@@ -1,9 +1,14 @@
-//! MQL5 & PineScript to WASM compiler for TyphooN Terminal.
+//! Multi-language indicator compiler for TyphooN Terminal.
 //!
 //! Pipeline: Source → Parse → AST → IR → WASM
 //!
-//! Supports MQL5 indicators (OnCalculate, SetIndexBuffer, DRAW_* types)
-//! and PineScript indicators (plot, ta.*, input.*).
+//! Frontends:
+//! - MQL5       — full parser (pest grammar), AST, IR lowering
+//! - PineScript — line scanner (pine.rs)
+//! - EasyLanguage — line scanner (easylang.rs)
+//! - thinkScript  — line scanner (thinkscript.rs)
+//!
+//! All four share the same IR + WASM/WGSL codegen pipeline.
 
 pub mod parser;
 pub mod ast;
@@ -13,6 +18,8 @@ pub mod wgsl_codegen;
 pub mod error;
 pub mod runtime;
 pub mod pine;
+pub mod easylang;
+pub mod thinkscript;
 
 
 
@@ -155,6 +162,20 @@ pub fn compile_to_wgsl(source: &str) -> Result<String, error::CompileError> {
 /// Supports: indicator(), input.*, ta.sma/ema/rsi/atr, plot(), math.*, close/open/high/low/volume.
 pub fn compile_pine(source: &str) -> CompileResult {
     pine::parse_pine(source)
+}
+
+/// Compile EasyLanguage (TradeStation / MultiCharts PowerLanguage) source to WASM.
+/// Supports: inputs, variables, Plot1..N, Average/XAverage/RSI/ATR built-ins,
+/// brace + line comments, case-insensitive identifiers.
+pub fn compile_easylang(source: &str) -> CompileResult {
+    easylang::parse_easylang(source)
+}
+
+/// Compile thinkScript (ThinkOrSwim) source to WASM.
+/// Supports: input, def, plot, Average/ExpAverage/RSI/ATR built-ins,
+/// `declare lower`, # line comments, case-sensitive identifiers.
+pub fn compile_thinkscript(source: &str) -> CompileResult {
+    thinkscript::parse_thinkscript(source)
 }
 
 #[cfg(test)]

@@ -240,22 +240,57 @@ async fn run_websocket_session(socket: ws::WebSocket, state: Arc<AppState>, clie
                         // Already authenticated, ignore duplicate auth
                     }
                     Ok(cmd) => {
-                        // Validate symbol/timeframe fields
-                        if let WebCmd::GetBars { ref symbol, ref timeframe } = cmd {
-                            if !typhoon_web_protocol::is_valid_symbol(symbol)
-                                || !typhoon_web_protocol::is_valid_timeframe(timeframe)
-                            {
-                                tracing::warn!("Web client {client_ip} sent invalid symbol/timeframe");
-                                continue;
+                        // Validate each command variant before forwarding.
+                        // Invalid commands are silently dropped (not relayed to the native app).
+                        match &cmd {
+                            WebCmd::GetBars { symbol, timeframe } => {
+                                if !typhoon_web_protocol::is_valid_symbol(symbol)
+                                    || !typhoon_web_protocol::is_valid_timeframe(timeframe)
+                                {
+                                    tracing::warn!("Web client {client_ip} sent invalid symbol/timeframe");
+                                    continue;
+                                }
                             }
-                        }
-                        if let WebCmd::GetWatchlistQuotes { ref symbols } = cmd {
-                            if symbols.len() > typhoon_web_protocol::MAX_WATCHLIST_SYMBOLS
-                                || symbols.iter().any(|s| !typhoon_web_protocol::is_valid_symbol(s))
-                            {
-                                tracing::warn!("Web client {client_ip} sent invalid watchlist request");
-                                continue;
+                            WebCmd::GetWatchlistQuotes { symbols } => {
+                                if symbols.len() > typhoon_web_protocol::MAX_WATCHLIST_SYMBOLS
+                                    || symbols.iter().any(|s| !typhoon_web_protocol::is_valid_symbol(s))
+                                {
+                                    tracing::warn!("Web client {client_ip} sent invalid watchlist request");
+                                    continue;
+                                }
                             }
+                            WebCmd::PlaceOrder { symbol, qty, side, order_type, broker, limit_price, stop_price } => {
+                                if !typhoon_web_protocol::is_valid_symbol(symbol)
+                                    || !typhoon_web_protocol::is_valid_order_qty(*qty)
+                                    || !typhoon_web_protocol::is_valid_order_side(side)
+                                    || !typhoon_web_protocol::is_valid_order_type(order_type)
+                                    || !matches!(broker.as_str(), "alpaca" | "tastytrade")
+                                    || limit_price.map(|p| !p.is_finite() || p <= 0.0).unwrap_or(false)
+                                    || stop_price.map(|p| !p.is_finite() || p <= 0.0).unwrap_or(false)
+                                {
+                                    tracing::warn!("Web client {client_ip} sent invalid PlaceOrder");
+                                    continue;
+                                }
+                            }
+                            WebCmd::CancelOrder { order_id, broker } => {
+                                // Order ID: alphanumeric + dashes, bounded length
+                                if order_id.is_empty() || order_id.len() > 64
+                                    || !order_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                                    || !matches!(broker.as_str(), "alpaca" | "tastytrade")
+                                {
+                                    tracing::warn!("Web client {client_ip} sent invalid CancelOrder");
+                                    continue;
+                                }
+                            }
+                            WebCmd::ClosePosition { symbol, broker } => {
+                                if !typhoon_web_protocol::is_valid_symbol(symbol)
+                                    || !matches!(broker.as_str(), "alpaca" | "tastytrade")
+                                {
+                                    tracing::warn!("Web client {client_ip} sent invalid ClosePosition");
+                                    continue;
+                                }
+                            }
+                            _ => {}
                         }
                         let _ = cmd_tx.send(cmd);
                     }

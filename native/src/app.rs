@@ -8841,7 +8841,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "OPTION_CHAIN",  desc: "tastytrade option chain for current symbol" },
     Command { name: "OPTIONS",       desc: "Alpaca options chain for current symbol" },
     Command { name: "WATCHLISTS",    desc: "Alpaca watchlists" },
-    Command { name: "COMPILE",       desc: "MQL5/PineScript indicator compiler" },
+    Command { name: "COMPILE",       desc: "Indicator compiler: MQL5 / PineScript / EasyLanguage / thinkScript" },
     Command { name: "STREAM",        desc: "Start real-time WebSocket stream for current symbol" },
     Command { name: "DXLINK_STREAM", desc: "Start DXLink real-time quote stream (tastytrade)" },
     // Analysis
@@ -23606,24 +23606,33 @@ impl TyphooNApp {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Language:").small());
                         egui::ComboBox::from_id_salt("compiler_lang")
-                            .selected_text(if self.compiler_language == 0 { "MQL5" } else { "PineScript v5" })
-                            .width(120.0)
+                            .selected_text(match self.compiler_language {
+                                0 => "MQL5",
+                                1 => "PineScript v5",
+                                2 => "EasyLanguage",
+                                3 => "thinkScript",
+                                _ => "MQL5",
+                            })
+                            .width(140.0)
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(&mut self.compiler_language, 0, "MQL5");
                                 ui.selectable_value(&mut self.compiler_language, 1, "PineScript v5");
+                                ui.selectable_value(&mut self.compiler_language, 2, "EasyLanguage");
+                                ui.selectable_value(&mut self.compiler_language, 3, "thinkScript");
                             });
                         if ui.button("Load File...").clicked() {
                             if let Some(path) = rfd::FileDialog::new()
-                                .add_filter("Indicator", &["mq5", "mqh", "pine", "txt"])
+                                .add_filter("Indicator", &["mq5", "mqh", "pine", "el", "els", "ts", "tos", "txt"])
                                 .pick_file() {
                                 if let Ok(contents) = std::fs::read_to_string(&path) {
                                     self.compiler_source = contents;
-                                    // Auto-detect language
-                                    if path.extension().map(|e| e == "pine").unwrap_or(false) {
-                                        self.compiler_language = 1;
-                                    } else {
-                                        self.compiler_language = 0;
-                                    }
+                                    // Auto-detect language by extension
+                                    self.compiler_language = match path.extension().and_then(|e| e.to_str()) {
+                                        Some("pine") => 1,
+                                        Some("el") | Some("els") => 2,
+                                        Some("ts") | Some("tos") => 3,
+                                        _ => 0,
+                                    };
                                     self.log.push_back(LogEntry::info(format!("Loaded: {}", path.display())));
                                 }
                             }
@@ -23631,10 +23640,12 @@ impl TyphooNApp {
                         let compile_btn = ui.add(egui::Button::new(
                             egui::RichText::new("Compile").color(egui::Color32::WHITE)).fill(BTN_BLUE));
                         if compile_btn.clicked() && !self.compiler_source.is_empty() {
-                            let result = if self.compiler_language == 0 {
-                                mql5_compiler::compile_mql5(&self.compiler_source)
-                            } else {
-                                mql5_compiler::compile_pine(&self.compiler_source)
+                            let result = match self.compiler_language {
+                                0 => mql5_compiler::compile_mql5(&self.compiler_source),
+                                1 => mql5_compiler::compile_pine(&self.compiler_source),
+                                2 => mql5_compiler::compile_easylang(&self.compiler_source),
+                                3 => mql5_compiler::compile_thinkscript(&self.compiler_source),
+                                _ => mql5_compiler::compile_mql5(&self.compiler_source),
                             };
                             self.compiler_diagnostics.clear();
                             for d in &result.diagnostics {
@@ -26986,6 +26997,133 @@ impl eframe::App for TyphooNApp {
                     }
                     typhoon_web_protocol::WebCmd::Auth { .. } => {
                         // Auth is handled by web-server before relay — ignore here
+                    }
+                    // ── Phase 2: order entry from phone ──
+                    // Server-side validation already happened in web-server.
+                    // We still confirm the broker selection matches a connected broker,
+                    // translate to the native BrokerCmd, and reply via the broadcast channel.
+                    typhoon_web_protocol::WebCmd::PlaceOrder {
+                        symbol, qty, side, order_type, limit_price, stop_price, broker
+                    } => {
+                        let lower_side = side.to_ascii_lowercase();
+                        let lower_type = order_type.to_ascii_lowercase();
+                        let reply = match broker.as_str() {
+                            "alpaca" => {
+                                if !self.broker_connected {
+                                    typhoon_web_protocol::WebMsg::OrderResult {
+                                        ok: false,
+                                        message: "Alpaca broker not connected on host".into(),
+                                    }
+                                } else {
+                                    // Dispatch based on order_type
+                                    match lower_type.as_str() {
+                                        "market" => {
+                                            let _ = self.broker_tx.send(BrokerCmd::AlpacaMarketOrder {
+                                                symbol: symbol.clone(),
+                                                qty,
+                                                side: lower_side.clone(),
+                                            });
+                                        }
+                                        "limit" => {
+                                            let lp = limit_price.unwrap_or(0.0);
+                                            let _ = self.broker_tx.send(BrokerCmd::AlpacaLimitOrder {
+                                                symbol: symbol.clone(),
+                                                qty,
+                                                side: lower_side.clone(),
+                                                limit_price: lp,
+                                            });
+                                        }
+                                        "stop" => {
+                                            let sp = stop_price.unwrap_or(0.0);
+                                            let _ = self.broker_tx.send(BrokerCmd::AlpacaStopOrder {
+                                                symbol: symbol.clone(),
+                                                qty,
+                                                side: lower_side.clone(),
+                                                stop_price: sp,
+                                            });
+                                        }
+                                        _ => {}
+                                    }
+                                    typhoon_web_protocol::WebMsg::OrderResult {
+                                        ok: true,
+                                        message: format!("{} {} {} {} dispatched to Alpaca", lower_side, qty, symbol, lower_type),
+                                    }
+                                }
+                            }
+                            "tastytrade" => {
+                                let _ = self.broker_tx.send(BrokerCmd::TastytradeEquityOrder {
+                                    symbol: symbol.clone(),
+                                    qty: qty as i64,
+                                    side: if lower_side == "buy" { "Buy to Open" } else { "Sell to Open" }.into(),
+                                    order_type: if lower_type == "market" { "Market" } else { "Limit" }.into(),
+                                    price: limit_price,
+                                });
+                                typhoon_web_protocol::WebMsg::OrderResult {
+                                    ok: true,
+                                    message: format!("{} {} {} {} dispatched to Tastytrade", lower_side, qty, symbol, lower_type),
+                                }
+                            }
+                            other => typhoon_web_protocol::WebMsg::OrderResult {
+                                ok: false,
+                                message: format!("Unknown broker: {other}"),
+                            },
+                        };
+                        if let Some(ref tx) = self.web_msg_tx {
+                            let _ = tx.send(reply);
+                        }
+                        // Mirror to local log so the host operator sees web-originated orders.
+                        self.log.push_back(LogEntry::info(format!(
+                            "Web order: {} {} {} {} via {}", side, qty, symbol, order_type, broker
+                        )));
+                    }
+                    typhoon_web_protocol::WebCmd::CancelOrder { order_id, broker } => {
+                        let reply = match broker.as_str() {
+                            "alpaca" => {
+                                let _ = self.broker_tx.send(BrokerCmd::AlpacaCancelOrder { order_id: order_id.clone() });
+                                typhoon_web_protocol::WebMsg::OrderResult {
+                                    ok: true,
+                                    message: format!("Cancel {} dispatched to Alpaca", order_id),
+                                }
+                            }
+                            "tastytrade" => typhoon_web_protocol::WebMsg::OrderResult {
+                                ok: false,
+                                message: "Tastytrade cancel not yet wired".into(),
+                            },
+                            other => typhoon_web_protocol::WebMsg::OrderResult {
+                                ok: false,
+                                message: format!("Unknown broker: {other}"),
+                            },
+                        };
+                        if let Some(ref tx) = self.web_msg_tx {
+                            let _ = tx.send(reply);
+                        }
+                        self.log.push_back(LogEntry::info(format!("Web cancel: {} via {}", order_id, broker)));
+                    }
+                    typhoon_web_protocol::WebCmd::ClosePosition { symbol, broker } => {
+                        let reply = match broker.as_str() {
+                            "alpaca" => {
+                                let _ = self.broker_tx.send(BrokerCmd::ClosePosition { symbol: symbol.clone() });
+                                typhoon_web_protocol::WebMsg::OrderResult {
+                                    ok: true,
+                                    message: format!("Close {} dispatched to Alpaca", symbol),
+                                }
+                            }
+                            "tastytrade" => {
+                                let _ = self.broker_tx.send(BrokerCmd::TastytradeClosePosition { symbol: symbol.clone() });
+                                typhoon_web_protocol::WebMsg::OrderResult {
+                                    ok: true,
+                                    message: format!("Close {} dispatched to Tastytrade", symbol),
+                                }
+                            }
+                            other => typhoon_web_protocol::WebMsg::OrderResult {
+                                ok: false,
+                                message: format!("Unknown broker: {other}"),
+                            },
+                        };
+                        if let Some(ref tx) = self.web_msg_tx {
+                            let _ = tx.send(reply);
+                        }
+                        self.log.push_back(LogEntry::info(format!("Web close: {} via {}", symbol, broker)));
                     }
                 }
             }

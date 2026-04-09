@@ -22,6 +22,29 @@ pub fn is_valid_timeframe(s: &str) -> bool {
         && s.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
+/// Maximum order quantity (prevents typos like 1000000 lots).
+pub const MAX_ORDER_QTY: f64 = 100_000.0;
+
+/// Validate an order side string.
+pub fn is_valid_order_side(s: &str) -> bool {
+    matches!(s, "buy" | "sell" | "BUY" | "SELL" | "Buy" | "Sell")
+}
+
+/// Validate an order type string.
+pub fn is_valid_order_type(s: &str) -> bool {
+    matches!(
+        s,
+        "market" | "limit" | "stop" | "stop_limit"
+        | "MARKET" | "LIMIT" | "STOP" | "STOP_LIMIT"
+        | "Market" | "Limit" | "Stop" | "StopLimit"
+    )
+}
+
+/// Validate an order qty: positive, finite, bounded.
+pub fn is_valid_order_qty(q: f64) -> bool {
+    q.is_finite() && q > 0.0 && q <= MAX_ORDER_QTY
+}
+
 // ── Client → Server ─────────────────────────────────────────────────
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", deny_unknown_fields)]
@@ -35,6 +58,24 @@ pub enum WebCmd {
     GetBars { symbol: String, timeframe: String },
     GetMarketClock,
     Ping,
+
+    // ── Phase 2: order entry from phone (ADR-073 follow-up) ──
+    /// Place a new equity order.
+    /// Server validates: symbol format, side, type, qty bounds.
+    /// Server rejects the entire command if any field fails validation.
+    PlaceOrder {
+        symbol: String,
+        qty: f64,
+        side: String,        // "buy" | "sell"
+        order_type: String,  // "market" | "limit" | "stop"
+        limit_price: Option<f64>,
+        stop_price: Option<f64>,
+        broker: String,      // "alpaca" | "tastytrade"
+    },
+    /// Cancel an open order by broker order ID.
+    CancelOrder { order_id: String, broker: String },
+    /// Close an open position at market.
+    ClosePosition { symbol: String, broker: String },
 }
 
 // ── Server → Client ─────────────────────────────────────────────────
@@ -58,6 +99,8 @@ pub enum WebMsg {
         bid: f64,
         ask: f64,
     },
+    /// Reply to PlaceOrder / CancelOrder / ClosePosition. Non-error feedback.
+    OrderResult { ok: bool, message: String },
     Error { msg: String },
     Pong,
 }
@@ -265,6 +308,105 @@ mod tests {
                 WebMsg::AuthResult { ok: v } => assert_eq!(v, ok),
                 _ => panic!("Expected AuthResult"),
             }
+        }
+    }
+
+    #[test]
+    fn order_side_validation() {
+        assert!(is_valid_order_side("buy"));
+        assert!(is_valid_order_side("sell"));
+        assert!(is_valid_order_side("Buy"));
+        assert!(is_valid_order_side("SELL"));
+        assert!(!is_valid_order_side("purchase"));
+        assert!(!is_valid_order_side(""));
+        assert!(!is_valid_order_side("buy; DROP"));
+    }
+
+    #[test]
+    fn order_type_validation() {
+        assert!(is_valid_order_type("market"));
+        assert!(is_valid_order_type("limit"));
+        assert!(is_valid_order_type("stop"));
+        assert!(is_valid_order_type("stop_limit"));
+        assert!(is_valid_order_type("MARKET"));
+        assert!(!is_valid_order_type(""));
+        assert!(!is_valid_order_type("asap"));
+    }
+
+    #[test]
+    fn order_qty_validation() {
+        assert!(is_valid_order_qty(1.0));
+        assert!(is_valid_order_qty(100.0));
+        assert!(is_valid_order_qty(MAX_ORDER_QTY));
+        assert!(!is_valid_order_qty(0.0));
+        assert!(!is_valid_order_qty(-1.0));
+        assert!(!is_valid_order_qty(MAX_ORDER_QTY + 1.0));
+        assert!(!is_valid_order_qty(f64::NAN));
+        assert!(!is_valid_order_qty(f64::INFINITY));
+    }
+
+    #[test]
+    fn place_order_serde_roundtrip() {
+        let cmd = WebCmd::PlaceOrder {
+            symbol: "AAPL".into(),
+            qty: 10.0,
+            side: "buy".into(),
+            order_type: "market".into(),
+            limit_price: None,
+            stop_price: None,
+            broker: "alpaca".into(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: WebCmd = serde_json::from_str(&json).unwrap();
+        assert_eq!(format!("{back:?}"), format!("{cmd:?}"));
+    }
+
+    #[test]
+    fn place_order_limit_roundtrip() {
+        let cmd = WebCmd::PlaceOrder {
+            symbol: "SPY".into(),
+            qty: 5.0,
+            side: "sell".into(),
+            order_type: "limit".into(),
+            limit_price: Some(450.25),
+            stop_price: None,
+            broker: "tastytrade".into(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: WebCmd = serde_json::from_str(&json).unwrap();
+        match back {
+            WebCmd::PlaceOrder { limit_price, .. } => assert_eq!(limit_price, Some(450.25)),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn cancel_order_serde_roundtrip() {
+        let cmd = WebCmd::CancelOrder { order_id: "ORD-123".into(), broker: "alpaca".into() };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: WebCmd = serde_json::from_str(&json).unwrap();
+        assert_eq!(format!("{back:?}"), format!("{cmd:?}"));
+    }
+
+    #[test]
+    fn close_position_serde_roundtrip() {
+        let cmd = WebCmd::ClosePosition { symbol: "AAPL".into(), broker: "tastytrade".into() };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: WebCmd = serde_json::from_str(&json).unwrap();
+        assert_eq!(format!("{back:?}"), format!("{cmd:?}"));
+    }
+
+    #[test]
+    fn order_result_msg_roundtrip() {
+        let msg = WebMsg::OrderResult { ok: true, message: "Order filled".into() };
+        let json = serde_json::to_string(&msg).unwrap();
+        let back: WebMsg = serde_json::from_str(&json).unwrap();
+        match back {
+            WebMsg::OrderResult { ok, message } => {
+                assert!(ok);
+                assert_eq!(message, "Order filled");
+            }
+            _ => panic!("wrong variant"),
         }
     }
 }
