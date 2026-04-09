@@ -13,6 +13,7 @@ enum Tab {
     Positions,
     Orders,
     Chart,
+    Trade,
 }
 
 // ── Main app ────────────────────────────────────────────────────────
@@ -37,6 +38,17 @@ pub struct WebApp {
 
     // Polling
     poll_counter: u32,
+
+    // Order entry form state
+    order_symbol: String,
+    order_qty_str: String,
+    order_side: String,     // "buy" | "sell"
+    order_type: String,     // "market" | "limit" | "stop"
+    order_limit_str: String,
+    order_stop_str: String,
+    order_broker: String,   // "alpaca" | "tastytrade"
+    order_confirm_pending: bool,
+    last_order_result: Option<(bool, String)>,
 }
 
 impl WebApp {
@@ -56,6 +68,15 @@ impl WebApp {
             current_symbol: "AAPL".into(),
             current_timeframe: "1Day".into(),
             poll_counter: 0,
+            order_symbol: "AAPL".into(),
+            order_qty_str: "1".into(),
+            order_side: "buy".into(),
+            order_type: "market".into(),
+            order_limit_str: String::new(),
+            order_stop_str: String::new(),
+            order_broker: "alpaca".into(),
+            order_confirm_pending: false,
+            last_order_result: None,
         }
     }
 
@@ -165,6 +186,11 @@ impl WebApp {
                     self.bars.insert(key, bars);
                 }
                 WebMsg::Pong => {}
+                WebMsg::OrderResult { ok, message } => {
+                    self.last_order_result = Some((ok, message));
+                    // Re-poll positions/orders so UI reflects new state
+                    self.request_data();
+                }
                 WebMsg::Error { msg } => {
                     web_sys::console::warn_1(&format!("Server: {msg}").into());
                 }
@@ -272,6 +298,7 @@ impl eframe::App for WebApp {
             ui.selectable_value(&mut self.tab, Tab::Positions, "Positions");
             ui.selectable_value(&mut self.tab, Tab::Orders, "Orders");
             ui.selectable_value(&mut self.tab, Tab::Chart, "Chart");
+            ui.selectable_value(&mut self.tab, Tab::Trade, "Trade");
         });
         ui.separator();
 
@@ -280,6 +307,7 @@ impl eframe::App for WebApp {
             Tab::Positions => self.render_positions(ui),
             Tab::Orders => self.render_orders(ui),
             Tab::Chart => self.render_chart(ui),
+            Tab::Trade => self.render_trade(ui),
         }
     }
 }
@@ -330,7 +358,7 @@ impl WebApp {
         }
     }
 
-    fn render_positions(&self, ui: &mut egui::Ui) {
+    fn render_positions(&mut self, ui: &mut egui::Ui) {
         if self.positions.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.label("No open positions");
@@ -338,9 +366,12 @@ impl WebApp {
             return;
         }
 
+        // Collect close requests so we don't hold &self.positions across send_cmd
+        let mut close_requests: Vec<String> = Vec::new();
+
         egui::ScrollArea::vertical().show(ui, |ui| {
             egui::Grid::new("positions_grid")
-                .num_columns(6)
+                .num_columns(7)
                 .spacing([12.0, 6.0])
                 .striped(true)
                 .show(ui, |ui| {
@@ -350,6 +381,7 @@ impl WebApp {
                     ui.strong("Entry");
                     ui.strong("Value");
                     ui.strong("P&L");
+                    ui.strong("");
                     ui.end_row();
 
                     for pos in &self.positions {
@@ -364,13 +396,26 @@ impl WebApp {
                             egui::Color32::from_rgb(200, 0, 0)
                         };
                         ui.colored_label(color, format!("${:.2}", pos.unrealized_pl));
+                        if ui
+                            .button("Close")
+                            .on_hover_text("Close this position at market")
+                            .clicked()
+                        {
+                            close_requests.push(pos.symbol.clone());
+                        }
                         ui.end_row();
                     }
                 });
         });
+
+        // Broker for close is the currently-selected order broker (Trade tab) — sensible default.
+        let broker = self.order_broker.clone();
+        for sym in close_requests {
+            self.send_cmd(&WebCmd::ClosePosition { symbol: sym, broker: broker.clone() });
+        }
     }
 
-    fn render_orders(&self, ui: &mut egui::Ui) {
+    fn render_orders(&mut self, ui: &mut egui::Ui) {
         if self.orders.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.label("No open orders");
@@ -378,9 +423,11 @@ impl WebApp {
             return;
         }
 
+        let mut cancel_requests: Vec<String> = Vec::new();
+
         egui::ScrollArea::vertical().show(ui, |ui| {
             egui::Grid::new("orders_grid")
-                .num_columns(6)
+                .num_columns(7)
                 .spacing([12.0, 6.0])
                 .striped(true)
                 .show(ui, |ui| {
@@ -390,6 +437,7 @@ impl WebApp {
                     ui.strong("Type");
                     ui.strong("Status");
                     ui.strong("Price");
+                    ui.strong("");
                     ui.end_row();
 
                     for ord in &self.orders {
@@ -404,10 +452,181 @@ impl WebApp {
                             .or(ord.stop_price.as_deref())
                             .unwrap_or("-");
                         ui.label(price);
+                        if ui
+                            .button("Cancel")
+                            .on_hover_text("Cancel this open order")
+                            .clicked()
+                        {
+                            cancel_requests.push(ord.id.clone());
+                        }
                         ui.end_row();
                     }
                 });
         });
+
+        let broker = self.order_broker.clone();
+        for id in cancel_requests {
+            self.send_cmd(&WebCmd::CancelOrder { order_id: id, broker: broker.clone() });
+        }
+    }
+
+    fn render_trade(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Place Order");
+        ui.add_space(6.0);
+
+        egui::Grid::new("trade_form")
+            .num_columns(2)
+            .spacing([12.0, 8.0])
+            .show(ui, |ui| {
+                ui.label("Broker");
+                egui::ComboBox::from_id_salt("broker_combo")
+                    .selected_text(&self.order_broker)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.order_broker, "alpaca".into(), "Alpaca");
+                        ui.selectable_value(&mut self.order_broker, "tastytrade".into(), "Tastytrade");
+                    });
+                ui.end_row();
+
+                ui.label("Symbol");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.order_symbol)
+                        .desired_width(120.0)
+                        .char_limit(MAX_SYMBOL_LEN),
+                );
+                ui.end_row();
+
+                ui.label("Side");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.order_side, "buy".into(), "Buy");
+                    ui.selectable_value(&mut self.order_side, "sell".into(), "Sell");
+                });
+                ui.end_row();
+
+                ui.label("Type");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.order_type, "market".into(), "Market");
+                    ui.selectable_value(&mut self.order_type, "limit".into(), "Limit");
+                    ui.selectable_value(&mut self.order_type, "stop".into(), "Stop");
+                });
+                ui.end_row();
+
+                ui.label("Qty");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.order_qty_str)
+                        .desired_width(100.0)
+                        .char_limit(12),
+                );
+                ui.end_row();
+
+                if self.order_type == "limit" {
+                    ui.label("Limit Price");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.order_limit_str)
+                            .desired_width(100.0)
+                            .char_limit(16),
+                    );
+                    ui.end_row();
+                }
+
+                if self.order_type == "stop" {
+                    ui.label("Stop Price");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.order_stop_str)
+                            .desired_width(100.0)
+                            .char_limit(16),
+                    );
+                    ui.end_row();
+                }
+            });
+
+        ui.add_space(10.0);
+
+        // Validate locally before showing Submit button
+        let qty = self.order_qty_str.parse::<f64>().ok();
+        let limit = self.order_limit_str.parse::<f64>().ok();
+        let stop = self.order_stop_str.parse::<f64>().ok();
+        let sym_ok = is_valid_symbol(&self.order_symbol);
+        let qty_ok = qty.map(is_valid_order_qty).unwrap_or(false);
+        let side_ok = is_valid_order_side(&self.order_side);
+        let type_ok = is_valid_order_type(&self.order_type);
+        let price_ok = match self.order_type.as_str() {
+            "limit" => limit.map(|p| p.is_finite() && p > 0.0).unwrap_or(false),
+            "stop" => stop.map(|p| p.is_finite() && p > 0.0).unwrap_or(false),
+            _ => true,
+        };
+        let form_valid = sym_ok && qty_ok && side_ok && type_ok && price_ok;
+
+        if !sym_ok {
+            ui.colored_label(egui::Color32::from_rgb(200, 120, 0), "Invalid symbol");
+        }
+        if !qty_ok && !self.order_qty_str.is_empty() {
+            ui.colored_label(egui::Color32::from_rgb(200, 120, 0), "Qty must be 0 < q ≤ 100,000");
+        }
+        if !price_ok {
+            ui.colored_label(egui::Color32::from_rgb(200, 120, 0), "Price must be positive");
+        }
+
+        ui.add_space(6.0);
+
+        // Two-step confirm so a stray tap doesn't send an order
+        if !self.order_confirm_pending {
+            let btn = egui::Button::new(format!(
+                "Review {} {} {} ({})",
+                self.order_side.to_uppercase(),
+                self.order_qty_str,
+                self.order_symbol,
+                self.order_broker
+            ));
+            if ui.add_enabled(form_valid, btn).clicked() {
+                self.order_confirm_pending = true;
+            }
+        } else {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 180, 0),
+                format!(
+                    "CONFIRM: {} {} {} on {} ({})",
+                    self.order_side.to_uppercase(),
+                    self.order_qty_str,
+                    self.order_symbol,
+                    self.order_broker,
+                    self.order_type
+                ),
+            );
+            ui.horizontal(|ui| {
+                if ui
+                    .add(egui::Button::new("SEND").fill(egui::Color32::from_rgb(0, 140, 0)))
+                    .clicked()
+                    && form_valid
+                {
+                    self.send_cmd(&WebCmd::PlaceOrder {
+                        symbol: self.order_symbol.clone(),
+                        qty: qty.unwrap_or(0.0),
+                        side: self.order_side.clone(),
+                        order_type: self.order_type.clone(),
+                        limit_price: if self.order_type == "limit" { limit } else { None },
+                        stop_price: if self.order_type == "stop" { stop } else { None },
+                        broker: self.order_broker.clone(),
+                    });
+                    self.order_confirm_pending = false;
+                }
+                if ui.button("Cancel").clicked() {
+                    self.order_confirm_pending = false;
+                }
+            });
+        }
+
+        ui.add_space(12.0);
+        ui.separator();
+        if let Some((ok, ref msg)) = self.last_order_result {
+            let color = if ok {
+                egui::Color32::from_rgb(0, 200, 0)
+            } else {
+                egui::Color32::from_rgb(200, 0, 0)
+            };
+            ui.colored_label(color, format!("Last: {msg}"));
+        } else {
+            ui.label("No orders sent this session");
+        }
     }
 
     fn render_chart(&mut self, ui: &mut egui::Ui) {

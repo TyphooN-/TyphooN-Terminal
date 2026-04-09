@@ -156,7 +156,7 @@ Every dispatch replies via `web_msg_tx` with a `WebMsg::OrderResult { ok, messag
 - EasyLanguage and thinkScript frontends are line-based scanners, not full AST parsers. They handle the common community-indicator cases but will misparse anything exotic (nested if blocks, anonymous functions, multi-line conditional expressions). A future hard requirement for one of these would justify a proper pest grammar.
 - Phone order entry trusts the web-server's passphrase + TLS for auth. There is no additional per-order confirmation step. If a phone is stolen with an active session, an attacker could place orders. Mitigation: the passphrase should be strong, and the user can reset it via Settings which invalidates existing sessions.
 - Tastytrade cancel is not yet wired — returns `ok:false` with an explanatory message. Follow-up ADR if needed.
-- Phone UI does not yet expose the order entry form — only the protocol exists. A follow-up will add a small form to `web/src/app.rs` so phone users can actually use the new commands. The protocol surface is ready.
+- ~~Phone UI does not yet expose the order entry form — only the protocol exists.~~ **Landed in follow-up.** `web/src/app.rs` now has a `Trade` tab (broker dropdown, symbol, side, type, qty, conditional limit/stop price), two-step review-then-send confirm so a stray tap can't fire an order, inline validation mirroring the server whitelist, and an `OrderResult` toast banner. The Positions tab has a per-row `Close` button; the Orders tab has a per-row `Cancel` button. Both use the broker currently selected in the Trade tab.
 - No new audio/sound library was added. Alert attention uses `ViewportCommand::RequestUserAttention` (from ADR-087) which is sufficient.
 
 ## Deferred / Out of Scope
@@ -164,7 +164,7 @@ Every dispatch replies via `web_msg_tx` with a `WebMsg::OrderResult { ok, messag
 - **Phase 2 indicators/drawing tools/MTF grid on phone** — each would significantly grow the WASM bundle (the existing client is 3.7 MB). Phase 1 UI remains intentionally minimal.
 - **DARWIN analytics on phone** — requires porting the GPU DARWIN computations to a server-rendered preview. Out of scope.
 - **Push notifications to phone** — requires a push service (FCM / APNS / WebPush). Out of scope.
-- **Phone order form (HTML)** — wiring the new protocol commands into the WASM client UI. Deferred to a follow-up commit — the server + protocol are ready, so a later UI-only pass can land it in isolation.
+- ~~**Phone order form (HTML)** — wiring the new protocol commands into the WASM client UI.~~ **Shipped** in the same pass: `Trade` tab + Close/Cancel row buttons. See the trade-offs section above.
 - **EasyLanguage Buy/Sell trade signals** — would need a backtesting/paper-trading harness on the compiler runtime side. Separate feature.
 
 ## Related
