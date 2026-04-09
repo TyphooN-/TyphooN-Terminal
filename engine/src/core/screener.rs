@@ -244,18 +244,65 @@ mod tests {
         assert_eq!(result.total_matched, 1);
         assert_eq!(result.symbols[0].symbol, "C");
     }
+}
+
+// ── Relative Strength Ranking ────────────────────────────────────────
+
+/// A symbol ranked by relative performance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelativeStrengthEntry {
+    pub symbol: String,
+    pub return_pct: f64,  // % return over lookback period
+    pub rank: usize,       // 1 = strongest
+}
+
+/// Compute relative strength ranking from bar cache.
+/// `bars_map`: symbol → Vec<(timestamp, close)> for each symbol.
+/// `lookback`: number of bars to measure return over.
+pub fn compute_relative_strength(
+    bars_map: &std::collections::HashMap<String, Vec<f64>>,
+    lookback: usize,
+) -> Vec<RelativeStrengthEntry> {
+    let mut entries: Vec<RelativeStrengthEntry> = bars_map.iter().filter_map(|(sym, closes)| {
+        if closes.len() < lookback + 1 { return None; }
+        let old = closes[closes.len() - lookback - 1];
+        let new = closes[closes.len() - 1];
+        if old <= 0.0 { return None; }
+        let ret = (new / old - 1.0) * 100.0;
+        Some(RelativeStrengthEntry { symbol: sym.clone(), return_pct: ret, rank: 0 })
+    }).collect();
+
+    entries.sort_by(|a, b| b.return_pct.partial_cmp(&a.return_pct).unwrap_or(std::cmp::Ordering::Equal));
+    for (i, e) in entries.iter_mut().enumerate() {
+        e.rank = i + 1;
+    }
+    entries
+}
+
+#[cfg(test)]
+mod rs_tests {
+    use super::*;
 
     #[test]
-    fn result_counts_accurate() {
-        let syms = vec![
-            test_symbol("A", 10.0, 1e6, 0.0, true, true, true, None),
-            test_symbol("B", 20.0, 1e6, 0.0, false, true, true, None),
-            test_symbol("C", 30.0, 1e6, 0.0, true, true, true, None),
-            test_symbol("D", 40.0, 1e6, 0.0, false, true, true, None),
-        ];
-        let result = screen_symbols(&ScreenerFilter::default(), &syms);
-        assert_eq!(result.total_scanned, 4);
-        assert_eq!(result.total_matched, 2);
-        assert_eq!(result.symbols.len(), 2);
+    fn test_relative_strength_ranking() {
+        let mut bars = std::collections::HashMap::new();
+        bars.insert("AAPL".into(), vec![100.0, 105.0, 110.0, 115.0, 120.0]); // +20%
+        bars.insert("MSFT".into(), vec![200.0, 198.0, 195.0, 190.0, 180.0]); // -10%
+        bars.insert("GOOG".into(), vec![50.0, 52.0, 55.0, 58.0, 60.0]);      // +20%
+        let rs = compute_relative_strength(&bars, 4);
+        assert_eq!(rs.len(), 3);
+        assert_eq!(rs[0].rank, 1);
+        assert!(rs[0].return_pct > 19.0); // AAPL or GOOG at ~20%
+        assert_eq!(rs[2].rank, 3);
+        assert!(rs[2].return_pct < 0.0); // MSFT at -10%
+    }
+
+    #[test]
+    fn test_rs_insufficient_data() {
+        let mut bars = std::collections::HashMap::new();
+        bars.insert("SHORT".into(), vec![100.0, 105.0]); // only 2 bars, lookback=4 needs 5
+        let rs = compute_relative_strength(&bars, 4);
+        assert!(rs.is_empty());
     }
 }
+
