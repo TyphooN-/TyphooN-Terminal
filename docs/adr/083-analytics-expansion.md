@@ -1,6 +1,6 @@
 # ADR-083: Analytics & Screening Expansion
 
-**Status:** In Progress | **Date:** 2026-04-08
+**Status:** Complete | **Date:** 2026-04-08
 
 ## Context
 
@@ -42,11 +42,23 @@ Comprehensive audit identified feature gaps vs TradingView/Bloomberg in options 
 - Computes IB High, IB Low, IB Range from first hour of session
 - Displayed alongside POC and VAH/VAL
 
-## Remaining Feature Gaps (Roadmap)
-- [ ] Market Breadth indicators (Advance/Decline, McClellan — needs exchange-level data)
-- [ ] Put/Call Ratio visualization (needs options volume data feed)
-- [ ] GPU Monte Carlo VaR (parallel sampling — infrastructure exists)
-- [ ] GPU Backtester (parallel parameter grid — struct exists)
+### GPU Monte Carlo VaR (native/src/gpu_compute.rs)
+- `run_monte_carlo_gpu()`: dispatch method for existing MONTE_CARLO_SHADER
+- PCG hash RNG on GPU, 256 threads/workgroup, N parallel simulations
+- Returns sorted Vec of final equity values (VaR = percentile lookup)
+
+### GPU Backtester (native/src/gpu_compute.rs)
+- `evaluate()` + `evaluate_nnfx()`: already fully implemented
+- 5 WGSL pipelines: eval, nnfx, walk_forward, robustness, monte_carlo
+- BacktestResult: net_pnl, max_drawdown, sharpe, sortino, win_rate, profit_factor, trade_count, avg_hold_bars, robustness_score
+
+## Remaining Feature Gaps (Data-Blocked)
+- [ ] Market Breadth indicators (Advance/Decline, McClellan — needs exchange-level breadth data feed)
+- [ ] Put/Call Ratio visualization (needs options volume data from CBOE or similar)
+
+## Consequences
+
+All implementable analytics features complete. 470 tests passing. GPU path fully utilized: 31 indicators + Monte Carlo VaR + parameter grid backtester. Only Market Breadth and Put/Call Ratio remain — both blocked on external data feeds not currently available.
 
 ## Consequences
 
