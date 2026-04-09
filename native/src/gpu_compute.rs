@@ -3468,6 +3468,93 @@ impl GpuBacktester {
         }
         Some(results)
     }
+
+    /// Run GPU-accelerated Monte Carlo VaR simulation.
+    /// `daily_returns`: historical daily return percentages (0-100 format → converted to fraction)
+    /// `simulations`: number of parallel paths (e.g., 10000)
+    /// `days_forward`: simulation horizon (e.g., 252 for 1 year)
+    /// `starting_equity`: initial portfolio value
+    /// Returns: Vec of final equity values (one per simulation), sorted ascending.
+    pub fn run_monte_carlo_gpu(&self, daily_returns: &[f32], simulations: u32, days_forward: u32, starting_equity: f32) -> Option<Vec<f32>> {
+        if daily_returns.is_empty() || simulations == 0 { return None; }
+
+        // Upload daily returns as "closes" buffer (repurposed)
+        let returns_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mc_returns"), size: (daily_returns.len() * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&returns_buf, 0, bytemuck_cast_slice(daily_returns));
+
+        // Empty OHLC buffer (unused by MC shader)
+        let empty_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mc_empty"), size: 4,
+            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+        });
+
+        // Params: [days_forward as f32 bits, starting_equity, 0, 0...]
+        let mc_params: Vec<f32> = vec![f32::from_bits(days_forward), starting_equity, 0.0, 0.0];
+        let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mc_params"), size: (mc_params.len() * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&params_buf, 0, bytemuck_cast_slice(&mc_params));
+
+        // Results: 1 f32 per simulation (final equity)
+        let result_size = (simulations as u64) * 4;
+        let results_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mc_results"), size: result_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mc_staging"), size: result_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+
+        // Uniforms: [bar_count (= n_returns), combo_count (= simulations)]
+        let uniforms = [daily_returns.len() as u32, simulations];
+        let uniform_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mc_uniforms"), size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&uniform_buf, 0, bytemuck_cast_slice(&uniforms));
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mc_bg"), layout: &self.eval_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: returns_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: empty_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: results_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: uniform_buf.as_entire_binding() },
+            ],
+        });
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("mc_pass"), timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.monte_carlo_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups((simulations + 255) / 256, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&results_buf, 0, &staging, 0, result_size);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        // Readback
+        let slice = staging.slice(0..result_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+        if rx.recv().ok()?.is_err() { return None; }
+        let data = slice.get_mapped_range();
+        let mut equities: Vec<f32> = bytemuck_cast_slice_to_f32(&data).to_vec();
+        drop(data);
+        staging.unmap();
+
+        equities.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Some(equities)
+    }
 }
 
 // ─── Backtest WGSL Shaders ───────────────────────────────────────────────────
