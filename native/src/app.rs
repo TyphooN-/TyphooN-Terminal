@@ -23706,17 +23706,22 @@ impl TyphooNApp {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Transpile to:").small());
                         const TRANSPILE_TARGETS: &[(&str, mql5_compiler::transpile::TargetLanguage)] = &[
-                            ("MQL5",         mql5_compiler::transpile::TargetLanguage::Mql5),
+                            ("MQL5",          mql5_compiler::transpile::TargetLanguage::Mql5),
+                            ("MQL4",          mql5_compiler::transpile::TargetLanguage::Mql4),
                             ("PineScript v5", mql5_compiler::transpile::TargetLanguage::PineScript),
-                            ("EasyLanguage", mql5_compiler::transpile::TargetLanguage::EasyLanguage),
-                            ("thinkScript",  mql5_compiler::transpile::TargetLanguage::ThinkScript),
+                            ("EasyLanguage",  mql5_compiler::transpile::TargetLanguage::EasyLanguage),
+                            ("thinkScript",   mql5_compiler::transpile::TargetLanguage::ThinkScript),
+                            ("AFL (AmiBroker)", mql5_compiler::transpile::TargetLanguage::Afl),
+                            ("ProBuilder",    mql5_compiler::transpile::TargetLanguage::ProBuilder),
+                            ("NinjaScript",   mql5_compiler::transpile::TargetLanguage::NinjaScript),
+                            ("cAlgo (cTrader)", mql5_compiler::transpile::TargetLanguage::Calgo),
                         ];
                         egui::ComboBox::from_id_salt("compiler_transpile_target")
                             .selected_text(TRANSPILE_TARGETS
                                 .get(self.compiler_transpile_target)
                                 .map(|(l, _)| *l)
                                 .unwrap_or("MQL5"))
-                            .width(140.0)
+                            .width(180.0)
                             .show_ui(ui, |ui| {
                                 for (i, (label, _)) in TRANSPILE_TARGETS.iter().enumerate() {
                                     ui.selectable_value(&mut self.compiler_transpile_target, i, *label);
@@ -23757,13 +23762,11 @@ impl TyphooNApp {
                         if self.compiler_transpiled.is_some() && ui.button("Use as Source").clicked() {
                             if let Some(ref out) = self.compiler_transpiled {
                                 self.compiler_source = out.clone();
-                                self.compiler_language = match self.compiler_transpile_target {
-                                    0 => 0, // MQL5
-                                    1 => 2, // Pine
-                                    2 => 3, // EL
-                                    3 => 4, // TS
-                                    _ => 0,
-                                };
+                                // Map transpile-target index → language dropdown index.
+                                // Transpile targets: 0=MQL5 1=MQL4 2=Pine 3=EL 4=TS 5=AFL 6=PB 7=Ninja 8=cAlgo
+                                // Language dropdown: 0=MQL5 1=MQL4 2=Pine 3=EL 4=TS 5=AFL 6=PB 7=Ninja 8=cAlgo
+                                // They happen to line up 1:1 after Phase 2.
+                                self.compiler_language = self.compiler_transpile_target;
                                 self.compiler_transpiled = None;
                             }
                         }

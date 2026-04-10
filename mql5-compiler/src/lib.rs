@@ -114,40 +114,16 @@ pub enum DrawType {
 pub fn compile_mql5(source: &str) -> CompileResult {
     let mut diagnostics = Vec::new();
 
-    // Phase 1: Parse
-    let ast = match parser::parse_mql5(source) {
-        Ok(ast) => ast,
-        Err(e) => {
-            diagnostics.push(Diagnostic {
-                level: DiagLevel::Error,
-                message: e.to_string(),
-                line: e.line(),
-                col: e.col(),
-            });
+    let (ir_module, metadata) = match build_mql5_ir(source) {
+        Ok(pair) => pair,
+        Err(errors) => {
+            for e in errors {
+                diagnostics.push(e);
+            }
             return CompileResult { wasm: None, diagnostics, metadata: None };
         }
     };
 
-    // Phase 2: Extract metadata
-    let metadata = ir::extract_metadata(&ast);
-
-    // Phase 3: Lower to IR
-    let ir_module = match ir::lower(&ast) {
-        Ok(ir) => ir,
-        Err(errors) => {
-            for e in errors {
-                diagnostics.push(Diagnostic {
-                    level: DiagLevel::Error,
-                    message: e.to_string(),
-                    line: e.line(),
-                    col: e.col(),
-                });
-            }
-            return CompileResult { wasm: None, diagnostics, metadata: Some(metadata) };
-        }
-    };
-
-    // Phase 4: Generate WASM
     match codegen::emit_wasm(&ir_module) {
         Ok(wasm_bytes) => CompileResult {
             wasm: Some(wasm_bytes),
@@ -164,6 +140,36 @@ pub fn compile_mql5(source: &str) -> CompileResult {
             CompileResult { wasm: None, diagnostics, metadata: Some(metadata) }
         }
     }
+}
+
+/// Build the IR module + metadata for MQL5 source, used by the cross-language
+/// transpiler. Returns the same `Diagnostic` shape as `compile_mql5` on error
+/// so callers don't need a second error type.
+pub fn build_mql5_ir(source: &str) -> Result<(ir::IrModule, IndicatorMeta), Vec<Diagnostic>> {
+    let ast = parser::parse_mql5(source).map_err(|e| {
+        vec![Diagnostic {
+            level: DiagLevel::Error,
+            message: e.to_string(),
+            line: e.line(),
+            col: e.col(),
+        }]
+    })?;
+
+    let metadata = ir::extract_metadata(&ast);
+
+    let ir_module = ir::lower(&ast).map_err(|errors| {
+        errors
+            .into_iter()
+            .map(|e| Diagnostic {
+                level: DiagLevel::Error,
+                message: e.to_string(),
+                line: e.line(),
+                col: e.col(),
+            })
+            .collect::<Vec<_>>()
+    })?;
+
+    Ok((ir_module, metadata))
 }
 
 /// Compile MQL5 source to a WGSL compute shader string.

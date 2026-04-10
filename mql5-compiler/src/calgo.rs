@@ -24,6 +24,30 @@ use crate::ir::*;
 use crate::{IndicatorMeta, InputParam, CompileResult, Diagnostic, DiagLevel, DrawType, PlotDef};
 
 pub fn parse_calgo(source: &str) -> CompileResult {
+    let (ir_module, meta) = build_ir(source);
+    let mut diagnostics = Vec::new();
+    match crate::codegen::emit_wasm(&ir_module) {
+        Ok(wasm) => {
+            diagnostics.push(Diagnostic {
+                level: DiagLevel::Info,
+                message: format!("cAlgo compiled: {} inputs, {} plots",
+                    meta.inputs.len(), meta.plots.len()),
+                line: 0, col: 0,
+            });
+            CompileResult { wasm: Some(wasm), diagnostics, metadata: Some(meta) }
+        }
+        Err(e) => {
+            diagnostics.push(Diagnostic {
+                level: DiagLevel::Error,
+                message: format!("cAlgo codegen failed: {e}"),
+                line: 0, col: 0,
+            });
+            CompileResult { wasm: None, diagnostics, metadata: Some(meta) }
+        }
+    }
+}
+
+pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
     let mut meta = IndicatorMeta {
         short_name: String::from("cAlgo"),
         buffers: 0,
@@ -31,7 +55,6 @@ pub fn parse_calgo(source: &str) -> CompileResult {
         inputs: Vec::new(),
         plots: Vec::new(),
     };
-    let mut diagnostics = Vec::new();
     let mut ir_body: Vec<IrStmt> = Vec::new();
     let mut inputs: Vec<IrInput> = Vec::new();
     let mut locals: Vec<(String, IrType)> = Vec::new();
@@ -194,25 +217,7 @@ pub fn parse_calgo(source: &str) -> CompileResult {
         on_init: None,
         globals: Vec::new(),
     };
-    match crate::codegen::emit_wasm(&ir_module) {
-        Ok(wasm) => {
-            diagnostics.push(Diagnostic {
-                level: DiagLevel::Info,
-                message: format!("cAlgo compiled: {} inputs, {} plots",
-                    meta.inputs.len(), meta.plots.len()),
-                line: 0, col: 0,
-            });
-            CompileResult { wasm: Some(wasm), diagnostics, metadata: Some(meta) }
-        }
-        Err(e) => {
-            diagnostics.push(Diagnostic {
-                level: DiagLevel::Error,
-                message: format!("cAlgo codegen failed: {e}"),
-                line: 0, col: 0,
-            });
-            CompileResult { wasm: None, diagnostics, metadata: Some(meta) }
-        }
-    }
+    (ir_module, meta)
 }
 
 /// Parse `public int Period { get; set; }` → ("Period", "int").
