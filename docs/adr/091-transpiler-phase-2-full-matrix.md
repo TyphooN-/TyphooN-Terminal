@@ -81,12 +81,15 @@ match the transpile target (1:1 index mapping after this commit).
 - `full_matrix_smoke_test` — EL source → all 9 targets, non-empty output
 - `pascal_case_helper` — helper correctness incl. leading-digit safety
 
-**Total workspace test count: 803** (up from 793 in ADR-090).
+**Total workspace test count: 813** (up from 793 in ADR-090).
 
-- 206 mql5-compiler (+10)
+- 216 mql5-compiler (+20: +10 Phase 2 transpile, +10 ACSIL follow-up)
 - 497 engine
 - 78 native
 - 22 web-protocol
+
+*Note: ACSIL (Sierra Chart) was added in a follow-up commit, expanding
+the matrix to 10×10 = 100 directional conversions and adding 10 tests.*
 
 ## Full matrix
 
@@ -109,9 +112,10 @@ cAlgo       ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅
 ### Positive
 
 - The **full N×N cross-language transpiler is complete**. A trader can
-  paste an indicator from any of the 9 supported platforms and get working
-  source for any of the other 8 in a single click. No other charting
-  platform ships this.
+  paste an indicator from any of the 10 supported platforms (MQL5, MQL4,
+  PineScript, EasyLanguage, thinkScript, AFL, ProBuilder, NinjaScript,
+  cAlgo, ACSIL) and get working source for any of the other 9 in a
+  single click. No other charting platform ships this.
 - MQL5 source-to-IR round-trip now works, meaning MQL5 indicators can
   be converted to PineScript / EasyLanguage / thinkScript / etc. with no
   manual rewriting.

@@ -1235,19 +1235,21 @@ impl GpuDarwinAnalytics {
 
         // Upload returns
         let returns_bytes: &[u8] = bytemuck_cast_slice(&flat);
-        self.returns_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+        let returns_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("darwin_returns"), size: returns_bytes.len() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        }));
-        self.queue.write_buffer(self.returns_buffer.as_ref().unwrap(), 0, returns_bytes);
+        });
+        self.queue.write_buffer(&returns_buf, 0, returns_bytes);
+        self.returns_buffer = Some(returns_buf);
 
         // Upload lengths
         let lengths_bytes: &[u8] = bytemuck_cast_slice(&lengths);
-        self.lengths_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+        let lengths_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("darwin_lengths"), size: lengths_bytes.len() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        }));
-        self.queue.write_buffer(self.lengths_buffer.as_ref().unwrap(), 0, lengths_bytes);
+        });
+        self.queue.write_buffer(&lengths_buf, 0, lengths_bytes);
+        self.lengths_buffer = Some(lengths_buf);
 
         // Allocate stats output: 10 floats per batch
         let stats_size = batch_count as u64 * 10 * 4;
@@ -1383,18 +1385,20 @@ impl GpuDarwinAnalytics {
 
             // Upload
             let returns_bytes: &[u8] = bytemuck_cast_slice(&flat);
-            self.returns_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            let returns_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("darwin_returns"), size: returns_bytes.len() as u64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-            }));
-            self.queue.write_buffer(self.returns_buffer.as_ref().unwrap(), 0, returns_bytes);
+            });
+            self.queue.write_buffer(&returns_buf, 0, returns_bytes);
+            self.returns_buffer = Some(returns_buf);
 
             let lengths_bytes: &[u8] = bytemuck_cast_slice(&lengths);
-            self.lengths_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            let lengths_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("darwin_lengths"), size: lengths_bytes.len() as u64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-            }));
-            self.queue.write_buffer(self.lengths_buffer.as_ref().unwrap(), 0, lengths_bytes);
+            });
+            self.queue.write_buffer(&lengths_buf, 0, lengths_bytes);
+            self.lengths_buffer = Some(lengths_buf);
 
             let stats_size = batch_count as u64 * 10 * 4;
             self.stats_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -3257,22 +3261,24 @@ impl GpuBacktester {
         self.combo_count = nc;
 
         // Close prices
-        self.bar_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+        let bar_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("bt_closes"), size: (n as u64) * 4,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        }));
-        self.queue.write_buffer(self.bar_buffer.as_ref().unwrap(), 0, bytemuck_cast_slice(closes));
+        });
+        self.queue.write_buffer(&bar_buf, 0, bytemuck_cast_slice(closes));
+        self.bar_buffer = Some(bar_buf);
 
         // OHLC interleaved
         let mut ohlc = Vec::with_capacity(n as usize * 3);
         for i in 0..n as usize {
             ohlc.push(highs[i]); ohlc.push(lows[i]); ohlc.push(closes[i]);
         }
-        self.ohlc_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+        let ohlc_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("bt_ohlc"), size: (n as u64) * 12,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        }));
-        self.queue.write_buffer(self.ohlc_buffer.as_ref().unwrap(), 0, bytemuck_cast_slice(&ohlc));
+        });
+        self.queue.write_buffer(&ohlc_buf, 0, bytemuck_cast_slice(&ohlc));
+        self.ohlc_buffer = Some(ohlc_buf);
 
         // Pack param combos: 8 u32/f32 per combo
         let mut packed = Vec::with_capacity(nc as usize * 8);
@@ -3286,11 +3292,12 @@ impl GpuBacktester {
             packed.push(c.atr_sl_mult);
             packed.push(c.atr_tp_mult);
         }
-        self.params_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+        let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("bt_params"), size: (nc as u64) * 32,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        }));
-        self.queue.write_buffer(self.params_buffer.as_ref().unwrap(), 0, bytemuck_cast_slice(&packed));
+        });
+        self.queue.write_buffer(&params_buf, 0, bytemuck_cast_slice(&packed));
+        self.params_buffer = Some(params_buf);
 
         // Results: 9 floats per combo
         let results_size = (nc as u64) * 36;
@@ -3380,19 +3387,21 @@ impl GpuBacktester {
         self.combo_count = nc;
 
         // Upload bar data
-        self.bar_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+        let bar_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("nnfx_closes"), size: (n as u64) * 4,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        }));
-        self.queue.write_buffer(self.bar_buffer.as_ref().unwrap(), 0, bytemuck_cast_slice(closes));
+        });
+        self.queue.write_buffer(&bar_buf, 0, bytemuck_cast_slice(closes));
+        self.bar_buffer = Some(bar_buf);
 
         let mut ohlc = Vec::with_capacity(n as usize * 3);
         for i in 0..n as usize { ohlc.push(highs[i]); ohlc.push(lows[i]); ohlc.push(closes[i]); }
-        self.ohlc_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+        let ohlc_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("nnfx_ohlc"), size: (n as u64) * 12,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        }));
-        self.queue.write_buffer(self.ohlc_buffer.as_ref().unwrap(), 0, bytemuck_cast_slice(&ohlc));
+        });
+        self.queue.write_buffer(&ohlc_buf, 0, bytemuck_cast_slice(&ohlc));
+        self.ohlc_buffer = Some(ohlc_buf);
 
         // Pack NNFX params: 8 floats per combo [kama_p, fisher_p, atr_p, adx_p, adx_thresh, sl_mult, tp_mult, 0]
         let mut packed = Vec::with_capacity(nc as usize * 8);
@@ -3406,11 +3415,12 @@ impl GpuBacktester {
             packed.push(c.atr_tp_mult);
             packed.push(0.0);
         }
-        self.params_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+        let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("nnfx_params"), size: (nc as u64) * 32,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        }));
-        self.queue.write_buffer(self.params_buffer.as_ref().unwrap(), 0, bytemuck_cast_slice(&packed));
+        });
+        self.queue.write_buffer(&params_buf, 0, bytemuck_cast_slice(&packed));
+        self.params_buffer = Some(params_buf);
 
         let results_size = (nc as u64) * 36;
         self.results_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {

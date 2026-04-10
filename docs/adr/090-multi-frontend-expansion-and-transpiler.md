@@ -350,10 +350,12 @@ transpile between the five line-scanner languages freely.
 - **Trade-signal IR**: `Buy` / `Sell` / `EnterLong` — new IR ops that
   lower to broker-specific calls per target language.
 
-### Out of scope (permanently)
-- **Sierra Chart ACSIL** — C++ with custom preprocessor. Users of this
+### Out of scope (permanently) — ~~subsequently implemented~~
+- ~~**Sierra Chart ACSIL** — C++ with custom preprocessor. Users of this
   platform are already systems programmers; the compatibility argument
-  doesn't apply.
+  doesn't apply.~~ **Implemented in follow-up commit** — ACSIL landed as
+  the 10th frontend with full transpiler support (10×10 matrix). See the
+  ACSIL commit for details.
 - **Wealth-Lab / TradersStudio / MetaStock Formula Language** — declining
   platforms with small userbases. If the community demand materialises we
   can add them later, but they're not on the near-term radar.
