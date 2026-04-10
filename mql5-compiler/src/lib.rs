@@ -12,8 +12,9 @@
 //! - ProBuilder  — ProRealTime (probuilder.rs)
 //! - NinjaScript — NinjaTrader indicator subset (ninjascript.rs)
 //! - cAlgo       — cTrader indicator subset (calgo.rs)
+//! - ACSIL       — Sierra Chart indicator subset (acsil.rs)
 //!
-//! All nine share the same IR + WASM/WGSL codegen pipeline.
+//! All ten share the same IR + WASM/WGSL codegen pipeline.
 //! Because of this common lowering, ANY source language can be
 //! transpiled into ANY other (IR → source backends — see ADR-090).
 
@@ -32,6 +33,7 @@ pub mod afl;
 pub mod probuilder;
 pub mod ninjascript;
 pub mod calgo;
+pub mod acsil;
 pub mod transpile;
 
 
@@ -237,6 +239,16 @@ pub fn compile_ninjascript(source: &str) -> CompileResult {
 /// series access.
 pub fn compile_calgo(source: &str) -> CompileResult {
     calgo::parse_calgo(source)
+}
+
+/// Compile Sierra Chart ACSIL source — indicator subset.
+/// Supports: `SCSubgraphRef` / `SCInputRef` aliases, `sc.SetDefaults` block
+/// for metadata extraction, `sc.SimpleMovAvg` / `ExponentialMovAvg` / `RSI` /
+/// `ATR` / `Highest` / `Lowest` / `StdDev` built-in study functions,
+/// `sc.BaseDataIn[SC_LAST/OPEN/HIGH/LOW/VOLUME]` price series,
+/// `Subgraph[sc.Index] = expr;` buffer assignments.
+pub fn compile_acsil(source: &str) -> CompileResult {
+    acsil::parse_acsil(source)
 }
 
 #[cfg(test)]

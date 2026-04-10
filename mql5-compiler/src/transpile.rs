@@ -53,6 +53,7 @@ pub enum SourceLanguage {
     ProBuilder,
     NinjaScript,
     Calgo,
+    Acsil,
 }
 
 /// Set of languages the transpiler can emit. Phase 2 brings this to parity
@@ -68,6 +69,7 @@ pub enum TargetLanguage {
     ProBuilder,
     NinjaScript,
     Calgo,
+    Acsil,
 }
 
 /// Top-level transpile entry: parse `source` as `from`, lower to IR,
@@ -87,6 +89,7 @@ pub fn source_to_ir(source: &str, lang: SourceLanguage) -> Result<(IrModule, Ind
         SourceLanguage::ProBuilder   => Ok(crate::probuilder::build_ir(source)),
         SourceLanguage::NinjaScript  => Ok(crate::ninjascript::build_ir(source)),
         SourceLanguage::Calgo        => Ok(crate::calgo::build_ir(source)),
+        SourceLanguage::Acsil        => Ok(crate::acsil::build_ir(source)),
         SourceLanguage::Mql5 => crate::build_mql5_ir(source).map_err(|diags| {
             diags.into_iter()
                 .map(|d| format!("{}:{}: {}", d.line, d.col, d.message))
@@ -119,6 +122,7 @@ pub fn emit(ir: &IrModule, meta: &IndicatorMeta, to: TargetLanguage) -> String {
         TargetLanguage::ProBuilder   => emit_probuilder(ir, meta),
         TargetLanguage::NinjaScript  => emit_ninjascript(ir, meta),
         TargetLanguage::Calgo        => emit_calgo(ir, meta),
+        TargetLanguage::Acsil        => emit_acsil(ir, meta),
     }
 }
 
@@ -966,6 +970,140 @@ fn calgo_builtin(name: &str, args: &[String]) -> String {
         "math_max"   => format!("Math.Max({}, {})", a(0), a(1)),
         "math_min"   => format!("Math.Min({}, {})", a(0), a(1)),
         _            => format!("/* {} */ 0.0", name),
+    }
+}
+
+// ── Sierra Chart ACSIL backend ───────────────────────────────────────
+
+fn emit_acsil(ir: &IrModule, meta: &IndicatorMeta) -> String {
+    let mut out = String::new();
+    let name = if meta.short_name.is_empty() { "Transpiled" } else { meta.short_name.as_str() };
+    let func_name = pascal_case(name);
+    out.push_str("#include \"SierraChart.h\"\n\n");
+    out.push_str(&format!("SCDLLName(\"{}\")\n\n", name));
+    out.push_str(&format!("SCSFExport scsf_{}(SCStudyInterfaceRef sc)\n{{\n", func_name));
+    // Declare subgraph and input refs
+    for (i, p) in meta.plots.iter().enumerate() {
+        out.push_str(&format!("    SCSubgraphRef {} = sc.Subgraph[{}];\n",
+            acsil_ident(&p.label, i, "Sub"), i));
+    }
+    for (i, inp) in ir.inputs.iter().enumerate() {
+        out.push_str(&format!("    SCInputRef {} = sc.Input[{}];\n",
+            acsil_ident(&inp.name, i, "Input"), i));
+    }
+    out.push('\n');
+    // SetDefaults block
+    out.push_str("    if (sc.SetDefaults)\n    {\n");
+    out.push_str(&format!("        sc.GraphName = \"{}\";\n", name));
+    out.push_str("        sc.AutoLoop = 1;\n");
+    if meta.separate_window {
+        out.push_str("        sc.GraphRegion = 1;\n");
+    }
+    for (i, p) in meta.plots.iter().enumerate() {
+        let ref_name = acsil_ident(&p.label, i, "Sub");
+        out.push_str(&format!("        {}.Name = \"{}\";\n", ref_name, p.label));
+        out.push_str(&format!("        {}.DrawStyle = DRAWSTYLE_LINE;\n", ref_name));
+        out.push_str(&format!("        {}.PrimaryColor = RGB(0, 0, 255);\n", ref_name));
+    }
+    for (i, inp) in ir.inputs.iter().enumerate() {
+        let ref_name = acsil_ident(&inp.name, i, "Input");
+        out.push_str(&format!("        {}.Name = \"{}\";\n", ref_name, inp.name));
+        match &inp.default {
+            IrValue::I32(n) => out.push_str(&format!("        {}.SetInt({});\n", ref_name, n)),
+            IrValue::F64(f) => out.push_str(&format!("        {}.SetFloat({});\n", ref_name, f)),
+            _ => out.push_str(&format!("        {}.SetInt(0);\n", ref_name)),
+        }
+    }
+    out.push_str("        return;\n    }\n\n");
+    // Body
+    let input_names: Vec<String> = ir.inputs.iter().map(|i| i.name.clone()).collect();
+    let input_ref_names: Vec<(String, String)> = ir.inputs.iter().enumerate()
+        .map(|(i, inp)| (inp.name.clone(), acsil_ident(&inp.name, i, "Input")))
+        .collect();
+    if let Some(ref f) = ir.on_calculate {
+        for (local_name, _) in &f.locals {
+            if input_names.iter().any(|n| n == local_name) { continue; }
+            out.push_str(&format!("    float {} = 0.0;\n", local_name));
+        }
+        for stmt in &f.body {
+            match stmt {
+                IrStmt::SetLocal(local_name, e) => {
+                    out.push_str(&format!("    {} = {};\n",
+                        local_name, emit_expr_acsil(e, &input_ref_names)));
+                }
+                IrStmt::SetBuffer(idx, _, e) => {
+                    let ref_name = meta.plots.get(*idx)
+                        .map(|p| acsil_ident(&p.label, *idx, "Sub"))
+                        .unwrap_or_else(|| format!("sc.Subgraph[{}]", idx));
+                    out.push_str(&format!("    {}[sc.Index] = {};\n",
+                        ref_name, emit_expr_acsil(e, &input_ref_names)));
+                }
+                _ => {}
+            }
+        }
+    }
+    out.push_str("}\n");
+    out
+}
+
+fn emit_expr_acsil(e: &IrExpr, input_refs: &[(String, String)]) -> String {
+    match e {
+        IrExpr::I32Const(n) => format!("{}", n),
+        IrExpr::F64Const(f) => format!("{}f", f),
+        IrExpr::GetLocal(n) => {
+            // If this is an input, emit RefName.GetInt()/GetFloat()
+            if let Some((_, ref_name)) = input_refs.iter().find(|(ir_name, _)| ir_name == n) {
+                format!("{}.GetInt()", ref_name)
+            } else {
+                n.clone()
+            }
+        }
+        IrExpr::IOpen(_)    => "sc.BaseDataIn[SC_OPEN][sc.Index]".into(),
+        IrExpr::IHigh(_)    => "sc.BaseDataIn[SC_HIGH][sc.Index]".into(),
+        IrExpr::ILow(_)     => "sc.BaseDataIn[SC_LOW][sc.Index]".into(),
+        IrExpr::IClose(_)   => "sc.BaseDataIn[SC_LAST][sc.Index]".into(),
+        IrExpr::IVolume(_)  => "sc.BaseDataIn[SC_VOLUME][sc.Index]".into(),
+        IrExpr::IBars       => "sc.Index".into(),
+        IrExpr::BinOp(op, l, r) => format!("({} {} {})",
+            emit_expr_acsil(l, input_refs), binop_sym(op), emit_expr_acsil(r, input_refs)),
+        IrExpr::Call(name, args) => {
+            let a: Vec<String> = args.iter().map(|x| emit_expr_acsil(x, input_refs)).collect();
+            acsil_builtin(name, &a)
+        }
+        IrExpr::UnaryOp(_, inner) => format!("(-{})", emit_expr_acsil(inner, input_refs)),
+        _ => "0.0f".into(),
+    }
+}
+
+fn acsil_builtin(name: &str, args: &[String]) -> String {
+    let a = |i: usize| args.get(i).cloned().unwrap_or_else(|| "0".into());
+    match name {
+        "ta_sma"     => format!("sc.SimpleMovAvg({}, {})", a(0), a(1)),
+        "ta_ema"     => format!("sc.ExponentialMovAvg({}, {})", a(0), a(1)),
+        "ta_rsi"     => format!("sc.RSI({}, {})", a(0), a(1)),
+        "ta_atr"     => format!("sc.ATR({})", a(0)),
+        "ta_highest" => format!("sc.Highest({}, {})", a(0), a(1)),
+        "ta_lowest"  => format!("sc.Lowest({}, {})", a(0), a(1)),
+        "ta_stdev"   => format!("sc.StdDev({}, {})", a(0), a(1)),
+        "math_abs"   => format!("fabs({})", a(0)),
+        "math_sqrt"  => format!("sqrt({})", a(0)),
+        "math_log"   => format!("log({})", a(0)),
+        "math_max"   => format!("sc.FormattedEvaluate(0, 0, 0, 0, 0) /* max({}, {}) */", a(0), a(1)),
+        "math_min"   => format!("sc.FormattedEvaluate(0, 0, 0, 0, 0) /* min({}, {}) */", a(0), a(1)),
+        _            => format!("/* {} */ 0.0f", name),
+    }
+}
+
+/// Create a valid C identifier from a label. If it looks like a C keyword
+/// or is empty, use `prefix + index` instead.
+fn acsil_ident(label: &str, index: usize, prefix: &str) -> String {
+    let cleaned: String = label.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .collect();
+    if cleaned.is_empty() || cleaned.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(true) {
+        format!("{}_{}", prefix, index)
+    } else {
+        cleaned
     }
 }
 

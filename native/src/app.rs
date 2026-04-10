@@ -23593,6 +23593,7 @@ impl TyphooNApp {
                         "ProBuilder",
                         "NinjaScript",
                         "cAlgo (cTrader)",
+                        "ACSIL (Sierra Chart)",
                     ];
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Language:").small());
@@ -23615,6 +23616,7 @@ impl TyphooNApp {
                                     "afl",           // AFL
                                     "itf",           // ProBuilder
                                     "cs",            // NinjaScript + cAlgo (C#)
+                                    "cpp", "h",     // ACSIL (Sierra Chart)
                                     "txt",
                                 ])
                                 .pick_file() {
@@ -23633,6 +23635,13 @@ impl TyphooNApp {
                                             if self.compiler_source.contains("NinjaScriptProperty")
                                                 || self.compiler_source.contains("NinjaTrader")
                                             { 7 } else { 8 }
+                                        }
+                                        Some("cpp") | Some("h") => {
+                                            // Sierra Chart ACSIL if it contains SierraChart.h or SCSF
+                                            if self.compiler_source.contains("SierraChart.h")
+                                                || self.compiler_source.contains("SCSFExport")
+                                                || self.compiler_source.contains("SCStudyInterfaceRef")
+                                            { 9 } else { 0 }
                                         }
                                         _ => 0,
                                     };
@@ -23653,6 +23662,7 @@ impl TyphooNApp {
                                 6 => mql5_compiler::compile_probuilder(&self.compiler_source),
                                 7 => mql5_compiler::compile_ninjascript(&self.compiler_source),
                                 8 => mql5_compiler::compile_calgo(&self.compiler_source),
+                                9 => mql5_compiler::compile_acsil(&self.compiler_source),
                                 _ => mql5_compiler::compile_mql5(&self.compiler_source),
                             };
                             self.compiler_diagnostics.clear();
@@ -23689,6 +23699,7 @@ impl TyphooNApp {
                             ("ProBuilder",    mql5_compiler::transpile::TargetLanguage::ProBuilder),
                             ("NinjaScript",   mql5_compiler::transpile::TargetLanguage::NinjaScript),
                             ("cAlgo (cTrader)", mql5_compiler::transpile::TargetLanguage::Calgo),
+                            ("ACSIL (Sierra Chart)", mql5_compiler::transpile::TargetLanguage::Acsil),
                         ];
                         egui::ComboBox::from_id_salt("compiler_transpile_target")
                             .selected_text(TRANSPILE_TARGETS
@@ -23713,6 +23724,7 @@ impl TyphooNApp {
                                 6 => SourceLanguage::ProBuilder,
                                 7 => SourceLanguage::NinjaScript,
                                 8 => SourceLanguage::Calgo,
+                                9 => SourceLanguage::Acsil,
                                 _ => SourceLanguage::Mql5,
                             };
                             let to = TRANSPILE_TARGETS
