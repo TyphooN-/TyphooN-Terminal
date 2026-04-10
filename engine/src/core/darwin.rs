@@ -4580,16 +4580,24 @@ pub fn compute_rebalance_suggestions(
 
     let mut profit_candidates: std::collections::HashMap<(String, String), (f64, String, String, f64)> = std::collections::HashMap::new();
 
+    // Pre-build lookup maps so the pair loop below is O(1) per lookup instead of O(n).
+    let sharpe_map: std::collections::HashMap<&str, f64> = darwin_var_list.iter()
+        .map(|d| (d.0.as_str(), d.2))
+        .collect();
+    // Open positions indexed by (darwin, symbol) for O(1) lookup.
+    let open_pos_map: std::collections::HashMap<(&str, &str), &(String, String, String, f64, f64, bool)> =
+        all_open.iter().map(|p| ((p.0.as_str(), p.1.as_str()), p)).collect();
+
     for pair in &high_corr_pairs {
         if pair.correlation >= 0.95 { // Darwinex upper correlation threshold
-            let sharpe_a = darwin_var_list.iter().find(|d| d.0 == pair.darwin_a).map(|d| d.2).unwrap_or(0.0);
-            let sharpe_b = darwin_var_list.iter().find(|d| d.0 == pair.darwin_b).map(|d| d.2).unwrap_or(0.0);
+            let sharpe_a = sharpe_map.get(pair.darwin_a.as_str()).copied().unwrap_or(0.0);
+            let sharpe_b = sharpe_map.get(pair.darwin_b.as_str()).copied().unwrap_or(0.0);
             let (reduce_dw, reduce_sym, other_dw) = if sharpe_a < sharpe_b {
                 (&pair.darwin_a, &pair.symbol_a, &pair.darwin_b)
             } else {
                 (&pair.darwin_b, &pair.symbol_b, &pair.darwin_a)
             };
-            if let Some(pos) = all_open.iter().find(|(dw, sym, _, _, _, _)| dw == reduce_dw && sym == reduce_sym) {
+            if let Some(pos) = open_pos_map.get(&(reduce_dw.as_str(), reduce_sym.as_str())) {
                 if !pos.5 { continue; } // skip positions at a loss
 
                 // Protection 1: Don't reduce if this DARWIN only trades 1 symbol (would lose all exposure)
@@ -5070,8 +5078,9 @@ pub fn get_regime_performance(conn: &Connection) -> Result<Vec<RegimePerformance
             ("HIGH_VOL", high_sharpe),
         ];
 
-        let best = regimes.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)).unwrap();
-        let worst = regimes.iter().min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)).unwrap();
+        let default_regime = ("MEDIUM_VOL", med_sharpe);
+        let best = regimes.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(&default_regime);
+        let worst = regimes.iter().min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(&default_regime);
 
         results.push(RegimePerformance {
             darwin_ticker: account.darwin_ticker.clone(),
@@ -6154,14 +6163,18 @@ pub fn compute_drawdown_attribution(conn: &Connection) -> Result<Vec<DrawdownAtt
     }
     let dates: Vec<String> = date_set.into_iter().collect();
 
-    // Build portfolio daily balance + per-DARWIN contribution
-    let mut portfolio_balance = Vec::new();
-    let mut per_darwin_balance: Vec<Vec<f64>> = vec![Vec::new(); all_returns.len()];
+    // Build portfolio daily balance + per-DARWIN contribution.
+    // Pre-build date→balance maps for O(1) lookup (was O(n) per date per darwin).
+    let balance_maps: Vec<std::collections::HashMap<&str, f64>> = all_returns.iter()
+        .map(|(_, returns)| returns.iter().map(|d| (d.date.as_str(), d.balance)).collect())
+        .collect();
+    let mut portfolio_balance = Vec::with_capacity(dates.len());
+    let mut per_darwin_balance: Vec<Vec<f64>> = vec![Vec::with_capacity(dates.len()); all_returns.len()];
 
     for date in &dates {
         let mut total = 0.0;
-        for (i, (_, returns)) in all_returns.iter().enumerate() {
-            let bal = returns.iter().find(|d| d.date == *date).map(|d| d.balance).unwrap_or(0.0);
+        for (i, bmap) in balance_maps.iter().enumerate() {
+            let bal = bmap.get(date.as_str()).copied().unwrap_or(0.0);
             per_darwin_balance[i].push(bal);
             total += bal;
         }

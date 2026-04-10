@@ -776,8 +776,7 @@ pub fn bar_by_bar_backtest(
     }
 
     // Close any open position at last bar
-    if in_position && !bars.is_empty() {
-        let last = bars.last().unwrap();
+    if let (true, Some(last)) = (in_position, bars.last()) {
         let last_idx = bars.len() - 1;
         let pnl = if position_side == "long" {
             (last.close - entry_price) * (initial_equity / entry_price)
@@ -986,8 +985,7 @@ pub fn run_backtest(
     }
 
     // Close any open position at last bar
-    if in_position && !bars.is_empty() {
-        let last = bars.last().unwrap();
+    if let (true, Some(last)) = (in_position, bars.last()) {
         let last_idx = bars.len() - 1;
         let pnl = if position_side == "long" {
             (last.close - entry_price) * (initial_equity / entry_price)
