@@ -14133,7 +14133,7 @@ impl TyphooNApp {
                 }
             }
             "NEWS"          => self.show_news = true,
-            "CALENDAR" | "ECON_CALENDAR" => {
+            "CALENDAR" => {
                 self.show_calendar = true;
                 // Also show the econ calendar panel and fetch if empty (absorbed ECON_CALENDAR).
                 self.show_econ_calendar = true;
@@ -14177,7 +14177,7 @@ impl TyphooNApp {
                     self.log.push_back(LogEntry::info(format!("MT5 sync started ({} sources)...", paths.len())));
                 }
             }
-            "ANALYST" | "PRICE_TARGET" => {
+            "ANALYST" => {
                 self.show_analyst = true;
                 // Also fetch price targets (absorbed PRICE_TARGET command).
                 let sym = self.charts.get(self.active_tab)
@@ -14212,7 +14212,7 @@ impl TyphooNApp {
             "WATCHLISTS"    => {
                 let _ = self.broker_tx.send(BrokerCmd::GetWatchlists);
             }
-            "OPTIONS" | "OPTION_CHAIN" => {
+            "OPTIONS" => {
                 let sym = self.charts.get(self.active_tab)
                     .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
                     .unwrap_or_default();
@@ -14286,7 +14286,7 @@ impl TyphooNApp {
                     "Broker scope → {label} ({} fundamentals in scope)", n
                 )));
             }
-            "DIVEXPLORER" | "EVENTS" | "EVENTCALENDAR" => {
+            "EVENTS" => {
                 // Comprehensive upcoming events view for actively traded symbols.
                 // Aggregates earnings / ex-dividend / dividend-payment dates from
                 // fundamentals, tags each row by broker tradeability (Alpaca / Darwinex / Tasty).
@@ -14371,13 +14371,6 @@ impl TyphooNApp {
                     self.log.push_back(LogEntry::warn("No events found. Run EVSCRAPE/FUNDAMENTALS first to populate earnings/dividend dates."));
                 }
                 self.event_calendar_rows = rows;
-                // DIVEXPLORER preset: Darwinex + dividends only.
-                if cmd_upper == "DIVEXPLORER" {
-                    self.event_filter_source = EventSource::Darwinex;
-                    self.event_filter_earnings = false;
-                    self.event_filter_exdiv = true;
-                    self.event_filter_divpay = true;
-                }
                 self.show_event_calendar = true;
             }
             "CONFLUENCE"    => self.show_confluence = true,
@@ -14408,7 +14401,7 @@ impl TyphooNApp {
             "HELP"          => self.show_help = true,
             "FULLSCREEN"    => ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true)),
             "CLOSE_WINDOWS" => self.close_all_windows(),
-            "NEW_WINDOW" | "POPOUT" => {
+            "NEW_WINDOW" => {
                 let exe = std::env::current_exe().unwrap_or_default();
                 match std::process::Command::new(&exe).spawn() {
                     Ok(_) => self.log.push_back(LogEntry::info("New window launched (separate process)")),
@@ -14615,20 +14608,10 @@ impl TyphooNApp {
                 self.show_alert_builder = true;
                 self.alert_symbol = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
             }
-            "DARWINEXOUTLIERS" | "OUTLIERS" | "ALPACAOUTLIERS" | "TASTYOUTLIERS" => {
+            "OUTLIERS" => {
                 // Multi-dimensional outlier detection: VaR + EV + ATR + SEC + Volume
-                // Per-command broker scope override: ALPACAOUTLIERS/TASTYOUTLIERS/DARWINEXOUTLIERS
-                // temporarily narrow the scope for this run without mutating the global.
-                let scope_override = match cmd_upper.as_str() {
-                    "ALPACAOUTLIERS" => Some(EventSource::Alpaca),
-                    "TASTYOUTLIERS" => Some(EventSource::Tasty),
-                    "DARWINEXOUTLIERS" => Some(EventSource::Darwinex),
-                    _ => None,
-                };
-                let prev_scope = self.broker_scope;
-                if let Some(s) = scope_override { self.broker_scope = s; }
+                // Uses the global broker scope (set via SCOPE command).
                 let fund_owned = self.scoped_fundamentals_owned();
-                if let Some(_) = scope_override { self.broker_scope = prev_scope; }
                 if let Some(ref cache) = self.cache {
                     if let Some(_conn) = cache.try_connection() {
                         use typhoon_engine::core::var;
@@ -31866,7 +31849,7 @@ impl eframe::App for TyphooNApp {
                                         }
                                         self.log.push_back(LogEntry::info("LAN remote: CryptoCompare backfill started"));
                                     }
-                                    "ECON_CALENDAR" | "CALENDAR" => {
+                                    "CALENDAR" => {
                                         if !self.finnhub_key.is_empty() {
                                             let _ = self.broker_tx.send(BrokerCmd::FetchEconCalendar { finnhub_key: self.finnhub_key.clone() });
                                             self.log.push_back(LogEntry::info("LAN remote: econ calendar fetch started"));
