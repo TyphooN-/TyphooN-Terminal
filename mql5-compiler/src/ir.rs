@@ -455,19 +455,40 @@ fn lower_expr(expr: &Expr) -> Result<IrExpr, CompileError> {
             // Map MQL5 built-in functions to IR
             let ir_args: Vec<IrExpr> = args.iter().map(|a| lower_expr(a)).collect::<Result<_, _>>()?;
             match func.as_str() {
-                "iOpen" if !ir_args.is_empty() => Ok(IrExpr::IOpen(Box::new(ir_args.into_iter().last().unwrap()))),
-                "iHigh" if !ir_args.is_empty() => Ok(IrExpr::IHigh(Box::new(ir_args.into_iter().last().unwrap()))),
-                "iLow" if !ir_args.is_empty() => Ok(IrExpr::ILow(Box::new(ir_args.into_iter().last().unwrap()))),
-                "iClose" if !ir_args.is_empty() => Ok(IrExpr::IClose(Box::new(ir_args.into_iter().last().unwrap()))),
-                "iVolume" if !ir_args.is_empty() => Ok(IrExpr::IVolume(Box::new(ir_args.into_iter().last().unwrap()))),
+                "iOpen" if !ir_args.is_empty() => {
+                    // SAFETY: guarded by !is_empty() — last() always Some.
+                    let last = ir_args.into_iter().last().expect("guarded by !is_empty");
+                    Ok(IrExpr::IOpen(Box::new(last)))
+                }
+                "iHigh" if !ir_args.is_empty() => {
+                    let last = ir_args.into_iter().last().expect("guarded by !is_empty");
+                    Ok(IrExpr::IHigh(Box::new(last)))
+                }
+                "iLow" if !ir_args.is_empty() => {
+                    let last = ir_args.into_iter().last().expect("guarded by !is_empty");
+                    Ok(IrExpr::ILow(Box::new(last)))
+                }
+                "iClose" if !ir_args.is_empty() => {
+                    let last = ir_args.into_iter().last().expect("guarded by !is_empty");
+                    Ok(IrExpr::IClose(Box::new(last)))
+                }
+                "iVolume" if !ir_args.is_empty() => {
+                    let last = ir_args.into_iter().last().expect("guarded by !is_empty");
+                    Ok(IrExpr::IVolume(Box::new(last)))
+                }
                 "iBars" => Ok(IrExpr::IBars),
                 "MathMax" if ir_args.len() == 2 => {
+                    // SAFETY: guarded by len() == 2 — into_iter yields exactly 2.
                     let mut it = ir_args.into_iter();
-                    Ok(IrExpr::Call("math_max".into(), vec![it.next().unwrap(), it.next().unwrap()]))
+                    let a = it.next().expect("guarded by len==2");
+                    let b = it.next().expect("guarded by len==2");
+                    Ok(IrExpr::Call("math_max".into(), vec![a, b]))
                 }
                 "MathMin" if ir_args.len() == 2 => {
                     let mut it = ir_args.into_iter();
-                    Ok(IrExpr::Call("math_min".into(), vec![it.next().unwrap(), it.next().unwrap()]))
+                    let a = it.next().expect("guarded by len==2");
+                    let b = it.next().expect("guarded by len==2");
+                    Ok(IrExpr::Call("math_min".into(), vec![a, b]))
                 }
                 "MathAbs" if ir_args.len() == 1 => {
                     Ok(IrExpr::Call("math_abs".into(), ir_args))
