@@ -8821,7 +8821,7 @@ const COMMANDS: &[Command] = &[
     // Research
     Command { name: "FRED",          desc: "FRED economic data dashboard (Fed Funds, CPI, GDP, VIX, yields)" },
     Command { name: "NEWS",          desc: "Market news & events" },
-    Command { name: "CALENDAR",      desc: "Economic calendar" },
+    Command { name: "CALENDAR",      desc: "Economic calendar — FOMC, NFP, CPI, PMI, earnings releases" },
     Command { name: "SEC",           desc: "SEC filings (10-K, 10-Q, 8-K)" },
     Command { name: "INSIDER",       desc: "Insider trades (Form 4)" },
     Command { name: "FUNDAMENTALS",  desc: "Fundamentals viewer (EV, ratios, profile)" },
@@ -8831,15 +8831,13 @@ const COMMANDS: &[Command] = &[
     Command { name: "DIVIDENDS",     desc: "Upcoming dividend calendar" },
     Command { name: "EVSCRAPE",      desc: "Scrape fundamentals for all MT5 symbols" },
     Command { name: "MT5SYNC",       desc: "Sync bar data from MT5 BarCacheWriter databases" },
-    Command { name: "ANALYST",       desc: "Analyst ratings & targets" },
-    Command { name: "PRICE_TARGET",  desc: "Analyst price targets (Finnhub)" },
+    Command { name: "ANALYST",       desc: "Analyst ratings, price targets & recommendations" },
     Command { name: "SHORT_INTEREST",desc: "Short interest data (Finnhub)" },
     Command { name: "CORPORATE",     desc: "Corporate actions (splits, dividends, mergers)" },
     Command { name: "MOST_ACTIVE",   desc: "Most active stocks by volume" },
     Command { name: "PORTFOLIO_HIST",desc: "Portfolio equity history" },
     Command { name: "HOLDERS",       desc: "Institutional holders" },
-    Command { name: "OPTION_CHAIN",  desc: "tastytrade option chain for current symbol" },
-    Command { name: "OPTIONS",       desc: "Alpaca options chain for current symbol" },
+    Command { name: "OPTIONS",       desc: "Options chain for current symbol (Alpaca + tastytrade)" },
     Command { name: "WATCHLISTS",    desc: "Alpaca watchlists" },
     Command { name: "COMPILE",       desc: "Indicator compiler: MQL5/MQL4/PineScript v4+v5/EasyLanguage/thinkScript/AFL/ProBuilder/NinjaScript/cAlgo + cross-language transpiler" },
     Command { name: "STREAM",        desc: "Start real-time WebSocket stream for current symbol" },
@@ -8855,7 +8853,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "HV_CONE",       desc: "Historical volatility cone (percentile rank)" },
     Command { name: "SECTOR_HEATMAP",desc: "Sector performance heatmap" },
     Command { name: "DIVSCREEN",     desc: "Dividend yield screener (ranked by yield)" },
-    Command { name: "EVENTS",        desc: "Upcoming events calendar (earnings/dividends) per broker (aliases: DIVEXPLORER, EVENTCALENDAR)" },
+    Command { name: "EVENTS",        desc: "Upcoming events calendar (earnings/dividends) per broker" },
     Command { name: "CONFLUENCE",    desc: "Multi-timeframe RSI/MACD confluence score" },
     Command { name: "STAT_ARB",      desc: "Statistical arbitrage pairs (z-score + half-life)" },
     Command { name: "RISK_BUDGET",   desc: "Portfolio risk budget (marginal VaR contribution)" },
@@ -8877,7 +8875,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "DSCORE",        desc: "D-Score estimation components" },
     Command { name: "DARWIN_BROWSER", desc: "Browse DARWIN FTP universe (50K DARWINs)" },
     Command { name: "DARWINIA_SCAN",  desc: "DarwinIA universe scan — top DARWINs by Sharpe (GPU → CPU)" },
-    Command { name: "OUTLIERS",        desc: "Multi-dim outlier scanner: P/E + EV + short ratio + SEC filings (aliases: DARWINEXOUTLIERS)" },
+    Command { name: "OUTLIERS",        desc: "Multi-dim outlier scanner: P/E + EV + short ratio + SEC filings" },
     Command { name: "DARWINVAR",       desc: "Outlier scanner on DARWIN VaR95 values + Darwinex corridor check (3.25%-6.5%)" },
     Command { name: "EVOUTLIERS",      desc: "Outlier scanner on enterprise value (EV), grouped by sector" },
     Command { name: "EXPORT_DARWIN", desc: "Export all DARWIN data to JSON file" },
@@ -9010,11 +9008,9 @@ const COMMANDS: &[Command] = &[
     Command { name: "SUPPLY_DEMAND", desc: "Toggle supply/demand zone detection" },
     Command { name: "LAN_SYNC",      desc: "LAN sync — start server or connect to server by IP" },
     Command { name: "NEW_WINDOW",    desc: "Open new terminal window (separate process, multi-monitor)" },
-    Command { name: "POPOUT",        desc: "Pop out new terminal window (alias for NEW_WINDOW)" },
     // Unusual Whales / Godel Terminal features
     Command { name: "UNUSUAL_VOLUME", desc: "Unusual volume scanner — symbols with volume > 2x 20-day average" },
     Command { name: "SECTOR_ROTATION", desc: "Sector ETF relative performance (11 SPDR sectors)" },
-    Command { name: "ECON_CALENDAR", desc: "Economic calendar — upcoming FOMC, NFP, CPI, PMI releases" },
     Command { name: "CONGRESS", desc: "Congressional stock trades (House Stock Watcher)" },
     // Chart templates
     Command { name: "SAVE_TEMPLATE", desc: "Save current indicators as named template (SAVE_TEMPLATE <name>)" },
@@ -10249,7 +10245,7 @@ impl TyphooNApp {
                         BrokerCmd::CryptoCompareBackfill { .. } => Some("CRYPTOCOMPARE"),
                         BrokerCmd::Mt5Sync { .. } => Some("MT5_SYNC"),
                         BrokerCmd::FinnhubNews { .. } => Some("FINNHUB_NEWS"),
-                        BrokerCmd::FetchEconCalendar { .. } => Some("ECON_CALENDAR"),
+                        BrokerCmd::FetchEconCalendar { .. } => Some("CALENDAR"),
                         BrokerCmd::FetchCongressTrades => Some("CONGRESS_TRADES"),
                         BrokerCmd::FredFetch { .. } => Some("FRED_DATA"),
                         BrokerCmd::DarwinImportAll { .. } => Some("DARWIN_IMPORT"),
@@ -14137,7 +14133,14 @@ impl TyphooNApp {
                 }
             }
             "NEWS"          => self.show_news = true,
-            "CALENDAR"      => self.show_calendar = true,
+            "CALENDAR" | "ECON_CALENDAR" => {
+                self.show_calendar = true;
+                // Also show the econ calendar panel and fetch if empty (absorbed ECON_CALENDAR).
+                self.show_econ_calendar = true;
+                if self.econ_events.is_empty() {
+                    let _ = self.broker_tx.send(BrokerCmd::FetchEconCalendar { finnhub_key: self.finnhub_key.clone() });
+                }
+            }
             "SEC"           => self.show_sec = true,
             "INSIDER"       => self.show_insider = true,
             "FUNDAMENTALS"  => self.show_fundamentals = true,
@@ -14174,8 +14177,9 @@ impl TyphooNApp {
                     self.log.push_back(LogEntry::info(format!("MT5 sync started ({} sources)...", paths.len())));
                 }
             }
-            "ANALYST"       => self.show_analyst = true,
-            "PRICE_TARGET"  => {
+            "ANALYST" | "PRICE_TARGET" => {
+                self.show_analyst = true;
+                // Also fetch price targets (absorbed PRICE_TARGET command).
                 let sym = self.charts.get(self.active_tab)
                     .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
                     .unwrap_or_default();
@@ -14208,28 +14212,21 @@ impl TyphooNApp {
             "WATCHLISTS"    => {
                 let _ = self.broker_tx.send(BrokerCmd::GetWatchlists);
             }
-            "OPTIONS"       => {
+            "OPTIONS" | "OPTION_CHAIN" => {
                 let sym = self.charts.get(self.active_tab)
                     .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    // Default to nearest monthly expiry (approximate)
+                    // Fetch from both brokers — Alpaca equity options + tastytrade
                     let expiry = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                    let _ = self.broker_tx.send(BrokerCmd::GetOptionsChain { symbol: sym, expiry });
-                }
-            }
-            "HOLDERS"       => self.show_holders = true,
-            "OPTION_CHAIN"  => {
-                let sym = self.charts.get(self.active_tab)
-                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
-                    .unwrap_or_default();
-                if !sym.is_empty() {
+                    let _ = self.broker_tx.send(BrokerCmd::GetOptionsChain { symbol: sym.clone(), expiry });
                     self.option_chain_sym = sym.clone();
                     let _ = self.broker_tx.send(BrokerCmd::TastytradeOptionChain { symbol: sym });
                     self.show_option_chain = true;
                     self.log.push_back(LogEntry::info(format!("Fetching option chain for {}...", self.option_chain_sym)));
                 }
             }
+            "HOLDERS"       => self.show_holders = true,
             "COMPILE"       => self.show_indicator_compiler = true,
             "STREAM"        => {
                 let sym = self.charts.get(self.active_tab)
@@ -14402,12 +14399,6 @@ impl TyphooNApp {
                 self.log.push_back(LogEntry::info("Scanning unusual volume..."));
             }
             "SECTOR_ROTATION" => self.show_sector_rotation = true,
-            "ECON_CALENDAR" => {
-                self.show_econ_calendar = true;
-                if self.econ_events.is_empty() {
-                    let _ = self.broker_tx.send(BrokerCmd::FetchEconCalendar { finnhub_key: self.finnhub_key.clone() });
-                }
-            }
             "CONGRESS" => {
                 self.show_congress = true;
                 if self.congress_trades.is_empty() {
@@ -22640,7 +22631,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Failed to parse option chain data.").color(oc_red).small());
                         }
                     } else {
-                        ui.label(egui::RichText::new(format!("No data cached for {} — click Refresh or run OPTION_CHAIN command.", sym)).color(oc_dim).small());
+                        ui.label(egui::RichText::new(format!("No data cached for {} — click Refresh or run OPTIONS command.", sym)).color(oc_dim).small());
                     }
                 });
         }
@@ -24289,7 +24280,7 @@ impl TyphooNApp {
                                 }
                             });
                         } else {
-                            ui.label(egui::RichText::new("No outliers detected. Run EVSCRAPE first, then DARWINEXOUTLIERS.").color(ol_dim));
+                            ui.label(egui::RichText::new("No outliers detected. Run EVSCRAPE first, then OUTLIERS.").color(ol_dim));
                         }
                     });
                 });
@@ -31875,7 +31866,7 @@ impl eframe::App for TyphooNApp {
                                         }
                                         self.log.push_back(LogEntry::info("LAN remote: CryptoCompare backfill started"));
                                     }
-                                    "ECON_CALENDAR" => {
+                                    "ECON_CALENDAR" | "CALENDAR" => {
                                         if !self.finnhub_key.is_empty() {
                                             let _ = self.broker_tx.send(BrokerCmd::FetchEconCalendar { finnhub_key: self.finnhub_key.clone() });
                                             self.log.push_back(LogEntry::info("LAN remote: econ calendar fetch started"));
