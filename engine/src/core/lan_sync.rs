@@ -541,14 +541,14 @@ impl LanSyncServer {
                             ).await;
                             match tls_result {
                                 Ok(Ok(tls_stream)) => {
-                                    {
+                                    // Update status under lock, then write KV outside lock to avoid I/O contention
+                                    let ips_json = {
                                         let mut s = status.lock().await;
                                         s.clients += 1;
                                         s.client_ips.push(client_ip.clone());
-                                        // Persist client list to KV for UI display
-                                        let ips_json = serde_json::to_string(&s.client_ips).unwrap_or_default();
-                                        let _ = cache.put_kv("lan:server:clients", &ips_json);
-                                    }
+                                        serde_json::to_string(&s.client_ips).unwrap_or_default()
+                                    }; // lock dropped here — before I/O
+                                    let _ = cache.put_kv("lan:server:clients", &ips_json);
                                     handle_client_tls(tls_stream, cache, secret, status, &client_ip).await;
                                 }
                                 Ok(Err(e)) => {
@@ -596,10 +596,13 @@ async fn handle_client_tls(
         let cache = cache.clone();
         let ip = ip.to_string();
         async move {
-            let mut s = status.lock().await;
-            s.clients = s.clients.saturating_sub(1);
-            s.client_ips.retain(|i| i != &ip);
-            let ips_json = serde_json::to_string(&s.client_ips).unwrap_or_default();
+            // Update status under lock, write KV outside lock to avoid I/O contention
+            let ips_json = {
+                let mut s = status.lock().await;
+                s.clients = s.clients.saturating_sub(1);
+                s.client_ips.retain(|i| i != &ip);
+                serde_json::to_string(&s.client_ips).unwrap_or_default()
+            }; // lock dropped here
             let _ = cache.put_kv("lan:server:clients", &ips_json);
         }
     };
@@ -1319,6 +1322,12 @@ async fn client_sync_loop(
     loop {
         match read_next(stream).await? {
             SyncMessage::TableSyncData { table, rows_json } => {
+                // Validate table name against whitelist (defense in depth — server is trusted but verify)
+                if !SYNCABLE_TABLES.contains(&table.as_str()) {
+                    tracing::warn!("LAN sync client: server sent non-whitelisted table '{}', skipping", table);
+                    table_count += 1;
+                    continue;
+                }
                 // Decompress zstd + base64
                 let compressed = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &rows_json)
                     .map_err(|e| format!("Base64 decode table '{}': {e}", table))?;

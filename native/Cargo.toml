@@ -54,3 +54,6 @@ image = "0.25"
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Selenium WebDriver for Darwinex Zero scraping (ADR-093)
+thirtyfour = "0.36"

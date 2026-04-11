@@ -1,4 +1,9 @@
 //! MQL5 Parser — pest grammar → AST.
+//!
+//! Zero `.unwrap()` in production code — all iterator advances use `next_or_err()`
+//! which returns `CompileError::Internal` if a grammar-guaranteed child is missing.
+//! This can only happen if the pest grammar and parser get out of sync, in which
+//! case a clear error message is far better than a panic.
 
 use pest::Parser;
 use pest_derive::Parser;
@@ -9,6 +14,17 @@ use crate::error::CompileError;
 #[derive(Parser)]
 #[grammar = "mql5.pest"]
 struct Mql5Parser;
+
+/// Advance a pest `Pairs` iterator, returning `CompileError::Internal` if empty.
+/// Replaces all `.next().unwrap()` calls with proper error propagation.
+fn next_or_err<'a>(
+    iter: &mut pest::iterators::Pairs<'a, Rule>,
+    context: &str,
+) -> Result<pest::iterators::Pair<'a, Rule>, CompileError> {
+    iter.next().ok_or_else(|| CompileError::Internal(
+        format!("parser: expected child in {context}, got none — grammar/parser mismatch")
+    ))
+}
 
 /// Parse MQL5 source into an AST.
 pub fn parse_mql5(source: &str) -> Result<Program, CompileError> {
@@ -46,7 +62,7 @@ fn parse_top_level(pair: pest::iterators::Pair<'_, Rule>) -> Result<Option<TopLe
     match pair.as_rule() {
         Rule::property_directive => {
             let mut inner = pair.into_inner();
-            let name = inner.next().unwrap().as_str().to_string();
+            let name = next_or_err(&mut inner, "property_directive name")?.as_str().to_string();
             let value = if let Some(expr_pair) = inner.next() {
                 parse_expr(expr_pair)?
             } else {
@@ -55,15 +71,15 @@ fn parse_top_level(pair: pest::iterators::Pair<'_, Rule>) -> Result<Option<TopLe
             Ok(Some(TopLevel::Property(Property { name, value, line })))
         }
         Rule::preprocessor => {
-            let inner = pair.into_inner().next().unwrap();
+            let inner = next_or_err(&mut pair.into_inner(), "preprocessor")?;
             match inner.as_rule() {
                 Rule::include_dir => {
-                    let path = inner.into_inner().next().unwrap().as_str().to_string();
+                    let path = next_or_err(&mut inner.into_inner(), "include_dir path")?.as_str().to_string();
                     Ok(Some(TopLevel::Include(path)))
                 }
                 Rule::define_dir => {
                     let mut parts = inner.into_inner();
-                    let name = parts.next().unwrap().as_str().to_string();
+                    let name = next_or_err(&mut parts, "define_dir name")?.as_str().to_string();
                     let value = parts.next().map(|p| parse_expr(p)).transpose()?;
                     Ok(Some(TopLevel::Define(name, value)))
                 }
@@ -71,19 +87,19 @@ fn parse_top_level(pair: pest::iterators::Pair<'_, Rule>) -> Result<Option<TopLe
             }
         }
         Rule::global_decl => {
-            let inner = pair.into_inner().next().unwrap();
+            let inner = next_or_err(&mut pair.into_inner(), "global_decl")?;
             match inner.as_rule() {
                 Rule::input_decl => {
                     let mut parts = inner.into_inner();
-                    let type_name = parse_type_spec(parts.next().unwrap());
-                    let name = parts.next().unwrap().as_str().to_string();
+                    let type_name = parse_type_spec(next_or_err(&mut parts, "input_decl type")?);
+                    let name = next_or_err(&mut parts, "input_decl name")?.as_str().to_string();
                     let default = parts.next().map(|p| parse_expr(p)).transpose()?;
                     Ok(Some(TopLevel::Input(InputDecl { type_name, name, default, line })))
                 }
                 Rule::sinput_decl => {
                     let mut parts = inner.into_inner();
-                    let type_name = parse_type_spec(parts.next().unwrap());
-                    let name = parts.next().unwrap().as_str().to_string();
+                    let type_name = parse_type_spec(next_or_err(&mut parts, "sinput_decl type")?);
+                    let name = next_or_err(&mut parts, "sinput_decl name")?.as_str().to_string();
                     let default = parts.next().map(|p| parse_expr(p)).transpose()?;
                     Ok(Some(TopLevel::Input(InputDecl { type_name, name, default, line })))
                 }
@@ -100,12 +116,12 @@ fn parse_top_level(pair: pest::iterators::Pair<'_, Rule>) -> Result<Option<TopLe
         }
         Rule::enum_def => {
             let mut inner = pair.into_inner();
-            let name = inner.next().unwrap().as_str().to_string();
+            let name = next_or_err(&mut inner, "enum_def name")?.as_str().to_string();
             let mut members = Vec::new();
             for member in inner {
                 if member.as_rule() == Rule::enum_member {
                     let mut parts = member.into_inner();
-                    let mname = parts.next().unwrap().as_str().to_string();
+                    let mname = next_or_err(&mut parts, "enum_member name")?.as_str().to_string();
                     let value = parts.next().map(|p| parse_expr(p)).transpose()?;
                     members.push((mname, value));
                 }
@@ -114,7 +130,7 @@ fn parse_top_level(pair: pest::iterators::Pair<'_, Rule>) -> Result<Option<TopLe
         }
         Rule::struct_def => {
             let mut inner = pair.into_inner();
-            let name = inner.next().unwrap().as_str().to_string();
+            let name = next_or_err(&mut inner, "struct_def name")?.as_str().to_string();
             let mut fields = Vec::new();
             let mut methods = Vec::new();
             for item in inner {
@@ -147,12 +163,12 @@ fn parse_var_decl(pair: pest::iterators::Pair<'_, Rule>, line: usize) -> Result<
 
     let mut inner = pair.into_inner();
     // Skip static/const keywords handled above
-    let type_pair = inner.next().unwrap();
+    let type_pair = next_or_err(&mut inner, "var_decl type")?;
     let type_name = parse_type_spec(type_pair);
 
-    let var_init = inner.next().unwrap();
+    let var_init = next_or_err(&mut inner, "var_decl var_init")?;
     let mut var_parts = var_init.into_inner();
-    let name = var_parts.next().unwrap().as_str().to_string();
+    let name = next_or_err(&mut var_parts, "var_decl name")?.as_str().to_string();
 
     let mut is_array = false;
     let mut array_size = None;
@@ -187,8 +203,8 @@ fn parse_function_def(pair: pest::iterators::Pair<'_, Rule>) -> Result<FunctionD
     let is_static = text.starts_with("static");
 
     let mut inner = pair.into_inner();
-    let return_type = parse_type_spec(inner.next().unwrap());
-    let name = inner.next().unwrap().as_str().to_string();
+    let return_type = parse_type_spec(next_or_err(&mut inner, "function_def return_type")?);
+    let name = next_or_err(&mut inner, "function_def name")?.as_str().to_string();
 
     let mut params = Vec::new();
     let mut body = Vec::new();
@@ -215,8 +231,8 @@ fn parse_param(pair: pest::iterators::Pair<'_, Rule>) -> Result<Param, CompileEr
     let is_ref = text.contains('&');
 
     let mut inner = pair.into_inner();
-    let type_name = parse_type_spec(inner.next().unwrap());
-    let name = inner.next().unwrap().as_str().to_string();
+    let type_name = parse_type_spec(next_or_err(&mut inner, "param type")?);
+    let name = next_or_err(&mut inner, "param name")?.as_str().to_string();
 
     let mut is_array = false;
     let mut default = None;
@@ -243,13 +259,12 @@ fn parse_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<Stmt, CompileErro
     let line = pair.line_col().0;
     match pair.as_rule() {
         Rule::stmt => {
-            // Unwrap the stmt wrapper to get the actual statement variant
-            let inner = pair.into_inner().next().unwrap();
+            let inner = next_or_err(&mut pair.into_inner(), "stmt wrapper")?;
             return parse_stmt(inner);
         }
         Rule::var_decl => Ok(Stmt::VarDecl(parse_var_decl(pair, line)?)),
         Rule::expr_stmt => {
-            let expr_pair = pair.into_inner().next().unwrap();
+            let expr_pair = next_or_err(&mut pair.into_inner(), "expr_stmt")?;
             Ok(Stmt::Expr(parse_expr(expr_pair)?))
         }
         Rule::return_stmt => {
@@ -258,8 +273,8 @@ fn parse_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<Stmt, CompileErro
         }
         Rule::if_stmt => {
             let mut inner = pair.into_inner();
-            let cond = parse_expr(inner.next().unwrap())?;
-            let then = vec![parse_stmt(inner.next().unwrap())?];
+            let cond = parse_expr(next_or_err(&mut inner, "if_stmt cond")?)?;
+            let then = vec![parse_stmt(next_or_err(&mut inner, "if_stmt then")?)?];
             let else_ = match inner.next() {
                 Some(p) => Some(vec![parse_stmt(p)?]),
                 None => None,
@@ -268,7 +283,7 @@ fn parse_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<Stmt, CompileErro
         }
         Rule::for_stmt => {
             let mut inner = pair.into_inner();
-            let init_pair = inner.next().unwrap();
+            let init_pair = next_or_err(&mut inner, "for_stmt init")?;
             let init = match init_pair.as_rule() {
                 Rule::empty_stmt => None,
                 _ => Some(Box::new(parse_stmt(init_pair)?)),
@@ -276,20 +291,20 @@ fn parse_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<Stmt, CompileErro
             let cond = inner.next().map(|p| parse_expr(p)).transpose()?;
             // Skip semicolon
             let step = inner.next().map(|p| parse_expr(p)).transpose()?;
-            let body_pair = inner.next().unwrap();
+            let body_pair = next_or_err(&mut inner, "for_stmt body")?;
             let body = vec![parse_stmt(body_pair)?];
             Ok(Stmt::For { init, cond, step, body, line })
         }
         Rule::while_stmt => {
             let mut inner = pair.into_inner();
-            let cond = parse_expr(inner.next().unwrap())?;
-            let body = vec![parse_stmt(inner.next().unwrap())?];
+            let cond = parse_expr(next_or_err(&mut inner, "while_stmt cond")?)?;
+            let body = vec![parse_stmt(next_or_err(&mut inner, "while_stmt body")?)?];
             Ok(Stmt::While { cond, body, line })
         }
         Rule::do_while_stmt => {
             let mut inner = pair.into_inner();
-            let body = vec![parse_stmt(inner.next().unwrap())?];
-            let cond = parse_expr(inner.next().unwrap())?;
+            let body = vec![parse_stmt(next_or_err(&mut inner, "do_while body")?)?];
+            let cond = parse_expr(next_or_err(&mut inner, "do_while cond")?)?;
             Ok(Stmt::DoWhile { body, cond, line })
         }
         Rule::break_stmt => Ok(Stmt::Break),
@@ -298,14 +313,14 @@ fn parse_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<Stmt, CompileErro
         Rule::empty_stmt => Ok(Stmt::Empty),
         Rule::switch_stmt => {
             let mut inner = pair.into_inner();
-            let expr = parse_expr(inner.next().unwrap())?;
+            let expr = parse_expr(next_or_err(&mut inner, "switch_stmt expr")?)?;
             let mut cases = Vec::new();
             let mut default = None;
             for clause in inner {
                 match clause.as_rule() {
                     Rule::case_clause => {
                         let mut parts = clause.into_inner();
-                        let val = parse_expr(parts.next().unwrap())?;
+                        let val = parse_expr(next_or_err(&mut parts, "case_clause value")?)?;
                         let stmts: Vec<Stmt> = parts.map(|p| parse_stmt(p)).collect::<Result<_, _>>()?;
                         cases.push((val, stmts));
                     }
@@ -329,14 +344,14 @@ fn parse_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Expr, CompileErro
         Rule::bitand_expr | Rule::eq_expr | Rule::rel_expr | Rule::shift_expr |
         Rule::add_expr | Rule::mul_expr => {
             let mut inner = pair.into_inner();
-            let first = inner.next().unwrap();
+            let first = next_or_err(&mut inner, "expr first operand")?;
             let mut result = parse_expr(first)?;
 
             while let Some(op_or_next) = inner.next() {
                 // Could be an operator token or the next operand
                 match op_or_next.as_rule() {
                     Rule::assign_op => {
-                        let rhs = parse_expr(inner.next().unwrap())?;
+                        let rhs = parse_expr(next_or_err(&mut inner, "assign rhs")?)?;
                         let op = match op_or_next.as_str() {
                             "=" => AssignOp::Assign,
                             "+=" => AssignOp::AddAssign,
@@ -369,7 +384,7 @@ fn parse_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Expr, CompileErro
                         };
                         if let Some(op) = maybe_op {
                             // Next token is the right-hand operand
-                            let rhs = parse_expr(inner.next().unwrap())?;
+                            let rhs = parse_expr(next_or_err(&mut inner, "binop rhs")?)?;
                             result = Expr::BinOp { op, left: Box::new(result), right: Box::new(rhs) };
                         } else {
                             // Not an operator — treat as operand (fallback for nested expression rules)
@@ -387,9 +402,9 @@ fn parse_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Expr, CompileErro
         }
         Rule::unary_expr => {
             let mut inner = pair.into_inner();
-            let first = inner.next().unwrap();
+            let first = next_or_err(&mut inner, "unary_expr")?;
             if first.as_rule() == Rule::unary_op {
-                let operand = parse_expr(inner.next().unwrap())?;
+                let operand = parse_expr(next_or_err(&mut inner, "unary_expr operand")?)?;
                 let op = match first.as_str() {
                     "-" => UnaryOp::Neg,
                     "!" => UnaryOp::Not,
@@ -405,7 +420,7 @@ fn parse_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Expr, CompileErro
         }
         Rule::postfix_expr => {
             let mut inner = pair.into_inner();
-            let mut result = parse_expr(inner.next().unwrap())?;
+            let mut result = parse_expr(next_or_err(&mut inner, "postfix_expr base")?)?;
             for op in inner {
                 // postfix_op wraps call_args/index_access/member_access or IS ++/--
                 // For ++/--, the postfix_op has no inner children — it IS the operator
@@ -414,7 +429,7 @@ fn parse_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Expr, CompileErro
                     if op_str == "++" || op_str == "--" {
                         op // ++/-- are leaf tokens, use directly
                     } else {
-                        op.into_inner().next().unwrap() // unwrap call_args/index_access/member_access
+                        next_or_err(&mut op.into_inner(), "postfix_op inner")? // call_args/index_access/member_access
                     }
                 } else {
                     op
@@ -432,11 +447,11 @@ fn parse_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Expr, CompileErro
                         result = Expr::Call { func: func_name, args };
                     }
                     Rule::index_access => {
-                        let idx = parse_expr(actual_op.into_inner().next().unwrap())?;
+                        let idx = parse_expr(next_or_err(&mut actual_op.into_inner(), "index_access expr")?)?;
                         result = Expr::Index { array: Box::new(result), index: Box::new(idx) };
                     }
                     Rule::member_access => {
-                        let field = actual_op.into_inner().next().unwrap().as_str().to_string();
+                        let field = next_or_err(&mut actual_op.into_inner(), "member_access field")?.as_str().to_string();
                         result = Expr::Member { object: Box::new(result), field };
                     }
                     _ if actual_op.as_str() == "++" => {
@@ -451,7 +466,7 @@ fn parse_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Expr, CompileErro
             Ok(result)
         }
         Rule::primary => {
-            let inner = pair.into_inner().next().unwrap();
+            let inner = next_or_err(&mut pair.into_inner(), "primary")?;
             parse_expr(inner)
         }
         Rule::number_literal => {

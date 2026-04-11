@@ -266,6 +266,31 @@ impl AlpacaBroker {
         })
     }
 
+    /// ADR-092: Trailing stop order via Alpaca API.
+    pub async fn trailing_stop_order(&self, symbol: &str, qty: f64, side: &str, trail_pct: f64) -> Result<OrderResult, String> {
+        let mut body = HashMap::new();
+        body.insert("symbol", serde_json::json!(symbol));
+        body.insert("qty", serde_json::json!(qty.to_string()));
+        body.insert("side", serde_json::json!(side));
+        body.insert("type", serde_json::json!("trailing_stop"));
+        body.insert("trail_percent", serde_json::json!(trail_pct.to_string()));
+        body.insert("time_in_force", serde_json::json!("gtc"));
+
+        let resp = self.client.post(format!("{}/v2/orders", self.base_url))
+            .headers(self.headers()).json(&body).send().await.map_err(|e| e.to_string())?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        if let Some(msg) = json.get("message").and_then(|m| m.as_str()) {
+            return Err(msg.to_string());
+        }
+        Ok(OrderResult {
+            id: json["id"].as_str().unwrap_or("").to_string(),
+            symbol: json["symbol"].as_str().unwrap_or("").to_string(),
+            qty: json["qty"].as_str().unwrap_or("").to_string(),
+            side: json["side"].as_str().unwrap_or("").to_string(),
+            status: json["status"].as_str().unwrap_or("").to_string(),
+        })
+    }
+
     pub async fn close_all(&self) -> Result<(), String> {
         let resp = self.client.delete(format!("{}/v2/positions", self.base_url))
             .headers(self.headers()).send().await.map_err(|e| e.to_string())?;

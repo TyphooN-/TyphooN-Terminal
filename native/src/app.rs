@@ -225,6 +225,19 @@ enum LogLevel {
     Info,
     Warn,
     Error,
+    Trade,  // ADR-094: fills, executions
+    Alert,  // ADR-094: triggered alerts
+}
+
+/// Log filter for the bottom panel dropdown.
+#[derive(Clone, Copy, PartialEq)]
+enum LogFilter {
+    All,
+    Info,
+    Warn,
+    Error,
+    Trade,
+    Alert,
 }
 
 /// A single log entry displayed in the bottom panel.
@@ -232,6 +245,7 @@ enum LogLevel {
 struct LogEntry {
     level: LogLevel,
     msg: String,
+    timestamp: String,  // ADR-094: HH:MM:SS
 }
 
 /// Indicator-based alert condition.
@@ -265,25 +279,135 @@ struct JournalEntry {
 }
 
 impl LogEntry {
-    fn info(msg: impl Into<String>) -> Self { Self { level: LogLevel::Info,  msg: msg.into() } }
-    fn warn(msg: impl Into<String>) -> Self { Self { level: LogLevel::Warn,  msg: msg.into() } }
-    fn err (msg: impl Into<String>) -> Self { Self { level: LogLevel::Error, msg: msg.into() } }
+    fn now_ts() -> String {
+        chrono::Local::now().format("%H:%M:%S").to_string()
+    }
+    fn info(msg: impl Into<String>) -> Self { Self { level: LogLevel::Info, msg: msg.into(), timestamp: Self::now_ts() } }
+    fn warn(msg: impl Into<String>) -> Self { Self { level: LogLevel::Warn, msg: msg.into(), timestamp: Self::now_ts() } }
+    fn err(msg: impl Into<String>) -> Self { Self { level: LogLevel::Error, msg: msg.into(), timestamp: Self::now_ts() } }
+    fn trade(msg: impl Into<String>) -> Self { Self { level: LogLevel::Trade, msg: msg.into(), timestamp: Self::now_ts() } }
+    fn alert(msg: impl Into<String>) -> Self { Self { level: LogLevel::Alert, msg: msg.into(), timestamp: Self::now_ts() } }
 
     fn color(&self) -> egui::Color32 {
         match self.level {
             LogLevel::Info  => egui::Color32::from_rgb(160, 200, 160),
             LogLevel::Warn  => egui::Color32::from_rgb(255, 200, 50),
             LogLevel::Error => egui::Color32::from_rgb(255, 80, 80),
+            LogLevel::Trade => egui::Color32::from_rgb(80, 220, 120),
+            LogLevel::Alert => egui::Color32::from_rgb(255, 165, 0),
         }
     }
 
-    fn prefix(&self) -> &'static str {
+    fn icon(&self) -> &'static str {
         match self.level {
-            LogLevel::Info  => "[INFO] ",
-            LogLevel::Warn  => "[WARN] ",
-            LogLevel::Error => "[ERR]  ",
+            LogLevel::Info  => "\u{2139}",  // ℹ
+            LogLevel::Warn  => "\u{26A0}",  // ⚠
+            LogLevel::Error => "\u{2716}",  // ✖
+            LogLevel::Trade => "\u{1F4B0}", // 💰
+            LogLevel::Alert => "\u{1F514}", // 🔔
         }
     }
+
+
+    fn matches_filter(&self, filter: LogFilter) -> bool {
+        match filter {
+            LogFilter::All => true,
+            LogFilter::Info => matches!(self.level, LogLevel::Info),
+            LogFilter::Warn => matches!(self.level, LogLevel::Warn),
+            LogFilter::Error => matches!(self.level, LogLevel::Error),
+            LogFilter::Trade => matches!(self.level, LogLevel::Trade),
+            LogFilter::Alert => matches!(self.level, LogLevel::Alert),
+        }
+    }
+}
+
+// ── ADR-094: Result Cards ──────────────────────────────────────────
+
+/// Structured analytics result displayed above the log panel.
+#[derive(Clone)]
+enum ResultCard {
+    /// Key-value metrics (VAR, RISK_CALC, MARGIN, COMPOUND)
+    Summary {
+        title: String,
+        metrics: Vec<(String, String, egui::Color32)>, // (label, value, color)
+    },
+    /// Sortable table (SCREENER, OUTLIERS, STRESS_TEST)
+    Table {
+        title: String,
+        headers: Vec<String>,
+        rows: Vec<Vec<String>>,
+        sort_col: usize,
+        sort_asc: bool,
+    },
+    /// Mini sparkline chart (FRED, BACKTEST equity)
+    Chart {
+        title: String,
+        label: String,
+        values: Vec<f64>,
+    },
+    /// Progress gauge with min/max/value (DARWINVAR corridor)
+    Gauge {
+        title: String,
+        label: String,
+        value: f64,
+        min: f64,
+        max: f64,
+        danger_low: f64,
+        danger_high: f64,
+    },
+}
+
+// ── ADR-094: Toast Notifications ───────────────────────────────────
+
+/// Overlay toast notification.
+#[derive(Clone)]
+struct Toast {
+    message: String,
+    color: egui::Color32,
+    created: std::time::Instant,
+    duration: std::time::Duration,
+    dismissable: bool,
+    dismissed: bool,
+}
+
+impl Toast {
+    fn is_expired(&self) -> bool {
+        self.dismissed || self.created.elapsed() > self.duration
+    }
+}
+
+// ── ADR-094: Command Palette Context ───────────────────────────────
+
+/// Context for right-click command palette filtering.
+#[derive(Clone, Copy, PartialEq)]
+enum PaletteContext {
+    /// Full command list (backtick key)
+    Global,
+    /// Right-clicked on chart area
+    Chart,
+    /// Right-clicked on a position row
+    Position,
+    /// Right-clicked on a watchlist row
+    Watchlist,
+    /// Right-clicked on a DARWIN row
+    Darwin,
+}
+
+// ── ADR-094: Sparkline helper ──────────────────────────────────────
+
+/// Render a tiny sparkline (polyline) in a given rect.
+fn draw_sparkline(painter: &egui::Painter, rect: egui::Rect, values: &[f64], color: egui::Color32) {
+    if values.len() < 2 { return; }
+    let min = values.iter().copied().fold(f64::MAX, f64::min);
+    let max = values.iter().copied().fold(f64::MIN, f64::max);
+    let range = (max - min).max(f64::EPSILON);
+    let n = values.len();
+    let points: Vec<egui::Pos2> = values.iter().enumerate().map(|(i, &v)| {
+        let x = rect.min.x + (i as f32 / (n - 1) as f32) * rect.width();
+        let y = rect.max.y - ((v - min) as f32 / range as f32) * rect.height();
+        egui::pos2(x, y)
+    }).collect();
+    painter.add(egui::Shape::line(points, egui::Stroke::new(1.0, color)));
 }
 
 // ─── drawing tools ───────────────────────────────────────────────────────────
@@ -2282,17 +2406,93 @@ impl ChartState {
                     self.vwap = vw; self.vwap_upper1 = vu1; self.vwap_upper2 = vu2; self.vwap_upper3 = vu3;
                     self.vwap_lower1 = vl1; self.vwap_lower2 = vl2; self.vwap_lower3 = vl3;
                 }
-                // Supertrend, Donchian, Keltner — CPU (simple, fast)
-                let (st, st_bull) = compute_supertrend(&self.bars, &self.atr, 10, 3.0);
-                self.supertrend = st; self.supertrend_bull = st_bull;
-                let (du, dl) = compute_donchian(&self.bars, 20);
-                self.donchian_upper = du; self.donchian_lower = dl;
-                let (km, ku, kl) = compute_keltner(&self.bars, 20, 10, 1.5);
-                self.keltner_mid = km; self.keltner_upper = ku; self.keltner_lower = kl;
-                let (rm, ru, rl) = compute_regression_channel(&self.bars, 20);
-                self.regression_mid = rm; self.regression_upper = ru; self.regression_lower = rl;
-                let (sm, sq) = compute_squeeze_momentum(&self.bb_upper, &self.bb_lower, &self.keltner_upper, &self.keltner_lower, &self.bars, 20);
-                self.squeeze_mom = sm; self.squeeze_on = sq;
+                // Supertrend — GPU (sequential, ATR-based) with CPU fallback
+                if let Some(data) = gpu.compute_supertrend_gpu(10) {
+                    let n = self.bars.len();
+                    let mut st = Vec::with_capacity(n);
+                    let mut bull = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let v = data.get(i * 2).copied().unwrap_or(0.0);
+                        let d = data.get(i * 2 + 1).copied().unwrap_or(0.0);
+                        if v == 0.0 { st.push(None); } else { st.push(Some(v as f64)); }
+                        bull.push(d > 0.0);
+                    }
+                    self.supertrend = st; self.supertrend_bull = bull;
+                } else {
+                    let (st, st_bull) = compute_supertrend(&self.bars, &self.atr, 10, 3.0);
+                    self.supertrend = st; self.supertrend_bull = st_bull;
+                }
+
+                // Donchian Channel — GPU (parallel) with CPU fallback
+                if let Some(data) = gpu.compute_donchian_gpu(20) {
+                    let n = self.bars.len();
+                    let mut du = Vec::with_capacity(n);
+                    let mut dl = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let u = data.get(i * 2).copied().unwrap_or(0.0);
+                        let l = data.get(i * 2 + 1).copied().unwrap_or(0.0);
+                        if u == 0.0 { du.push(None); dl.push(None); } else { du.push(Some(u as f64)); dl.push(Some(l as f64)); }
+                    }
+                    self.donchian_upper = du; self.donchian_lower = dl;
+                } else {
+                    let (du, dl) = compute_donchian(&self.bars, 20);
+                    self.donchian_upper = du; self.donchian_lower = dl;
+                }
+
+                // Keltner Channel — GPU (sequential EMA+ATR) with CPU fallback
+                if let Some(data) = gpu.compute_keltner_gpu(20) {
+                    let n = self.bars.len();
+                    let mut ku = Vec::with_capacity(n);
+                    let mut km = Vec::with_capacity(n);
+                    let mut kl = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let u = data.get(i * 3).copied().unwrap_or(0.0);
+                        let m = data.get(i * 3 + 1).copied().unwrap_or(0.0);
+                        let l = data.get(i * 3 + 2).copied().unwrap_or(0.0);
+                        if m == 0.0 { ku.push(None); km.push(None); kl.push(None); }
+                        else { ku.push(Some(u as f64)); km.push(Some(m as f64)); kl.push(Some(l as f64)); }
+                    }
+                    self.keltner_upper = ku; self.keltner_mid = km; self.keltner_lower = kl;
+                } else {
+                    let (km, ku, kl) = compute_keltner(&self.bars, 20, 10, 1.5);
+                    self.keltner_mid = km; self.keltner_upper = ku; self.keltner_lower = kl;
+                }
+
+                // Regression Channel — GPU (parallel least squares) with CPU fallback
+                if let Some(data) = gpu.compute_regression_gpu(20) {
+                    let n = self.bars.len();
+                    let mut rm = Vec::with_capacity(n);
+                    let mut ru = Vec::with_capacity(n);
+                    let mut rl = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let m = data.get(i * 3).copied().unwrap_or(0.0);
+                        let u = data.get(i * 3 + 1).copied().unwrap_or(0.0);
+                        let l = data.get(i * 3 + 2).copied().unwrap_or(0.0);
+                        if m == 0.0 { rm.push(None); ru.push(None); rl.push(None); }
+                        else { rm.push(Some(m as f64)); ru.push(Some(u as f64)); rl.push(Some(l as f64)); }
+                    }
+                    self.regression_mid = rm; self.regression_upper = ru; self.regression_lower = rl;
+                } else {
+                    let (rm, ru, rl) = compute_regression_channel(&self.bars, 20);
+                    self.regression_mid = rm; self.regression_upper = ru; self.regression_lower = rl;
+                }
+
+                // Squeeze Momentum — GPU (sequential BB+KC) with CPU fallback
+                if let Some(data) = gpu.compute_squeeze_gpu(20) {
+                    let n = self.bars.len();
+                    let mut sm = Vec::with_capacity(n);
+                    let mut sq = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let m = data.get(i * 2).copied().unwrap_or(0.0);
+                        let s = data.get(i * 2 + 1).copied().unwrap_or(0.0);
+                        sm.push(Some(m as f64));
+                        sq.push(s > 0.5);
+                    }
+                    self.squeeze_mom = sm; self.squeeze_on = sq;
+                } else {
+                    let (sm, sq) = compute_squeeze_momentum(&self.bb_upper, &self.bb_lower, &self.keltner_upper, &self.keltner_lower, &self.bars, 20);
+                    self.squeeze_mom = sm; self.squeeze_on = sq;
+                }
                 // Pre-compute 20-bar rolling average volume for heatmap candle coloring
                 {
                     let n = self.bars.len();
@@ -8883,6 +9083,14 @@ const COMMANDS: &[Command] = &[
     Command { name: "DELETE_DARWIN", desc: "Delete a DARWIN/MT5 account (DELETE_DARWIN TICKER)" },
     Command { name: "SWAPHARVEST",  desc: "Scan MT5 symbols for positive swap carry trades" },
     Command { name: "DARWINEXRADAR", desc: "Export Darwinex symbol radar CSVs (stocks/CFD/crypto/futures)" },
+    Command { name: "DWXLOGIN",      desc: "Login to darwinexzero.com via Selenium (visible browser for CAPTCHA)" },
+    Command { name: "DWXSYNC",       desc: "Scrape live DARWIN stats from darwinexzero.com now" },
+    Command { name: "DWXAUTO",       desc: "Toggle automatic hourly DARWIN web scraping at :20 past" },
+    Command { name: "DWXSTATUS",     desc: "Show Darwinex web scraping session status" },
+    Command { name: "DWXLOGOUT",     desc: "Close Selenium browser and clear session" },
+    Command { name: "DWXSETCREDS",   desc: "Store Darwinex Zero email/password in system keyring" },
+    Command { name: "DWXDARWINS",    desc: "Set managed DARWIN tickers to scrape (DWXDARWINS TPN AJT XUQF ...)" },
+    Command { name: "DWXEXCLUDE",    desc: "Manually exclude DARWINs from correlation (DWXEXCLUDE MFSO) — auto-detected from scrape" },
     Command { name: "SCRAPESTATUS", desc: "Scrape status dashboard — fundamentals, SEC, DarwinIA, crypto" },
     Command { name: "WEBSERVER",    desc: "Start HTTPS web server for phone access over LAN" },
     Command { name: "ALERTS",          desc: "Indicator alert builder (RSI, MACD, Fisher, Price conditions)" },
@@ -9025,6 +9233,9 @@ const COMMANDS: &[Command] = &[
     Command { name: "CRYPTO50",      desc: "Top 50 cryptocurrencies by market cap" },
     Command { name: "FOREX",         desc: "Forex major pairs dashboard" },
     Command { name: "KRAKEN",        desc: "Kraken crypto exchange (connect, balance, trade)" },
+    // ADR-092: UX improvements
+    Command { name: "COMPACT",       desc: "Toggle compact execution mode (hide indicators + sub-panes)" },
+    Command { name: "RULER",         desc: "Ruler tool — measure price/time distance" },
 ];
 
 fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -9572,6 +9783,10 @@ pub struct TyphooNApp {
     command_input: String,
     /// Currently highlighted command in console (arrow key navigation).
     console_selected: usize,
+    /// ADR-092: Recent commands (MRU, up to 10, shown when palette filter is empty).
+    recent_commands: Vec<String>,
+    /// ADR-092: Compact mode — hides indicators and sub-panes for minimal execution view.
+    compact_mode: bool,
 
     // ── indicator overlay toggles ────────────────────────────────────────
     show_sma200: bool,
@@ -9661,6 +9876,25 @@ pub struct TyphooNApp {
     darwin_ftp_dir: String,
     /// Shared FTP dir for background thread access.
     shared_ftp_dir: std::sync::Arc<std::sync::Mutex<String>>,
+
+    // ── Darwinex Zero Web Scraping (ADR-093) ────────────────────────
+    /// WebDriver handle for Selenium browser (None if not logged in).
+    dwx_driver: Option<std::sync::Arc<tokio::sync::Mutex<thirtyfour::WebDriver>>>,
+    /// Whether the Selenium browser is currently logged in to darwinexzero.com.
+    dwx_logged_in: bool,
+    /// Darwinex web scraping configuration (managed DARWINs, schedule, etc.).
+    dwx_config: typhoon_engine::core::darwin_web::DarwinWebConfig,
+    /// Last scrape result (live snapshots + correlation).
+    dwx_last_update: Option<typhoon_engine::core::darwin_web::DarwinWebUpdate>,
+    /// Last scrape hour (for hourly auto-timer, checked in update loop).
+    #[allow(dead_code)]
+    dwx_last_scrape_hour: Option<u32>,
+    /// Receiver for async scrape results from background task.
+    /// Contains: (result, optional WebDriver to store on success).
+    dwx_rx: Option<std::sync::mpsc::Receiver<(
+        Result<typhoon_engine::core::darwin_web::DarwinWebUpdate, String>,
+        Option<std::sync::Arc<tokio::sync::Mutex<thirtyfour::WebDriver>>>,
+    )>>,
 
     /// Broker connection fields (Alpaca).
     broker_api_key: String,
@@ -10060,6 +10294,16 @@ pub struct TyphooNApp {
 
     /// Application log — max 500 entries, ring-buffer style.
     log: VecDeque<LogEntry>,
+    /// ADR-094: Log level filter dropdown.
+    log_filter: LogFilter,
+
+    // ── ADR-094: UX Analytics Features ──────────────────────────────
+    /// Active result card (rendered above log, auto-dismissed after 30s).
+    result_card: Option<(ResultCard, std::time::Instant)>,
+    /// Toast notification stack (top-right overlay).
+    toasts: Vec<Toast>,
+    /// Command palette context (set by right-click location).
+    palette_context: PaletteContext,
 
     /// Crosshair position in screen coordinates (updated each frame).
     crosshair: Option<egui::Pos2>,
@@ -12478,6 +12722,8 @@ impl TyphooNApp {
             command_open: false,
             command_input: String::new(),
             console_selected: 0,
+            recent_commands: Vec::new(),
+            compact_mode: false,
             // ── NNFX default preset (matching old WebKit defaults) ──
             show_sma200: true,
             show_sma100: false,
@@ -12542,6 +12788,12 @@ impl TyphooNApp {
             mt5_db_paths: [String::new(), String::new(), String::new(), String::new()],
             darwin_ftp_dir: String::new(),
             shared_ftp_dir: shared_ftp_dir.clone(),
+            dwx_driver: None,
+            dwx_logged_in: false,
+            dwx_config: typhoon_engine::core::darwin_web::DarwinWebConfig::default(),
+            dwx_last_update: None,
+            dwx_last_scrape_hour: None,
+            dwx_rx: None,
             broker_api_key: String::new(),
             broker_secret: String::new(),
             broker_paper: true,
@@ -12834,6 +13086,10 @@ impl TyphooNApp {
             forex_pairs_data: Vec::new(),
             bottom_tab: BottomTab::Log,
             log,
+            log_filter: LogFilter::All,
+            result_card: None,
+            toasts: Vec::new(),
+            palette_context: PaletteContext::Global,
             crosshair: None,
             frame_count: 0,
             dragging_tab: None,
@@ -14556,9 +14812,207 @@ impl TyphooNApp {
                     }
                 }
             }
+            // ── Darwinex Zero Web Scraping (ADR-093) ────────────────
+            "DWXLOGIN" => {
+                use typhoon_engine::core::darwin_web;
+                use typhoon_engine::core::keyring;
+                let email = keyring::load(darwin_web::keys::DARWINEX_EMAIL).ok().flatten();
+                let password = keyring::load(darwin_web::keys::DARWINEX_PASSWORD).ok().flatten();
+                match (email, password) {
+                    (Some(email), Some(password)) => {
+                        if self.dwx_logged_in {
+                            self.log.push_back(LogEntry::warn("Already logged in — use DWXLOGOUT first"));
+                        } else {
+                            self.log.push_back(LogEntry::info("Launching Chrome for Darwinex Zero login..."));
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            self.dwx_rx = Some(rx);
+                            let config = self.dwx_config.clone();
+                            let cache_arc = self.cache.clone();
+                            // Load cached cookies
+                            let cached_cookies: Option<Vec<darwin_web::SerializableCookie>> = cache_arc.as_ref()
+                                .and_then(|c| c.get_kv(darwin_web::cache_keys::COOKIES).ok().flatten())
+                                .and_then(|json| serde_json::from_str(&json).ok());
+                            let rt = self.rt_handle.clone();
+                            std::thread::spawn(move || {
+                                rt.block_on(async {
+                                    match darwin_web::launch_browser().await {
+                                        Ok(driver) => {
+                                            let cache_fn = |key: &str, val: &str| -> Result<(), String> {
+                                                if let Some(ref c) = cache_arc { c.put_kv(key, val) } else { Ok(()) }
+                                            };
+                                            let result = darwin_web::login_and_scrape(
+                                                &driver, &email, &password,
+                                                cached_cookies.as_deref(),
+                                                &config, cache_fn,
+                                            ).await;
+                                            // Save cookies for next time
+                                            if let Ok(cookies) = darwin_web::get_cookies(&driver).await {
+                                                if let Some(ref c) = cache_arc {
+                                                    if let Ok(json) = serde_json::to_string(&cookies) {
+                                                        let _ = c.put_kv(darwin_web::cache_keys::COOKIES, &json);
+                                                    }
+                                                }
+                                            }
+                                            // Send result + driver handle back to UI thread
+                                            let driver_arc = std::sync::Arc::new(tokio::sync::Mutex::new(driver));
+                                            let _ = tx.send((result, Some(driver_arc)));
+                                        }
+                                        Err(e) => { let _ = tx.send((Err(e), None)); }
+                                    }
+                                });
+                            });
+                        }
+                    }
+                    _ => {
+                        self.log.push_back(LogEntry::err("Darwinex credentials not set — use DWXSETCREDS first"));
+                    }
+                }
+            }
+            "DWXSYNC" => {
+                if !self.dwx_logged_in {
+                    self.log.push_back(LogEntry::warn("Not logged in — use DWXLOGIN first"));
+                } else {
+                    self.log.push_back(LogEntry::info("Manual DARWIN web scrape started..."));
+                    // Trigger scrape via the existing driver session
+                    if let Some(ref driver_arc) = self.dwx_driver {
+                        let driver_arc = driver_arc.clone();
+                        let config = self.dwx_config.clone();
+                        let cache_arc = self.cache.clone();
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        self.dwx_rx = Some(rx);
+                        let rt = self.rt_handle.clone();
+                        std::thread::spawn(move || {
+                            rt.block_on(async {
+                                let driver = driver_arc.lock().await;
+                                let cache_fn = |key: &str, val: &str| -> Result<(), String> {
+                                    if let Some(ref c) = cache_arc { c.put_kv(key, val) } else { Ok(()) }
+                                };
+                                let result = typhoon_engine::core::darwin_web::scrape_all(&driver, &config, cache_fn).await;
+                                let _ = tx.send((result, None)); // No new driver, just result
+                            });
+                        });
+                    }
+                }
+            }
+            "DWXAUTO" => {
+                self.dwx_config.auto_scrape = !self.dwx_config.auto_scrape;
+                self.log.push_back(LogEntry::info(format!(
+                    "Darwinex auto-scrape: {} (every hour at :{:02})",
+                    if self.dwx_config.auto_scrape { "ON" } else { "OFF" },
+                    self.dwx_config.scrape_minute
+                )));
+                // Persist config
+                if let Some(ref cache) = self.cache {
+                    if let Ok(json) = serde_json::to_string(&self.dwx_config) {
+                        let _ = cache.put_kv(typhoon_engine::core::darwin_web::cache_keys::CONFIG, &json);
+                    }
+                }
+            }
+            "DWXSTATUS" => {
+                let status = if self.dwx_logged_in { "logged in" } else { "not logged in" };
+                let auto = if self.dwx_config.auto_scrape {
+                    format!("ON (every hour at :{:02})", self.dwx_config.scrape_minute)
+                } else {
+                    "OFF".to_string()
+                };
+                let darwins = if self.dwx_config.managed_darwins.is_empty() {
+                    "none set".to_string()
+                } else {
+                    self.dwx_config.managed_darwins.join(", ")
+                };
+                let excluded = if self.dwx_config.excluded_darwins.is_empty() {
+                    "none".to_string()
+                } else {
+                    self.dwx_config.excluded_darwins.join(", ")
+                };
+                let last = self.dwx_last_update.as_ref()
+                    .map(|u| {
+                        let dt = chrono::DateTime::from_timestamp_millis(u.timestamp_ms).unwrap_or_default();
+                        format!("{} ({} DARWINs, {} correlations, {} alerts)",
+                            dt.format("%Y-%m-%d %H:%M:%S"),
+                            u.snapshots.len(), u.correlations.len(), u.correlation_alerts.len())
+                    })
+                    .unwrap_or_else(|| "never".to_string());
+                self.log.push_back(LogEntry::info(format!("DWX Status: {} | Auto: {} | DARWINs: {} | Excluded: {} | Last scrape: {}", status, auto, darwins, excluded, last)));
+            }
+            "DWXLOGOUT" => {
+                if let Some(driver_arc) = self.dwx_driver.take() {
+                    let rt = self.rt_handle.clone();
+                    std::thread::spawn(move || {
+                        rt.block_on(async {
+                            let driver = std::sync::Arc::try_unwrap(driver_arc)
+                                .map_err(|_| "Driver still in use".to_string());
+                            if let Ok(mutex) = driver {
+                                let d = mutex.into_inner();
+                                let _ = typhoon_engine::core::darwin_web::close_browser(d).await;
+                            }
+                        });
+                    });
+                    self.dwx_logged_in = false;
+                    self.log.push_back(LogEntry::info("Darwinex browser closed"));
+                } else {
+                    self.log.push_back(LogEntry::warn("No active Darwinex browser session"));
+                }
+                // Clear cached cookies
+                if let Some(ref cache) = self.cache {
+                    let _ = cache.put_kv(typhoon_engine::core::darwin_web::cache_keys::COOKIES, "[]");
+                }
+            }
+            "DWXSETCREDS" => {
+                // For now, prompt user to set via keyring manually or add a UI dialog
+                self.log.push_back(LogEntry::info("Use system keyring to set credentials:"));
+                self.log.push_back(LogEntry::info("  keyring set typhoon-terminal darwinex_email YOUR_EMAIL"));
+                self.log.push_back(LogEntry::info("  keyring set typhoon-terminal darwinex_password YOUR_PASSWORD"));
+            }
+            cmd if cmd.starts_with("DWXDARWINS ") || cmd.starts_with("DWXDARWINS\t") => {
+                let tickers: Vec<String> = cmd[11..].split_whitespace()
+                    .map(|s| s.trim().to_uppercase())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if tickers.is_empty() {
+                    self.log.push_back(LogEntry::warn("Usage: DWXDARWINS TPN AJT XUQF ..."));
+                } else {
+                    self.dwx_config.managed_darwins = tickers.clone();
+                    self.dwx_config.normalize();
+                    self.log.push_back(LogEntry::info(format!("Managed DARWINs set: {}", self.dwx_config.managed_darwins.join(", "))));
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(json) = serde_json::to_string(&self.dwx_config) {
+                            let _ = cache.put_kv(typhoon_engine::core::darwin_web::cache_keys::CONFIG, &json);
+                        }
+                    }
+                }
+            }
+            cmd if cmd.starts_with("DWXEXCLUDE ") || cmd.starts_with("DWXEXCLUDE\t") => {
+                let tickers: Vec<String> = cmd[11..].split_whitespace()
+                    .map(|s| s.trim().to_uppercase())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if tickers.is_empty() {
+                    self.log.push_back(LogEntry::warn("Usage: DWXEXCLUDE MFSO ..."));
+                } else {
+                    self.dwx_config.excluded_darwins = tickers.clone();
+                    self.dwx_config.normalize();
+                    self.log.push_back(LogEntry::info(format!("Excluded DARWINs: {}", self.dwx_config.excluded_darwins.join(", "))));
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(json) = serde_json::to_string(&self.dwx_config) {
+                            let _ = cache.put_kv(typhoon_engine::core::darwin_web::cache_keys::CONFIG, &json);
+                        }
+                    }
+                }
+            }
             "RISKRUIN" => self.show_risk_ruin = true,
             "SCRAPESTATUS" => {
                 self.show_scrape_status = true;
+                // ADR-094: Summary result card for scrape status
+                self.result_card = Some((ResultCard::Summary {
+                    title: "Scrape Status".to_string(),
+                    metrics: vec![
+                        ("Fundamentals".to_string(), format!("{}/{}", self.scrape_fund_ok, self.scrape_fund_total),
+                            if self.scrape_fund_running { egui::Color32::YELLOW } else { egui::Color32::from_rgb(80, 220, 120) }),
+                        ("SEC".to_string(), if self.scrape_sec_running { "Running".to_string() } else { "Idle".to_string() },
+                            if self.scrape_sec_running { egui::Color32::YELLOW } else { egui::Color32::GRAY }),
+                    ],
+                }, std::time::Instant::now()));
             }
             "WEBSERVER" => {
                 if !self.web_server_running {
@@ -14673,8 +15127,23 @@ impl TyphooNApp {
                             )));
                             self.darwinex_outliers = outliers;
                             self.darwinex_sector_stats = stats;
-                            self.darwinex_multi_outliers = multi;
+                            self.darwinex_multi_outliers = multi.clone();
                             self.show_darwinex_outliers = true;
+
+                            // ADR-094: Table result card for top outliers
+                            if !multi.is_empty() {
+                                let headers = vec!["Symbol".into(), "Score".into(), "Dims".into(), "Tier".into()];
+                                let rows: Vec<Vec<String>> = multi.iter().take(20).map(|o| vec![
+                                    o.symbol.clone(),
+                                    format!("{:.1}", o.composite_score),
+                                    format!("{}", o.dimensions_flagged),
+                                    o.tier.clone(),
+                                ]).collect();
+                                self.result_card = Some((ResultCard::Table {
+                                    title: "Multi-Dimensional Outliers".to_string(),
+                                    headers, rows, sort_col: 1, sort_asc: false,
+                                }, std::time::Instant::now()));
+                            }
                         }
                     }
                 }
@@ -14724,6 +15193,30 @@ impl TyphooNApp {
                     self.darwinex_sector_stats = stats;
                     self.darwinex_multi_outliers = Vec::new();
                     self.show_darwinex_outliers = true;
+
+                    // ADR-094: Show VaR corridor gauge as result card
+                    let avg_var = data.iter().map(|(_, _, v)| v).sum::<f64>() / data.len().max(1) as f64;
+                    self.result_card = Some((ResultCard::Gauge {
+                        title: "DARWIN VaR Corridor".to_string(),
+                        label: "Avg VaR95".to_string(),
+                        value: avg_var,
+                        min: 0.0,
+                        max: 10.0,
+                        danger_low: CORRIDOR_LOW,
+                        danger_high: CORRIDOR_HIGH,
+                    }, std::time::Instant::now()));
+
+                    // ADR-094: Toast for corridor violations
+                    if !above.is_empty() {
+                        self.toasts.push(Toast {
+                            message: format!("VaR CORRIDOR BREACH: {} above 6.5%", above.join(", ")),
+                            color: egui::Color32::from_rgb(255, 80, 80),
+                            created: std::time::Instant::now(),
+                            duration: std::time::Duration::from_secs(30),
+                            dismissable: true,
+                            dismissed: false,
+                        });
+                    }
                 }
             }
             "EVOUTLIERS" | "EV_OUTLIERS" => {
@@ -15286,6 +15779,27 @@ impl TyphooNApp {
                 }
                 names.sort();
                 self.log.push_back(LogEntry::info(format!("Templates: {}", names.join(", "))));
+            }
+            // ADR-092: UX improvement commands
+            "COMPACT" => {
+                self.compact_mode = !self.compact_mode;
+                if self.compact_mode {
+                    self.show_rsi = false;
+                    self.show_fisher = false;
+                    self.show_macd = false;
+                    self.show_stochastic = false;
+                    self.show_adx = false;
+                    self.show_volume_pane = false;
+                    self.show_better_volume = false;
+                    self.log.push_back(LogEntry::info("Compact mode ON — sub-panes hidden"));
+                } else {
+                    self.show_fisher = true;
+                    self.show_better_volume = true;
+                    self.log.push_back(LogEntry::info("Compact mode OFF — default indicators restored"));
+                }
+            }
+            "RULER" => {
+                self.log.push_back(LogEntry::info("Ruler: use trendline (Alt+T) to measure price/time distance"));
             }
             other => {
                 // Commands with arguments
@@ -17650,10 +18164,18 @@ impl TyphooNApp {
                                             });
                                             // Per-DARWIN table
                                             ui.add_space(10.0);
-                                            ui.heading("Per-DARWIN");
+                                            ui.horizontal(|ui| {
+                                                ui.heading("Per-DARWIN");
+                                                // ADR-094: Context palette for DARWIN rows
+                                                if ui.small_button("Commands…").clicked() {
+                                                    self.palette_context = PaletteContext::Darwin;
+                                                    self.command_open = true;
+                                                    self.command_input.clear();
+                                                }
+                                            });
                                             ui.separator();
-                                            egui::Grid::new("per_darwin").striped(true).num_columns(14).show(ui, |ui| {
-                                                ui.strong("DARWIN"); ui.strong("Signal Bal"); ui.strong("Signal P&L");
+                                            egui::Grid::new("per_darwin").striped(true).num_columns(15).show(ui, |ui| {
+                                                ui.strong("DARWIN"); ui.strong("Equity"); ui.strong("Signal Bal"); ui.strong("Signal P&L");
                                                 ui.strong("Win%"); ui.strong("PF"); ui.strong("Signal DD%");
                                                 ui.strong("Quote"); ui.strong("Quote Ret%"); ui.strong("Quote DD%");
                                                 ui.strong("Divergence"); ui.strong("Multiplier");
@@ -17662,6 +18184,20 @@ impl TyphooNApp {
                                                 for acct in &portfolio.accounts {
                                                     let ticker = &acct.account.darwin_ticker;
                                                     ui.label(ticker);
+                                                    // ADR-094: Equity sparkline from daily returns
+                                                    {
+                                                        let daily_returns = self.bg.account_details.iter()
+                                                            .find(|d| d.ticker == *ticker)
+                                                            .map(|d| &d.daily_returns);
+                                                        let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 12.0), egui::Sense::hover());
+                                                        if let Some(dr) = daily_returns {
+                                                            if dr.len() >= 2 {
+                                                                let vals: Vec<f64> = dr.iter().map(|r| r.balance).collect();
+                                                                let color = if vals.last() >= vals.first() { UP } else { DOWN };
+                                                                draw_sparkline(ui.painter(), rect, &vals, color);
+                                                            }
+                                                        }
+                                                    }
                                                     ui.label(format!("${:.0}", acct.final_balance));
                                                     let c = if acct.total_profit >= 0.0 { UP } else { DOWN };
                                                     ui.label(egui::RichText::new(format!("${:.0}", acct.total_profit)).color(c));
@@ -24096,7 +24632,16 @@ impl TyphooNApp {
                         ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
                             egui::UserAttentionType::Critical
                         ));
-                        self.log.push_back(LogEntry::warn(msg.clone()));
+                        self.log.push_back(LogEntry::alert(&msg));
+                        // ADR-094: Toast for triggered alerts
+                        self.toasts.push(Toast {
+                            message: msg.clone(),
+                            color: egui::Color32::from_rgb(255, 165, 0),
+                            created: std::time::Instant::now(),
+                            duration: std::time::Duration::from_secs(10),
+                            dismissable: true,
+                            dismissed: false,
+                        });
                         // Send notification if any provider configured
                         if !self.discord_webhook.is_empty() || !self.ntfy_topic.is_empty()
                             || (!self.pushover_token.is_empty() && !self.pushover_user.is_empty()) {
@@ -26281,6 +26826,23 @@ impl eframe::App for TyphooNApp {
                 self.log.push_back(LogEntry::info("Kraken auto-connecting..."));
             }
 
+            // ── Restore Darwinex web scraping config from cache (ADR-093) ──
+            if let Some(ref cache) = self.cache {
+                if let Ok(Some(json)) = cache.get_kv(typhoon_engine::core::darwin_web::cache_keys::CONFIG) {
+                    if let Ok(cfg) = serde_json::from_str::<typhoon_engine::core::darwin_web::DarwinWebConfig>(&json) {
+                        self.dwx_config = cfg;
+                        if !self.dwx_config.managed_darwins.is_empty() {
+                            self.log.push_back(LogEntry::info(format!(
+                                "DWX config restored: {} DARWINs [{}], auto={}",
+                                self.dwx_config.managed_darwins.len(),
+                                self.dwx_config.managed_darwins.join(", "),
+                                self.dwx_config.auto_scrape
+                            )));
+                        }
+                    }
+                }
+            }
+
             // LAN KV recovery: read client_enabled FIRST so we don't misidentify a client
             // machine as a server. Stale lan:server_enabled keys could have been synced from
             // the server into the client's local KV cache (fixed in lan_sync.rs, but existing
@@ -26565,6 +27127,59 @@ impl eframe::App for TyphooNApp {
             }
         }
 
+        // ── receive Darwinex web scrape results (ADR-093) ─────────────
+        if let Some(ref rx) = self.dwx_rx {
+            if let Ok((result, driver_handle)) = rx.try_recv() {
+                // Store the WebDriver handle if provided (from DWXLOGIN)
+                if let Some(driver_arc) = driver_handle {
+                    self.dwx_driver = Some(driver_arc);
+                }
+                match result {
+                    Ok(update) => {
+                        let n_snap = update.snapshots.len();
+                        let n_corr = update.correlations.len();
+                        let n_alerts = update.correlation_alerts.len();
+                        // Log excluded DARWINs
+                        for snap in &update.snapshots {
+                            if snap.excluded {
+                                self.log.push_back(LogEntry::warn(format!(
+                                    "DARWIN {} EXCLUDED: {}",
+                                    snap.ticker,
+                                    if snap.exclusion_reason.is_empty() { "no reason" } else { &snap.exclusion_reason }
+                                )));
+                            }
+                        }
+                        // Log correlation alerts
+                        for alert in &update.correlation_alerts {
+                            self.log.push_back(LogEntry::err(format!(
+                                "CORRELATION BREACH: {} × {} = {:.4} — {}",
+                                alert.darwin_a, alert.darwin_b, alert.correlation, alert.suggestion
+                            )));
+                            // ADR-094: Toast for each correlation breach
+                            self.toasts.push(Toast {
+                                message: format!("{} × {} = {:.4}", alert.darwin_a, alert.darwin_b, alert.correlation),
+                                color: egui::Color32::from_rgb(255, 80, 80),
+                                created: std::time::Instant::now(),
+                                duration: std::time::Duration::from_secs(60),
+                                dismissable: true,
+                                dismissed: false,
+                            });
+                        }
+                        self.dwx_last_update = Some(update);
+                        self.dwx_logged_in = true;
+                        self.log.push_back(LogEntry::info(format!(
+                            "DWX scrape complete: {} DARWINs, {} correlations, {} alerts",
+                            n_snap, n_corr, n_alerts
+                        )));
+                    }
+                    Err(e) => {
+                        self.log.push_back(LogEntry::err(format!("DWX scrape failed: {}", e)));
+                    }
+                }
+                self.dwx_rx = None;
+            }
+        }
+
         // ── poll async broker messages ───────────────────────────────────
         while let Ok(msg) = self.broker_rx.try_recv() {
             match msg {
@@ -26729,7 +27344,20 @@ impl eframe::App for TyphooNApp {
                             self.bardata_completed += 1;
                         }
                     }
-                    self.log.push_back(LogEntry::info(msg));
+                    // ADR-094: Use Trade log level and toast for fills
+                    if is_trade {
+                        self.log.push_back(LogEntry::trade(&msg));
+                        self.toasts.push(Toast {
+                            message: msg,
+                            color: egui::Color32::from_rgb(80, 220, 120),
+                            created: std::time::Instant::now(),
+                            duration: std::time::Duration::from_secs(5),
+                            dismissable: false,
+                            dismissed: false,
+                        });
+                    } else {
+                        self.log.push_back(LogEntry::info(msg));
+                    }
                 }
                 BrokerMsg::SecScrapeResult(ref msg) => {
                     self.scrape_sec_running = false;
@@ -26850,6 +27478,17 @@ impl eframe::App for TyphooNApp {
                     self.fred_data = series;
                     self.fred_yield_curve = yields;
                     self.log.push_back(LogEntry::info(format!("FRED: {} series loaded", self.fred_data.len())));
+                    // ADR-094: Chart result card for first FRED series
+                    if let Some(first) = self.fred_data.first() {
+                        if !first.observations.is_empty() {
+                            let vals: Vec<f64> = first.observations.iter().map(|o| o.value).collect();
+                            self.result_card = Some((ResultCard::Chart {
+                                title: format!("FRED: {}", first.title),
+                                label: first.id.clone(),
+                                values: vals,
+                            }, std::time::Instant::now()));
+                        }
+                    }
                 }
                 BrokerMsg::EconCalendarData(events) => {
                     self.econ_events = events;
@@ -27109,7 +27748,7 @@ impl eframe::App for TyphooNApp {
                     // We still confirm the broker selection matches a connected broker,
                     // translate to the native BrokerCmd, and reply via the broadcast channel.
                     typhoon_web_protocol::WebCmd::PlaceOrder {
-                        symbol, qty, side, order_type, limit_price, stop_price, broker
+                        symbol, qty, side, order_type, limit_price, stop_price, broker, ..
                     } => {
                         let lower_side = side.to_ascii_lowercase();
                         let lower_type = order_type.to_ascii_lowercase();
@@ -27231,6 +27870,135 @@ impl eframe::App for TyphooNApp {
                         }
                         self.log.push_back(LogEntry::info(format!("Web close: {} via {}", symbol, broker)));
                     }
+                    // ── ADR-092: new WebCmd handlers ──
+                    typhoon_web_protocol::WebCmd::GetIndicators { symbol, timeframe, indicators } => {
+                        self.log.push_back(LogEntry::info(format!("Web indicator request: {symbol} {timeframe} {:?}", indicators)));
+                        // Send indicator data from current chart cache
+                        // Full GPU dispatch integration will be wired in GPU compute task
+                        for name in &indicators {
+                            if let Some(ref tx) = self.web_msg_tx {
+                                let _ = tx.send(typhoon_web_protocol::WebMsg::IndicatorData {
+                                    symbol: symbol.clone(),
+                                    timeframe: timeframe.clone(),
+                                    name: name.clone(),
+                                    values: Vec::new(),
+                                });
+                            }
+                        }
+                    }
+                    typhoon_web_protocol::WebCmd::CreateAlert { symbol, condition: _, price, message } => {
+                        self.log.push_back(LogEntry::info(format!("Web alert: {symbol} @ {price}")));
+                        let label = if message.is_empty() { symbol } else { message };
+                        self.alerts.push((price, label));
+                    }
+                    typhoon_web_protocol::WebCmd::DeleteAlert { alert_id } => {
+                        // alert_id is index-based from web: "web-N"
+                        if let Some(idx) = alert_id.strip_prefix("web-").and_then(|s| s.parse::<usize>().ok()) {
+                            if idx < self.alerts.len() {
+                                self.alerts.remove(idx);
+                            }
+                        }
+                    }
+                    typhoon_web_protocol::WebCmd::ListAlerts => {
+                        if let Some(ref tx) = self.web_msg_tx {
+                            let _ = tx.send(typhoon_web_protocol::WebMsg::AlertList {
+                                items: self.alerts.iter().enumerate().map(|(i, (price, label))| {
+                                    typhoon_web_protocol::AlertSnapshot {
+                                        id: format!("web-{i}"),
+                                        symbol: label.clone(),
+                                        condition: "reaches".into(),
+                                        price: *price,
+                                        message: label.clone(),
+                                        active: true,
+                                    }
+                                }).collect(),
+                            });
+                        }
+                    }
+                    typhoon_web_protocol::WebCmd::GetNews { symbol } => {
+                        self.log.push_back(LogEntry::info(format!("Web news: {:?}", symbol)));
+                        if let Some(ref tx) = self.web_msg_tx {
+                            let items: Vec<typhoon_web_protocol::NewsItem> = self.news_articles.iter()
+                                .filter(|n| symbol.as_ref().map(|s| n.0.contains(s) || n.1.contains(s)).unwrap_or(true))
+                                .take(typhoon_web_protocol::MAX_NEWS_ITEMS)
+                                .map(|n| typhoon_web_protocol::NewsItem {
+                                    headline: n.0.clone(),
+                                    source: n.2.clone(),
+                                    url: n.1.clone(),
+                                    symbol: symbol.clone(),
+                                    timestamp: 0,
+                                    summary: String::new(),
+                                })
+                                .collect();
+                            let _ = tx.send(typhoon_web_protocol::WebMsg::NewsFeed { items });
+                        }
+                    }
+                    typhoon_web_protocol::WebCmd::Subscribe { symbol, timeframe } => {
+                        self.log.push_back(LogEntry::info(format!("Web subscribe: {symbol}:{timeframe}")));
+                    }
+                    typhoon_web_protocol::WebCmd::Unsubscribe { .. } => {}
+                    typhoon_web_protocol::WebCmd::GetDarwinWeb { ticker } => {
+                        // Return cached DWX web data to web client
+                        if let Some(ref update) = self.dwx_last_update {
+                            let snapshots: Vec<typhoon_web_protocol::DarwinWebSnapshot> = update.snapshots.iter()
+                                .filter(|s| ticker.as_ref().map_or(true, |t| s.ticker == t.to_uppercase()))
+                                .map(|s| typhoon_web_protocol::DarwinWebSnapshot {
+                                    ticker: s.ticker.clone(),
+                                    timestamp_ms: s.timestamp_ms,
+                                    quote: s.quote,
+                                    daily_return_pct: s.daily_return_pct,
+                                    monthly_return_pct: s.monthly_return_pct,
+                                    ytd_return_pct: s.ytd_return_pct,
+                                    all_time_return_pct: s.all_time_return_pct,
+                                    dscore: s.dscore,
+                                    ds_experience: s.ds_experience,
+                                    ds_risk_mgmt: s.ds_risk_mgmt,
+                                    ds_risk_adjustment: s.ds_risk_adjustment,
+                                    ds_performance: s.ds_performance,
+                                    ds_scalability: s.ds_scalability,
+                                    ds_market_correlation: s.ds_market_correlation,
+                                    var_monthly: s.var_monthly,
+                                    max_drawdown_pct: s.max_drawdown_pct,
+                                    volatility_annual: s.volatility_annual,
+                                    sharpe_ratio: s.sharpe_ratio,
+                                    sortino_ratio: s.sortino_ratio,
+                                    investors: s.investors,
+                                    aum: s.aum,
+                                    capacity_remaining_pct: s.capacity_remaining_pct,
+                                    total_trades: s.total_trades,
+                                    win_rate: s.win_rate,
+                                    profit_factor: s.profit_factor,
+                                    avg_holding_time_hours: s.avg_holding_time_hours,
+                                    avg_trade_return_pct: s.avg_trade_return_pct,
+                                    symbols_traded: s.symbols_traded,
+                                    excluded: s.excluded,
+                                    exclusion_reason: s.exclusion_reason.clone(),
+                                    correlation_portfolio: s.correlation_portfolio,
+                                })
+                                .collect();
+                            let correlations: Vec<typhoon_web_protocol::DarwinWebCorrelation> = update.correlations.iter()
+                                .map(|c| typhoon_web_protocol::DarwinWebCorrelation {
+                                    darwin_a: c.darwin_a.clone(),
+                                    darwin_b: c.darwin_b.clone(),
+                                    correlation: c.correlation,
+                                })
+                                .collect();
+                            let alerts: Vec<typhoon_web_protocol::DarwinCorrelationAlert> = update.correlation_alerts.iter()
+                                .map(|a| typhoon_web_protocol::DarwinCorrelationAlert {
+                                    darwin_a: a.darwin_a.clone(),
+                                    darwin_b: a.darwin_b.clone(),
+                                    correlation: a.correlation,
+                                    threshold: a.threshold,
+                                    suggestion: a.suggestion.clone(),
+                                })
+                                .collect();
+                            if let Some(ref tx) = self.web_msg_tx {
+                                let _ = tx.send(typhoon_web_protocol::WebMsg::DarwinWebUpdate {
+                                    snapshots, correlations, correlation_alerts: alerts,
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -27321,6 +28089,7 @@ impl eframe::App for TyphooNApp {
         // ── Esc → close palette ──────────────────────────────────────────────
         if self.command_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.command_open = false;
+            self.palette_context = PaletteContext::Global; // reset context on close
         }
 
         // ── crosshair from pointer ───────────────────────────────────────────
@@ -27366,6 +28135,42 @@ impl eframe::App for TyphooNApp {
                     if self.active_tab >= self.charts.len() {
                         self.active_tab = self.charts.len().saturating_sub(1);
                     }
+                }
+            }
+
+            // ADR-094: Analytics keyboard shortcuts (Alt+key)
+            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::V)) {
+                self.command_input = "VAR".to_string();
+                self.log.push_back(LogEntry::info("Shortcut: Alt+V → VAR"));
+            }
+            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::C)) {
+                self.command_input = "CORRELATION".to_string();
+                self.log.push_back(LogEntry::info("Shortcut: Alt+C → CORRELATION"));
+            }
+            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::D)) {
+                self.show_darwin_portfolio = true;
+                self.log.push_back(LogEntry::info("Shortcut: Alt+D → DARWIN Portfolio"));
+            }
+            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::S)) {
+                self.command_input = "SCREENER".to_string();
+                self.log.push_back(LogEntry::info("Shortcut: Alt+S → SCREENER"));
+            }
+            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::R)) {
+                self.command_input = "RISK_CALC".to_string();
+                self.log.push_back(LogEntry::info("Shortcut: Alt+R → RISK_CALC"));
+            }
+            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::B)) {
+                self.command_input = "BACKTEST".to_string();
+                self.log.push_back(LogEntry::info("Shortcut: Alt+B → BACKTEST"));
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::F5)) {
+                self.log.push_back(LogEntry::info("F5: Refreshing all analytics..."));
+                self.indicators_dirty = true;
+            }
+            // Esc: dismiss result card or close topmost window
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !self.command_open {
+                if self.result_card.is_some() {
+                    self.result_card = None;
                 }
             }
             // Ctrl+1..9 = jump to tab by number
@@ -28412,14 +29217,132 @@ impl eframe::App for TyphooNApp {
         });
 
         // ── bottom panel (log / volume) ──────────────────────────────────────
+        // ── ADR-094: Result card rendering (above log) ─────────────
+        // Auto-dismiss after 30 seconds
+        if let Some((_, created)) = &self.result_card {
+            if created.elapsed() > std::time::Duration::from_secs(30) {
+                self.result_card = None;
+            }
+        }
+
         egui::Panel::bottom("bottom_panel")
             .resizable(true)
             .min_size(80.0)
-            .default_size(120.0)
+            .default_size(140.0)
             .show(ctx, |ui| {
+                // ── Result card (above log) ──
+                if let Some((card, _)) = &self.result_card {
+                    ui.group(|ui| {
+                        match card {
+                            ResultCard::Summary { title, metrics } => {
+                                ui.horizontal(|ui| {
+                                    ui.strong(title);
+                                    if ui.small_button("\u{2716}").clicked() { /* dismiss below */ }
+                                });
+                                ui.horizontal_wrapped(|ui| {
+                                    for (label, value, color) in metrics {
+                                        ui.label(egui::RichText::new(label).small().color(egui::Color32::GRAY));
+                                        ui.label(egui::RichText::new(value).strong().color(*color).monospace());
+                                        ui.add_space(12.0);
+                                    }
+                                });
+                            }
+                            ResultCard::Table { title, headers, rows, sort_col, sort_asc } => {
+                                ui.horizontal(|ui| {
+                                    ui.strong(title);
+                                    ui.label(egui::RichText::new(format!("({} rows)", rows.len())).small().color(egui::Color32::GRAY));
+                                });
+                                egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+                                    egui::Grid::new("result_table").striped(true).show(ui, |ui| {
+                                        for (i, h) in headers.iter().enumerate() {
+                                            let arrow = if i == *sort_col { if *sort_asc { " \u{25B2}" } else { " \u{25BC}" } } else { "" };
+                                            ui.label(egui::RichText::new(format!("{h}{arrow}")).small().strong());
+                                        }
+                                        ui.end_row();
+                                        for row in rows.iter().take(50) {
+                                            for cell in row {
+                                                ui.label(egui::RichText::new(cell).small().monospace());
+                                            }
+                                            ui.end_row();
+                                        }
+                                    });
+                                });
+                            }
+                            ResultCard::Chart { title, label, values } => {
+                                ui.horizontal(|ui| {
+                                    ui.strong(title);
+                                    if let Some(last) = values.last() {
+                                        ui.label(egui::RichText::new(format!("{label}: {last:.4}")).monospace());
+                                    }
+                                });
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().min(300.0), 40.0), egui::Sense::hover());
+                                draw_sparkline(ui.painter(), rect, values, egui::Color32::from_rgb(0, 180, 255));
+                            }
+                            ResultCard::Gauge { title, label, value, min, max, danger_low, danger_high } => {
+                                ui.horizontal(|ui| {
+                                    ui.strong(title);
+                                    let color = if *value < *danger_low || *value > *danger_high {
+                                        egui::Color32::from_rgb(255, 80, 80)
+                                    } else {
+                                        egui::Color32::from_rgb(80, 220, 120)
+                                    };
+                                    ui.label(egui::RichText::new(format!("{label}: {value:.2}%")).strong().color(color).monospace());
+                                });
+                                // Draw gauge bar
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(200.0, 12.0), egui::Sense::hover());
+                                let painter = ui.painter();
+                                painter.rect_filled(rect, 3.0, egui::Color32::from_rgb(40, 40, 50));
+                                let range = max - min;
+                                if range > 0.0 {
+                                    let frac = ((value - min) / range).clamp(0.0, 1.0) as f32;
+                                    let fill_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * frac, rect.height()));
+                                    let fill_color = if *value < *danger_low || *value > *danger_high {
+                                        egui::Color32::from_rgb(255, 80, 80)
+                                    } else {
+                                        egui::Color32::from_rgb(80, 220, 120)
+                                    };
+                                    painter.rect_filled(fill_rect, 3.0, fill_color);
+                                    // Danger zone markers
+                                    let low_x = rect.min.x + ((danger_low - min) / range) as f32 * rect.width();
+                                    let high_x = rect.min.x + ((danger_high - min) / range) as f32 * rect.width();
+                                    painter.line_segment([egui::pos2(low_x, rect.min.y), egui::pos2(low_x, rect.max.y)], egui::Stroke::new(1.0, egui::Color32::YELLOW));
+                                    painter.line_segment([egui::pos2(high_x, rect.min.y), egui::pos2(high_x, rect.max.y)], egui::Stroke::new(1.0, egui::Color32::YELLOW));
+                                }
+                            }
+                        }
+                    });
+                    ui.separator();
+                }
+
+                // ── Log panel header with filter ──
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.bottom_tab, BottomTab::Log, "Log");
-                    // Volume tab removed — BetterVolume sub-pane is more useful
+                    ui.separator();
+                    ui.label(egui::RichText::new("Filter:").small().color(egui::Color32::GRAY));
+                    egui::ComboBox::from_id_salt("log_filter")
+                        .width(70.0)
+                        .selected_text(match self.log_filter {
+                            LogFilter::All => "All",
+                            LogFilter::Info => "Info",
+                            LogFilter::Warn => "Warn",
+                            LogFilter::Error => "Error",
+                            LogFilter::Trade => "Trade",
+                            LogFilter::Alert => "Alert",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.log_filter, LogFilter::All, "All");
+                            ui.selectable_value(&mut self.log_filter, LogFilter::Info, "\u{2139} Info");
+                            ui.selectable_value(&mut self.log_filter, LogFilter::Warn, "\u{26A0} Warn");
+                            ui.selectable_value(&mut self.log_filter, LogFilter::Error, "\u{2716} Error");
+                            ui.selectable_value(&mut self.log_filter, LogFilter::Trade, "\u{1F4B0} Trade");
+                            ui.selectable_value(&mut self.log_filter, LogFilter::Alert, "\u{1F514} Alert");
+                        });
+                    // Dismiss result card button
+                    if self.result_card.is_some() {
+                        if ui.small_button("Dismiss Card").clicked() {
+                            self.result_card = None;
+                        }
+                    }
                 });
                 ui.separator();
                 match self.bottom_tab {
@@ -28429,17 +29352,57 @@ impl eframe::App for TyphooNApp {
                             .auto_shrink(false)
                             .show(ui, |ui| {
                                 for entry in &self.log {
-                                    ui.add(egui::Label::new(
-                                        egui::RichText::new(format!("{}{}", entry.prefix(), entry.msg))
+                                    if !entry.matches_filter(self.log_filter) { continue; }
+                                    let text = format!("[{}] {} {}", entry.timestamp, entry.icon(), entry.msg);
+                                    let response = ui.add(egui::Label::new(
+                                        egui::RichText::new(&text)
                                             .color(entry.color())
                                             .font(egui::FontId::monospace(11.0)),
-                                    ).wrap_mode(egui::TextWrapMode::Extend));
+                                    ).wrap_mode(egui::TextWrapMode::Extend).sense(egui::Sense::click()));
+                                    // Clickable log entries: detect ticker symbols (ALL CAPS, 2-6 chars)
+                                    if response.clicked() {
+                                        // Extract first uppercase word that looks like a ticker
+                                        if let Some(ticker) = entry.msg.split_whitespace()
+                                            .find(|w| w.len() >= 2 && w.len() <= 8 && w.chars().all(|c| c.is_ascii_uppercase() || c == '.' || c == '/'))
+                                        {
+                                            self.symbol_input = ticker.to_string();
+                                        }
+                                    }
                                 }
                             });
                     }
-                    // Volume tab removed — BetterVolume sub-pane is more useful
                 }
             });
+
+        // ── ADR-094: Toast notification overlay (top-right, stacked) ──────
+        self.toasts.retain(|t| !t.is_expired());
+        if !self.toasts.is_empty() {
+            let mut y_offset = 40.0_f32;
+            for (i, toast) in self.toasts.iter_mut().enumerate() {
+                let toast_id = egui::Id::new("toast").with(i);
+                egui::Area::new(toast_id)
+                    .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, y_offset))
+                    .order(egui::Order::Foreground)
+                    .show(ctx, |ui| {
+                        egui::Frame::popup(ui.style())
+                            .fill(egui::Color32::from_rgb(30, 30, 40))
+                            .inner_margin(8.0)
+                            .rounding(6.0)
+                            .stroke(egui::Stroke::new(1.0, toast.color))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(&toast.message).color(toast.color));
+                                    if toast.dismissable {
+                                        if ui.small_button("\u{2716}").clicked() {
+                                            toast.dismissed = true;
+                                        }
+                                    }
+                                });
+                            });
+                    });
+                y_offset += 36.0;
+            }
+        }
 
         // ── bottom status bar ────────────────────────────────────────────────
         egui::Panel::bottom("status_bar")
@@ -28580,6 +29543,14 @@ impl eframe::App for TyphooNApp {
                             ui.horizontal(|ui| {
                                 if ui.add(egui::Button::new(egui::RichText::new("Set TP").color(BTN_BLUE_TEXT).small().strong()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
                                     self.tp_enabled = true;
+                                }
+                            });
+                            // ADR-094: Position context palette
+                            ui.horizontal(|ui| {
+                                if ui.add(egui::Button::new(egui::RichText::new("Commands…").small().strong()).min_size(btn_size)).clicked() {
+                                    self.palette_context = PaletteContext::Position;
+                                    self.command_open = true;
+                                    self.command_input.clear();
                                 }
                             });
                             ui.add_space(6.0);
@@ -29096,9 +30067,16 @@ impl eframe::App for TyphooNApp {
                                     let (row_rect, row_resp) = ui.allocate_exact_size(egui::vec2(avail_w, row_h), egui::Sense::click());
                                     let rp = ui.painter_at(row_rect);
 
-                                    // Row background (striped + selection)
+                                    // ADR-092: Row background with P&L heatmap intensity
+                                    let heat = (wl.change_pct.abs() * 8.0).min(40.0) as u8;
                                     let row_bg = if is_selected {
                                         egui::Color32::from_rgb(15, 25, 45)
+                                    } else if heat > 0 {
+                                        if wl.change_pct >= 0.0 {
+                                            egui::Color32::from_rgb(0, heat / 2, 0)
+                                        } else {
+                                            egui::Color32::from_rgb(heat / 2, 0, 0)
+                                        }
                                     } else if idx % 2 == 1 {
                                         egui::Color32::from_rgb(8, 8, 14)
                                     } else {
@@ -29180,6 +30158,13 @@ impl eframe::App for TyphooNApp {
                                         }
                                         if ui.button(format!("Remove {}", wl.symbol)).clicked() {
                                             remove_sym = Some(wl.symbol.clone());
+                                            ui.close_menu();
+                                        }
+                                        ui.separator();
+                                        if ui.button("Command Palette…").clicked() {
+                                            self.palette_context = PaletteContext::Watchlist;
+                                            self.command_open = true;
+                                            self.command_input.clear();
                                             ui.close_menu();
                                         }
                                     });
@@ -31599,6 +32584,13 @@ impl eframe::App for TyphooNApp {
                         if ui.button("Data Window").clicked() { self.show_data_window = true; ui.close(); }
                         if ui.button("Volume Profile").clicked() { self.show_volume_profile = true; ui.close(); }
                         if ui.button("Price Alerts…").clicked() { self.show_alerts = true; ui.close(); }
+                        // ADR-094: Open command palette with chart context
+                        if ui.button("Command Palette…").clicked() {
+                            self.palette_context = PaletteContext::Chart;
+                            self.command_open = true;
+                            self.command_input.clear();
+                            ui.close();
+                        }
                         // Copy price at crosshair
                         if let Some(pos) = crosshair {
                             ui.separator();
@@ -31622,10 +32614,65 @@ impl eframe::App for TyphooNApp {
 
         // ── Console (egui::Window for proper focus/interaction on Wayland) ────
         if self.command_open {
-            let palette_commands: Vec<&Command> = COMMANDS
-                .iter()
-                .filter(|c| fuzzy_match(&self.command_input, c.name) || fuzzy_match(&self.command_input, c.desc))
-                .collect();
+            // ADR-092: When filter is empty, show recent commands first
+            let filter_empty = self.command_input.trim().is_empty();
+            // ADR-094: Context-aware command filtering
+            let context_filter: Option<&[&str]> = match self.palette_context {
+                PaletteContext::Global => None,
+                PaletteContext::Chart => Some(&[
+                    "DRAW_HLINE", "DRAW_TRENDLINE", "DRAW_FIBO", "DRAW_VLINE", "DRAW_RECT", "DRAW_RAY",
+                    "DRAW_CHANNEL", "DRAW_PARALLEL_CH", "DRAW_FIB_CHANNEL", "DRAW_REGRESSION",
+                    "NNFX", "RESET_IND", "SESSIONS", "SUPERTREND", "DONCHIAN", "KELTNER",
+                    "BOLLINGER", "ICHIMOKU", "SQUEEZE", "REGRESSION", "FVG", "ORDER_BLOCKS",
+                    "CANDLE", "HEIKINASHI", "LINE", "OHLC", "RENKO",
+                    "M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1",
+                    "SCREENSHOT", "COPY_CHART", "REPLAY", "VOLUME_PROFILE", "VWAP",
+                ]),
+                PaletteContext::Position => Some(&[
+                    "CLOSE_ALL", "CLOSE_PARTIAL", "SET_SL", "SET_TP", "OPEN_MG",
+                    "EQUITY", "TRADESTATS", "PROFILE", "RISK_CALC",
+                ]),
+                PaletteContext::Watchlist => Some(&[
+                    "SEARCH", "QUOTE", "FUNDAMENTALS", "SEC", "INSIDER", "EV",
+                    "EARNINGS", "DIVIDENDS", "ANALYST", "SHORT_INTEREST",
+                    "ALERTS", "NEWS", "OPTIONS",
+                ]),
+                PaletteContext::Darwin => Some(&[
+                    "DARWIN", "PORTFOLIO", "DRAWDOWN", "REBALANCE", "DARWIN_TRADES",
+                    "DARWINVAR", "DARWINIA_SCAN", "CORRELATION", "DWXSYNC", "DWXSTATUS",
+                    "EXPORT_DARWIN", "DELETE_DARWIN", "SWAPHARVEST",
+                ]),
+            };
+            let palette_commands: Vec<&Command> = if filter_empty && !self.recent_commands.is_empty() {
+                // Show recent commands first, then all commands
+                let mut cmds: Vec<&Command> = Vec::new();
+                for name in &self.recent_commands {
+                    if let Some(c) = COMMANDS.iter().find(|c| c.name == name.as_str()) {
+                        if !cmds.iter().any(|x: &&Command| x.name == c.name) {
+                            cmds.push(c);
+                        }
+                    }
+                }
+                for c in COMMANDS.iter() {
+                    if !cmds.iter().any(|x: &&Command| x.name == c.name) {
+                        cmds.push(c);
+                    }
+                }
+                cmds
+            } else {
+                COMMANDS
+                    .iter()
+                    .filter(|c| {
+                        let text_match = fuzzy_match(&self.command_input, c.name) || fuzzy_match(&self.command_input, c.desc);
+                        let ctx_match = context_filter.map_or(true, |allowed| allowed.contains(&c.name));
+                        text_match && ctx_match
+                    })
+                    .collect()
+            };
+            // Reset context to Global after opening (one-shot filtering)
+            if filter_empty && self.palette_context != PaletteContext::Global {
+                // Keep context while palette is open — reset on close
+            }
 
             let num_visible = palette_commands.len().clamp(1, 15);
             let console_height = (num_visible as f32) * 24.0 + 52.0;
@@ -31680,6 +32727,10 @@ impl eframe::App for TyphooNApp {
                                 ui.painter().rect_filled(row_rect, 0.0, row_bg);
 
                                 ui.label(egui::RichText::new(cmd.name).color(name_col).monospace().strong().size(13.0));
+                                // ADR-092: show RECENT badge for MRU commands
+                                if filter_empty && self.recent_commands.iter().take(10).any(|n| n == cmd.name) {
+                                    ui.label(egui::RichText::new("RECENT").color(egui::Color32::from_rgb(76, 175, 80)).size(9.0));
+                                }
                                 ui.add_space(12.0);
                                 ui.label(egui::RichText::new(cmd.desc).color(egui::Color32::from_rgb(136, 136, 136)).size(11.0));
                             });
@@ -31695,6 +32746,10 @@ impl eframe::App for TyphooNApp {
                     }
                     if let Some(cmd_name) = execute {
                         self.command_open = false;
+                        // ADR-092: track recent commands (MRU, max 10)
+                        self.recent_commands.retain(|n| n != &cmd_name);
+                        self.recent_commands.insert(0, cmd_name.clone());
+                        self.recent_commands.truncate(10);
                         self.handle_command(&cmd_name, ctx);
                     }
                 });

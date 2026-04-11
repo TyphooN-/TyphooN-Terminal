@@ -645,6 +645,26 @@ impl App {
                     }
                 }
             }
+            "trailing" | "trail" => {
+                // trailing buy/sell SYMBOL QTY TRAIL_PCT
+                if parts.len() < 5 {
+                    self.log("Usage: trailing buy|sell SYMBOL QTY TRAIL_PERCENT", Color::Yellow);
+                } else {
+                    let side = parts[1].to_lowercase();
+                    if side != "buy" && side != "sell" { self.log("Side must be 'buy' or 'sell'", Color::Red); return; }
+                    let symbol = parts[2].to_uppercase();
+                    let qty: f64 = parts[3].parse().unwrap_or(0.0);
+                    let trail_pct: f64 = parts[4].parse().unwrap_or(0.0);
+                    if qty <= 0.0 || trail_pct <= 0.0 || trail_pct > 50.0 {
+                        self.log("Invalid qty or trail % (must be 0 < pct <= 50)", Color::Red);
+                        return;
+                    }
+                    match self.broker.trailing_stop_order(&symbol, qty, &side, trail_pct).await {
+                        Ok(r) => self.log(&format!("TRAILING {} {qty} {symbol} trail={trail_pct}%: {}", side.to_uppercase(), r.status), Color::Green),
+                        Err(e) => self.log(&format!("Trailing stop failed: {e}"), Color::Red),
+                    }
+                }
+            }
             "closeall" => {
                 self.log("Closing all positions...", Color::Yellow);
                 match self.broker.close_all().await {
@@ -816,6 +836,7 @@ impl App {
                 self.log("  limit buy|sell SYM QTY PRICE  Limit order", Color::Cyan);
                 self.log("  stop buy|sell SYM QTY PRICE   Stop order", Color::Cyan);
                 self.log("  bracket buy|sell SYM QTY SL TP  Bracket (market+SL+TP)", Color::Cyan);
+                self.log("  trailing buy|sell SYM QTY PCT Trailing stop order", Color::Cyan);
                 self.log("  close SYMBOL [QTY]            Close position", Color::Cyan);
                 self.log("  closeall                      Close ALL positions", Color::Cyan);
                 self.log("  cancelall                     Cancel ALL open orders", Color::Cyan);
@@ -1052,6 +1073,16 @@ fn draw_chart(f: &mut Frame, app: &App, area: Rect) {
     let visible_bars = bars.len().min(chart_width);
     let start = bars.len().saturating_sub(visible_bars);
 
+    // ADR-092: Compute SMA(20) overlay for visible bars
+    let sma_period = 20;
+    let mut sma_values: Vec<Option<f64>> = vec![None; bars.len()];
+    if bars.len() >= sma_period {
+        for i in (sma_period - 1)..bars.len() {
+            let sum: f64 = bars[(i + 1 - sma_period)..=i].iter().map(|b| b.close).sum();
+            sma_values[i] = Some(sum / sma_period as f64);
+        }
+    }
+
     let mut lines: Vec<Line> = Vec::new();
     for row in 0..chart_height {
         let y_price = max_price - (row as f64 / chart_height as f64) * price_range;
@@ -1068,12 +1099,22 @@ fn draw_chart(f: &mut Frame, app: &App, area: Rect) {
             let bullish = bar.close >= bar.open;
             let color = if bullish { Color::Green } else { Color::Red };
 
+            // Check if SMA line passes through this row
+            let sma_row = sma_values[start + col].map(|v| {
+                ((max_price - v) / price_range * chart_height as f64) as usize
+            });
+
             let ch = if row >= body_top && row <= body_bot {
-                // Body
                 Span::styled("█", Style::default().fg(color))
             } else if row >= high_row && row <= low_row {
-                // Wick
-                Span::styled("│", Style::default().fg(Color::DarkGray))
+                // Wick — but show SMA if it coincides
+                if sma_row == Some(row) {
+                    Span::styled("╋", Style::default().fg(Color::Yellow))
+                } else {
+                    Span::styled("│", Style::default().fg(Color::DarkGray))
+                }
+            } else if sma_row == Some(row) {
+                Span::styled("─", Style::default().fg(Color::Yellow))
             } else {
                 Span::raw(" ")
             };

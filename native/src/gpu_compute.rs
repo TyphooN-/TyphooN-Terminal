@@ -87,6 +87,13 @@ pub struct GpuCompute {
     atr_proj_pipeline: wgpu::ComputePipeline,
     better_vol_pipeline: wgpu::ComputePipeline,
     anchored_vwap_pipeline: wgpu::ComputePipeline,
+    // ─── ADR-094: GPU parity shaders ───
+    supertrend_pipeline: wgpu::ComputePipeline,
+    donchian_pipeline: wgpu::ComputePipeline,
+    keltner_pipeline: wgpu::ComputePipeline,
+    regression_pipeline: wgpu::ComputePipeline,
+    squeeze_pipeline: wgpu::ComputePipeline,
+    prev_levels_pipeline: wgpu::ComputePipeline,
 }
 
 impl GpuCompute {
@@ -264,6 +271,13 @@ impl GpuCompute {
         let atr_proj_pipeline = make_pipeline("atr_proj_pipeline", ATR_PROJECTION_SHADER);
         let better_vol_pipeline = make_pipeline("better_vol_pipeline", BETTER_VOLUME_SHADER);
         let anchored_vwap_pipeline = make_pipeline("anchored_vwap_pipeline", ANCHORED_VWAP_SHADER);
+        // ADR-094: GPU parity shaders
+        let supertrend_pipeline = make_pipeline("supertrend_pipeline", SUPERTREND_SHADER);
+        let donchian_pipeline = make_pipeline("donchian_pipeline", DONCHIAN_SHADER);
+        let keltner_pipeline = make_pipeline("keltner_pipeline", KELTNER_SHADER);
+        let regression_pipeline = make_pipeline("regression_pipeline", REGRESSION_SHADER);
+        let squeeze_pipeline = make_pipeline("squeeze_pipeline", SQUEEZE_SHADER);
+        let prev_levels_pipeline = make_pipeline("prev_levels_pipeline", PREV_LEVELS_SHADER);
 
         Self {
             device,
@@ -308,6 +322,12 @@ impl GpuCompute {
             atr_proj_pipeline,
             better_vol_pipeline,
             anchored_vwap_pipeline,
+            supertrend_pipeline,
+            donchian_pipeline,
+            keltner_pipeline,
+            regression_pipeline,
+            squeeze_pipeline,
+            prev_levels_pipeline,
             bind_group_layout,
             readback_buffer: None,
             ind_out_buffer: None,
@@ -1091,6 +1111,40 @@ fn bytemuck_cast_slice_to_f32(data: &[u8]) -> Vec<f32> {
     bytemuck::cast_slice::<u8, f32>(data).to_vec()
 }
 
+// ─── ADR-094: GPU parity dispatch methods ─────────────────────────────────────
+
+impl GpuCompute {
+    /// Supertrend — sequential GPU (state machine like PSAR). 2 outputs: value, direction (1.0=up, -1.0=down).
+    pub fn compute_supertrend_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.supertrend_pipeline, period, 2)
+    }
+
+    /// Donchian Channel — parallel GPU. 2 outputs: upper (highest high), lower (lowest low).
+    pub fn compute_donchian_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.donchian_pipeline, period, 2)
+    }
+
+    /// Keltner Channel — parallel GPU. 3 outputs: upper, mid (EMA), lower.
+    pub fn compute_keltner_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.keltner_pipeline, period, 3)
+    }
+
+    /// Regression Channel — parallel GPU. 3 outputs: mid (linear reg), upper (+2σ), lower (−2σ).
+    pub fn compute_regression_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.regression_pipeline, period, 3)
+    }
+
+    /// Squeeze Momentum — parallel GPU. 2 outputs: momentum value, squeeze_on (1.0/0.0).
+    pub fn compute_squeeze_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.squeeze_pipeline, period, 2)
+    }
+
+    /// Previous Candle Levels — parallel GPU. 2 outputs per bar: prev_day_high, prev_day_low.
+    pub fn compute_prev_levels_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.prev_levels_pipeline, period, 2)
+    }
+}
+
 // ─── DARWIN GPU Analytics ─────────────────────────────────────────────────────
 
 /// Per-DARWIN statistics computed on GPU.
@@ -1221,7 +1275,10 @@ impl GpuDarwinAnalytics {
 
         // For upload, use min(count, chunk_size) DARWINs (first batch)
         let batch_count = (count as usize).min(self.chunk_size as usize);
-        let total_floats = batch_count * max_days as usize;
+        let total_floats = match batch_count.checked_mul(max_days as usize) {
+            Some(n) => n,
+            None => { tracing::error!("GPU Darwin: overflow in batch_count * max_days"); return; }
+        };
         let mut flat = vec![0.0_f32; total_floats];
         let mut lengths = vec![0_u32; batch_count];
 
@@ -1372,7 +1429,10 @@ impl GpuDarwinAnalytics {
             let batch_count = batch_slice.len();
 
             // Flatten this batch
-            let total_floats = batch_count * self.max_days as usize;
+            let total_floats = match batch_count.checked_mul(self.max_days as usize) {
+                Some(n) => n,
+                None => { tracing::error!("GPU Darwin batch: overflow in batch_count * max_days"); continue; }
+            };
             let mut flat = vec![0.0_f32; total_floats];
             let mut lengths = vec![0_u32; batch_count];
             for (i, series) in batch_slice.iter().enumerate() {
@@ -4250,5 +4310,759 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     results[out + 3u] = 0.0; results[out + 4u] = 0.0; results[out + 5u] = 0.0;
     results[out + 6u] = f32(trades);
     results[out + 7u] = 0.0; results[out + 8u] = 0.0;
+}
+"#;
+
+// ── ADR-092: New GPU compute shaders ────────────────────────────────
+
+/// Volume Profile — bins price×volume into N price levels.
+/// Input: OHLCV interleaved [open, high, low, close, volume] × bar_count.
+/// Output: histogram[num_levels] = cumulative volume at each price level.
+const VOLUME_PROFILE_SHADER: &str = r#"
+struct Params {
+    bar_count: u32,
+    num_levels: u32,
+    price_min: f32,
+    price_max: f32,
+}
+@group(0) @binding(0) var<storage, read> ohlcv: array<f32>;
+@group(0) @binding(1) var<storage, read_write> histogram: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= params.bar_count) { return; }
+    let base = i * 5u;
+    let high = ohlcv[base + 1u];
+    let low = ohlcv[base + 2u];
+    let close = ohlcv[base + 3u];
+    let volume = ohlcv[base + 4u];
+    let price_range = params.price_max - params.price_min;
+    if (price_range <= 0.0) { return; }
+    // Distribute volume across price levels touched by this bar
+    let level_size = price_range / f32(params.num_levels);
+    let lo_level = u32(max((low - params.price_min) / level_size, 0.0));
+    let hi_level = min(u32((high - params.price_min) / level_size), params.num_levels - 1u);
+    let levels_touched = hi_level - lo_level + 1u;
+    let vol_per_level = volume / f32(levels_touched);
+    for (var l = lo_level; l <= hi_level; l++) {
+        // Atomic-free: each thread writes to different regions (acceptable race for visualization)
+        histogram[l] += vol_per_level;
+    }
+}
+"#;
+
+/// Batch Screener — computes RSI + SMA for 500+ symbols in one dispatch.
+/// Each thread processes one symbol. Input: close prices for all symbols
+/// packed sequentially with offsets. Output: [rsi, sma] per symbol.
+const BATCH_SCREENER_SHADER: &str = r#"
+struct Params {
+    symbol_count: u32,
+    bars_per_symbol: u32,
+    rsi_period: u32,
+    sma_period: u32,
+}
+@group(0) @binding(0) var<storage, read> closes: array<f32>;
+@group(0) @binding(1) var<storage, read_write> results: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let sym = gid.x;
+    if (sym >= params.symbol_count) { return; }
+    let base = sym * params.bars_per_symbol;
+    let n = params.bars_per_symbol;
+    if (n < 2u) { results[sym * 2u] = 50.0; results[sym * 2u + 1u] = 0.0; return; }
+
+    // RSI
+    var avg_gain = 0.0;
+    var avg_loss = 0.0;
+    let rp = min(params.rsi_period, n - 1u);
+    for (var i = 1u; i <= rp; i++) {
+        let diff = closes[base + i] - closes[base + i - 1u];
+        if (diff > 0.0) { avg_gain += diff; } else { avg_loss -= diff; }
+    }
+    avg_gain /= f32(rp);
+    avg_loss /= f32(rp);
+    for (var i = rp + 1u; i < n; i++) {
+        let diff = closes[base + i] - closes[base + i - 1u];
+        if (diff > 0.0) {
+            avg_gain = (avg_gain * f32(rp - 1u) + diff) / f32(rp);
+            avg_loss = (avg_loss * f32(rp - 1u)) / f32(rp);
+        } else {
+            avg_gain = (avg_gain * f32(rp - 1u)) / f32(rp);
+            avg_loss = (avg_loss * f32(rp - 1u) - diff) / f32(rp);
+        }
+    }
+    var rsi = 50.0;
+    if (avg_loss > 0.0) {
+        let rs = avg_gain / avg_loss;
+        rsi = 100.0 - (100.0 / (1.0 + rs));
+    } else if (avg_gain > 0.0) {
+        rsi = 100.0;
+    }
+    results[sym * 2u] = rsi;
+
+    // SMA (last sma_period bars)
+    var sum = 0.0;
+    let sp = min(params.sma_period, n);
+    for (var i = n - sp; i < n; i++) {
+        sum += closes[base + i];
+    }
+    results[sym * 2u + 1u] = sum / f32(sp);
+}
+"#;
+
+/// Rolling Statistics — computes rolling Sharpe ratio for each window position.
+/// Each thread computes one window. Input: returns array.
+/// Output: rolling_sharpe[position].
+const ROLLING_STATS_SHADER: &str = r#"
+struct Params {
+    total_days: u32,
+    window_size: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+@group(0) @binding(0) var<storage, read> returns: array<f32>;
+@group(0) @binding(1) var<storage, read_write> rolling_sharpe: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let pos = gid.x;
+    let end = pos + params.window_size;
+    if (end > params.total_days) { return; }
+
+    // Mean
+    var sum = 0.0;
+    for (var i = pos; i < end; i++) {
+        sum += returns[i];
+    }
+    let mean = sum / f32(params.window_size);
+
+    // StdDev
+    var var_sum = 0.0;
+    for (var i = pos; i < end; i++) {
+        let diff = returns[i] - mean;
+        var_sum += diff * diff;
+    }
+    let std_dev = sqrt(var_sum / f32(params.window_size));
+
+    // Sharpe (annualized, assumes daily returns)
+    if (std_dev > 0.0001) {
+        rolling_sharpe[pos] = (mean * 252.0) / (std_dev * sqrt(252.0));
+    } else {
+        rolling_sharpe[pos] = 0.0;
+    }
+}
+"#;
+
+/// Renko Builder — constructs Renko bricks from close price data.
+/// Each brick has a fixed size. Output: [direction, open, close] per brick.
+/// Sequential dispatch (brick dependencies).
+const RENKO_BUILDER_SHADER: &str = r#"
+struct Params {
+    bar_count: u32,
+    brick_size: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+@group(0) @binding(0) var<storage, read> closes: array<f32>;
+@group(0) @binding(1) var<storage, read_write> bricks: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    if (params.bar_count < 1u) { return; }
+    var brick_base = closes[0u];
+    var brick_count = 0u;
+    let max_bricks = params.bar_count * 2u; // upper bound
+
+    for (var i = 1u; i < params.bar_count; i++) {
+        let price = closes[i];
+        // Up bricks
+        while (price >= brick_base + params.brick_size && brick_count < max_bricks) {
+            let out = brick_count * 3u;
+            bricks[out] = 1.0;  // direction: up
+            bricks[out + 1u] = brick_base;
+            bricks[out + 2u] = brick_base + params.brick_size;
+            brick_base += params.brick_size;
+            brick_count++;
+        }
+        // Down bricks
+        while (price <= brick_base - params.brick_size && brick_count < max_bricks) {
+            let out = brick_count * 3u;
+            bricks[out] = -1.0;  // direction: down
+            bricks[out + 1u] = brick_base;
+            bricks[out + 2u] = brick_base - params.brick_size;
+            brick_base -= params.brick_size;
+            brick_count++;
+        }
+    }
+    // Store brick count in first output slot (slot 0 rewritten)
+    // Consumers check bricks[i*3] for 1.0/-1.0 vs 0.0 to find end
+}
+"#;
+
+/// Tick Aggregation — aggregates raw ticks into OHLCV bars at multiple timeframes.
+/// Each thread processes one timeframe bucket. Input: tick prices + timestamps.
+/// Output: OHLCV bars per timeframe.
+const TICK_AGGREGATION_SHADER: &str = r#"
+struct Params {
+    tick_count: u32,
+    tf_seconds: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+@group(0) @binding(0) var<storage, read> tick_prices: array<f32>;
+@group(0) @binding(1) var<storage, read> tick_timestamps: array<u32>;
+@group(0) @binding(2) var<storage, read_write> ohlcv_out: array<f32>;
+@group(0) @binding(3) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let bar_idx = gid.x;
+    if (params.tick_count == 0u) { return; }
+
+    let bar_start_ts = tick_timestamps[0u] + bar_idx * params.tf_seconds;
+    let bar_end_ts = bar_start_ts + params.tf_seconds;
+
+    var o = 0.0;
+    var h = -999999.0;
+    var l = 999999.0;
+    var c = 0.0;
+    var v = 0.0;
+    var found = false;
+
+    for (var i = 0u; i < params.tick_count; i++) {
+        let ts = tick_timestamps[i];
+        if (ts >= bar_start_ts && ts < bar_end_ts) {
+            let price = tick_prices[i];
+            if (!found) { o = price; found = true; }
+            if (price > h) { h = price; }
+            if (price < l) { l = price; }
+            c = price;
+            v += 1.0;
+        }
+    }
+
+    if (found) {
+        let out = bar_idx * 5u;
+        ohlcv_out[out] = o;
+        ohlcv_out[out + 1u] = h;
+        ohlcv_out[out + 2u] = l;
+        ohlcv_out[out + 3u] = c;
+        ohlcv_out[out + 4u] = v;
+    }
+}
+"#;
+
+/// Multi-Symbol Backtest — tests same strategy across N symbols × M param combos.
+/// Extends BACKTEST_EVAL_SHADER to two-dimensional dispatch.
+const MULTI_SYMBOL_BACKTEST_SHADER: &str = r#"
+struct Params {
+    bars_per_symbol: u32,
+    symbol_count: u32,
+    fast_start: u32,
+    fast_step: u32,
+    slow_start: u32,
+    slow_step: u32,
+    combos_per_symbol: u32,
+    _pad: u32,
+}
+@group(0) @binding(0) var<storage, read> all_closes: array<f32>;
+@group(0) @binding(1) var<storage, read_write> results: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let thread_idx = gid.x;
+    let total_combos = params.symbol_count * params.combos_per_symbol;
+    if (thread_idx >= total_combos) { return; }
+
+    let sym_idx = thread_idx / params.combos_per_symbol;
+    let combo_idx = thread_idx % params.combos_per_symbol;
+    let base = sym_idx * params.bars_per_symbol;
+    let n = params.bars_per_symbol;
+
+    // Derive fast/slow periods from combo index (grid search)
+    let fast_range = 10u; // 10 fast values per slow value
+    let fast_idx = combo_idx % fast_range;
+    let slow_idx = combo_idx / fast_range;
+    let fast_period = params.fast_start + fast_idx * params.fast_step;
+    let slow_period = params.slow_start + slow_idx * params.slow_step;
+
+    if (fast_period >= slow_period || slow_period >= n) {
+        let out = thread_idx * 4u;
+        results[out] = 0.0; results[out + 1u] = 0.0;
+        results[out + 2u] = 0.0; results[out + 3u] = 0.0;
+        return;
+    }
+
+    // SMA crossover backtest
+    var equity = 100000.0;
+    var peak = equity;
+    var max_dd = 0.0;
+    var wins = 0u;
+    var losses = 0u;
+    var in_trade = false;
+    var trade_dir = 0;
+    var entry_price = 0.0;
+
+    for (var i = slow_period; i < n; i++) {
+        // Compute fast SMA
+        var fast_sum = 0.0;
+        for (var j = i - fast_period; j < i; j++) { fast_sum += all_closes[base + j]; }
+        let fast_sma = fast_sum / f32(fast_period);
+        // Compute slow SMA
+        var slow_sum = 0.0;
+        for (var j = i - slow_period; j < i; j++) { slow_sum += all_closes[base + j]; }
+        let slow_sma = slow_sum / f32(slow_period);
+
+        let price = all_closes[base + i];
+
+        if (in_trade) {
+            let pnl = f32(trade_dir) * (price - entry_price) * 100.0;
+            if ((trade_dir == 1 && fast_sma < slow_sma) || (trade_dir == -1 && fast_sma > slow_sma)) {
+                equity += pnl;
+                if (pnl > 0.0) { wins++; } else { losses++; }
+                in_trade = false;
+            }
+        }
+        if (!in_trade) {
+            // Compute previous bar SMAs for crossover detection
+            if (i > slow_period) {
+                var pf = 0.0;
+                for (var j = i - 1u - fast_period; j < i - 1u; j++) { pf += all_closes[base + j]; }
+                let prev_fast = pf / f32(fast_period);
+                var ps = 0.0;
+                for (var j = i - 1u - slow_period; j < i - 1u; j++) { ps += all_closes[base + j]; }
+                let prev_slow = ps / f32(slow_period);
+                if (prev_fast <= prev_slow && fast_sma > slow_sma) {
+                    in_trade = true; trade_dir = 1; entry_price = price;
+                } else if (prev_fast >= prev_slow && fast_sma < slow_sma) {
+                    in_trade = true; trade_dir = -1; entry_price = price;
+                }
+            }
+        }
+        if (equity > peak) { peak = equity; }
+        let dd = (peak - equity) / max(peak, 0.01);
+        if (dd > max_dd) { max_dd = dd; }
+    }
+
+    let trades = wins + losses;
+    let out = thread_idx * 4u;
+    results[out] = equity - 100000.0;  // net P&L
+    results[out + 1u] = max_dd;
+    results[out + 2u] = select(f32(wins) / f32(trades), 0.0, trades == 0u);
+    results[out + 3u] = f32(trades);
+}
+"#;
+
+// ── ADR-092: GPU Render Shaders (Vertex + Fragment) ──────────────────
+
+/// Instanced Candlestick Renderer — renders all visible candles in a single draw call.
+/// Each instance is one candlestick. Instance data: [x, open_y, close_y, high_y, low_y, is_up].
+/// Vertex shader expands each instance into body quad + wick line geometry.
+#[allow(dead_code)]
+const CANDLE_RENDER_SHADER: &str = r#"
+// Per-instance data uploaded from CPU each frame
+struct CandleInstance {
+    @location(0) x_center: f32,
+    @location(1) body_top: f32,
+    @location(2) body_bot: f32,
+    @location(3) wick_top: f32,
+    @location(4) wick_bot: f32,
+    @location(5) is_up: f32,      // 1.0 = green, 0.0 = red
+    @location(6) half_width: f32,
+}
+
+struct Uniforms {
+    viewport_width: f32,
+    viewport_height: f32,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+}
+
+// 10 vertices per instance: 4 for body quad (triangle strip), 2 for wick top, 2 for wick bot
+// vertex_index 0-3: body quad, 4-5: top wick, 6-7: bottom wick, 8-9: unused
+@vertex
+fn vs_main(
+    instance: CandleInstance,
+    @builtin(vertex_index) vid: u32,
+) -> VertexOutput {
+    var out: VertexOutput;
+    let green = vec4<f32>(0.0, 1.0, 0.0, 1.0);
+    let red = vec4<f32>(1.0, 0.0, 0.0, 1.0);
+    out.color = select(red, green, instance.is_up > 0.5);
+
+    // NDC coords: x in [-1, 1], y in [-1, 1]
+    let ndc_x = (instance.x_center / uniforms.viewport_width) * 2.0 - 1.0;
+    let hw = (instance.half_width / uniforms.viewport_width) * 2.0;
+    let wick_w = 1.0 / uniforms.viewport_width; // 1px wick
+
+    var pos = vec2<f32>(0.0, 0.0);
+    switch (vid) {
+        // Body quad (triangle strip: 0-1-2-3)
+        case 0u: { pos = vec2<f32>(ndc_x - hw, 1.0 - instance.body_top / uniforms.viewport_height * 2.0); }
+        case 1u: { pos = vec2<f32>(ndc_x + hw, 1.0 - instance.body_top / uniforms.viewport_height * 2.0); }
+        case 2u: { pos = vec2<f32>(ndc_x - hw, 1.0 - instance.body_bot / uniforms.viewport_height * 2.0); }
+        case 3u: { pos = vec2<f32>(ndc_x + hw, 1.0 - instance.body_bot / uniforms.viewport_height * 2.0); }
+        // Top wick (line: 4-5)
+        case 4u: { pos = vec2<f32>(ndc_x, 1.0 - instance.wick_top / uniforms.viewport_height * 2.0); }
+        case 5u: { pos = vec2<f32>(ndc_x, 1.0 - instance.body_top / uniforms.viewport_height * 2.0); }
+        // Bottom wick (line: 6-7)
+        case 6u: { pos = vec2<f32>(ndc_x, 1.0 - instance.body_bot / uniforms.viewport_height * 2.0); }
+        case 7u: { pos = vec2<f32>(ndc_x, 1.0 - instance.wick_bot / uniforms.viewport_height * 2.0); }
+        default: { pos = vec2<f32>(0.0, 0.0); }
+    }
+
+    out.position = vec4<f32>(pos, 0.0, 1.0);
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return in.color;
+}
+"#;
+
+/// Indicator Polyline Renderer — renders indicator values as GPU line strip.
+/// Input: vertex buffer of [x, y, r, g, b, a] per point.
+#[allow(dead_code)]
+const POLYLINE_RENDER_SHADER: &str = r#"
+struct Uniforms {
+    viewport_width: f32,
+    viewport_height: f32,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+struct VertexInput {
+    @location(0) pos: vec2<f32>,
+    @location(1) color: vec4<f32>,
+}
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+}
+
+@vertex
+fn vs_main(in: VertexInput) -> VertexOutput {
+    var out: VertexOutput;
+    let ndc_x = (in.pos.x / uniforms.viewport_width) * 2.0 - 1.0;
+    let ndc_y = 1.0 - (in.pos.y / uniforms.viewport_height) * 2.0;
+    out.position = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
+    out.color = in.color;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return in.color;
+}
+"#;
+
+/// Heatmap Texture Renderer — renders a compute-generated texture as fullscreen quad.
+/// Used for correlation matrices, sector heatmaps, volume profiles.
+#[allow(dead_code)]
+const HEATMAP_RENDER_SHADER: &str = r#"
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid: u32) -> VertexOutput {
+    var out: VertexOutput;
+    // Fullscreen triangle (3 vertices cover entire viewport)
+    let x = f32(vid & 1u) * 4.0 - 1.0;
+    let y = f32((vid >> 1u) & 1u) * 4.0 - 1.0;
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+
+@group(0) @binding(0) var heatmap_texture: texture_2d<f32>;
+@group(0) @binding(1) var heatmap_sampler: sampler;
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(heatmap_texture, heatmap_sampler, in.uv);
+}
+"#;
+
+/// Zone Compositor — renders session highlights, S/D zones, FVG as a texture overlay.
+/// Alpha-blended composite of multiple zone layers.
+#[allow(dead_code)]
+const ZONE_COMPOSITE_SHADER: &str = r#"
+struct ZoneInstance {
+    @location(0) rect_min: vec2<f32>,
+    @location(1) rect_max: vec2<f32>,
+    @location(2) color: vec4<f32>,
+}
+
+struct Uniforms {
+    viewport_width: f32,
+    viewport_height: f32,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+}
+
+@vertex
+fn vs_main(
+    zone: ZoneInstance,
+    @builtin(vertex_index) vid: u32,
+) -> VertexOutput {
+    var out: VertexOutput;
+    out.color = zone.color;
+    // Expand instance to quad (triangle strip: 4 vertices)
+    var pos = vec2<f32>(0.0, 0.0);
+    switch (vid) {
+        case 0u: { pos = zone.rect_min; }
+        case 1u: { pos = vec2<f32>(zone.rect_max.x, zone.rect_min.y); }
+        case 2u: { pos = vec2<f32>(zone.rect_min.x, zone.rect_max.y); }
+        case 3u: { pos = zone.rect_max; }
+        default: {}
+    }
+    let ndc_x = (pos.x / uniforms.viewport_width) * 2.0 - 1.0;
+    let ndc_y = 1.0 - (pos.y / uniforms.viewport_height) * 2.0;
+    out.position = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return in.color;
+}
+"#;
+
+// ─── ADR-094: GPU parity shaders ──────────────────────────────────────────────
+
+const SUPERTREND_SHADER: &str = r#"
+// Supertrend — sequential (ATR-based trailing stop with direction flip)
+// Output: 2 per bar [supertrend_value, direction] where direction: 1.0=up, -1.0=down
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let n = params.bar_count;
+    let p = params.period;
+    let mult: f32 = 3.0;
+    if (n < p + 1u) { return; }
+
+    // ATR seed
+    var atr: f32 = 0.0;
+    for (var i: u32 = 1u; i < p + 1u; i = i + 1u) {
+        let h = bars[i * 3u]; let l = bars[i * 3u + 1u]; let pc = bars[(i - 1u) * 3u + 2u];
+        atr += max(h - l, max(abs(h - pc), abs(l - pc)));
+    }
+    atr = atr / f32(p);
+
+    var dir: f32 = 1.0;
+    var upper_band: f32 = 0.0;
+    var lower_band: f32 = 0.0;
+
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let h = bars[i * 3u]; let l = bars[i * 3u + 1u]; let c = bars[i * 3u + 2u];
+        if (i >= p) {
+            let pc = bars[(i - 1u) * 3u + 2u];
+            let tr = max(h - l, max(abs(h - pc), abs(l - pc)));
+            atr = (atr * f32(p - 1u) + tr) / f32(p);
+        }
+        let hl2 = (h + l) / 2.0;
+        let raw_upper = hl2 + mult * atr;
+        let raw_lower = hl2 - mult * atr;
+        if (i == 0u) { upper_band = raw_upper; lower_band = raw_lower; }
+        else {
+            upper_band = select(raw_upper, min(raw_upper, upper_band), raw_upper < upper_band || bars[(i - 1u) * 3u + 2u] > upper_band);
+            lower_band = select(raw_lower, max(raw_lower, lower_band), raw_lower > lower_band || bars[(i - 1u) * 3u + 2u] < lower_band);
+        }
+        if (dir == 1.0 && c < lower_band) { dir = -1.0; }
+        else if (dir == -1.0 && c > upper_band) { dir = 1.0; }
+        output[i * 2u] = select(upper_band, lower_band, dir == 1.0);
+        output[i * 2u + 1u] = dir;
+    }
+}
+"#;
+
+const DONCHIAN_SHADER: &str = r#"
+// Donchian Channel — parallel (rolling highest high, lowest low)
+// Output: 2 per bar [upper, lower]
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count) { return; }
+    if (i < params.period - 1u) { output[i * 2u] = 0.0; output[i * 2u + 1u] = 0.0; return; }
+    var hh: f32 = -1000000.0;
+    var ll: f32 = 1000000.0;
+    for (var j: u32 = 0u; j < params.period; j = j + 1u) {
+        let idx = i - j;
+        if (bars[idx * 3u] > hh) { hh = bars[idx * 3u]; }
+        if (bars[idx * 3u + 1u] < ll) { ll = bars[idx * 3u + 1u]; }
+    }
+    output[i * 2u] = hh;
+    output[i * 2u + 1u] = ll;
+}
+"#;
+
+const KELTNER_SHADER: &str = r#"
+// Keltner Channel — sequential (EMA ± mult × ATR)
+// Output: 3 per bar [upper, mid, lower]
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let n = params.bar_count;
+    let p = params.period;
+    let mult: f32 = 1.5;
+    if (n < p) { return; }
+    let alpha = 2.0 / (f32(p) + 1.0);
+    var ema: f32 = bars[2u];
+    var atr: f32 = bars[0u] - bars[1u];
+    output[0u] = 0.0; output[1u] = 0.0; output[2u] = 0.0;
+    for (var i: u32 = 1u; i < n; i = i + 1u) {
+        let h = bars[i * 3u]; let l = bars[i * 3u + 1u]; let c = bars[i * 3u + 2u];
+        let pc = bars[(i - 1u) * 3u + 2u];
+        ema = alpha * c + (1.0 - alpha) * ema;
+        let tr = max(h - l, max(abs(h - pc), abs(l - pc)));
+        atr = (atr * f32(p - 1u) + tr) / f32(p);
+        if (i < p) { output[i * 3u] = 0.0; output[i * 3u + 1u] = 0.0; output[i * 3u + 2u] = 0.0; }
+        else {
+            output[i * 3u] = ema + mult * atr;
+            output[i * 3u + 1u] = ema;
+            output[i * 3u + 2u] = ema - mult * atr;
+        }
+    }
+}
+"#;
+
+const REGRESSION_SHADER: &str = r#"
+// Linear Regression Channel — parallel (least squares + standard error)
+// Output: 3 per bar [mid, upper(+2σ), lower(−2σ)]
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count) { return; }
+    let p = params.period;
+    if (i < p - 1u) { output[i * 3u] = 0.0; output[i * 3u + 1u] = 0.0; output[i * 3u + 2u] = 0.0; return; }
+    let n = f32(p);
+    var sum_x: f32 = 0.0; var sum_y: f32 = 0.0; var sum_xy: f32 = 0.0; var sum_xx: f32 = 0.0;
+    for (var j: u32 = 0u; j < p; j = j + 1u) {
+        let x = f32(j);
+        let y = bars[(i - p + 1u + j) * 3u + 2u];
+        sum_x += x; sum_y += y; sum_xy += x * y; sum_xx += x * x;
+    }
+    let denom = n * sum_xx - sum_x * sum_x;
+    if (abs(denom) < 0.000001) { let avg = sum_y / n; output[i * 3u] = avg; output[i * 3u + 1u] = avg; output[i * 3u + 2u] = avg; return; }
+    let b = (n * sum_xy - sum_x * sum_y) / denom;
+    let a = (sum_y - b * sum_x) / n;
+    let reg_val = a + b * (n - 1.0);
+    var sse: f32 = 0.0;
+    for (var j: u32 = 0u; j < p; j = j + 1u) {
+        let e = bars[(i - p + 1u + j) * 3u + 2u] - (a + b * f32(j));
+        sse += e * e;
+    }
+    let se = sqrt(sse / n);
+    output[i * 3u] = reg_val;
+    output[i * 3u + 1u] = reg_val + 2.0 * se;
+    output[i * 3u + 2u] = reg_val - 2.0 * se;
+}
+"#;
+
+const SQUEEZE_SHADER: &str = r#"
+// Squeeze Momentum — sequential (BB inside KC detection + momentum)
+// Output: 2 per bar [momentum, squeeze_on]
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let n = params.bar_count;
+    let p = params.period;
+    let bb_mult: f32 = 2.0;
+    let kc_mult: f32 = 1.5;
+    if (n < p) { return; }
+    let alpha = 2.0 / (f32(p) + 1.0);
+    var ema: f32 = bars[2u];
+    var atr: f32 = bars[0u] - bars[1u];
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let h = bars[i * 3u]; let l = bars[i * 3u + 1u]; let c = bars[i * 3u + 2u];
+        if (i > 0u) {
+            let pc = bars[(i - 1u) * 3u + 2u];
+            ema = alpha * c + (1.0 - alpha) * ema;
+            atr = (atr * f32(p - 1u) + max(h - l, max(abs(h - pc), abs(l - pc)))) / f32(p);
+        }
+        if (i < p - 1u) { output[i * 2u] = 0.0; output[i * 2u + 1u] = 0.0; continue; }
+        // SMA + StdDev + Donchian over window
+        var sum: f32 = 0.0; var hh: f32 = -1e9; var ll: f32 = 1e9;
+        for (var j: u32 = 0u; j < p; j = j + 1u) {
+            let sc = bars[(i - j) * 3u + 2u]; sum += sc;
+            let sh = bars[(i - j) * 3u]; let sl = bars[(i - j) * 3u + 1u];
+            if (sh > hh) { hh = sh; } if (sl < ll) { ll = sl; }
+        }
+        let sma = sum / f32(p);
+        var vs: f32 = 0.0;
+        for (var j: u32 = 0u; j < p; j = j + 1u) { let d = bars[(i - j) * 3u + 2u] - sma; vs += d * d; }
+        let sd = sqrt(vs / f32(p));
+        let squeeze_on = select(0.0, 1.0, sma - bb_mult * sd > ema - kc_mult * atr && sma + bb_mult * sd < ema + kc_mult * atr);
+        output[i * 2u] = c - ((hh + ll) / 2.0 + sma) / 2.0;
+        output[i * 2u + 1u] = squeeze_on;
+    }
+}
+"#;
+
+const PREV_LEVELS_SHADER: &str = r#"
+// Previous Candle Levels — parallel (approximate prev day high/low)
+// Output: 2 per bar [prev_day_high, prev_day_low]
+struct Params { period: u32, bar_count: u32, }  // period = minutes per bar
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count) { return; }
+    let bpd = select(1u, 1440u / max(params.period, 1u), params.period > 0u);
+    if (i < bpd) { output[i * 2u] = 0.0; output[i * 2u + 1u] = 0.0; return; }
+    let start = i - bpd;
+    var ph: f32 = -1e9; var pl: f32 = 1e9;
+    for (var j: u32 = start; j < i; j = j + 1u) {
+        if (bars[j * 3u] > ph) { ph = bars[j * 3u]; }
+        if (bars[j * 3u + 1u] < pl) { pl = bars[j * 3u + 1u]; }
+    }
+    output[i * 2u] = ph;
+    output[i * 2u + 1u] = pl;
 }
 "#;

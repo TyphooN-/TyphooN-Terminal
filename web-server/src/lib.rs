@@ -259,7 +259,13 @@ async fn run_websocket_session(socket: ws::WebSocket, state: Arc<AppState>, clie
                                     continue;
                                 }
                             }
-                            WebCmd::PlaceOrder { symbol, qty, side, order_type, broker, limit_price, stop_price } => {
+                            WebCmd::PlaceOrder {
+                                symbol, qty, side, order_type, broker,
+                                limit_price, stop_price,
+                                take_profit, stop_loss,
+                                trail_percent, trail_offset,
+                                risk_mode, risk_pct,
+                            } => {
                                 if !typhoon_web_protocol::is_valid_symbol(symbol)
                                     || !typhoon_web_protocol::is_valid_order_qty(*qty)
                                     || !typhoon_web_protocol::is_valid_order_side(side)
@@ -267,6 +273,12 @@ async fn run_websocket_session(socket: ws::WebSocket, state: Arc<AppState>, clie
                                     || !matches!(broker.as_str(), "alpaca" | "tastytrade")
                                     || limit_price.map(|p| !p.is_finite() || p <= 0.0).unwrap_or(false)
                                     || stop_price.map(|p| !p.is_finite() || p <= 0.0).unwrap_or(false)
+                                    || take_profit.map(|p| !p.is_finite() || p <= 0.0).unwrap_or(false)
+                                    || stop_loss.map(|p| !p.is_finite() || p <= 0.0).unwrap_or(false)
+                                    || trail_percent.map(|p| !p.is_finite() || p <= 0.0 || p > 100.0).unwrap_or(false)
+                                    || trail_offset.map(|p| !p.is_finite() || p <= 0.0).unwrap_or(false)
+                                    || risk_mode.as_ref().map(|m| !typhoon_web_protocol::is_valid_risk_mode(m)).unwrap_or(false)
+                                    || risk_pct.map(|p| !p.is_finite() || p <= 0.0 || p > 100.0).unwrap_or(false)
                                 {
                                     tracing::warn!("Web client {client_ip} sent invalid PlaceOrder");
                                     continue;
@@ -288,6 +300,58 @@ async fn run_websocket_session(socket: ws::WebSocket, state: Arc<AppState>, clie
                                 {
                                     tracing::warn!("Web client {client_ip} sent invalid ClosePosition");
                                     continue;
+                                }
+                            }
+                            // ── ADR-092: validate new command variants ──
+                            WebCmd::GetIndicators { symbol, timeframe, indicators } => {
+                                if !typhoon_web_protocol::is_valid_symbol(symbol)
+                                    || !typhoon_web_protocol::is_valid_timeframe(timeframe)
+                                    || indicators.is_empty()
+                                    || indicators.len() > typhoon_web_protocol::MAX_INDICATOR_NAMES
+                                    || indicators.iter().any(|n| !typhoon_web_protocol::is_valid_indicator_name(n))
+                                {
+                                    tracing::warn!("Web client {client_ip} sent invalid GetIndicators");
+                                    continue;
+                                }
+                            }
+                            WebCmd::CreateAlert { symbol, condition, price, message } => {
+                                if !typhoon_web_protocol::is_valid_symbol(symbol)
+                                    || !typhoon_web_protocol::is_valid_alert_condition(condition)
+                                    || !price.is_finite() || *price <= 0.0
+                                    || message.len() > typhoon_web_protocol::MAX_ALERT_MSG_LEN
+                                {
+                                    tracing::warn!("Web client {client_ip} sent invalid CreateAlert");
+                                    continue;
+                                }
+                            }
+                            WebCmd::DeleteAlert { alert_id } => {
+                                if !typhoon_web_protocol::is_valid_alert_id(alert_id) {
+                                    tracing::warn!("Web client {client_ip} sent invalid DeleteAlert");
+                                    continue;
+                                }
+                            }
+                            WebCmd::GetNews { symbol } => {
+                                if let Some(s) = symbol {
+                                    if !typhoon_web_protocol::is_valid_symbol(s) {
+                                        tracing::warn!("Web client {client_ip} sent invalid GetNews symbol");
+                                        continue;
+                                    }
+                                }
+                            }
+                            WebCmd::Subscribe { symbol, timeframe } | WebCmd::Unsubscribe { symbol, timeframe } => {
+                                if !typhoon_web_protocol::is_valid_symbol(symbol)
+                                    || !typhoon_web_protocol::is_valid_timeframe(timeframe)
+                                {
+                                    tracing::warn!("Web client {client_ip} sent invalid Subscribe/Unsubscribe");
+                                    continue;
+                                }
+                            }
+                            WebCmd::GetDarwinWeb { ticker } => {
+                                if let Some(ref t) = ticker {
+                                    if !typhoon_web_protocol::is_valid_symbol(t) {
+                                        tracing::warn!("Web client {client_ip} sent invalid GetDarwinWeb ticker");
+                                        continue;
+                                    }
                                 }
                             }
                             _ => {}
@@ -318,7 +382,9 @@ async fn wait_for_auth(
         if let ws::Message::Text(text) = msg {
             return match serde_json::from_str::<WebCmd>(&text) {
                 Ok(WebCmd::Auth { passphrase }) => {
-                    Ok(passphrase == expected_passphrase)
+                    // Constant-time comparison prevents timing attacks on passphrase
+                    use subtle::ConstantTimeEq;
+                    Ok(passphrase.as_bytes().ct_eq(expected_passphrase.as_bytes()).into())
                 }
                 _ => Ok(false),
             };

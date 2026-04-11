@@ -870,17 +870,20 @@ impl SqliteCache {
     /// Export entire cache to a compressed backup file.
     /// Format: zstd-compressed copy of the SQLite database file (via VACUUM INTO).
     pub fn export_backup(&self, path: &str) -> Result<String, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-
         // Use SQLite's VACUUM INTO to create a consistent snapshot.
         // Use a unique temp file name to avoid TOCTOU races with concurrent exports.
         let backup_path = format!("{}.tmp.{}", path, std::process::id());
         // Remove any stale leftover from a previous crash
         let _ = std::fs::remove_file(&backup_path);
-        conn.execute("VACUUM INTO ?1", [&backup_path])
-            .map_err(|e| format!("VACUUM INTO failed: {e}"))?;
 
-        // Read the temp file and compress with zstd level 9
+        // Hold write lock ONLY for VACUUM INTO — release before file I/O + compression
+        {
+            let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+            conn.execute("VACUUM INTO ?1", [&backup_path])
+                .map_err(|e| format!("VACUUM INTO failed: {e}"))?;
+        } // lock released here
+
+        // File I/O + level-9 compression without holding any lock
         let data = std::fs::read(&backup_path)
             .map_err(|e| format!("Read backup failed: {e}"))?;
         let compressed = zstd::encode_all(data.as_slice(), 9)
@@ -1301,7 +1304,10 @@ impl SqliteCache {
         }).map_err(|e| format!("Query failed: {e}"))?;
         for row in rows {
             if let Ok((key, data)) = row {
-                let bytes = maybe_decompress(data).unwrap_or_default();
+                let bytes = match maybe_decompress(data) {
+                    Ok(b) => b,
+                    Err(e) => { tracing::warn!("repair_bar_counts: decompress failed for {key}: {e}"); continue; }
+                };
                 if bytes.len() >= 8 && &bytes[0..4] == BAR_BINARY_MAGIC {
                     let count = u32::from_le_bytes(bytes[4..8].try_into().unwrap_or([0; 4])) as i64;
                     if count > 0 {

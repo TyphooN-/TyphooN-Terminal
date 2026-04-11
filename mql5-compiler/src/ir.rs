@@ -456,38 +456,41 @@ fn lower_expr(expr: &Expr) -> Result<IrExpr, CompileError> {
             let ir_args: Vec<IrExpr> = args.iter().map(|a| lower_expr(a)).collect::<Result<_, _>>()?;
             match func.as_str() {
                 "iOpen" if !ir_args.is_empty() => {
-                    // SAFETY: guarded by !is_empty() — last() always Some.
-                    let last = ir_args.into_iter().last().expect("guarded by !is_empty");
+                    let last = ir_args.into_iter().last()
+                        .ok_or_else(|| CompileError::Internal("expected arg after !is_empty guard".into()))?;
                     Ok(IrExpr::IOpen(Box::new(last)))
                 }
                 "iHigh" if !ir_args.is_empty() => {
-                    let last = ir_args.into_iter().last().expect("guarded by !is_empty");
+                    let last = ir_args.into_iter().last()
+                        .ok_or_else(|| CompileError::Internal("expected arg after !is_empty guard".into()))?;
                     Ok(IrExpr::IHigh(Box::new(last)))
                 }
                 "iLow" if !ir_args.is_empty() => {
-                    let last = ir_args.into_iter().last().expect("guarded by !is_empty");
+                    let last = ir_args.into_iter().last()
+                        .ok_or_else(|| CompileError::Internal("expected arg after !is_empty guard".into()))?;
                     Ok(IrExpr::ILow(Box::new(last)))
                 }
                 "iClose" if !ir_args.is_empty() => {
-                    let last = ir_args.into_iter().last().expect("guarded by !is_empty");
+                    let last = ir_args.into_iter().last()
+                        .ok_or_else(|| CompileError::Internal("expected arg after !is_empty guard".into()))?;
                     Ok(IrExpr::IClose(Box::new(last)))
                 }
                 "iVolume" if !ir_args.is_empty() => {
-                    let last = ir_args.into_iter().last().expect("guarded by !is_empty");
+                    let last = ir_args.into_iter().last()
+                        .ok_or_else(|| CompileError::Internal("expected arg after !is_empty guard".into()))?;
                     Ok(IrExpr::IVolume(Box::new(last)))
                 }
                 "iBars" => Ok(IrExpr::IBars),
                 "MathMax" if ir_args.len() == 2 => {
-                    // SAFETY: guarded by len() == 2 — into_iter yields exactly 2.
                     let mut it = ir_args.into_iter();
-                    let a = it.next().expect("guarded by len==2");
-                    let b = it.next().expect("guarded by len==2");
+                    let a = it.next().ok_or_else(|| CompileError::Internal("expected 2 args after len==2 guard".into()))?;
+                    let b = it.next().ok_or_else(|| CompileError::Internal("expected 2 args after len==2 guard".into()))?;
                     Ok(IrExpr::Call("math_max".into(), vec![a, b]))
                 }
                 "MathMin" if ir_args.len() == 2 => {
                     let mut it = ir_args.into_iter();
-                    let a = it.next().expect("guarded by len==2");
-                    let b = it.next().expect("guarded by len==2");
+                    let a = it.next().ok_or_else(|| CompileError::Internal("MathMin: expected 2 args".into()))?;
+                    let b = it.next().ok_or_else(|| CompileError::Internal("MathMin: expected 2 args".into()))?;
                     Ok(IrExpr::Call("math_min".into(), vec![a, b]))
                 }
                 "MathAbs" if ir_args.len() == 1 => {
