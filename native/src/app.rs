@@ -9215,8 +9215,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "TEMPLATES",     desc: "List all available chart templates" },
     Command { name: "CRYPTO_FEAR_GREED", desc: "Crypto Fear & Greed Index (alternative.me)" },
     Command { name: "AI",            desc: "AI assistant chat (Claude/GPT)" },
-    Command { name: "MATRIX",        desc: "TyphooN Terminal community chat (Matrix)" },
-    Command { name: "MATRIX_LOGIN",  desc: "Login to Matrix with username/password for community chat" },
+    Command { name: "CHAT",          desc: "TyphooN Terminal community chat" },
     Command { name: "WSB",           desc: "Reddit WallStreetBets hot posts" },
     Command { name: "BARDATA",       desc: "Download bar data for all known symbols from all brokers" },
     Command { name: "INDICES",       desc: "World stock indices dashboard" },
@@ -9949,6 +9948,8 @@ pub struct TyphooNApp {
     matrix_input: String,
     matrix_access_token: String,
     matrix_user_id: String,
+    matrix_username: String,
+    matrix_password: String,
     matrix_last_fetch: std::time::Instant,
     /// Real-time bar construction from WebSocket trade stream.
     bar_builder: std::sync::Arc<std::sync::Mutex<typhoon_engine::core::bar_builder::BarBuilder>>,
@@ -12929,6 +12930,8 @@ impl TyphooNApp {
             show_matrix_chat: false,
             matrix_room: "!SWsYKZXXtuHJVtTMOA:matrix.org".to_string(), // TyphooN Terminal Chat (public, unencrypted)
             matrix_input: String::new(),
+            matrix_username: String::new(),
+            matrix_password: String::new(),
             matrix_access_token: String::new(),
             matrix_user_id: String::new(),
             matrix_last_fetch: std::time::Instant::now(),
@@ -15705,25 +15708,20 @@ impl TyphooNApp {
                     let _ = self.broker_tx.send(BrokerCmd::FetchFearGreed);
                 }
             }
-            "AI" | "AI_CHAT" | "CHAT" => self.show_ai_chat = true,
-            "MATRIX" => self.show_matrix_chat = true,
-            "MATRIX_LOGIN" => {
-                // Prompt: store Matrix credentials in keyring, then login
-                let username = typhoon_engine::core::keyring::load("matrix_username").ok().flatten();
-                let password = typhoon_engine::core::keyring::load("matrix_password").ok().flatten();
-                match (username, password) {
-                    (Some(u), Some(p)) => {
-                        self.log.push_back(LogEntry::info(format!("Matrix: logging in as {}...", u)));
-                        let _ = self.broker_tx.send(BrokerCmd::MatrixLogin {
-                            username: u, password: p, room_id: self.matrix_room.clone(),
-                        });
-                    }
-                    _ => {
-                        self.log.push_back(LogEntry::info("Set Matrix credentials in system keyring:"));
-                        self.log.push_back(LogEntry::info("  keyring set typhoon-terminal matrix_username YOUR_USERNAME"));
-                        self.log.push_back(LogEntry::info("  keyring set typhoon-terminal matrix_password YOUR_PASSWORD"));
-                        self.log.push_back(LogEntry::info("Then run MATRIX_LOGIN again."));
-                    }
+            "AI" | "AI_CHAT" => self.show_ai_chat = true,
+            "CHAT" | "MATRIX" => {
+                self.show_matrix_chat = true;
+                // Auto-login if credentials available but not yet authenticated
+                if (self.matrix_access_token.is_empty() || self.matrix_access_token == "none")
+                    && !self.matrix_username.is_empty() && !self.matrix_password.is_empty()
+                {
+                    let _ = self.broker_tx.send(BrokerCmd::MatrixLogin {
+                        username: self.matrix_username.clone(),
+                        password: self.matrix_password.clone(),
+                        room_id: self.matrix_room.clone(),
+                    });
+                    self.matrix_access_token = "pending".to_string();
+                    self.log.push_back(LogEntry::info("Chat: logging in..."));
                 }
             }
             "WSB" | "REDDIT" | "WALLSTREETBETS" => {
@@ -17177,6 +17175,12 @@ impl TyphooNApp {
                         ui.label("Kraken API Secret:");
                         ui.add(egui::TextEdit::singleline(&mut self.kraken_api_secret).desired_width(250.0).password(true));
                         ui.end_row();
+                        ui.label("Matrix Username:");
+                        ui.add(egui::TextEdit::singleline(&mut self.matrix_username).desired_width(250.0));
+                        ui.end_row();
+                        ui.label("Matrix Password:");
+                        ui.add(egui::TextEdit::singleline(&mut self.matrix_password).desired_width(250.0).password(true));
+                        ui.end_row();
                     });
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
@@ -17264,6 +17268,27 @@ impl TyphooNApp {
                                     api_secret: self.kraken_api_secret.clone(),
                                 });
                                 self.log.push_back(LogEntry::info("Kraken — connecting..."));
+                            }
+                        }
+                    });
+
+                    // Matrix chat login
+                    ui.horizontal(|ui| {
+                        if !self.matrix_username.is_empty() && !self.matrix_password.is_empty() {
+                            let matrix_label = if !self.matrix_user_id.is_empty() && self.matrix_access_token != "none" && self.matrix_access_token != "pending" {
+                                egui::RichText::new(format!("Matrix: {}", self.matrix_user_id)).color(UP)
+                            } else {
+                                egui::RichText::new("Connect Matrix")
+                            };
+                            if ui.button(matrix_label).clicked() {
+                                let _ = keyring::store("matrix_username", &self.matrix_username);
+                                let _ = keyring::store("matrix_password", &self.matrix_password);
+                                let _ = self.broker_tx.send(BrokerCmd::MatrixLogin {
+                                    username: self.matrix_username.clone(),
+                                    password: self.matrix_password.clone(),
+                                    room_id: self.matrix_room.clone(),
+                                });
+                                self.log.push_back(LogEntry::info("Matrix — logging in..."));
                             }
                         }
                     });
@@ -27132,6 +27157,10 @@ impl eframe::App for TyphooNApp {
                     (keyring::keys::OPENAI_KEY, "openai_key"),
                     (keyring::keys::KRAKEN_API_KEY, "kraken_api_key"),
                     (keyring::keys::KRAKEN_API_SECRET, "kraken_api_secret"),
+                    ("matrix_username", "matrix_username"),
+                    ("matrix_password", "matrix_password"),
+                    ("matrix_access_token", "matrix_access_token"),
+                    ("matrix_user_id", "matrix_user_id"),
                 ];
                 let mut loaded_values: Vec<(String, String)> = Vec::new();
                 for (kr_key, _label) in &cred_keys {
@@ -27172,6 +27201,10 @@ impl eframe::App for TyphooNApp {
                         k if k == keyring::keys::OPENAI_KEY => self.openai_key = val.clone(),
                         k if k == keyring::keys::KRAKEN_API_KEY => self.kraken_api_key = val.clone(),
                         k if k == keyring::keys::KRAKEN_API_SECRET => self.kraken_api_secret = val.clone(),
+                        "matrix_username" => self.matrix_username = val.clone(),
+                        "matrix_password" => self.matrix_password = val.clone(),
+                        "matrix_access_token" => self.matrix_access_token = val.clone(),
+                        "matrix_user_id" => self.matrix_user_id = val.clone(),
                         _ => {}
                     }
                 }
