@@ -9625,8 +9625,6 @@ enum BrokerCmd {
     AiChat { provider: String, api_key: String, message: String, history: Vec<(bool, String)> },
     /// Fetch recent messages from a public Matrix room.
     MatrixFetchMessages { room_id: String, access_token: String },
-    /// Login to Matrix with username/password, join room.
-    MatrixLogin { username: String, password: String, room_id: String },
     /// Send a message to a Matrix room.
     MatrixSendMessage { room_id: String, access_token: String, body: String },
     /// Upload an image to Matrix and send it as m.image message.
@@ -9967,8 +9965,6 @@ pub struct TyphooNApp {
     matrix_input: String,
     matrix_access_token: String,
     matrix_user_id: String,
-    matrix_username: String,
-    matrix_password: String,
     matrix_last_fetch: std::time::Instant,
     /// Real-time bar construction from WebSocket trade stream.
     bar_builder: std::sync::Arc<std::sync::Mutex<typhoon_engine::core::bar_builder::BarBuilder>>,
@@ -11309,42 +11305,6 @@ impl TyphooNApp {
                                     }
                                 }
                                 Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix upload: {e}"))); }
-                            }
-                        });
-                    }
-                    BrokerCmd::MatrixLogin { username, password, room_id } => {
-                        let client = reqwest::Client::new();
-                        let msg_tx = broker_msg_tx_clone.clone();
-                        tokio::spawn(async move {
-                            // Step 1: Login with username/password
-                            let login_url = "https://matrix.org/_matrix/client/r0/login";
-                            let login_body = serde_json::json!({
-                                "type": "m.login.password",
-                                "identifier": { "type": "m.id.user", "user": username },
-                                "password": password,
-                            });
-                            match client.post(login_url).json(&login_body).send().await {
-                                Ok(resp) => {
-                                    let status = resp.status();
-                                    if let Ok(json) = resp.json::<serde_json::Value>().await {
-                                        let token = json["access_token"].as_str().unwrap_or("").to_string();
-                                        let user_id = json["user_id"].as_str().unwrap_or("").to_string();
-                                        if token.is_empty() {
-                                            let err = json["error"].as_str().unwrap_or("unknown error");
-                                            let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix login failed ({}): {}", status, err)));
-                                            return;
-                                        }
-                                        // Step 2: Join the room/space
-                                        let join_url = format!("https://matrix.org/_matrix/client/r0/join/{}", room_id);
-                                        let _ = client.post(&join_url)
-                                            .header("Authorization", format!("Bearer {}", token))
-                                            .json(&serde_json::json!({}))
-                                            .send().await;
-                                        let _ = msg_tx.send(BrokerMsg::JsonResult("MatrixAuth".into(),
-                                            serde_json::json!({"access_token": token, "user_id": user_id}).to_string()));
-                                    }
-                                }
-                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix login: {}", e))); }
                             }
                         });
                     }
@@ -13040,8 +13000,6 @@ impl TyphooNApp {
             show_matrix_chat: false,
             matrix_room: "!SWsYKZXXtuHJVtTMOA:matrix.org".to_string(), // TyphooN Terminal Chat (public, unencrypted)
             matrix_input: String::new(),
-            matrix_username: String::new(),
-            matrix_password: String::new(),
             matrix_access_token: String::new(),
             matrix_user_id: String::new(),
             matrix_last_fetch: std::time::Instant::now(),
@@ -14962,7 +14920,7 @@ impl TyphooNApp {
             "SHARE" | "SCREENSHOT_SHARE" => {
                 if let Some(ref path) = self.last_screenshot_path {
                     if self.matrix_access_token.is_empty() || self.matrix_access_token == "none" || self.matrix_access_token == "pending" {
-                        self.log.push_back(LogEntry::warn("Not logged into Matrix — use CHAT and set credentials in Settings first"));
+                        self.log.push_back(LogEntry::warn("Matrix: no access token — set it in Settings first"));
                     } else if path.exists() {
                         let _ = self.broker_tx.send(BrokerCmd::MatrixSendImage {
                             room_id: self.matrix_room.clone(),
@@ -15863,17 +15821,8 @@ impl TyphooNApp {
             }
             "CHAT" | "MATRIX" => {
                 self.show_matrix_chat = true;
-                // Auto-login if credentials available but not yet authenticated
-                if (self.matrix_access_token.is_empty() || self.matrix_access_token == "none")
-                    && !self.matrix_username.is_empty() && !self.matrix_password.is_empty()
-                {
-                    let _ = self.broker_tx.send(BrokerCmd::MatrixLogin {
-                        username: self.matrix_username.clone(),
-                        password: self.matrix_password.clone(),
-                        room_id: self.matrix_room.clone(),
-                    });
-                    self.matrix_access_token = "pending".to_string();
-                    self.log.push_back(LogEntry::info("Chat: logging in..."));
+                if self.matrix_access_token.is_empty() || self.matrix_access_token == "none" {
+                    self.log.push_back(LogEntry::warn("Matrix: no access token — set it in Settings"));
                 }
             }
             "WSB" | "REDDIT" | "WALLSTREETBETS" => {
@@ -17341,11 +17290,11 @@ impl TyphooNApp {
                         ui.label("Perplexity Key:");
                         ui.add(egui::TextEdit::singleline(&mut self.perplexity_key).desired_width(250.0).password(true));
                         ui.end_row();
-                        ui.label("Matrix Username:");
-                        ui.add(egui::TextEdit::singleline(&mut self.matrix_username).desired_width(250.0));
+                        ui.label("Matrix Token:");
+                        ui.add(egui::TextEdit::singleline(&mut self.matrix_access_token).desired_width(250.0).password(true));
                         ui.end_row();
-                        ui.label("Matrix Password:");
-                        ui.add(egui::TextEdit::singleline(&mut self.matrix_password).desired_width(250.0).password(true));
+                        ui.label("Matrix User ID:");
+                        ui.add(egui::TextEdit::singleline(&mut self.matrix_user_id).desired_width(250.0).hint_text("@user:matrix.org"));
                         ui.end_row();
                     });
                     ui.add_space(4.0);
@@ -17438,23 +17387,25 @@ impl TyphooNApp {
                         }
                     });
 
-                    // Matrix chat login
+                    // Matrix chat — save token to keyring
                     ui.horizontal(|ui| {
-                        if !self.matrix_username.is_empty() && !self.matrix_password.is_empty() {
-                            let matrix_label = if !self.matrix_user_id.is_empty() && self.matrix_access_token != "none" && self.matrix_access_token != "pending" {
+                        if !self.matrix_access_token.is_empty() && self.matrix_access_token != "none" {
+                            let matrix_label = if !self.matrix_user_id.is_empty() {
                                 egui::RichText::new(format!("Matrix: {}", self.matrix_user_id)).color(UP)
                             } else {
-                                egui::RichText::new("Connect Matrix")
+                                egui::RichText::new("Save Matrix Token")
                             };
                             if ui.button(matrix_label).clicked() {
-                                let _ = keyring::store("matrix_username", &self.matrix_username);
-                                let _ = keyring::store("matrix_password", &self.matrix_password);
-                                let _ = self.broker_tx.send(BrokerCmd::MatrixLogin {
-                                    username: self.matrix_username.clone(),
-                                    password: self.matrix_password.clone(),
+                                let _ = keyring::store(keyring::keys::MATRIX_ACCESS_TOKEN, &self.matrix_access_token);
+                                if !self.matrix_user_id.is_empty() {
+                                    let _ = keyring::store(keyring::keys::MATRIX_USER_ID, &self.matrix_user_id);
+                                }
+                                self.log.push_back(LogEntry::info("Matrix token saved to keyring"));
+                                // Join room with the token
+                                let _ = self.broker_tx.send(BrokerCmd::MatrixFetchMessages {
                                     room_id: self.matrix_room.clone(),
+                                    access_token: self.matrix_access_token.clone(),
                                 });
-                                self.log.push_back(LogEntry::info("Matrix — logging in..."));
                             }
                         }
                     });
@@ -20604,9 +20555,9 @@ impl TyphooNApp {
             // Try to load Matrix token from keyring on first open
             if self.matrix_access_token.is_empty() && !self.matrix_room.is_empty() {
                 // Check keyring for stored token
-                if let Ok(Some(token)) = typhoon_engine::core::keyring::load("matrix_access_token") {
+                if let Ok(Some(token)) = typhoon_engine::core::keyring::load(typhoon_engine::core::keyring::keys::MATRIX_ACCESS_TOKEN) {
                     self.matrix_access_token = token;
-                    if let Ok(Some(uid)) = typhoon_engine::core::keyring::load("matrix_user_id") {
+                    if let Ok(Some(uid)) = typhoon_engine::core::keyring::load(typhoon_engine::core::keyring::keys::MATRIX_USER_ID) {
                         self.matrix_user_id = uid;
                     }
                     self.log.push_back(LogEntry::info(format!("Matrix: restored session as {}", self.matrix_user_id)));
@@ -20617,7 +20568,7 @@ impl TyphooNApp {
                     });
                 } else {
                     self.matrix_access_token = "none".to_string(); // mark as checked
-                    self.log.push_back(LogEntry::info("Matrix: no credentials — read-only mode. Use MATRIX_LOGIN to authenticate."));
+                    self.log.push_back(LogEntry::info("Matrix: no access token — read-only mode. Set token in Settings."));
                     // Fetch without auth (read-only for world-readable rooms)
                     let _ = self.broker_tx.send(BrokerCmd::MatrixFetchMessages {
                         room_id: self.matrix_room.clone(),
@@ -20676,7 +20627,7 @@ impl TyphooNApp {
                     ui.separator();
                     // Send message input
                     if self.matrix_access_token.is_empty() || self.matrix_access_token == "pending" || self.matrix_access_token == "none" {
-                        ui.label(egui::RichText::new("Read-only — run MATRIX_LOGIN to send messages").small().color(AXIS_TEXT));
+                        ui.label(egui::RichText::new("Read-only — set Matrix access token in Settings").small().color(AXIS_TEXT));
                     } else {
                         ui.horizontal(|ui| {
                             let resp = ui.add(
@@ -27496,10 +27447,8 @@ impl eframe::App for TyphooNApp {
                     (keyring::keys::XAI_KEY, "xai_key"),
                     (keyring::keys::MISTRAL_KEY, "mistral_key"),
                     (keyring::keys::PERPLEXITY_KEY, "perplexity_key"),
-                    ("matrix_username", "matrix_username"),
-                    ("matrix_password", "matrix_password"),
-                    ("matrix_access_token", "matrix_access_token"),
-                    ("matrix_user_id", "matrix_user_id"),
+                    (keyring::keys::MATRIX_ACCESS_TOKEN, "matrix_access_token"),
+                    (keyring::keys::MATRIX_USER_ID, "matrix_user_id"),
                 ];
                 let mut loaded_values: Vec<(String, String)> = Vec::new();
                 for (kr_key, _label) in &cred_keys {
@@ -27544,10 +27493,8 @@ impl eframe::App for TyphooNApp {
                         k if k == keyring::keys::XAI_KEY => self.xai_key = val.clone(),
                         k if k == keyring::keys::MISTRAL_KEY => self.mistral_key = val.clone(),
                         k if k == keyring::keys::PERPLEXITY_KEY => self.perplexity_key = val.clone(),
-                        "matrix_username" => self.matrix_username = val.clone(),
-                        "matrix_password" => self.matrix_password = val.clone(),
-                        "matrix_access_token" => self.matrix_access_token = val.clone(),
-                        "matrix_user_id" => self.matrix_user_id = val.clone(),
+                        k if k == keyring::keys::MATRIX_ACCESS_TOKEN => self.matrix_access_token = val.clone(),
+                        k if k == keyring::keys::MATRIX_USER_ID => self.matrix_user_id = val.clone(),
                         _ => {}
                     }
                 }
@@ -28334,21 +28281,6 @@ impl eframe::App for TyphooNApp {
                     } else if label == "RedditWSB" {
                         if let Ok(posts) = serde_json::from_str::<Vec<(String, String, u64, u64)>>(&text) {
                             self.reddit_posts = posts;
-                        }
-                    } else if label == "MatrixAuth" {
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                            self.matrix_access_token = json["access_token"].as_str().unwrap_or("").to_string();
-                            self.matrix_user_id = json["user_id"].as_str().unwrap_or("").to_string();
-                            // Save to keyring for session persistence
-                            let _ = typhoon_engine::core::keyring::store("matrix_access_token", &self.matrix_access_token);
-                            let _ = typhoon_engine::core::keyring::store("matrix_user_id", &self.matrix_user_id);
-                            self.log.push_back(LogEntry::info(format!("Matrix: logged in as {}", self.matrix_user_id)));
-                            self.show_matrix_chat = true;
-                            // Fetch messages now that we're authed
-                            let _ = self.broker_tx.send(BrokerCmd::MatrixFetchMessages {
-                                room_id: self.matrix_room.clone(),
-                                access_token: self.matrix_access_token.clone(),
-                            });
                         }
                     } else if label == "MatrixMessages" {
                         if let Ok(msgs) = serde_json::from_str::<Vec<(String, String, String)>>(&text) {

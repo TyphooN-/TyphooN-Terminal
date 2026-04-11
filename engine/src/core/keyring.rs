@@ -61,6 +61,8 @@ pub mod keys {
     pub const XAI_KEY: &str = "xai_api_key";
     pub const MISTRAL_KEY: &str = "mistral_api_key";
     pub const PERPLEXITY_KEY: &str = "perplexity_api_key";
+    pub const MATRIX_ACCESS_TOKEN: &str = "matrix_access_token";
+    pub const MATRIX_USER_ID: &str = "matrix_user_id";
 }
 
 #[cfg(test)]
