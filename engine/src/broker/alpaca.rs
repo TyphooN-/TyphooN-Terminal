@@ -478,6 +478,25 @@ impl AlpacaBroker {
         self.submit_order(&body).await
     }
 
+    /// Place an OCO (one-cancels-other) exit order: TP limit + SL stop on same side.
+    /// When one leg fills, the other is automatically cancelled.
+    pub async fn oco_order(&self, symbol: &str, qty: f64, side: &str, tp_price: f64, sl_price: f64, sl_limit: Option<f64>) -> Result<OrderResult, String> {
+        let mut body = serde_json::json!({
+            "symbol": symbol,
+            "qty": qty.to_string(),
+            "side": side,
+            "type": "limit",
+            "time_in_force": "gtc",
+            "order_class": "oco",
+            "take_profit": { "limit_price": format_order_price(tp_price) },
+            "stop_loss": { "stop_price": format_order_price(sl_price) },
+        });
+        if let Some(sl_lim) = sl_limit {
+            body["stop_loss"]["limit_price"] = serde_json::json!(format_order_price(sl_lim));
+        }
+        self.submit_order(&body).await
+    }
+
     /// Common order submission logic.
     async fn submit_order(&self, body: &serde_json::Value) -> Result<OrderResult, String> {
         let resp = self

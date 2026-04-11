@@ -108,7 +108,7 @@ Date color: red (≤3 days), amber (≤7 days), muted otherwise — draws the ey
 
 **Trade-offs:**
 - Ext candle clamp means the candle is cosmetically attached to the right edge rather than offset by a full bar. Acceptable — matches TradingView's "last bar hugs the right" behavior.
-- Event Calendar is read-only — no calendar ICS export yet. Deferred.
+- ~~Event Calendar is read-only — no calendar ICS export yet.~~ **Implemented.** `EXPORT_CALENDAR` command writes `.ics` file via `build_events_ics()`. Source/impact/type filters respected.
 - Darwinex "active" means "tradeable universe" (~6K symbols), not "currently held". The app doesn't know about DARWIN-internal positions held by underlying investors in the strategy. This is the best available proxy.
 
 ## Related

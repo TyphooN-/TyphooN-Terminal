@@ -220,6 +220,20 @@ impl KrakenBroker {
         volume: f64,
         price: Option<f64>,
     ) -> Result<serde_json::Value, String> {
+        self.place_order_with_leverage(pair, side, order_type, volume, price, None).await
+    }
+
+    /// Place an order with optional leverage (margin trading).
+    /// `leverage`: e.g. Some("2:1"), Some("3:1"), Some("5:1"). None = no margin.
+    pub async fn place_order_with_leverage(
+        &self,
+        pair: &str,
+        side: &str,
+        order_type: &str,
+        volume: f64,
+        price: Option<f64>,
+        leverage: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
         let vol_str = volume.to_string();
         let mut params: Vec<(&str, &str)> = vec![
             ("pair", pair),
@@ -232,6 +246,10 @@ impl KrakenBroker {
         if let Some(p) = price {
             price_str = p.to_string();
             params.push(("price", &price_str));
+        }
+
+        if let Some(lev) = leverage {
+            params.push(("leverage", lev));
         }
 
         self.private_post("/0/private/AddOrder", &params).await

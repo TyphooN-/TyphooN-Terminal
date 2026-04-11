@@ -49,7 +49,7 @@
 | Forex Cross-Rate Matrix | IMPLEMENTED | FOREX command, 10 major pairs with proper FX precision |
 | Crypto Top 50 | IMPLEMENTED | CRYPTO50 command, CoinGecko API, scrollable grid |
 | Dark Pool Volume | NOT IMPLEMENTED | SqueezMetrics DIX/GEX researched but not wired |
-| OCO Orders | NOT IMPLEMENTED | Only market/limit/stop/bracket exist |
+| OCO Orders | IMPLEMENTED | `AlpacaBroker::oco_order()` — order_class "oco" with TP/SL legs. `OCO` console command. |
 | Draggable SL/TP | IMPLEMENTED | Draggable lines + Set SL/TP places stop/limit orders on broker (full MT5 EA parity) |
 | 7 Order Types | 6/7 | market/limit/stop/stop-limit/bracket/trailing + Set SL/TP orders. Missing: OCO (Alpaca limitation) |
 

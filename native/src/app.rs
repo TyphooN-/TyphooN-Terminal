@@ -8987,6 +8987,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "FULLSCREEN",    desc: "Toggle fullscreen mode" },
     // Trading
     Command { name: "OPEN_TRADE",    desc: "Open order entry panel" },
+    Command { name: "OCO",           desc: "OCO exit order — one-cancels-other (OCO SELL AAPL 10 200 180)" },
+    Command { name: "EXPORT_CALENDAR", desc: "Export event calendar to ICS file" },
     Command { name: "CLOSE_ALL",     desc: "Close all open positions" },
     Command { name: "CLOSE_PARTIAL", desc: "Close 50% of largest position" },
     Command { name: "SET_SL",        desc: "Click chart to set stop loss" },
@@ -9608,6 +9610,8 @@ enum BrokerCmd {
     AlpacaBracketOrder { symbol: String, qty: f64, side: String, stop_loss: f64, take_profit: f64 },
     /// Cancel an Alpaca order by ID.
     AlpacaCancelOrder { order_id: String },
+    /// Place an OCO (one-cancels-other) exit order on Alpaca.
+    AlpacaOcoOrder { symbol: String, qty: f64, side: String, tp_price: f64, sl_price: f64 },
     /// Modify an existing Alpaca order (change price/qty on bracket legs).
     AlpacaModifyOrder { order_id: String, qty: Option<f64>, limit_price: Option<f64>, stop_price: Option<f64> },
     /// Set SL for current symbol: places a stop order opposite to position direction.
@@ -9641,7 +9645,7 @@ enum BrokerCmd {
     /// Place an order on Kraken.
     /// Cancel a tastytrade order by order ID.
     TastytradeCancelOrder { order_id: String },
-    KrakenPlaceOrder { pair: String, side: String, order_type: String, volume: f64, price: Option<f64> },
+    KrakenPlaceOrder { pair: String, side: String, order_type: String, volume: f64, price: Option<f64>, leverage: Option<String> },
     /// Cancel a Kraken order by transaction ID.
     KrakenCancelOrder { txid: String },
     /// Cancel all open Kraken orders.
@@ -11061,6 +11065,14 @@ impl TyphooNApp {
                             }
                         }
                     }
+                    BrokerCmd::AlpacaOcoOrder { symbol, qty, side, tp_price, sl_price } => {
+                        if let Some(ref b) = broker {
+                            match b.oco_order(&symbol, qty, &side, tp_price, sl_price, None).await {
+                                Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("OCO {} {} {} @ TP:{} SL:{}: {}", side, qty, symbol, tp_price, sl_price, r.status))); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("OCO failed: {}", e))); }
+                            }
+                        }
+                    }
                     BrokerCmd::TastytradeCancelOrder { order_id } => {
                         if let Some(ref mut tt) = tt_broker {
                             match tt.cancel_order(&order_id).await {
@@ -11359,10 +11371,10 @@ impl TyphooNApp {
                             let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("Kraken: connect first".into()));
                         }
                     }
-                    BrokerCmd::KrakenPlaceOrder { pair, side, order_type, volume, price } => {
+                    BrokerCmd::KrakenPlaceOrder { pair, side, order_type, volume, price, leverage } => {
                         if let Some(ref kb) = kraken_broker {
                             let msg_tx = broker_msg_tx_clone.clone();
-                            match kb.place_order(&pair, &side, &order_type, volume, price).await {
+                            match kb.place_order_with_leverage(&pair, &side, &order_type, volume, price, leverage.as_deref()).await {
                                 Ok(result) => {
                                     let text = serde_json::to_string_pretty(&result).unwrap_or_default();
                                     let _ = msg_tx.send(BrokerMsg::OrderResult(format!("Kraken order placed: {}", text)));
@@ -15764,6 +15776,44 @@ impl TyphooNApp {
             "OPEN_TRADE" => {
                 self.show_order_entry = true;
                 self.order_symbol = self.symbol_input.clone();
+            }
+            "EXPORT_CALENDAR" => {
+                if self.event_calendar_rows.is_empty() {
+                    self.log.push_back(LogEntry::warn("No events loaded — open CALENDAR first"));
+                } else {
+                    let ics = Self::build_events_ics(
+                        &self.event_calendar_rows,
+                        self.event_filter_source,
+                        true, true, true,
+                    );
+                    let mut path = dirs_home();
+                    path.push("export");
+                    let _ = std::fs::create_dir_all(&path);
+                    path.push("typhoon_events.ics");
+                    match std::fs::write(&path, &ics) {
+                        Ok(_) => self.log.push_back(LogEntry::info(format!("Calendar exported: {} ({} bytes)", path.display(), ics.len()))),
+                        Err(e) => self.log.push_back(LogEntry::err(format!("ICS export failed: {e}"))),
+                    }
+                }
+            }
+            cmd if cmd.starts_with("OCO ") => {
+                // OCO SELL AAPL 10 200.00 180.00
+                let parts: Vec<&str> = cmd.split_whitespace().collect();
+                if parts.len() >= 6 {
+                    let side = parts[1].to_lowercase();
+                    let symbol = parts[2].to_string();
+                    let qty: f64 = parts[3].parse().unwrap_or(0.0);
+                    let tp: f64 = parts[4].parse().unwrap_or(0.0);
+                    let sl: f64 = parts[5].parse().unwrap_or(0.0);
+                    if qty > 0.0 && tp > 0.0 && sl > 0.0 {
+                        let _ = self.broker_tx.send(BrokerCmd::AlpacaOcoOrder { symbol: symbol.clone(), qty, side: side.clone(), tp_price: tp, sl_price: sl });
+                        self.log.push_back(LogEntry::info(format!("OCO {} {} {} TP:{} SL:{}", side, qty, symbol, tp, sl)));
+                    } else {
+                        self.log.push_back(LogEntry::warn("Invalid OCO params — need positive qty, TP, SL"));
+                    }
+                } else {
+                    self.log.push_back(LogEntry::warn("Usage: OCO SELL AAPL 10 200.00 180.00"));
+                }
             }
             "CLOSE_ALL" => {
                 if self.broker_connected {
@@ -26148,7 +26198,7 @@ impl TyphooNApp {
                                             let _ = self.broker_tx.send(BrokerCmd::TastytradeEquityOrder { symbol: sym.clone(), qty: qty as i64, side: action.to_string(), order_type: "Market".to_string(), price: None });
                                         }
                                         if send_kraken {
-                                            let _ = self.broker_tx.send(BrokerCmd::KrakenPlaceOrder { pair: sym.clone(), side: side_str.clone(), order_type: "market".to_string(), volume: qty, price: None });
+                                            let _ = self.broker_tx.send(BrokerCmd::KrakenPlaceOrder { pair: sym.clone(), side: side_str.clone(), order_type: "market".to_string(), volume: qty, price: None, leverage: None });
                                         }
                                         self.log.push_back(LogEntry::info(format!("Submitting market {} {} {}", side_label, qty, sym)));
                                     }
@@ -26162,7 +26212,7 @@ impl TyphooNApp {
                                                 let _ = self.broker_tx.send(BrokerCmd::TastytradeEquityOrder { symbol: sym.clone(), qty: qty as i64, side: action.to_string(), order_type: "Limit".to_string(), price: Some(lp) });
                                             }
                                             if send_kraken {
-                                                let _ = self.broker_tx.send(BrokerCmd::KrakenPlaceOrder { pair: sym.clone(), side: side_str.clone(), order_type: "limit".to_string(), volume: qty, price: Some(lp) });
+                                                let _ = self.broker_tx.send(BrokerCmd::KrakenPlaceOrder { pair: sym.clone(), side: side_str.clone(), order_type: "limit".to_string(), volume: qty, price: Some(lp), leverage: None });
                                             }
                                             self.log.push_back(LogEntry::info(format!("Submitting limit {} {} {} @ {}", side_label, qty, sym, lp)));
                                         } else {
