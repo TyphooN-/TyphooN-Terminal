@@ -14506,13 +14506,23 @@ impl TyphooNApp {
                 }
             }
             "MOST_ACTIVE"   => {
-                let _ = self.broker_tx.send(BrokerCmd::GetMostActive);
+                if self.broker_connected {
+                    let _ = self.broker_tx.send(BrokerCmd::GetMostActive);
+                    self.log.push_back(LogEntry::info("Fetching most active symbols..."));
+                } else { self.log.push_back(LogEntry::warn("Connect to broker first")); }
             }
             "PORTFOLIO_HIST" => {
-                let _ = self.broker_tx.send(BrokerCmd::GetPortfolioHistory { period: "1M".into() });
+                if self.broker_connected {
+                    let _ = self.broker_tx.send(BrokerCmd::GetPortfolioHistory { period: "1M".into() });
+                    self.log.push_back(LogEntry::info("Fetching portfolio equity history (1M)..."));
+                } else {
+                    self.log.push_back(LogEntry::warn("Connect to broker first"));
+                }
             }
             "WATCHLISTS"    => {
-                let _ = self.broker_tx.send(BrokerCmd::GetWatchlists);
+                if self.broker_connected {
+                    let _ = self.broker_tx.send(BrokerCmd::GetWatchlists);
+                } else { self.log.push_back(LogEntry::warn("Connect to broker first")); }
             }
             "OPTIONS" => {
                 let sym = self.charts.get(self.active_tab)
@@ -15543,9 +15553,18 @@ impl TyphooNApp {
                 let sym = self.symbol_input.trim().to_string();
                 let _ = self.broker_tx.send(BrokerCmd::GetQuote { symbol: sym });
             }
-            "CLOCK" => { let _ = self.broker_tx.send(BrokerCmd::GetMarketClock); }
-            "FILLS" => { let _ = self.broker_tx.send(BrokerCmd::GetActivities { limit: 20 }); }
-            "MOVERS" => { let _ = self.broker_tx.send(BrokerCmd::GetTopMovers); }
+            "CLOCK" => {
+                let _ = self.broker_tx.send(BrokerCmd::GetMarketClock);
+                if !self.broker_connected { self.log.push_back(LogEntry::warn("Broker not connected — clock may fail")); }
+            }
+            "FILLS" => {
+                if self.broker_connected { let _ = self.broker_tx.send(BrokerCmd::GetActivities { limit: 20 }); }
+                else { self.log.push_back(LogEntry::warn("Connect to broker first")); }
+            }
+            "MOVERS" => {
+                if self.broker_connected { let _ = self.broker_tx.send(BrokerCmd::GetTopMovers); }
+                else { self.log.push_back(LogEntry::warn("Connect to broker first")); }
+            }
             "SEARCH" => {
                 let query = self.command_input.trim().to_string();
                 if query.len() >= 2 {
@@ -15554,7 +15573,10 @@ impl TyphooNApp {
                     self.log.push_back(LogEntry::warn("Type at least 2 characters to search"));
                 }
             }
-            "HISTORY" => { let _ = self.broker_tx.send(BrokerCmd::GetOrderHistory { limit: 50 }); }
+            "HISTORY" => {
+                if self.broker_connected { let _ = self.broker_tx.send(BrokerCmd::GetOrderHistory { limit: 50 }); }
+                else { self.log.push_back(LogEntry::warn("Connect to broker first")); }
+            }
             "PIVOTS"   => self.show_pivots = !self.show_pivots,
             "SRLEVEL"  => self.show_pivots = !self.show_pivots,
             "FRACTALS"  => self.show_fractals = !self.show_fractals,
