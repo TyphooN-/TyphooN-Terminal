@@ -7,7 +7,7 @@
 //! inside `tokio::task::spawn_blocking` closures with short-lived connections.
 //! HTTP fetches happen on the async runtime between DB calls.
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -186,6 +186,30 @@ pub fn create_sec_tables(conn: &Connection) -> Result<(), String> {
 
     // Schema migration: add updated_at column for incremental LAN sync
     let _ = conn.execute("ALTER TABLE sec_scrape_index ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0", []);
+
+    // Schema migration: filing content storage (indefinite, growing database)
+    let _ = conn.execute("ALTER TABLE sec_filings ADD COLUMN content_fetched BOOLEAN DEFAULT FALSE", []);
+    conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS sec_filing_content (
+            accession_number TEXT PRIMARY KEY,
+            content_plain TEXT NOT NULL,
+            content_size INTEGER DEFAULT 0,
+            fetched_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS sec_keyword_watchlist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword TEXT NOT NULL UNIQUE,
+            created_at INTEGER NOT NULL
+        );
+    ").map_err(|e| format!("Failed to create SEC content tables: {e}"))?;
+
+    // FTS5 full-text search index (porter stemming + unicode)
+    let _ = conn.execute_batch("
+        CREATE VIRTUAL TABLE IF NOT EXISTS sec_fts USING fts5(
+            accession_number, ticker, form_type, company_name, content,
+            tokenize='porter unicode61'
+        );
+    ");
 
     Ok(())
 }
@@ -948,6 +972,277 @@ pub fn dismiss_alert(conn: &Connection, alert_id: i64, reason: &str) -> Result<(
         params![reason, alert_id],
     ).map_err(|e| format!("Dismiss alert failed: {e}"))?;
     Ok(())
+}
+
+// ── Unlimited Query Functions (for growing database) ────────────────────────
+
+/// Get ALL filings (no limit). For BG thread — builds the growing searchable database.
+pub fn get_all_filings(conn: &Connection) -> Result<Vec<SecFiling>, String> {
+    let mut stmt = conn.prepare(
+        "SELECT id, ticker, form_type, accession_number, filing_date, url, company_name, importance_score, category, summary, insider_flag, created_at
+         FROM sec_filings ORDER BY filing_date DESC"
+    ).map_err(|e| format!("Prepare all filings failed: {e}"))?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(SecFiling {
+            id: row.get(0)?,
+            ticker: row.get(1)?,
+            form_type: row.get(2)?,
+            accession_number: row.get(3)?,
+            filing_date: row.get(4)?,
+            url: row.get(5)?,
+            company_name: row.get(6)?,
+            importance_score: row.get(7)?,
+            category: row.get(8)?,
+            summary: row.get(9)?,
+            insider_flag: row.get(10)?,
+            created_at: row.get(11)?,
+        })
+    }).map_err(|e| format!("Query all filings failed: {e}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Collect filings failed: {e}"))
+}
+
+/// Get ALL insider trades (no date cutoff). For BG thread growing database.
+pub fn get_all_insider_trades(conn: &Connection) -> Result<Vec<InsiderTrade>, String> {
+    let mut stmt = conn.prepare(
+        "SELECT id, ticker, accession_number, insider_name, insider_title, transaction_date, transaction_type, shares, price, aggregate_value, is_officer, is_director, created_at
+         FROM sec_insider_trades ORDER BY transaction_date DESC"
+    ).map_err(|e| format!("Prepare all insider trades failed: {e}"))?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(InsiderTrade {
+            id: row.get(0)?,
+            ticker: row.get(1)?,
+            accession_number: row.get(2)?,
+            insider_name: row.get(3)?,
+            insider_title: row.get(4)?,
+            transaction_date: row.get(5)?,
+            transaction_type: row.get(6)?,
+            shares: row.get(7)?,
+            price: row.get(8)?,
+            aggregate_value: row.get(9)?,
+            is_officer: row.get(10)?,
+            is_director: row.get(11)?,
+            created_at: row.get(12)?,
+        })
+    }).map_err(|e| format!("Query all insider trades failed: {e}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Collect insider trades failed: {e}"))
+}
+
+/// Count total filings and how many have content fetched.
+pub fn filing_content_stats(conn: &Connection) -> (usize, usize) {
+    let total: i64 = conn.query_row("SELECT COUNT(*) FROM sec_filings", [], |r| r.get(0)).unwrap_or(0);
+    let indexed: i64 = conn.query_row("SELECT COUNT(*) FROM sec_filing_content", [], |r| r.get(0)).unwrap_or(0);
+    (total as usize, indexed as usize)
+}
+
+// ── HTML Stripping (reusable for content storage + on-demand viewer) ────────
+
+/// Convert raw HTML to searchable plain text.
+pub fn strip_html_to_text(html: &str) -> String {
+    let mut text = html.to_string();
+    // Remove style/script/head/noscript blocks
+    for tag in &["style", "script", "head", "noscript"] {
+        while let Some(start) = text.find(&format!("<{}", tag)) {
+            if let Some(end) = text[start..].find(&format!("</{}>", tag)) {
+                text.replace_range(start..start + end + tag.len() + 3, "\n");
+            } else {
+                break;
+            }
+        }
+    }
+    // Convert structural HTML to whitespace
+    text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n");
+    text = text.replace("</p>", "\n\n").replace("</div>", "\n");
+    text = text.replace("</tr>", "\n").replace("</td>", " | ").replace("</th>", " | ");
+    text = text.replace("</li>", "\n").replace("<li>", "  - ");
+    // HTML entities
+    text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">");
+    text = text.replace("&nbsp;", " ").replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'");
+    // Strip remaining tags
+    let mut result = String::with_capacity(text.len());
+    let mut in_tag = false;
+    for ch in text.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => result.push(ch),
+            _ => {}
+        }
+    }
+    // Collapse whitespace
+    let lines: Vec<&str> = result.lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    lines.join("\n")
+}
+
+/// Store filing content and index in FTS5.
+pub fn store_filing_content(conn: &Connection, accession: &str, ticker: &str, form_type: &str, company: &str, content: &str) -> Result<(), String> {
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "INSERT OR REPLACE INTO sec_filing_content (accession_number, content_plain, content_size, fetched_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![accession, content, content.len() as i64, now],
+    ).map_err(|e| format!("Store content failed: {e}"))?;
+
+    // Update content_fetched flag
+    let _ = conn.execute(
+        "UPDATE sec_filings SET content_fetched = TRUE WHERE accession_number = ?1",
+        params![accession],
+    );
+
+    // Populate FTS5 index
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO sec_fts (accession_number, ticker, form_type, company_name, content)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![accession, ticker, form_type, company, content],
+    );
+
+    Ok(())
+}
+
+/// Full-text search across filing content using FTS5.
+/// Returns filings matching the query, optionally filtered by ticker set.
+pub fn search_filings_fts(
+    conn: &Connection,
+    query: &str,
+    tickers: Option<&[String]>,
+    limit: usize,
+) -> Result<Vec<SecFiling>, String> {
+    // Sanitize FTS5 query: escape double quotes, wrap terms
+    let sanitized = query.replace('"', "\"\"");
+    let fts_query = format!("\"{}\"", sanitized);
+
+    let sql = if tickers.is_some() {
+        format!(
+            "SELECT f.id, f.ticker, f.form_type, f.accession_number, f.filing_date, f.url,
+                    f.company_name, f.importance_score, f.category, f.summary, f.insider_flag, f.created_at
+             FROM sec_fts s
+             JOIN sec_filings f ON f.accession_number = s.accession_number
+             WHERE sec_fts MATCH ?1
+             ORDER BY rank
+             LIMIT ?2")
+    } else {
+        "SELECT f.id, f.ticker, f.form_type, f.accession_number, f.filing_date, f.url,
+                f.company_name, f.importance_score, f.category, f.summary, f.insider_flag, f.created_at
+         FROM sec_fts s
+         JOIN sec_filings f ON f.accession_number = s.accession_number
+         WHERE sec_fts MATCH ?1
+         ORDER BY rank
+         LIMIT ?2".to_string()
+    };
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("FTS prepare failed: {e}"))?;
+    let limit_i64 = limit as i64;
+    let rows = stmt.query_map(params![fts_query, limit_i64], |row| {
+        Ok(SecFiling {
+            id: row.get(0)?,
+            ticker: row.get(1)?,
+            form_type: row.get(2)?,
+            accession_number: row.get(3)?,
+            filing_date: row.get(4)?,
+            url: row.get(5)?,
+            company_name: row.get(6)?,
+            importance_score: row.get(7)?,
+            category: row.get(8)?,
+            summary: row.get(9)?,
+            insider_flag: row.get(10)?,
+            created_at: row.get(11)?,
+        })
+    }).map_err(|e| format!("FTS query failed: {e}"))?;
+
+    let mut results: Vec<SecFiling> = rows.filter_map(|r| r.ok()).collect();
+
+    // Post-filter by tickers if provided (FTS5 doesn't natively support IN-clause on separate column)
+    if let Some(ticker_set) = tickers {
+        let set: std::collections::HashSet<String> = ticker_set.iter().map(|t| t.to_uppercase()).collect();
+        results.retain(|f| set.contains(&f.ticker.to_uppercase()));
+    }
+
+    Ok(results)
+}
+
+/// Get filing content for display / diff.
+pub fn get_filing_content(conn: &Connection, accession: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT content_plain FROM sec_filing_content WHERE accession_number = ?1",
+        params![accession],
+        |row| row.get(0),
+    ).optional().map_err(|e| format!("Get content failed: {e}"))
+}
+
+/// Get filings that haven't had their content fetched yet.
+pub fn get_unfetched_filings(conn: &Connection, limit: usize) -> Result<Vec<SecFiling>, String> {
+    let mut stmt = conn.prepare(
+        "SELECT id, ticker, form_type, accession_number, filing_date, url, company_name, importance_score, category, summary, insider_flag, created_at
+         FROM sec_filings WHERE accession_number NOT IN (SELECT accession_number FROM sec_filing_content)
+         ORDER BY filing_date DESC LIMIT ?1"
+    ).map_err(|e| format!("Prepare unfetched failed: {e}"))?;
+
+    let rows = stmt.query_map(params![limit as i64], |row| {
+        Ok(SecFiling {
+            id: row.get(0)?,
+            ticker: row.get(1)?,
+            form_type: row.get(2)?,
+            accession_number: row.get(3)?,
+            filing_date: row.get(4)?,
+            url: row.get(5)?,
+            company_name: row.get(6)?,
+            importance_score: row.get(7)?,
+            category: row.get(8)?,
+            summary: row.get(9)?,
+            insider_flag: row.get(10)?,
+            created_at: row.get(11)?,
+        })
+    }).map_err(|e| format!("Query unfetched failed: {e}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Collect unfetched failed: {e}"))
+}
+
+// ── Keyword Watchlist ───────────────────────────────────────────────────────
+
+/// Add a keyword to the watchlist.
+pub fn add_keyword(conn: &Connection, keyword: &str) -> Result<(), String> {
+    conn.execute(
+        "INSERT OR IGNORE INTO sec_keyword_watchlist (keyword, created_at) VALUES (?1, ?2)",
+        params![keyword.to_lowercase(), chrono::Utc::now().timestamp()],
+    ).map_err(|e| format!("Add keyword failed: {e}"))?;
+    Ok(())
+}
+
+/// Remove a keyword from the watchlist.
+pub fn remove_keyword(conn: &Connection, keyword: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM sec_keyword_watchlist WHERE keyword = ?1",
+        params![keyword.to_lowercase()],
+    ).map_err(|e| format!("Remove keyword failed: {e}"))?;
+    Ok(())
+}
+
+/// Get all keywords.
+pub fn get_keywords(conn: &Connection) -> Result<Vec<String>, String> {
+    let mut stmt = conn.prepare("SELECT keyword FROM sec_keyword_watchlist ORDER BY keyword")
+        .map_err(|e| format!("Prepare keywords failed: {e}"))?;
+    let rows = stmt.query_map([], |row| row.get(0))
+        .map_err(|e| format!("Query keywords failed: {e}"))?;
+    rows.collect::<Result<Vec<String>, _>>()
+        .map_err(|e| format!("Collect keywords failed: {e}"))
+}
+
+/// Check content against keyword watchlist, return matching keywords.
+pub fn check_keywords(conn: &Connection, content: &str) -> Vec<String> {
+    let keywords = get_keywords(conn).unwrap_or_default();
+    let content_lower = content.to_lowercase();
+    keywords.into_iter()
+        .filter(|kw| content_lower.contains(kw.as_str()))
+        .collect()
 }
 
 #[cfg(test)]

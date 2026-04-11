@@ -9392,6 +9392,7 @@ struct BgDarwinData {
 
     // ── SEC / Insider ──
     insider_trades: std::collections::HashMap<String, Vec<sec_filing::InsiderTrade>>,
+    sec_content_stats: (usize, usize), // (total_filings, indexed_content)
 
     // ── DARWIN risk alerts ──
     darwin_alerts: Vec<darwin::AlertCondition>,
@@ -10073,7 +10074,7 @@ pub struct TyphooNApp {
     show_sec: bool,
     sec_selected_filing: Option<usize>,
     sec_tab: usize,  // 0=Filings, 1=Alerts
-    sec_active_only: bool,      // filter SEC filings to active positions/charts only
+    sec_search_query: String,   // text search filter for filings
     earnings_active_only: bool,  // filter earnings calendar to active symbols
     dividends_active_only: bool, // filter dividend calendar to active symbols
     ev_active_only: bool,        // filter EV scanner to active symbols
@@ -12430,6 +12431,7 @@ impl TyphooNApp {
                     }
                     BrokerCmd::FetchFilingContent { url } => {
                         let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_fetch = shared_cache_broker.clone();
                         // SEC EDGAR requires a proper User-Agent with contact email
                         let client = reqwest::Client::builder()
                             .user_agent("TyphooN-Terminal/1.0 (typhoon@marketwizardry.org)")
@@ -12442,45 +12444,27 @@ impl TyphooNApp {
                             .header("Accept-Encoding", "identity")
                             .send().await {
                             Ok(resp) => {
-                                if let Ok(text) = resp.text().await {
-                                    // Remove <style>, <script>, <head> blocks entirely (content + tags)
-                                    let mut clean = text.clone();
-                                    for tag in &["style", "script", "head", "noscript"] {
-                                        loop {
-                                            let open = format!("<{}", tag);
-                                            let close = format!("</{}>", tag);
-                                            if let Some(start) = clean.to_lowercase().find(&open) {
-                                                if let Some(end) = clean.to_lowercase()[start..].find(&close) {
-                                                    clean = format!("{}{}", &clean[..start], &clean[start + end + close.len()..]);
-                                                } else { break; }
-                                            } else { break; }
+                                if let Ok(html) = resp.text().await {
+                                    let result = sec_filing::strip_html_to_text(&html);
+                                    // Store content in DB for FTS indexing (growing database)
+                                    // Extract accession from URL: .../data/{cik}/{accession_nodash}/...
+                                    let accession = url.split('/').rev().nth(1).unwrap_or("").replace('-', "");
+                                    if !accession.is_empty() {
+                                        if let Some(cache) = shared_cache_fetch.read().ok().and_then(|g| g.clone()) {
+                                            if let Ok(conn) = cache.connection() {
+                                                // Look up filing metadata for FTS indexing
+                                                let like_pat = format!("%{}%", &accession);
+                                                let meta: Option<(String, String, String)> = conn.query_row(
+                                                    "SELECT ticker, form_type, company_name FROM sec_filings WHERE accession_number LIKE ?1 LIMIT 1",
+                                                    [&like_pat],
+                                                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                                                ).ok();
+                                                if let Some((ticker, form_type, company)) = meta {
+                                                    let _ = sec_filing::store_filing_content(&conn, &accession, &ticker, &form_type, &company, &result);
+                                                }
+                                            }
                                         }
                                     }
-                                    // Convert HTML structure to readable text
-                                    let plain = clean
-                                        .replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n").replace("<BR>", "\n")
-                                        .replace("<p>", "\n").replace("</p>", "\n").replace("<P>", "\n")
-                                        .replace("<div>", "\n").replace("</div>", "").replace("<DIV>", "\n")
-                                        .replace("<tr>", "\n").replace("</tr>", "").replace("<TR>", "\n")
-                                        .replace("<td>", " | ").replace("</td>", "").replace("<TD>", " | ")
-                                        .replace("<th>", " | ").replace("</th>", "").replace("<TH>", " | ")
-                                        .replace("<li>", "\n  • ").replace("</li>", "")
-                                        .replace("<hr>", "\n────────────────────\n").replace("<hr/>", "\n────────────────────\n")
-                                        .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
-                                        .replace("&nbsp;", " ").replace("&quot;", "\"").replace("&#39;", "'")
-                                        .replace("&apos;", "'");
-                                    // Strip remaining HTML tags
-                                    let mut result = String::new();
-                                    let mut in_tag = false;
-                                    for ch in plain.chars() {
-                                        if ch == '<' { in_tag = true; continue; }
-                                        if ch == '>' { in_tag = false; continue; }
-                                        if !in_tag { result.push(ch); }
-                                    }
-                                    // Collapse whitespace
-                                    while result.contains("  ") { result = result.replace("  ", " "); }
-                                    while result.contains("\n\n\n") { result = result.replace("\n\n\n", "\n\n"); }
-                                    result = result.trim().to_string();
                                     let truncated = if result.len() > 80000 { format!("{}...\n\n[Truncated at 80KB]", &result[..80000]) } else { result };
                                     let _ = msg_tx.send(BrokerMsg::FilingContent(truncated));
                                 }
@@ -13108,7 +13092,7 @@ impl TyphooNApp {
             show_sec: false,
             sec_selected_filing: None,
             sec_tab: 0,
-            sec_active_only: false,
+            sec_search_query: String::new(),
             earnings_active_only: false,
             dividends_active_only: false,
             ev_active_only: false,
@@ -13463,9 +13447,10 @@ impl TyphooNApp {
                             let _ = sec_filing::create_sec_tables(&wconn);
                             let _ = fundamentals::create_fundamentals_tables(&wconn);
                         }
-                        // SEC data + cache stats — all via BG's own connection
-                        data.sec_filings = sec_filing::get_recent_filings(conn, None, 100).unwrap_or_default();
+                        // SEC data + cache stats — all via BG's own connection (growing database — no limit)
+                        data.sec_filings = sec_filing::get_all_filings(conn).unwrap_or_default();
                         data.sec_alerts = sec_filing::get_filing_alerts(conn, false).unwrap_or_default();
+                        data.sec_content_stats = sec_filing::filing_content_stats(conn);
                         // Stats via BG's own connection (avoids read_conn contention)
                         {
                             let bar_count: i64 = conn.query_row("SELECT COUNT(*) FROM bar_cache", [], |r| r.get(0)).unwrap_or(0);
@@ -13888,14 +13873,11 @@ impl TyphooNApp {
                         if !is_lan_client {
                             data.darwin_alerts = darwin::check_alerts(conn).unwrap_or_default();
                             {
-                                let mut insider_map = std::collections::HashMap::new();
-                                let syms: Vec<String> = data.exposure.iter().map(|e| e.symbol.clone()).collect();
-                                for sym in &syms {
-                                    if let Ok(trades) = sec_filing::get_insider_trades(conn, Some(sym), 90) {
-                                        if !trades.is_empty() {
-                                            insider_map.insert(sym.clone(), trades);
-                                        }
-                                    }
+                                // Load ALL insider trades (growing database — no date cutoff)
+                                let all_trades = sec_filing::get_all_insider_trades(conn).unwrap_or_default();
+                                let mut insider_map: std::collections::HashMap<String, Vec<sec_filing::InsiderTrade>> = std::collections::HashMap::new();
+                                for trade in all_trades {
+                                    insider_map.entry(trade.ticker.clone()).or_default().push(trade);
                                 }
                                 data.insider_trades = insider_map;
                             }
@@ -22199,13 +22181,13 @@ impl TyphooNApp {
 
         // SEC Filing Scanner — tabbed: Filings | Alerts | Detail
         if self.show_sec {
-            let sec_active_syms = if self.sec_active_only { self.active_symbols() } else { Vec::new() };
+            let sec_scope_syms = self.broker_scope_symbols();
+            let sec_scope_label = self.broker_scope_label();
             egui::Window::new("SEC Filing Scanner")
                 .open(&mut self.show_sec)
                 .resizable(true).default_size([900.0, 650.0]).min_size([600.0, 200.0]).constrain(false)
                 .scroll([false, true])
                 .show(ctx, |ui| {
-                    let active_syms = &sec_active_syms;
                     let sec_high = egui::Color32::from_rgb(231, 76, 60);
                     let sec_med = egui::Color32::from_rgb(241, 196, 15);
                     let sec_low = egui::Color32::from_rgb(100, 100, 120);
@@ -22214,14 +22196,17 @@ impl TyphooNApp {
                     let sec_purple = egui::Color32::from_rgb(200, 100, 255);
                     let sec_orange = egui::Color32::from_rgb(255, 130, 60);
 
-                    // ── Tab bar + scrape button ──
+                    // ── Tab bar + scrape button + scope ──
                     ui.horizontal(|ui| {
-                        let filing_count = if self.sec_active_only {
-                            self.bg.sec_filings.iter().filter(|f| active_syms.iter().any(|s| f.ticker.eq_ignore_ascii_case(s))).count()
-                        } else { self.bg.sec_filings.len() };
+                        let scoped_count = match &sec_scope_syms {
+                            None => self.bg.sec_filings.len(),
+                            Some(set) => self.bg.sec_filings.iter().filter(|f| set.contains(&f.ticker.to_uppercase())).count(),
+                        };
                         let alert_count = self.bg.sec_alerts.len();
-                        if ui.selectable_label(self.sec_tab == 0, egui::RichText::new(format!("Filings ({})", filing_count)).small()).clicked() { self.sec_tab = 0; }
+                        let insider_count: usize = self.bg.insider_trades.values().map(|v| v.len()).sum();
+                        if ui.selectable_label(self.sec_tab == 0, egui::RichText::new(format!("Filings ({})", scoped_count)).small()).clicked() { self.sec_tab = 0; }
                         if ui.selectable_label(self.sec_tab == 1, egui::RichText::new(format!("Alerts ({})", alert_count)).small()).clicked() { self.sec_tab = 1; }
+                        if ui.selectable_label(self.sec_tab == 2, egui::RichText::new(format!("Insiders ({})", insider_count)).small()).clicked() { self.sec_tab = 2; }
                         ui.separator();
                         let labels = ["4", "13F", "14A", "S-1", "10-K", "10-Q", "8-K"];
                         for (i, label) in labels.iter().enumerate() {
@@ -22236,7 +22221,17 @@ impl TyphooNApp {
                             self.log.push_back(LogEntry::info("SEC EDGAR scrape initiated..."));
                         }
                         ui.separator();
-                        ui.checkbox(&mut self.sec_active_only, egui::RichText::new("Active Only").small());
+                        let (total_filings, indexed_content) = self.bg.sec_content_stats;
+                        ui.label(egui::RichText::new(format!("[{}] {}/{} indexed", sec_scope_label, indexed_content, total_filings)).color(AXIS_TEXT).small());
+                    });
+                    // ── Search box ──
+                    ui.horizontal(|ui| {
+                        let search_resp = ui.add(egui::TextEdit::singleline(&mut self.sec_search_query).desired_width(300.0).hint_text("Search filings...").font(egui::TextStyle::Small));
+                        if ui.small_button("X").clicked() {
+                            self.sec_search_query.clear();
+                            self.sec_page = 0;
+                        }
+                        if search_resp.changed() { self.sec_page = 0; }
                     });
                     ui.separator();
 
@@ -22247,6 +22242,7 @@ impl TyphooNApp {
                         let all_on = self.sec_filters.iter().all(|&v| v);
                         let none_on = self.sec_filters.iter().all(|&v| !v);
                         let show_all = all_on || none_on;
+                        let search_lower = self.sec_search_query.trim().to_lowercase();
                         let mut seen = std::collections::HashSet::new();
                         let mut deduped = Vec::new();
                         for f in filings {
@@ -22263,9 +22259,19 @@ impl TyphooNApp {
                                     }
                                 });
                                 if !pass { continue; }
-                                // Active Only filter: skip filings not in active symbols
-                                if self.sec_active_only && !active_syms.iter().any(|s| f.ticker.eq_ignore_ascii_case(s)) {
-                                    continue;
+                                // Broker scope filter
+                                if let Some(ref set) = sec_scope_syms {
+                                    if !set.contains(&f.ticker.to_uppercase()) { continue; }
+                                }
+                                // Text search filter (client-side — instant)
+                                if !search_lower.is_empty() {
+                                    let matches = f.ticker.to_lowercase().contains(&search_lower)
+                                        || f.company_name.to_lowercase().contains(&search_lower)
+                                        || f.form_type.to_lowercase().contains(&search_lower)
+                                        || f.category.to_lowercase().contains(&search_lower)
+                                        || f.summary.to_lowercase().contains(&search_lower)
+                                        || f.accession_number.to_lowercase().contains(&search_lower);
+                                    if !matches { continue; }
                                 }
                                 deduped.push(f);
                             }
@@ -22469,6 +22475,92 @@ impl TyphooNApp {
                                     }
                                 }
                             }
+                        });
+                    }
+
+                    if self.sec_tab == 2 {
+                        // ═══════════ INSIDERS TAB — Cross-symbol insider trade aggregation ═══════════
+                        let search_lower = self.sec_search_query.trim().to_lowercase();
+                        let mut all_insider_trades: Vec<(&str, &sec_filing::InsiderTrade)> = Vec::new();
+                        for (ticker, trades) in &self.bg.insider_trades {
+                            if let Some(ref set) = sec_scope_syms {
+                                if !set.contains(&ticker.to_uppercase()) { continue; }
+                            }
+                            for trade in trades {
+                                if !search_lower.is_empty() {
+                                    let matches = trade.ticker.to_lowercase().contains(&search_lower)
+                                        || trade.insider_name.to_lowercase().contains(&search_lower)
+                                        || trade.insider_title.to_lowercase().contains(&search_lower);
+                                    if !matches { continue; }
+                                }
+                                all_insider_trades.push((ticker.as_str(), trade));
+                            }
+                        }
+                        all_insider_trades.sort_by(|a, b| b.1.transaction_date.cmp(&a.1.transaction_date));
+
+                        // Cluster detection: 3+ insiders trading same stock within 14 days
+                        let mut clusters: Vec<(&str, usize, &str)> = Vec::new();
+                        {
+                            let mut by_sym: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+                            for (ticker, trade) in &all_insider_trades {
+                                by_sym.entry(ticker).or_default().push(&trade.transaction_date);
+                            }
+                            for (ticker, dates) in &by_sym {
+                                if dates.len() < 3 { continue; }
+                                let mut sorted_dates: Vec<&str> = dates.clone();
+                                sorted_dates.sort();
+                                for window in sorted_dates.windows(3) {
+                                    if let (Some(&first), Some(&last)) = (window.first(), window.last()) {
+                                        if last.len() >= 10 && first.len() >= 10 {
+                                            let d1: i64 = first[..10].replace('-', "").parse().unwrap_or(0);
+                                            let d2: i64 = last[..10].replace('-', "").parse().unwrap_or(0);
+                                            if (d2 - d1).abs() <= 14 {
+                                                clusters.push((ticker, dates.len(), "CLUSTER"));
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(format!("{} insider trades across {} symbols",
+                                all_insider_trades.len(), self.bg.insider_trades.len())).strong());
+                            if !clusters.is_empty() {
+                                ui.separator();
+                                ui.label(egui::RichText::new(format!("{} cluster(s)", clusters.len())).color(sec_high));
+                            }
+                        });
+                        if !clusters.is_empty() {
+                            ui.horizontal_wrapped(|ui| {
+                                for (ticker, count, _) in &clusters {
+                                    ui.label(egui::RichText::new(format!("{}: {}x", ticker, count)).color(sec_high).small());
+                                }
+                            });
+                            ui.separator();
+                        }
+
+                        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                            egui::Grid::new("insider_agg_grid").striped(true).num_columns(8).min_col_width(50.0).show(ui, |ui| {
+                                ui.strong("Date"); ui.strong("Symbol"); ui.strong("Insider"); ui.strong("Title");
+                                ui.strong("Type"); ui.strong("Shares"); ui.strong("Value"); ui.strong("Flag");
+                                ui.end_row();
+                                for (_, trade) in all_insider_trades.iter().take(500) {
+                                    let is_sell = matches!(trade.transaction_type.chars().next(), Some('S') | Some('D'));
+                                    let row_color = if is_sell { sec_high } else { egui::Color32::from_rgb(46, 204, 113) };
+                                    ui.label(egui::RichText::new(&trade.transaction_date).color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new(&trade.ticker).color(sec_cyan).small());
+                                    ui.label(egui::RichText::new(&trade.insider_name).color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new(&trade.insider_title).color(sec_low).small());
+                                    ui.label(egui::RichText::new(if is_sell { "SELL" } else { "BUY" }).color(row_color).small());
+                                    ui.label(egui::RichText::new(format!("{:.0}", trade.shares)).color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new(format!("${:.0}", trade.aggregate_value)).color(row_color).small());
+                                    let flag = if trade.is_officer { "Officer" } else if trade.is_director { "Director" } else { "" };
+                                    ui.label(egui::RichText::new(flag).color(sec_purple).small());
+                                    ui.end_row();
+                                }
+                            });
                         });
                     }
                 });
