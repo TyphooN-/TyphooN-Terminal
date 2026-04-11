@@ -21,9 +21,9 @@
 - **tastytrade**: REST API — login, accounts, positions, balances, option chains, equity order placement + DXLink WebSocket streaming (historical bars + real-time quotes)
 - **MT5 (Darwinex)**: LAN sync from BarCacheWriter databases, bid/ask live quotes, 34 KV-synced analytics fields, 14 remote commands, TLS encryption
 
-### Data Sources (19 integrated, 3 not wired)
-- **Integrated:** Alpaca Markets, SEC EDGAR, FRED (10 series), Finnhub, FMP, Alpha Vantage, CryptoCompare, CoinGecko, House Stock Watcher, Yahoo Finance, Treasury.gov, alternative.me, FINRA RegSHO, Pushover, ntfy.sh, Anthropic (AI chat), OpenAI (AI chat), Matrix (chat), Discord (webhooks)
-- **Not wired:** whale-alert.io (needs free API key), QuiverQuant (paid API)
+### Data Sources (21 integrated, 2 deferred)
+- **Integrated:** Alpaca Markets, tastytrade, Kraken, SEC EDGAR, FRED (10 series), Finnhub, FMP, Alpha Vantage, CryptoCompare, CoinGecko, House Stock Watcher, Yahoo Finance, Treasury.gov, alternative.me, FINRA RegSHO, Pushover, ntfy.sh, Anthropic (AI chat), OpenAI (AI chat), Matrix (chat), Discord (webhooks)
+- **Deferred (paid/API-gated):** whale-alert.io (needs free API key), QuiverQuant (paid API)
 
 ### Analytics
 - DARWIN analytics: 80+ functions, performance attribution, D-Score components, investment velocity, tax lots, rolling correlation, diversification candidates

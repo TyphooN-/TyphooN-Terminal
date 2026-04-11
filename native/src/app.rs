@@ -9644,6 +9644,8 @@ enum BrokerCmd {
     KrakenPlaceOrder { pair: String, side: String, order_type: String, volume: f64, price: Option<f64> },
     /// Cancel a Kraken order by transaction ID.
     KrakenCancelOrder { txid: String },
+    /// Cancel all open Kraken orders.
+    KrakenCancelAll,
     /// Get all Kraken tradeable asset pairs.
     KrakenGetPairs,
 }
@@ -11380,6 +11382,20 @@ impl TyphooNApp {
                                     let _ = msg_tx.send(BrokerMsg::OrderResult(format!("Kraken cancel: {}", text)));
                                 }
                                 Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Kraken cancel failed: {}", e))); }
+                            }
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("Kraken: connect first".into()));
+                        }
+                    }
+                    BrokerCmd::KrakenCancelAll => {
+                        if let Some(ref kb) = kraken_broker {
+                            let msg_tx = broker_msg_tx_clone.clone();
+                            match kb.cancel_all_orders().await {
+                                Ok(result) => {
+                                    let count = result["count"].as_u64().unwrap_or(0);
+                                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!("Kraken: cancelled {} orders", count)));
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Kraken cancel all failed: {}", e))); }
                             }
                         } else {
                             let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("Kraken: connect first".into()));

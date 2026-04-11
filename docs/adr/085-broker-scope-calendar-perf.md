@@ -35,10 +35,12 @@ This ADR captures the single pass that addressed all five.
 - Sector Heatmap window — reads from `scoped_fundamentals_owned()`, header shows scope label and count.
 - Dividend Yield Screener — same.
 
-**Sites NOT updated yet** (deferred — not all fundamental features; will thread through in follow-up):
-- `DARWINVAR` (already scoped by definition)
-- HV Cone (chart-scoped, not fundamentals-scoped)
-- `EV` viewer window
+**Sites updated** *(resolved 2026-04-10)*:
+- `DARWINVAR` — scoped by definition (DARWIN-specific, not fundamentals)
+- `EVOUTLIERS` — uses `scoped_fundamentals_owned()` ✓
+- `OUTLIERS` — uses `scoped_fundamentals_owned()` ✓
+- HV Cone — chart-scoped (per-symbol, not fundamentals-scoped; no action needed)
+- `EV` viewer — uses same fundamentals data path ✓
 
 **Darwinex symbol normalization:** Darwinex MT5 symbols use suffixes (`.US`, `.UK`, `.DE`, `.JP`, `.HK`). The scope helper strips everything after the first `.` to get the bare ticker before comparing to the fundamentals set. This is the same pattern used by the Event Calendar in ADR-084.
 
@@ -66,7 +68,7 @@ Public ForexFactory XML feed (`nfs.faireconomy.media/ff_calendar_thisweek.xml`) 
 
 Existing `econ_events` UI schema is preserved; FF events are mapped into the same `(date, country, event, impact, actual)` tuple format. Forecast/previous are folded into the `actual` field as `fc:X (prev:Y)` since the 5-tuple predates the forecast/previous split.
 
-**Not yet a full ForexFactory replica:** we don't surface a separate actual-vs-forecast column, no impact filter UI, no currency filter UI. Those are UI-only follow-ups on top of the now-available data.
+~~**Not yet a full ForexFactory replica**~~ **Resolved.** Impact filter (High/Medium/Low/Holiday checkboxes) and currency filter (text input with USD/Majors presets) are implemented in the Economic Calendar window. Actual-vs-forecast is folded into the actual column as `fc:X (prev:Y)`.
 
 ### 3. Command registry deduplication
 

@@ -25,8 +25,8 @@ Kraken is a US-friendly cryptocurrency exchange with comprehensive REST + WebSoc
 ### Phase 2: Order Placement *(Implemented)*
 - [x] `POST /0/private/AddOrder` — market orders via `KrakenPlaceOrder` BrokerCmd
 - [x] `POST /0/private/CancelOrder` — cancel by txid via `KrakenCancelOrder` BrokerCmd
-- `POST /0/private/CancelAll` — not wired (use individual cancel)
-- Support for leverage (Kraken margin trading) — not wired
+- [x] `POST /0/private/CancelAll` — `KrakenCancelAll` BrokerCmd (ADR-094)
+- Support for leverage (Kraken margin trading) — deferred (requires margin account setup)
 
 ### Phase 3: WebSocket Streaming
 - `wss://ws.kraken.com` — real-time trades, orderbook, OHLC

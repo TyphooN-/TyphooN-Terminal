@@ -17,8 +17,8 @@
 - **Prometheus metrics** — bar counts, positions, equity, cache stats
 - **Security** — zero unsafe blocks, parameterized SQL, keyring credentials, TLS LAN sync
 - **tastytrade** — Full REST API (auth, balances, positions, orders, quotes, market metrics, option chains) + DXLink WebSocket (historical bars via SETUP→AUTH→FEED protocol). Connect button active. See ADR-022.
-- **MQL5 compiler** — All TODOs fixed (switch, do-while, assignment, local resolution, continue). 82 tests passing across parser, WASM codegen, WGSL codegen. See ADR-060.
-- **PineScript v5 parser** — Compiles PineScript indicators to WASM via same IR pipeline. Supports indicator(), input.*, ta.*, plot(), math.*, built-in series. 7 dedicated tests.
+- **MQL5 compiler** — All TODOs fixed (switch, do-while, assignment, local resolution, continue). 216 tests passing across parser, IR, WASM codegen, WGSL codegen, and 8 transpiler backends *(updated 2026-04-10 — was 82 at time of writing)*. See ADR-060, ADR-090, ADR-091.
+- **PineScript v5 parser** — Compiles PineScript indicators to WASM via same IR pipeline. Supports indicator(), input.*, ta.*, plot(), math.*, built-in series. Part of the 216 compiler tests.
 - **Position visibility toggles** — Per-broker hide/show (DARWIN, Alpaca, tastytrade) including orders
 - **Session persistence** — Auto-save on window close (on_exit), restore on startup
 - **Backfill coloring** — Magenta candles for non-primary data source bars

@@ -95,8 +95,8 @@ Date color: red (≤3 days), amber (≤7 days), muted otherwise — draws the ey
 
 - **Reserve a right-edge slot in bar_w** for the ext candle (i.e. `bar_w = width / (n_bars + 1)`). Rejected — shifts the entire chart layout whenever ext state toggles, causing visible flicker. The clamp approach keeps regular bar positions stable.
 - **Store an independent dividend explorer window** rather than folding it into the Event Calendar. Rejected — redundant state/UI for a strict subset of the calendar's data. A preset on the calendar command gives the same UX with no duplication.
-- **Fetch events from an external calendar API** (Finnhub, FMP). Deferred — the data we already scrape via the fundamentals pipeline covers the important dates for the user's actively-traded universe. External APIs add rate limits and additional failure modes.
-- **Include economic calendar events** (FOMC, CPI, NFP). Out of scope for this ADR; those are not per-symbol and warrant a separate timeline view.
+- ~~**Fetch events from an external calendar API**~~ **Implemented in ADR-085.** Finnhub economic calendar with ForexFactory XML fallback, impact/currency filters.
+- ~~**Include economic calendar events** (FOMC, CPI, NFP)~~ **Implemented in ADR-085.** Separate Economic Calendar window with country/impact/date columns.
 
 ## Consequences
 

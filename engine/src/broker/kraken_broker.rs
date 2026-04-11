@@ -243,6 +243,11 @@ impl KrakenBroker {
             .await
     }
 
+    /// Cancel all open orders.
+    pub async fn cancel_all_orders(&self) -> Result<serde_json::Value, String> {
+        self.private_post("/0/private/CancelAll", &[]).await
+    }
+
     /// Get all tradeable asset pairs (public endpoint, no auth required).
     /// Returns list of (pair_name, wsname/altname) tuples.
     pub async fn get_tradeable_pairs(&self) -> Result<Vec<(String, String)>, String> {
