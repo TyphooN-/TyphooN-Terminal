@@ -9017,7 +9017,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "EV",            desc: "Enterprise Value scanner (all symbols)" },
     Command { name: "EARNINGS",      desc: "Upcoming earnings calendar" },
     Command { name: "DIVIDENDS",     desc: "Upcoming dividend calendar" },
-    Command { name: "EVSCRAPE",      desc: "Scrape fundamentals for all MT5 symbols" },
+    Command { name: "EVSCRAPE",      desc: "Scrape fundamentals for all MT5 symbols (EVSCRAPE FORCE to bypass 24h cache)" },
     Command { name: "MT5SYNC",       desc: "Sync bar data from MT5 BarCacheWriter databases" },
     Command { name: "ANALYST",       desc: "Analyst ratings, price targets & recommendations" },
     Command { name: "SHORT_INTEREST",desc: "Short interest data (Finnhub)" },
@@ -9554,7 +9554,7 @@ enum BrokerCmd {
     /// Recompress cache at target zstd level (e.g. 22 for max compression).
     CompactStorage { db_path: PathBuf, level: i32 },
     /// Scrape fundamentals for stock symbols from selected sources (non-blocking).
-    FundamentalsScrape { db_path: PathBuf, use_mt5: bool, use_alpaca: bool, use_tastytrade: bool },
+    FundamentalsScrape { db_path: PathBuf, use_mt5: bool, use_alpaca: bool, use_tastytrade: bool, force: bool },
     /// Scrape fundamentals for a single ticker.
     FundamentalsScrapeOne { ticker: String, db_path: PathBuf },
     /// Scan DARWIN FTP universe (non-blocking, heavy I/O).
@@ -9788,7 +9788,7 @@ pub struct TyphooNApp {
     /// Currently highlighted command in console (arrow key navigation).
     console_selected: usize,
     /// ADR-092: Recent commands (MRU, up to 10, shown when palette filter is empty).
-    recent_commands: Vec<String>,
+    recent_commands: VecDeque<String>,
     /// ADR-092: Compact mode — hides indicators and sub-panes for minimal execution view.
     compact_mode: bool,
 
@@ -9892,9 +9892,6 @@ pub struct TyphooNApp {
     data_sources: typhoon_engine::core::data_source::DataSourceManager,
     /// Last scrape result (live snapshots + correlation).
     dwx_last_update: Option<typhoon_engine::core::darwin_web::DarwinWebUpdate>,
-    /// Last scrape hour (for hourly auto-timer, checked in update loop).
-    #[allow(dead_code)]
-    dwx_last_scrape_hour: Option<u32>,
     /// Receiver for async scrape results from background task.
     /// Contains: (result, optional WebDriver to store on success).
     dwx_rx: Option<std::sync::mpsc::Receiver<(
@@ -9957,7 +9954,7 @@ pub struct TyphooNApp {
     bardata_queued: usize,
     bardata_completed: usize,
     bardata_skipped: usize,
-    bardata_log: Vec<String>,
+    bardata_log: VecDeque<String>,
     bardata_active: bool,
     reddit_posts: Vec<(String, String, u64, u64)>, // (title, url, score, comments)
     /// Matrix chat (community chat room — send + receive).
@@ -10511,7 +10508,7 @@ impl TyphooNApp {
                 if lan_client.load(std::sync::atomic::Ordering::Relaxed) {
                     let remote_cmd = match &cmd {
                         BrokerCmd::SecScrape { .. } => Some("SEC_SCRAPE"),
-                        BrokerCmd::FundamentalsScrape { .. } => Some("FUNDAMENTALS"),
+                        BrokerCmd::FundamentalsScrape { force, .. } => Some(if *force { "FUNDAMENTALS_FORCE" } else { "FUNDAMENTALS" }),
                         BrokerCmd::FundamentalsScrapeOne { .. } => Some("FUNDAMENTALS_ONE"),
                         BrokerCmd::KrakenBackfill { .. } => Some("KRAKEN_BACKFILL"),
                         BrokerCmd::CryptoCompareBackfill { .. } => Some("CRYPTOCOMPARE"),
@@ -11706,7 +11703,7 @@ impl TyphooNApp {
                             }
                         });
                     }
-                    BrokerCmd::FundamentalsScrape { db_path: _, use_mt5, use_alpaca, use_tastytrade } => {
+                    BrokerCmd::FundamentalsScrape { db_path: _, use_mt5, use_alpaca, use_tastytrade, force } => {
                         // Gather symbols from brokers BEFORE spawning thread (broker vars are in scope here)
                         let mut extra_tickers: Vec<String> = Vec::new();
                         if use_alpaca {
@@ -11775,7 +11772,7 @@ impl TyphooNApp {
                                                     return;
                                                 }
                                             };
-                                            // Skip tickers updated within 24 hours
+                                            // Skip tickers updated within 24 hours (unless force=true)
                                             let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24))
                                                 .format("%Y-%m-%dT%H:%M:%SZ").to_string();
                                             let mut ok = 0usize;
@@ -11785,7 +11782,7 @@ impl TyphooNApp {
                                             for ticker in &tickers {
                                                 // Acquire write lock per-ticker — release between iterations
                                                 // so other threads (BG, Mt5Sync, KV writes) aren't starved.
-                                                let skip = if let Ok(conn) = cache.connection() {
+                                                let skip = if force { false } else if let Ok(conn) = cache.connection() {
                                                     if let Ok(Some(existing)) = fundamentals::get_fundamentals(&conn, ticker) {
                                                         existing.last_updated >= cutoff
                                                     } else { false }
@@ -12914,7 +12911,7 @@ impl TyphooNApp {
             command_open: false,
             command_input: String::new(),
             console_selected: 0,
-            recent_commands: Vec::new(),
+            recent_commands: VecDeque::new(),
             compact_mode: false,
             // ── NNFX default preset (matching old WebKit defaults) ──
             show_sma200: true,
@@ -12985,7 +12982,6 @@ impl TyphooNApp {
             dwx_config: typhoon_engine::core::darwin_web::DarwinWebConfig::default(),
             data_sources: typhoon_engine::core::data_source::DataSourceManager::default(),
             dwx_last_update: None,
-            dwx_last_scrape_hour: None,
             dwx_rx: None,
             broker_api_key: String::new(),
             broker_secret: String::new(),
@@ -13023,7 +13019,7 @@ impl TyphooNApp {
             bardata_queued: 0,
             bardata_completed: 0,
             bardata_skipped: 0,
-            bardata_log: Vec::new(),
+            bardata_log: VecDeque::new(),
             bardata_active: false,
             reddit_posts: Vec::new(),
             show_matrix_chat: false,
@@ -14254,15 +14250,15 @@ impl TyphooNApp {
 
         if need_load.is_empty() {
             // All TFs already loaded — just use preloaded data, no blocking work needed
-            let tf_order: Vec<&str> = all_tfs.iter().map(|&(l, _)| l).collect();
-            preloaded.sort_by_key(|r| tf_order.iter().position(|&l| l == r.0).unwrap_or(99));
+            let tf_idx: std::collections::HashMap<&str, usize> = all_tfs.iter().enumerate().map(|(i, &(l, _))| (l, i)).collect();
+            preloaded.sort_by_key(|r| tf_idx.get(r.0).copied().unwrap_or(99));
             self.mtf_grid_status = preloaded;
         } else {
             // Spawn background thread for TFs that need cache loading — don't block UI
             self.mtf_grid_status = preloaded; // show what we have immediately
             let (tx, rx) = std::sync::mpsc::channel();
             let need_load_owned: Vec<(&'static str, Timeframe)> = need_load;
-            let all_tfs_order: Vec<&'static str> = all_tfs.iter().map(|&(l, _)| l).collect();
+            let all_tfs_idx: std::collections::HashMap<&'static str, usize> = all_tfs.iter().enumerate().map(|(i, &(l, _))| (l, i)).collect();
             std::thread::spawn(move || {
                 let mut results: Vec<_> = Vec::new();
                 for (label, tf) in need_load_owned {
@@ -14280,7 +14276,7 @@ impl TyphooNApp {
                         results.push((label, close, sma, kama, fisher, fsig));
                     }
                 }
-                results.sort_by_key(|r| all_tfs_order.iter().position(|&l| l == r.0).unwrap_or(99));
+                results.sort_by_key(|r| all_tfs_idx.get(r.0).copied().unwrap_or(99));
                 let _ = tx.send(results);
             });
             self.mtf_grid_rx = Some(rx);
@@ -14628,7 +14624,8 @@ impl TyphooNApp {
             "EV"            => self.show_ev_scanner = true,
             "EARNINGS"      => self.show_earnings_calendar = true,
             "DIVIDENDS"     => self.show_dividend_calendar = true,
-            "EVSCRAPE"      => {
+            s if s == "EVSCRAPE" || s == "EVSCRAPE FORCE" => {
+                let force = s.ends_with("FORCE");
                 let mut db_path = dirs_home();
                 db_path.push("cache");
                 db_path.push("typhoon_cache.db");
@@ -14641,12 +14638,13 @@ impl TyphooNApp {
                     EventSource::Tasty    => (false, false, true),
                     EventSource::Positions => (self.fund_source_mt5, self.fund_source_alpaca, self.fund_source_tastytrade),
                 };
-                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5, use_alpaca, use_tastytrade: use_tasty });
+                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5, use_alpaca, use_tastytrade: use_tasty, force });
                 self.scrape_fund_running = true;
                 self.scrape_fund_ok = 0; self.scrape_fund_fail = 0; self.scrape_fund_skipped = 0;
                 let sources: Vec<&str> = [("MT5", use_mt5), ("Alpaca", use_alpaca), ("TastyTrade", use_tasty)]
                     .iter().filter(|(_, on)| *on).map(|(n, _)| *n).collect();
-                self.log.push_back(LogEntry::info(format!("Fundamentals scrape started [{}] sources: {}...", self.broker_scope_label(), sources.join(", "))));
+                let force_label = if force { " (FORCE — ignoring cache)" } else { "" };
+                self.log.push_back(LogEntry::info(format!("Fundamentals scrape started [{}] sources: {}{}...", self.broker_scope_label(), sources.join(", "), force_label)));
             }
             "MT5SYNC"       => {
                 let paths: Vec<String> = self.mt5_db_paths.iter()
@@ -16001,10 +15999,10 @@ impl TyphooNApp {
                     self.bardata_skipped = skipped_count;
                     self.bardata_completed = 0;
                     self.bardata_log.clear();
-                    self.bardata_log.push(format!("Total symbols: {}", symbols.len()));
-                    self.bardata_log.push(format!("Queued for download: {}", fetched_count));
-                    self.bardata_log.push(format!("Already cached (skipped): {}", skipped_count));
-                    self.bardata_log.push(format!("Uncached (priority): {}", uncached_syms.len()));
+                    self.bardata_log.push_back(format!("Total symbols: {}", symbols.len()));
+                    self.bardata_log.push_back(format!("Queued for download: {}", fetched_count));
+                    self.bardata_log.push_back(format!("Already cached (skipped): {}", skipped_count));
+                    self.bardata_log.push_back(format!("Uncached (priority): {}", uncached_syms.len()));
                     self.show_bardata = true;
                     self.bardata_active = true;
 
@@ -20736,7 +20734,7 @@ impl TyphooNApp {
                         if self.bardata_active {
                             if ui.add(egui::Button::new(egui::RichText::new("Stop").color(DOWN).small().strong()).fill(egui::Color32::from_rgb(60, 20, 20))).clicked() {
                                 self.bardata_active = false;
-                                self.bardata_log.push("=== STOPPED by user ===".into());
+                                self.bardata_log.push_back("=== STOPPED by user ===".into());
                             }
                         } else if completed >= queued && queued > 0 {
                             ui.label(egui::RichText::new("Complete").color(UP).small().strong());
@@ -21921,10 +21919,12 @@ impl TyphooNApp {
                                 let max_sharpe = self.gpu_opt_results.iter().map(|r| r.sharpe).fold(0.0_f32, f32::max).max(0.01);
                                 let min_sharpe = self.gpu_opt_results.iter().map(|r| r.sharpe).fold(f32::MAX, f32::min);
 
-                                // Map each combo to grid cell
+                                // Map each combo to grid cell — O(1) lookups via HashMap
+                                let fast_idx: std::collections::HashMap<u32, usize> = fast_set.iter().enumerate().map(|(i, &f)| (f, i)).collect();
+                                let slow_idx: std::collections::HashMap<u32, usize> = slow_set.iter().enumerate().map(|(i, &s)| (s, i)).collect();
                                 for (i, (combo, result)) in self.gpu_opt_combos.iter().zip(self.gpu_opt_results.iter()).enumerate() {
-                                    let col = fast_set.iter().position(|&f| f == combo.sma_fast).unwrap_or(0);
-                                    let row = slow_set.iter().position(|&s| s == combo.sma_slow).unwrap_or(0);
+                                    let col = fast_idx.get(&combo.sma_fast).copied().unwrap_or(0);
+                                    let row = slow_idx.get(&combo.sma_slow).copied().unwrap_or(0);
                                     let x = rect.left() + col as f32 * cell_w;
                                     let y = rect.top() + row as f32 * cell_h;
 
@@ -23227,7 +23227,7 @@ impl TyphooNApp {
                         if !self.scrape_fund_running {
                             if ui.add(egui::Button::new(egui::RichText::new("Scrape").color(BTN_GREEN_TEXT).small()).fill(BTN_GREEN)).clicked() {
                                 let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: self.fund_source_mt5, use_alpaca: self.fund_source_alpaca, use_tastytrade: self.fund_source_tastytrade });
+                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: self.fund_source_mt5, use_alpaca: self.fund_source_alpaca, use_tastytrade: self.fund_source_tastytrade, force: false });
                                 self.scrape_fund_running = true;
                                 self.scrape_fund_ok = 0; self.scrape_fund_fail = 0; self.scrape_fund_skipped = 0;
                             }
@@ -23301,25 +23301,25 @@ impl TyphooNApp {
                         if can_scrape {
                             if ui.add(egui::Button::new(egui::RichText::new("MT5 Only").small()).fill(BTN_GREEN)).clicked() {
                                 let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: true, use_alpaca: false, use_tastytrade: false });
+                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: true, use_alpaca: false, use_tastytrade: false, force: false });
                                 self.scrape_fund_running = true;
                                 self.scrape_fund_ok = 0; self.scrape_fund_fail = 0; self.scrape_fund_skipped = 0;
                             }
                             if ui.add(egui::Button::new(egui::RichText::new("Alpaca Only").small()).fill(BTN_GREEN)).clicked() {
                                 let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: false, use_alpaca: true, use_tastytrade: false });
+                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: false, use_alpaca: true, use_tastytrade: false, force: false });
                                 self.scrape_fund_running = true;
                                 self.scrape_fund_ok = 0; self.scrape_fund_fail = 0; self.scrape_fund_skipped = 0;
                             }
                             if ui.add(egui::Button::new(egui::RichText::new("TastyTrade Only").small()).fill(BTN_GREEN)).clicked() {
                                 let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: false, use_alpaca: false, use_tastytrade: true });
+                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: false, use_alpaca: false, use_tastytrade: true, force: false });
                                 self.scrape_fund_running = true;
                                 self.scrape_fund_ok = 0; self.scrape_fund_fail = 0; self.scrape_fund_skipped = 0;
                             }
                             if ui.add(egui::Button::new(egui::RichText::new("All Sources").small()).fill(BTN_GREEN)).clicked() {
                                 let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: true, use_alpaca: true, use_tastytrade: true });
+                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: true, use_alpaca: true, use_tastytrade: true, force: false });
                                 self.scrape_fund_running = true;
                                 self.scrape_fund_ok = 0; self.scrape_fund_fail = 0; self.scrape_fund_skipped = 0;
                             }
@@ -23524,7 +23524,7 @@ impl TyphooNApp {
                     ui.horizontal(|ui| {
                         if ui.add(egui::Button::new(egui::RichText::new("Scrape All").color(egui::Color32::WHITE)).fill(BTN_GREEN)).clicked() {
                             let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                            let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: self.fund_source_mt5, use_alpaca: self.fund_source_alpaca, use_tastytrade: self.fund_source_tastytrade });
+                            let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: self.fund_source_mt5, use_alpaca: self.fund_source_alpaca, use_tastytrade: self.fund_source_tastytrade, force: false });
                             self.log.push_back(LogEntry::info("Fundamentals scrape started for all MT5 symbols..."));
                         }
                         ui.label(egui::RichText::new(format!("{} symbols • scope: {}", self.bg.all_fundamentals.len(), scope_label)).color(AXIS_TEXT).small());
@@ -24558,8 +24558,9 @@ impl TyphooNApp {
                             // Build correlation matrix from bg data
                             let mut corr = vec![vec![0.0; n]; n];
                             for i in 0..n { corr[i][i] = 1.0; }
+                            let name_idx: std::collections::HashMap<&str, usize> = names.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
                             for c in &self.bg.correlations {
-                                if let (Some(i), Some(j)) = (names.iter().position(|s| s == &c.darwin_a), names.iter().position(|s| s == &c.darwin_b)) {
+                                if let (Some(&i), Some(&j)) = (name_idx.get(c.darwin_a.as_str()), name_idx.get(c.darwin_b.as_str())) {
                                     corr[i][j] = c.correlation;
                                     corr[j][i] = c.correlation;
                                 }
@@ -27727,7 +27728,7 @@ impl eframe::App for TyphooNApp {
                         let mut db_path = dirs_home();
                         db_path.push("cache");
                         db_path.push("typhoon_cache.db");
-                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: self.fund_source_mt5, use_alpaca: self.fund_source_alpaca, use_tastytrade: self.fund_source_tastytrade });
+                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: self.fund_source_mt5, use_alpaca: self.fund_source_alpaca, use_tastytrade: self.fund_source_tastytrade, force: false });
                         self.log.push_back(LogEntry::info("Fundamentals scrape started for all MT5 symbols..."));
                     }
                 } else {
@@ -28118,8 +28119,8 @@ impl eframe::App for TyphooNApp {
                     }
                     // Track BARDATA progress
                     if msg.starts_with("BARDATA:") {
-                        self.bardata_log.push(msg.clone());
-                        if self.bardata_log.len() > 200 { self.bardata_log.drain(0..100); }
+                        self.bardata_log.push_back(msg.clone());
+                        while self.bardata_log.len() > 200 { self.bardata_log.pop_front(); }
                         // Count any finished fetch (success, error, or empty) as completed
                         if msg.contains("bars stored") || msg.contains("complete") || msg.contains("failed") || msg.contains("no bars") {
                             self.bardata_completed += 1;
@@ -29068,7 +29069,7 @@ impl eframe::App for TyphooNApp {
             }
 
             // Ctrl+Tab / Ctrl+Shift+Tab = cycle tabs
-            if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Tab)) {
+            if !self.charts.is_empty() && ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Tab)) {
                 if ctx.input(|i| i.modifiers.shift) {
                     self.active_tab = if self.active_tab == 0 { self.charts.len() - 1 } else { self.active_tab - 1 };
                 } else {
@@ -33638,7 +33639,7 @@ impl eframe::App for TyphooNApp {
                         self.command_open = false;
                         // ADR-092: track recent commands (MRU, max 10)
                         self.recent_commands.retain(|n| n != &cmd_name);
-                        self.recent_commands.insert(0, cmd_name.clone());
+                        self.recent_commands.push_front(cmd_name.clone());
                         self.recent_commands.truncate(10);
                         self.handle_command(&cmd_name, ctx);
                     }
@@ -33767,10 +33768,12 @@ impl eframe::App for TyphooNApp {
                                             }
                                         }
                                     }
-                                    "FUNDAMENTALS" => {
+                                    "FUNDAMENTALS" | "FUNDAMENTALS_FORCE" => {
+                                        let force = cmd == "FUNDAMENTALS_FORCE";
                                         let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: self.fund_source_mt5, use_alpaca: self.fund_source_alpaca, use_tastytrade: self.fund_source_tastytrade });
-                                        self.log.push_back(LogEntry::info("LAN remote: fundamentals scrape started"));
+                                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: self.fund_source_mt5, use_alpaca: self.fund_source_alpaca, use_tastytrade: self.fund_source_tastytrade, force });
+                                        let label = if force { "fundamentals scrape started (FORCE)" } else { "fundamentals scrape started" };
+                                        self.log.push_back(LogEntry::info(format!("LAN remote: {}", label)));
                                     }
                                     "SEC_SCRAPE" => {
                                         let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
@@ -33837,10 +33840,12 @@ impl eframe::App for TyphooNApp {
                                             self.log.push_back(LogEntry::info("LAN remote: DARWIN XLSX import started"));
                                         }
                                     }
-                                    "EVSCRAPE" => {
+                                    "EVSCRAPE" | "EVSCRAPE_FORCE" => {
+                                        let force = cmd == "EVSCRAPE_FORCE";
                                         let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: self.fund_source_mt5, use_alpaca: self.fund_source_alpaca, use_tastytrade: self.fund_source_tastytrade });
-                                        self.log.push_back(LogEntry::info("LAN remote: EVScrape started"));
+                                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: self.fund_source_mt5, use_alpaca: self.fund_source_alpaca, use_tastytrade: self.fund_source_tastytrade, force });
+                                        let label = if force { "EVScrape started (FORCE)" } else { "EVScrape started" };
+                                        self.log.push_back(LogEntry::info(format!("LAN remote: {}", label)));
                                     }
                                     _ => {
                                         self.log.push_back(LogEntry::info(format!("LAN remote: unhandled '{}' (args: {})", cmd, args)));
