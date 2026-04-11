@@ -10073,8 +10073,10 @@ pub struct TyphooNApp {
     show_calendar: bool,
     show_sec: bool,
     sec_selected_filing: Option<usize>,
-    sec_tab: usize,  // 0=Filings, 1=Alerts
+    sec_tab: usize,  // 0=Filings, 1=Alerts, 2=Insiders, 3=Timeline
     sec_search_query: String,   // text search filter for filings
+    sec_keyword_input: String,  // keyword watchlist input
+    sec_keywords: Vec<String>,  // cached keyword list
     earnings_active_only: bool,  // filter earnings calendar to active symbols
     dividends_active_only: bool, // filter dividend calendar to active symbols
     ev_active_only: bool,        // filter EV scanner to active symbols
@@ -13093,6 +13095,8 @@ impl TyphooNApp {
             sec_selected_filing: None,
             sec_tab: 0,
             sec_search_query: String::new(),
+            sec_keyword_input: String::new(),
+            sec_keywords: Vec::new(),
             earnings_active_only: false,
             dividends_active_only: false,
             ev_active_only: false,
@@ -13392,6 +13396,7 @@ impl TyphooNApp {
                 // WAL mode allows unlimited concurrent readers — each connection reads
                 // independently without blocking the others.
                 let mut bg_conn: Option<typhoon_engine::core::cache::BgConnection> = None;
+                let mut bg_cycle_count: u64 = 0;
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(3));
 
@@ -13592,6 +13597,60 @@ impl TyphooNApp {
                         let need_full_refresh = !full_refresh_done;
                         if !need_full_refresh {
                             // Lightweight refresh only — skip expensive phases
+                            // Low-priority: backfill SEC filing content (5 per ~30s cycle)
+                            // Spawns a short-lived thread with its own tokio runtime (same pattern as scrape thread).
+                            if !is_lan_client && bg_cycle_count % 10 == 5 {
+                                if let Ok(unfetched) = sec_filing::get_unfetched_filings(conn, 5) {
+                                    if !unfetched.is_empty() {
+                                        if let Some(ref wr_cache) = cache_arc {
+                                            let wr_cache = wr_cache.clone();
+                                            let unfetched = unfetched.clone();
+                                            std::thread::spawn(move || {
+                                                let rt = tokio::runtime::Builder::new_current_thread()
+                                                    .enable_all().build().unwrap_or_else(|e| { eprintln!("BG backfill rt: {e}"); std::process::exit(1); });
+                                                rt.block_on(async {
+                                                    let client = reqwest::Client::builder()
+                                                        .user_agent("TyphooN-Terminal/0.1 (support@marketwizardry.org)")
+                                                        .timeout(std::time::Duration::from_secs(10))
+                                                        .build().unwrap_or_default();
+                                                    let mut fetched = 0usize;
+                                                    for filing in &unfetched {
+                                                        if filing.url.is_empty() { continue; }
+                                                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                                                        if let Ok(resp) = client.get(&filing.url).send().await {
+                                                            if let Ok(html) = resp.text().await {
+                                                                let content = sec_filing::strip_html_to_text(&html);
+                                                                if let Ok(wr_conn) = wr_cache.connection() {
+                                                                    let _ = sec_filing::store_filing_content(
+                                                                        &wr_conn, &filing.accession_number, &filing.ticker,
+                                                                        &filing.form_type, &filing.company_name, &content,
+                                                                    );
+                                                                    // Check keyword watchlist for alerts
+                                                                    let matched_kw = sec_filing::check_keywords(&wr_conn, &content);
+                                                                    for kw in &matched_kw {
+                                                                        let msg = format!("Keyword '{}' found in {} {} ({})", kw, filing.ticker, filing.form_type, filing.filing_date);
+                                                                        let _ = wr_conn.execute(
+                                                                            "INSERT INTO sec_filing_alerts (ticker, alert_type, message, filing_accession, importance, created_at, dismissed)
+                                                                             SELECT ?1, 'KEYWORD_MATCH', ?2, ?3, 70, ?4, FALSE
+                                                                             WHERE NOT EXISTS (SELECT 1 FROM sec_filing_alerts WHERE ticker=?1 AND alert_type='KEYWORD_MATCH' AND filing_accession=?3)",
+                                                                            [&filing.ticker, &msg, &filing.accession_number, &chrono::Utc::now().timestamp().to_string()],
+                                                                        );
+                                                                    }
+                                                                }
+                                                                fetched += 1;
+                                                            }
+                                                        }
+                                                    }
+                                                    if fetched > 0 {
+                                                        tracing::info!("BG: backfilled {} SEC filing(s) content", fetched);
+                                                    }
+                                                });
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            bg_cycle_count += 1;
                             let _ = bg_tx.send(data.clone());
                             continue;
                         }
@@ -14461,6 +14520,28 @@ impl TyphooNApp {
                 let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((0.0, 0, String::new()));
                 entry.0 += qty;
                 entry.1 += 1;
+            }
+        }
+
+        // SEC insider trades (Form 4) — show buy/sell markers on chart
+        if let Some(trades) = self.bg.insider_trades.get(&bare_upper) {
+            for trade in trades {
+                // Parse "YYYY-MM-DD" to timestamp
+                let ts = chrono::NaiveDate::parse_from_str(&trade.transaction_date, "%Y-%m-%d")
+                    .map(|d| d.and_hms_opt(12, 0, 0).unwrap_or_default().and_utc().timestamp_millis())
+                    .unwrap_or(0);
+                if let Some(bar_idx) = find_bar(ts) {
+                    let is_buy = !matches!(trade.transaction_type.chars().next(), Some('S') | Some('D'));
+                    // Use the bar's close price as the marker price (insider trade price may not match chart scale)
+                    let price = if let Some(bar) = chart.bars.get(bar_idx) { bar.close } else { trade.price };
+                    let price_key = (price * 100000.0) as i64;
+                    let label = format!("SEC:{}", trade.insider_name.split_whitespace().next().unwrap_or(""));
+                    let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((0.0, 0, String::new()));
+                    entry.0 += trade.shares;
+                    entry.1 += 1;
+                    if !entry.2.is_empty() { entry.2.push_str(", "); }
+                    entry.2.push_str(&label);
+                }
             }
         }
 
@@ -22207,6 +22288,7 @@ impl TyphooNApp {
                         if ui.selectable_label(self.sec_tab == 0, egui::RichText::new(format!("Filings ({})", scoped_count)).small()).clicked() { self.sec_tab = 0; }
                         if ui.selectable_label(self.sec_tab == 1, egui::RichText::new(format!("Alerts ({})", alert_count)).small()).clicked() { self.sec_tab = 1; }
                         if ui.selectable_label(self.sec_tab == 2, egui::RichText::new(format!("Insiders ({})", insider_count)).small()).clicked() { self.sec_tab = 2; }
+                        if ui.selectable_label(self.sec_tab == 3, egui::RichText::new("Timeline").small()).clicked() { self.sec_tab = 3; }
                         ui.separator();
                         let labels = ["4", "13F", "14A", "S-1", "10-K", "10-Q", "8-K"];
                         for (i, label) in labels.iter().enumerate() {
@@ -22416,7 +22498,48 @@ impl TyphooNApp {
                                     }
                                 }
                             }
+                            ui.separator();
+                            ui.label(egui::RichText::new("Keywords:").color(AXIS_TEXT).small());
+                            let kw_resp = ui.add(egui::TextEdit::singleline(&mut self.sec_keyword_input).desired_width(150.0).hint_text("add keyword...").font(egui::TextStyle::Small));
+                            if kw_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !self.sec_keyword_input.trim().is_empty() {
+                                let kw = self.sec_keyword_input.trim().to_string();
+                                if let Some(ref cache) = self.cache {
+                                    if let Ok(conn) = cache.connection() {
+                                        let _ = sec_filing::add_keyword(&conn, &kw);
+                                        self.sec_keywords = sec_filing::get_keywords(&conn).unwrap_or_default();
+                                    }
+                                }
+                                self.sec_keyword_input.clear();
+                            }
                         });
+                        // Lazy-load keywords on first view
+                        if self.sec_keywords.is_empty() && self.sec_tab == 1 {
+                            if let Some(ref cache) = self.cache {
+                                if let Some(conn) = cache.try_connection() {
+                                    self.sec_keywords = sec_filing::get_keywords(&conn).unwrap_or_default();
+                                }
+                            }
+                        }
+                        // Show active keywords as removable badges
+                        if !self.sec_keywords.is_empty() {
+                            ui.horizontal_wrapped(|ui| {
+                                let mut remove_kw: Option<String> = None;
+                                for kw in &self.sec_keywords {
+                                    if ui.small_button(egui::RichText::new(format!("{} x", kw)).color(sec_med).small()).clicked() {
+                                        remove_kw = Some(kw.clone());
+                                    }
+                                }
+                                if let Some(kw) = remove_kw {
+                                    if let Some(ref cache) = self.cache {
+                                        if let Ok(conn) = cache.connection() {
+                                            let _ = sec_filing::remove_keyword(&conn, &kw);
+                                            self.sec_keywords = sec_filing::get_keywords(&conn).unwrap_or_default();
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        ui.separator();
                         let avail = ui.available_height().max(200.0);
                         egui::ScrollArea::vertical().id_salt("sec_alerts_tab").min_scrolled_height(avail).auto_shrink(false).show(ui, |ui| {
                             if alerts.is_empty() {
@@ -22561,6 +22684,60 @@ impl TyphooNApp {
                                     ui.end_row();
                                 }
                             });
+                        });
+                    }
+
+                    if self.sec_tab == 3 {
+                        // ═══════════ TIMELINE TAB — Filing activity heatmap ═══════════
+                        // Group filings by month for a calendar-like density view
+                        let mut by_month: std::collections::BTreeMap<String, Vec<&sec_filing::SecFiling>> = std::collections::BTreeMap::new();
+                        for f in &self.bg.sec_filings {
+                            if let Some(ref set) = sec_scope_syms {
+                                if !set.contains(&f.ticker.to_uppercase()) { continue; }
+                            }
+                            let month = if f.filing_date.len() >= 7 { &f.filing_date[..7] } else { &f.filing_date };
+                            by_month.entry(month.to_string()).or_default().push(f);
+                        }
+
+                        ui.label(egui::RichText::new(format!("Filing activity: {} months with data", by_month.len())).strong());
+                        ui.separator();
+
+                        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                            // Most recent months first
+                            let months: Vec<_> = by_month.iter().rev().collect();
+                            for (month, filings) in &months {
+                                let count = filings.len();
+                                // Color intensity based on filing count
+                                let intensity = (count as f32 / 20.0).min(1.0);
+                                let bar_color = egui::Color32::from_rgba_unmultiplied(
+                                    (26.0 + 205.0 * intensity) as u8,
+                                    (188.0 - 88.0 * intensity) as u8,
+                                    (156.0 - 56.0 * intensity) as u8,
+                                    200,
+                                );
+
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("{}: ", month)).color(AXIS_TEXT).monospace().small());
+                                    // Draw a proportional bar
+                                    let bar_width = (count as f32 * 8.0).min(300.0);
+                                    let (rect, _) = ui.allocate_exact_size(egui::vec2(bar_width, 14.0), egui::Sense::hover());
+                                    ui.painter().rect_filled(rect, 2.0, bar_color);
+                                    ui.painter().text(
+                                        rect.left_center() + egui::vec2(4.0, 0.0),
+                                        egui::Align2::LEFT_CENTER,
+                                        format!("{} filings", count),
+                                        egui::FontId::proportional(10.0),
+                                        egui::Color32::WHITE,
+                                    );
+
+                                    // Form type breakdown
+                                    let mut types: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+                                    for f in *filings { *types.entry(f.form_type.as_str()).or_default() += 1; }
+                                    let mut type_str: Vec<String> = types.iter().map(|(t, c)| format!("{}:{}", t, c)).collect();
+                                    type_str.sort();
+                                    ui.label(egui::RichText::new(type_str.join(" ")).color(sec_low).small());
+                                });
+                            }
                         });
                     }
                 });
