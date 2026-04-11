@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 const USER_AGENT: &str = "TyphooN-Terminal/0.1 (support@marketwizardry.org)";
 
 /// Rate limit sleep between SEC requests (200ms = 5 req/sec, well under 10/sec limit).
-const RATE_LIMIT_MS: u64 = 200;
+const RATE_LIMIT_MS: u64 = 250; // SEC EDGAR fair use: max 10 req/sec, use 4/sec for safety
 
 /// All SEC filing types we track — comprehensive coverage for trading signals.
 const RELEVANT_FORMS: &[&str] = &[
@@ -506,20 +506,35 @@ async fn fetch_and_parse_form4(
     accession: &str,
     url: &str,
 ) -> Result<(usize, usize), String> {
-    // Async: fetch the filing
-    let resp = client
-        .get(url)
-        .header("User-Agent", USER_AGENT)
-        .send()
-        .await
-        .map_err(|e| format!("Form 4 fetch failed: {e}"))?;
+    // Async: fetch the filing with retry on 429
+    let mut body = String::new();
+    for attempt in 0..3u32 {
+        let resp = client
+            .get(url)
+            .header("User-Agent", USER_AGENT)
+            .send()
+            .await
+            .map_err(|e| format!("Form 4 fetch failed: {e}"))?;
 
-    if !resp.status().is_success() {
-        return Err(format!("Form 4 HTTP {}", resp.status()));
+        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            // Exponential backoff: 1s, 2s, 4s
+            let delay = std::time::Duration::from_secs(1 << attempt);
+            tracing::debug!("Form 4 429 for {ticker} — retrying in {}s", delay.as_secs());
+            tokio::time::sleep(delay).await;
+            continue;
+        }
+
+        if !resp.status().is_success() {
+            return Err(format!("Form 4 HTTP {}", resp.status()));
+        }
+
+        body = resp.text().await
+            .map_err(|e| format!("Form 4 read failed: {e}"))?;
+        break;
     }
-
-    let body = resp.text().await
-        .map_err(|e| format!("Form 4 read failed: {e}"))?;
+    if body.is_empty() {
+        return Err(format!("Form 4 exhausted retries for {ticker} {accession}"));
+    }
 
     // Parse in-memory (no DB needed)
     let insider_name = extract_xml_value(&body, "rptOwnerName")
