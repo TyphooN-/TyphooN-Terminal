@@ -665,6 +665,39 @@ impl App {
                     }
                 }
             }
+            "oco" => {
+                // oco sell SYMBOL QTY TP SL
+                if parts.len() < 6 {
+                    self.log("Usage: oco sell|buy SYMBOL QTY TP_PRICE SL_PRICE", Color::Yellow);
+                } else {
+                    let side = parts[1].to_lowercase();
+                    if side != "buy" && side != "sell" { self.log("Side must be 'buy' or 'sell'", Color::Red); return; }
+                    let symbol = parts[2].to_uppercase();
+                    let qty: f64 = parts[3].parse().unwrap_or(0.0);
+                    let tp: f64 = parts[4].parse().unwrap_or(0.0);
+                    let sl: f64 = parts[5].parse().unwrap_or(0.0);
+                    if qty <= 0.0 || tp <= 0.0 || sl <= 0.0 {
+                        self.log("Invalid qty, TP, or SL price", Color::Red);
+                        return;
+                    }
+                    match self.broker.oco_order(&symbol, qty, &side, tp, sl, None).await {
+                        Ok(r) => self.log(&format!("OCO {} {qty} {symbol} TP={tp} SL={sl}: {}", side.to_uppercase(), r.status), Color::Green),
+                        Err(e) => self.log(&format!("OCO failed: {e}"), Color::Red),
+                    }
+                }
+            }
+            "cancel" => {
+                // cancel ORDER_ID
+                if parts.len() < 2 {
+                    self.log("Usage: cancel ORDER_ID", Color::Yellow);
+                } else {
+                    let order_id = parts[1].to_string();
+                    match self.broker.cancel_order(&order_id).await {
+                        Ok(()) => self.log(&format!("Order {order_id} cancelled"), Color::Green),
+                        Err(e) => self.log(&format!("Cancel failed: {e}"), Color::Red),
+                    }
+                }
+            }
             "closeall" => {
                 self.log("Closing all positions...", Color::Yellow);
                 match self.broker.close_all().await {
@@ -837,7 +870,9 @@ impl App {
                 self.log("  stop buy|sell SYM QTY PRICE   Stop order", Color::Cyan);
                 self.log("  bracket buy|sell SYM QTY SL TP  Bracket (market+SL+TP)", Color::Cyan);
                 self.log("  trailing buy|sell SYM QTY PCT Trailing stop order", Color::Cyan);
+                self.log("  oco sell|buy SYM QTY TP SL    OCO exit (one-cancels-other)", Color::Cyan);
                 self.log("  close SYMBOL [QTY]            Close position", Color::Cyan);
+                self.log("  cancel ORDER_ID               Cancel specific order", Color::Cyan);
                 self.log("  closeall                      Close ALL positions", Color::Cyan);
                 self.log("  cancelall                     Cancel ALL open orders", Color::Cyan);
                 self.log("--- Research ---", Color::Cyan);

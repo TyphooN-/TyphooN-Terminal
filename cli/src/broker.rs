@@ -291,6 +291,32 @@ impl AlpacaBroker {
         })
     }
 
+    pub async fn oco_order(&self, symbol: &str, qty: f64, side: &str, tp: f64, sl: f64, _sl_limit: Option<f64>) -> Result<OrderResult, String> {
+        let body = serde_json::json!({
+            "symbol": symbol,
+            "qty": qty.to_string(),
+            "side": side,
+            "type": "limit",
+            "time_in_force": "gtc",
+            "order_class": "oco",
+            "take_profit": { "limit_price": format!("{tp:.2}") },
+            "stop_loss": { "stop_price": format!("{sl:.2}") },
+        });
+        let resp = self.client.post(format!("{}/v2/orders", self.base_url))
+            .headers(self.headers()).json(&body).send().await.map_err(|e| e.to_string())?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        if let Some(msg) = json.get("message").and_then(|m| m.as_str()) {
+            return Err(msg.to_string());
+        }
+        Ok(OrderResult {
+            id: json["id"].as_str().unwrap_or("").to_string(),
+            symbol: json["symbol"].as_str().unwrap_or("").to_string(),
+            qty: json["qty"].as_str().unwrap_or("").to_string(),
+            side: json["side"].as_str().unwrap_or("").to_string(),
+            status: json["status"].as_str().unwrap_or("").to_string(),
+        })
+    }
+
     pub async fn close_all(&self) -> Result<(), String> {
         let resp = self.client.delete(format!("{}/v2/positions", self.base_url))
             .headers(self.headers()).send().await.map_err(|e| e.to_string())?;
