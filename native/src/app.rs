@@ -20236,29 +20236,44 @@ impl TyphooNApp {
         // Risk Calculator — wired to engine risk.rs
         // ── SCOPE popup window with source checkboxes ──
         if self.show_scope_window {
-            let scope_label = self.broker_scope_label().to_string();
-            let n_scoped = self.scoped_fundamentals().len();
             egui::Window::new("Scope — Symbol Sources")
                 .open(&mut self.show_scope_window)
-                .resizable(false).default_size([320.0, 220.0])
+                .resizable(false).default_size([320.0, 240.0])
                 .show(ctx, |ui| {
-                    ui.label(egui::RichText::new(format!("Current scope: {} ({} symbols)", scope_label, n_scoped)).strong());
-                    ui.separator();
                     ui.label("Symbol sources for fundamentals scraping + analytics:");
                     ui.add_space(4.0);
-                    let mt5_changed = ui.checkbox(&mut self.fund_source_mt5, "MT5 / Darwinex").changed();
-                    let alp_changed = ui.checkbox(&mut self.fund_source_alpaca, "Alpaca").changed();
-                    let tt_changed = ui.checkbox(&mut self.fund_source_tastytrade, "tastytrade").changed();
-                    // Sync scope enum from checkboxes
-                    if mt5_changed || alp_changed || tt_changed {
-                        self.broker_scope = match (self.fund_source_mt5, self.fund_source_alpaca, self.fund_source_tastytrade) {
-                            (true, true, true) => EventSource::All,
-                            (false, true, false) => EventSource::Alpaca,
-                            (true, false, false) => EventSource::Darwinex,
-                            (false, false, true) => EventSource::Tasty,
-                            _ => EventSource::All, // mixed selection defaults to All
-                        };
-                    }
+                    ui.checkbox(&mut self.fund_source_mt5, "MT5 / Darwinex");
+                    ui.checkbox(&mut self.fund_source_alpaca, "Alpaca");
+                    ui.checkbox(&mut self.fund_source_tastytrade, "tastytrade");
+
+                    // Always sync scope enum from current checkbox state
+                    self.broker_scope = match (self.fund_source_mt5, self.fund_source_alpaca, self.fund_source_tastytrade) {
+                        (true, true, true)   => EventSource::All,
+                        (true, true, false)  => EventSource::All,
+                        (true, false, true)  => EventSource::All,
+                        (false, true, true)  => EventSource::All,
+                        (false, true, false) => EventSource::Alpaca,
+                        (true, false, false) => EventSource::Darwinex,
+                        (false, false, true) => EventSource::Tasty,
+                        (false, false, false) => EventSource::All, // none selected = all
+                    };
+
+                    ui.separator();
+                    // Show count AFTER scope is synced (same frame)
+                    // Can't call self.scoped_fundamentals() here due to borrow, so count directly
+                    let total = self.bg.all_fundamentals.len();
+                    let lbl = match self.broker_scope {
+                        EventSource::All => "ALL", EventSource::Alpaca => "ALPACA",
+                        EventSource::Darwinex => "DARWINEX", EventSource::Tasty => "TASTY",
+                        EventSource::Positions => "POSITIONS",
+                    };
+                    let src_note = format!("MT5:{} Alpaca:{} Tasty:{}",
+                        if self.fund_source_mt5 { "ON" } else { "off" },
+                        if self.fund_source_alpaca { "ON" } else { "off" },
+                        if self.fund_source_tastytrade { "ON" } else { "off" },
+                    );
+                    ui.label(egui::RichText::new(format!("Scope: {} | {} total fundamentals | {}", lbl, total, src_note)).strong());
+
                     ui.separator();
                     ui.label("Quick presets:");
                     ui.horizontal(|ui| {
