@@ -16993,7 +16993,7 @@ impl TyphooNApp {
                 .open(&mut self.show_settings)
                 .resizable(true).default_size([450.0, 500.0])
                 .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                     // ── API Keys (matching old WebKit connection modal) ──
                     ui.heading("API Keys");
                     ui.separator();
@@ -17650,7 +17650,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                     // ── Compact overview table ──────────────────────────────────
                     let mut darwin_to_delete: Option<String> = None;
                     let mut aum_changed: Option<(String, String)> = None;
@@ -18238,7 +18238,7 @@ impl TyphooNApp {
                     // Read directly from self.bg (background-computed data, no DB queries)
                     {
                         let dv = self.darwin_view;
-                        egui::ScrollArea::vertical().show(ui, |ui| {
+                        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                         match self.bg.portfolio.as_ref() {
                             Some(portfolio) if !portfolio.accounts.is_empty() => {
                                 match dv {
@@ -20066,7 +20066,7 @@ impl TyphooNApp {
                     });
                     ui.separator();
                     // Chat history
-                    egui::ScrollArea::vertical().max_height(300.0).stick_to_bottom(true).show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).max_height(300.0).stick_to_bottom(true).show(ui, |ui| {
                         for (is_user, msg) in &self.ai_chat_history {
                             let (align, color, prefix) = if *is_user {
                                 (egui::Align::RIGHT, egui::Color32::from_rgb(80, 140, 255), "You")
@@ -20117,7 +20117,7 @@ impl TyphooNApp {
                         }
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).max_height(320.0).show(ui, |ui| {
                         if self.matrix_messages.is_empty() {
                             ui.label(egui::RichText::new("No messages — enter room ID and click Fetch.").color(AXIS_TEXT).small());
                         }
@@ -20176,7 +20176,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Complete").color(UP).small().strong());
                         }
                     });
-                    egui::ScrollArea::vertical().max_height(180.0).stick_to_bottom(true).show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).max_height(180.0).stick_to_bottom(true).show(ui, |ui| {
                         for msg in &self.bardata_log {
                             ui.label(egui::RichText::new(msg).monospace().small().color(AXIS_TEXT));
                         }
@@ -20197,7 +20197,7 @@ impl TyphooNApp {
                         }
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).max_height(340.0).show(ui, |ui| {
                         for (title, _url, score, comments) in &self.reddit_posts {
                             ui.horizontal(|ui| {
                                 let score_col = if *score > 1000 { UP } else if *score > 100 { egui::Color32::from_rgb(255, 200, 50) } else { AXIS_TEXT };
@@ -20532,7 +20532,7 @@ impl TyphooNApp {
                         if !self.bt_trades.is_empty() {
                             ui.add_space(10.0);
                             ui.collapsing(format!("Trade List ({})", self.bt_trades.len()), |ui| {
-                                egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                                egui::ScrollArea::vertical().auto_shrink(false).max_height(200.0).show(ui, |ui| {
                                     egui::Grid::new("bt_trades").striped(true).num_columns(5).show(ui, |ui| {
                                         ui.strong("#"); ui.strong("Side"); ui.strong("Entry"); ui.strong("Exit"); ui.strong("P&L");
                                         ui.end_row();
@@ -20580,7 +20580,7 @@ impl TyphooNApp {
                     if self.screener_sort_by_bars {
                         entries.sort_by(|a, b| b.1.cmp(&a.1));
                     }
-                    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).max_height(360.0).show(ui, |ui| {
                         egui::Grid::new("screener_grid").striped(true).num_columns(5)
                             .min_col_width(60.0).show(ui, |ui| {
                             ui.strong("Source"); ui.strong("Symbol"); ui.strong("TF"); ui.strong("Bars"); ui.strong("");
@@ -21314,7 +21314,7 @@ impl TyphooNApp {
                             }
                         }
 
-                        egui::ScrollArea::vertical().max_height(350.0).show(ui, |ui| {
+                        egui::ScrollArea::vertical().auto_shrink(false).max_height(350.0).show(ui, |ui| {
                             egui::Grid::new("gpu_opt_grid").striped(true).num_columns(11).min_col_width(45.0).show(ui, |ui| {
                                 ui.label(egui::RichText::new("Fast").color(opt_dim).small());
                                 ui.label(egui::RichText::new("Slow").color(opt_dim).small());
@@ -21357,7 +21357,7 @@ impl TyphooNApp {
                         ui.add_space(10.0);
                         ui.heading(format!("CPU Results — Top {}", self.opt_results.len()));
                         ui.separator();
-                        egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                        egui::ScrollArea::vertical().auto_shrink(false).max_height(300.0).show(ui, |ui| {
                             egui::Grid::new("opt_grid").striped(true).num_columns(6).show(ui, |ui| {
                                 ui.strong("Fast"); ui.strong("Slow"); ui.strong("Trades"); ui.strong("PF"); ui.strong("Sharpe"); ui.strong("P&L");
                                 ui.end_row();
@@ -21469,7 +21469,7 @@ impl TyphooNApp {
                     if self.news_articles.is_empty() {
                         ui.label(egui::RichText::new("No news loaded. Enter Finnhub API key and click Fetch News.").color(AXIS_TEXT));
                     } else {
-                        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        egui::ScrollArea::vertical().auto_shrink(false).max_height(320.0).show(ui, |ui| {
                             for (headline, source, dt) in &self.news_articles {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new(dt).color(egui::Color32::from_rgb(102, 102, 102)).small());
@@ -21862,7 +21862,7 @@ impl TyphooNApp {
                                 });
                                 ui.separator();
                             }
-                            egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                            egui::ScrollArea::vertical().auto_shrink(false).max_height(300.0).show(ui, |ui| {
                                 let mut insider_sorted: Vec<&_> = trades.iter().collect();
                                 match self.insider_sort.column {
                                     0 => insider_sorted.sort_by(|a, b| a.transaction_date.cmp(&b.transaction_date)),
@@ -21913,7 +21913,7 @@ impl TyphooNApp {
                         ui.checkbox(&mut self.volume_active_only, egui::RichText::new("Active Only").small());
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                         egui::Grid::new("unusual_vol_grid").striped(true).num_columns(4).show(ui, |ui| {
                             ui.label(egui::RichText::new("Symbol").color(AXIS_TEXT).small().strong());
                             ui.label(egui::RichText::new("Today Vol").color(AXIS_TEXT).small().strong());
@@ -22737,7 +22737,7 @@ impl TyphooNApp {
                     });
                     ui.separator();
                     if let Some(f) = found {
-                        egui::ScrollArea::vertical().show(ui, |ui| {
+                        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                             // Company info
                             ui.label(egui::RichText::new(if f.company_name.is_empty() { "—" } else { &f.company_name }).strong());
                             ui.horizontal(|ui| {
@@ -22900,7 +22900,7 @@ impl TyphooNApp {
                         _ => {}
                     }
                     if !self.ev_sort.ascending { fund_sorted.reverse(); }
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                         egui::Grid::new("ev_scanner_grid").striped(true).num_columns(9).show(ui, |ui| {
                             if SortState::header(ui, "Symbol", 0, &self.ev_sort) { self.ev_sort.toggle(0); }
                             if SortState::header(ui, "Company", 1, &self.ev_sort) { self.ev_sort.toggle(1); }
@@ -22951,7 +22951,7 @@ impl TyphooNApp {
                         ui.checkbox(&mut self.earnings_active_only, egui::RichText::new("Active Only").small());
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                         egui::Grid::new("earnings_cal_grid").striped(true).num_columns(3).show(ui, |ui| {
                             ui.strong("Date"); ui.strong("Symbol"); ui.strong("Company");
                             ui.end_row();
@@ -22988,7 +22988,7 @@ impl TyphooNApp {
                         ui.checkbox(&mut self.dividends_active_only, egui::RichText::new("Active Only").small());
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                         egui::Grid::new("div_cal_grid").striped(true).num_columns(4).show(ui, |ui| {
                             ui.strong("Ex-Div Date"); ui.strong("Symbol"); ui.strong("Company"); ui.strong("Yield%");
                             ui.end_row();
@@ -23031,7 +23031,7 @@ impl TyphooNApp {
                         ui.label(egui::RichText::new("No data — click Fetch Ratings.").color(AXIS_TEXT).small());
                     } else if let Ok(arr) = serde_json::from_str::<serde_json::Value>(&self.analyst_result) {
                         if let Some(recs) = arr.as_array() {
-                            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                            egui::ScrollArea::vertical().auto_shrink(false).max_height(260.0).show(ui, |ui| {
                                 egui::Grid::new("analyst_grid").striped(true).num_columns(7).show(ui, |ui| {
                                     ui.strong("Period");
                                     ui.strong("StrongBuy"); ui.strong("Buy");
@@ -23128,7 +23128,7 @@ impl TyphooNApp {
                         let count = v["total_13f_found"].as_u64().unwrap_or(0);
                         ui.label(egui::RichText::new(format!("{} 13F filings found (SEC EDGAR)", count)).small());
                         if let Some(filings) = v["filings_13f"].as_array() {
-                            egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                            egui::ScrollArea::vertical().auto_shrink(false).max_height(240.0).show(ui, |ui| {
                                 egui::Grid::new("holders_grid").striped(true).num_columns(3).show(ui, |ui| {
                                     ui.strong("Form"); ui.strong("Filed"); ui.strong("Accession");
                                     ui.end_row();
@@ -23178,7 +23178,7 @@ impl TyphooNApp {
                         if let Ok(expirations) = serde_json::from_str::<serde_json::Value>(&json) {
                             if let Some(arr) = expirations.as_array() {
                                 ui.label(egui::RichText::new(format!("{} expirations", arr.len())).small());
-                                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                                egui::ScrollArea::vertical().auto_shrink(false).max_height(360.0).show(ui, |ui| {
                                     for exp in arr.iter() {
                                         let date = exp["expiration_date"].as_str().unwrap_or("?");
                                         let strikes = exp["strikes"].as_array();
@@ -23266,7 +23266,7 @@ impl TyphooNApp {
                         ui.label("No overlapping symbols across DARWINs.");
                     } else {
                         ui.label(egui::RichText::new(format!("{} overlapping symbols", overlaps.len())).strong());
-                        egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                        egui::ScrollArea::vertical().auto_shrink(false).max_height(300.0).show(ui, |ui| {
                             egui::Grid::new("overlap_grid").striped(true).num_columns(6).show(ui, |ui| {
                                 ui.strong("Symbol"); ui.strong("Side"); ui.strong("Volume"); ui.strong("Notional"); ui.strong("Risk"); ui.strong("DARWINs");
                                 ui.end_row();
@@ -23668,7 +23668,7 @@ impl TyphooNApp {
                     let sectors = typhoon_engine::core::screener::compute_sector_heatmap(&scoped);
                     ui.label(egui::RichText::new(format!("{} sectors • scope: {} ({} symbols)", sectors.len(), scope_label, scoped.len())).strong());
                     ui.separator();
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                         egui::Grid::new("sector_heat_grid").striped(true).num_columns(4).show(ui, |ui| {
                             ui.strong("Sector"); ui.strong("Symbols"); ui.strong("Total MCap"); ui.strong("Avg P/E");
                             ui.end_row();
@@ -23695,7 +23695,7 @@ impl TyphooNApp {
                     let divs = typhoon_engine::core::screener::screen_dividend_stocks(&scoped);
                     ui.label(egui::RichText::new(format!("{} dividend stocks • scope: {}", divs.len(), scope_label)).strong());
                     ui.separator();
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                         egui::Grid::new("div_screen_grid").striped(true).num_columns(5).show(ui, |ui| {
                             ui.strong("Symbol"); ui.strong("Company"); ui.strong("Yield%"); ui.strong("Ex-Div"); ui.strong("P/E");
                             ui.end_row();
@@ -23769,7 +23769,7 @@ impl TyphooNApp {
                     )).strong());
                     ui.separator();
 
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                         egui::Grid::new("event_cal_grid").striped(true).num_columns(7).show(ui, |ui| {
                             ui.strong("Date"); ui.strong("Days"); ui.strong("Type");
                             ui.strong("Symbol"); ui.strong("Company"); ui.strong("Detail"); ui.strong("Brokers");
@@ -23862,7 +23862,7 @@ impl TyphooNApp {
                     if pairs.is_empty() {
                         ui.label(egui::RichText::new("No correlated pairs found (need >2 charts with >50 bars, correlation >0.7).").color(AXIS_TEXT));
                     } else {
-                        egui::ScrollArea::vertical().show(ui, |ui| {
+                        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                             egui::Grid::new("stat_arb_grid").striped(true).num_columns(5).show(ui, |ui| {
                                 ui.strong("Pair"); ui.strong("Corr"); ui.strong("Z-Score"); ui.strong("Half-Life"); ui.strong("Signal");
                                 ui.end_row();
@@ -24169,7 +24169,7 @@ impl TyphooNApp {
                             .filter_map(|e| e["size"].as_f64())
                             .fold(0.0_f64, f64::max).max(1.0);
                         let avail_w = ui.available_width().min(320.0);
-                        egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                        egui::ScrollArea::vertical().auto_shrink(false).max_height(340.0).show(ui, |ui| {
                             ui.label(egui::RichText::new("Asks (sell side)").color(ob_ask).small().strong());
                             for ask in asks.iter().rev().take(15) {
                                 let price = ask["price"].as_f64().unwrap_or(0.0);
@@ -24400,7 +24400,7 @@ impl TyphooNApp {
 
                     // Source code editor
                     ui.label(egui::RichText::new("Source Code").small().strong());
-                    egui::ScrollArea::vertical().max_height(280.0).id_salt("compiler_src").show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).max_height(280.0).id_salt("compiler_src").show(ui, |ui| {
                         ui.add(egui::TextEdit::multiline(&mut self.compiler_source)
                             .code_editor()
                             .desired_width(f32::INFINITY)
@@ -24412,7 +24412,7 @@ impl TyphooNApp {
                     // Diagnostics
                     if !self.compiler_diagnostics.is_empty() {
                         ui.label(egui::RichText::new("Diagnostics").small().strong());
-                        egui::ScrollArea::vertical().max_height(120.0).id_salt("compiler_diag").show(ui, |ui| {
+                        egui::ScrollArea::vertical().auto_shrink(false).max_height(120.0).id_salt("compiler_diag").show(ui, |ui| {
                             for d in &self.compiler_diagnostics {
                                 let c = if d.starts_with("OK:") { cc_green }
                                     else if d.contains("ERROR") { cc_red }
@@ -24450,7 +24450,7 @@ impl TyphooNApp {
                     if let Some(ref transpiled) = self.compiler_transpiled {
                         ui.separator();
                         ui.label(egui::RichText::new("Transpiled Output").small().strong().color(cc_green));
-                        egui::ScrollArea::vertical().max_height(200.0).id_salt("compiler_transpile_out").show(ui, |ui| {
+                        egui::ScrollArea::vertical().auto_shrink(false).max_height(200.0).id_salt("compiler_transpile_out").show(ui, |ui| {
                             ui.add(egui::Label::new(
                                 egui::RichText::new(transpiled).monospace().small()
                             ).wrap_mode(egui::TextWrapMode::Extend));
@@ -24653,7 +24653,7 @@ impl TyphooNApp {
                     // Active alerts list
                     ui.label(egui::RichText::new(format!("Active Alerts ({})", self.indicator_alerts.len())).strong());
                     let mut remove_idx: Option<usize> = None;
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                         for (idx, alert) in self.indicator_alerts.iter_mut().enumerate() {
                             ui.horizontal(|ui| {
                                 let status_c = if alert.triggered { al_red } else if alert.active { al_green } else { al_dim };
@@ -24789,7 +24789,7 @@ impl TyphooNApp {
                     });
                     ui.separator();
 
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
                         // Multi-dimensional anomaly table (VaR + EV + ATR + SEC)
                         if !self.darwinex_multi_outliers.is_empty() {
                             let extreme_count = self.darwinex_multi_outliers.iter().filter(|o| o.dimensions_flagged >= 3).count();
@@ -24975,7 +24975,7 @@ impl TyphooNApp {
                         ui.separator();
                     }
 
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                         let mut delete_idx: Option<usize> = None;
                         for (idx, entry) in self.journal_entries.iter_mut().enumerate() {
                             ui.horizontal(|ui| {
@@ -25274,7 +25274,7 @@ impl TyphooNApp {
                     if !self.bg.detailed_stats.is_empty() {
                         ui.heading("Cached Symbols");
                         ui.separator();
-                        egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
+                        egui::ScrollArea::vertical().auto_shrink(false).max_height(250.0).show(ui, |ui| {
                             egui::Grid::new("cache_detail").striped(true).num_columns(3).show(ui, |ui| {
                                 ui.strong("Key"); ui.strong("Bars"); ui.strong("Size (KB)");
                                 ui.end_row();
@@ -25650,7 +25650,7 @@ impl TyphooNApp {
                         } else {
                             ui.label(egui::RichText::new(format!("{} drawings", chart.drawings.len())).small().color(AXIS_TEXT));
                             ui.separator();
-                            egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
+                            egui::ScrollArea::vertical().auto_shrink(false).max_height(250.0).show(ui, |ui| {
                                 egui::Grid::new("object_list_grid").striped(true).show(ui, |ui| {
                                     ui.label(egui::RichText::new("#").small().strong());
                                     ui.label(egui::RichText::new("Type").small().strong());
@@ -25802,7 +25802,7 @@ impl TyphooNApp {
                             || desc.to_lowercase().contains(&filter_lower)
                     };
 
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                         // ── Chart navigation ──
                         ui.label(egui::RichText::new("Chart navigation").color(ACCENT).strong());
                         egui::Grid::new("help_nav").striped(true).num_columns(2).show(ui, |ui| {
@@ -26563,7 +26563,7 @@ impl TyphooNApp {
                                     _ => {}
                                 }
                                 if !self.darwin_browser_sort.ascending { darwin_sorted.reverse(); }
-                                egui::ScrollArea::vertical().max_height(500.0).show(ui, |ui| {
+                                egui::ScrollArea::vertical().auto_shrink(false).max_height(500.0).show(ui, |ui| {
                                     egui::Grid::new("ftp_universe").striped(true).num_columns(7).show(ui, |ui| {
                                         if SortState::header(ui, "DARWIN", 0, &self.darwin_browser_sort) { self.darwin_browser_sort.toggle(0); }
                                         if SortState::header(ui, "Days", 1, &self.darwin_browser_sort) { self.darwin_browser_sort.toggle(1); }
@@ -29353,7 +29353,7 @@ impl eframe::App for TyphooNApp {
                                     ui.strong(title);
                                     ui.label(egui::RichText::new(format!("({} rows)", rows.len())).small().color(egui::Color32::GRAY));
                                 });
-                                egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+                                egui::ScrollArea::vertical().auto_shrink(false).max_height(100.0).show(ui, |ui| {
                                     egui::Grid::new("result_table").striped(true).show(ui, |ui| {
                                         for (i, h) in headers.iter().enumerate() {
                                             let arrow = if i == *sort_col { if *sort_asc { " \u{25B2}" } else { " \u{25BC}" } } else { "" };
@@ -29561,7 +29561,7 @@ impl eframe::App for TyphooNApp {
         egui::Panel::right("right_panel")
             .min_size(220.0).max_size(500.0).default_size(320.0).resizable(true)
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
 
                     // ── Trading Section ──────────────────────────────────
                     egui::CollapsingHeader::new(egui::RichText::new("Trading").strong().small())
@@ -30417,7 +30417,7 @@ impl eframe::App for TyphooNApp {
                                         }
                                     });
                                 } else {
-                                    egui::ScrollArea::vertical().max_height(180.0).id_salt("news_scroll_r").show(ui, |ui| {
+                                    egui::ScrollArea::vertical().auto_shrink(false).max_height(180.0).id_salt("news_scroll_r").show(ui, |ui| {
                                         for (headline, source, dt) in &self.news_articles {
                                             ui.horizontal(|ui| {
                                                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -32815,7 +32815,7 @@ impl eframe::App for TyphooNApp {
                     ui.separator();
 
                     let mut execute: Option<String> = None;
-                    egui::ScrollArea::vertical().max_height(console_height - 52.0).show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).max_height(console_height - 52.0).show(ui, |ui| {
                         for (i, cmd) in palette_commands.iter().enumerate() {
                             let is_selected = i == self.console_selected;
                             let row_bg = if is_selected { egui::Color32::from_rgb(15, 52, 96) } else { egui::Color32::TRANSPARENT };
