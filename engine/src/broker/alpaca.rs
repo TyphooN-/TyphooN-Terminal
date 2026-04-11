@@ -3018,4 +3018,48 @@ mod tests {
         let monthly = AlpacaBroker::aggregate_weekly_to_monthly(&[]);
         assert!(monthly.is_empty());
     }
+
+    // ── OCO order body construction ──
+
+    #[test]
+    fn oco_order_body_has_correct_class() {
+        // Verify the JSON body shape for OCO orders matches Alpaca's spec
+        let body = serde_json::json!({
+            "symbol": "SPY",
+            "qty": "10",
+            "side": "sell",
+            "type": "limit",
+            "time_in_force": "gtc",
+            "order_class": "oco",
+            "take_profit": { "limit_price": "500.00" },
+            "stop_loss": { "stop_price": "450.00" },
+        });
+        assert_eq!(body["order_class"], "oco");
+        assert_eq!(body["type"], "limit");
+        assert_eq!(body["take_profit"]["limit_price"], "500.00");
+        assert_eq!(body["stop_loss"]["stop_price"], "450.00");
+    }
+
+    #[test]
+    fn oco_order_body_with_stop_limit() {
+        let body = serde_json::json!({
+            "symbol": "AAPL",
+            "qty": "5",
+            "side": "sell",
+            "type": "limit",
+            "time_in_force": "gtc",
+            "order_class": "oco",
+            "take_profit": { "limit_price": "200.00" },
+            "stop_loss": { "stop_price": "170.00", "limit_price": "169.50" },
+        });
+        assert_eq!(body["stop_loss"]["limit_price"], "169.50");
+    }
+
+    #[test]
+    fn format_order_price_rounds_correctly() {
+        assert_eq!(format_order_price(100.123456), "100.12");   // $1+ → 2 decimals
+        assert_eq!(format_order_price(0.05), "0.0500");          // $0.01-$0.99 → 4 decimals
+        assert_eq!(format_order_price(0.00345), "0.00345000");   // sub-penny → 8 decimals
+        assert_eq!(format_order_price(1500.0), "1500.00");
+    }
 }

@@ -130,4 +130,29 @@ mod tests {
             assert!(seen.insert(id), "duplicate series ID: {id}");
         }
     }
+
+    #[test]
+    fn fred_series_roundtrip() {
+        let series = FredSeries {
+            id: "DFF".to_string(),
+            title: "Fed Funds Rate".to_string(),
+            observations: vec![
+                FredObservation { date: "2024-01-01".to_string(), value: 5.33 },
+                FredObservation { date: "2024-01-02".to_string(), value: 5.33 },
+            ],
+        };
+        let json = serde_json::to_string(&series).unwrap();
+        let back: FredSeries = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, "DFF");
+        assert_eq!(back.observations.len(), 2);
+        assert!((back.observations[0].value - 5.33).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn fred_observation_empty_date() {
+        let obs = FredObservation { date: String::new(), value: 0.0 };
+        let json = serde_json::to_string(&obs).unwrap();
+        let back: FredObservation = serde_json::from_str(&json).unwrap();
+        assert!(back.date.is_empty());
+    }
 }

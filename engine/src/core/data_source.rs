@@ -314,4 +314,61 @@ mod tests {
         assert_eq!(summary.len(), 5);
         assert!(summary[0].2); // mt5 healthy
     }
+
+    #[test]
+    fn resolve_candidates_case_insensitive() {
+        let mgr = DataSourceManager::default();
+        let upper = mgr.resolve_candidates("EURUSD", "1Hour");
+        let lower = mgr.resolve_candidates("eurusd", "1Hour");
+        // Both should produce uppercase keys
+        assert_eq!(upper[0], "mt5:EURUSD:1Hour");
+        assert_eq!(lower[0], "mt5:EURUSD:1Hour");
+    }
+
+    #[test]
+    fn wildcard_override_prefix_match() {
+        let mut mgr = DataSourceManager::default();
+        mgr.add_override("SOL*", vec!["cryptocompare".into()]);
+        let c1 = mgr.resolve_candidates("SOLUSD", "1Day");
+        assert_eq!(c1[0], "cryptocompare:SOLUSD:1Day");
+        // Non-matching symbol uses default order
+        let c2 = mgr.resolve_candidates("AAPL", "1Day");
+        assert_eq!(c2[0], "mt5:AAPL:1Day");
+    }
+
+    #[test]
+    fn exact_override_match() {
+        let mut mgr = DataSourceManager::default();
+        mgr.add_override("XAUUSD", vec!["mt5-darwinex".into(), "alpaca".into()]);
+        let c = mgr.resolve_candidates("XAUUSD", "1Hour");
+        assert_eq!(c[0], "mt5:XAUUSD:1Hour");
+        assert_eq!(c[1], "alpaca:XAUUSD:1Hour");
+    }
+
+    #[test]
+    fn health_timeout_marks_stale_sources() {
+        let mut mgr = DataSourceManager::default();
+        mgr.health_timeout_secs = 1; // 1 second timeout for test
+        mgr.sources[0].last_success_ts = chrono::Utc::now().timestamp() - 10; // 10s ago
+        mgr.update_health();
+        assert!(!mgr.sources[0].healthy); // should be marked unhealthy
+    }
+
+    #[test]
+    fn mark_success_restores_health() {
+        let mut mgr = DataSourceManager::default();
+        mgr.mark_failure("mt5-darwinex");
+        assert!(!mgr.sources[0].healthy);
+        mgr.mark_success("mt5-darwinex");
+        assert!(mgr.sources[0].healthy);
+    }
+
+    #[test]
+    fn unknown_source_id_ignored() {
+        let mut mgr = DataSourceManager::default();
+        mgr.mark_success("nonexistent");
+        mgr.mark_failure("nonexistent");
+        // No panic, no change
+        assert_eq!(mgr.sources.len(), 5);
+    }
 }

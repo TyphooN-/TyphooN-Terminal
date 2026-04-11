@@ -361,13 +361,25 @@ mod tests {
         assert!(n2 > n1);
     }
 
+    #[test]
+    fn new_broker_has_empty_api_key() {
+        let broker = KrakenBroker::new(String::new(), String::new());
+        assert!(broker.api_key.is_empty());
+    }
+
+    #[test]
+    fn new_broker_with_credentials() {
+        let broker = KrakenBroker::new("my_key".to_string(), "my_secret".to_string());
+        assert_eq!(broker.api_key.as_str(), "my_key");
+        assert_eq!(broker.api_secret.as_str(), "my_secret");
+    }
+
     #[tokio::test]
     #[ignore] // Requires network access — run with `cargo test -- --ignored`
     async fn get_tradeable_pairs_public() {
         let broker = KrakenBroker::new(String::new(), String::new());
         let pairs = broker.get_tradeable_pairs().await.unwrap();
         assert!(!pairs.is_empty());
-        // BTC/USD should always exist on Kraken
         assert!(pairs.iter().any(|(name, _)| name.contains("BTC") || name.contains("XBT")));
     }
 }

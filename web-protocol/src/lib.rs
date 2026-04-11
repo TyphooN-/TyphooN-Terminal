@@ -996,4 +996,67 @@ mod tests {
         json.push_str(r#","extra":1}"#);
         assert!(serde_json::from_str::<DarwinWebSnapshot>(&json).is_err());
     }
+
+    // ── Additional coverage for order types ──
+
+    #[test]
+    fn place_order_oco_style_roundtrip() {
+        // OCO exits use take_profit + stop_loss on PlaceOrder
+        let cmd = WebCmd::PlaceOrder {
+            symbol: "SPY".into(),
+            qty: 10.0,
+            side: "sell".into(),
+            order_type: "limit".into(),
+            limit_price: None,
+            stop_price: None,
+            broker: "alpaca".into(),
+            take_profit: Some(500.0),
+            stop_loss: Some(450.0),
+            trail_percent: None,
+            trail_offset: None,
+            risk_mode: None,
+            risk_pct: None,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: WebCmd = serde_json::from_str(&json).unwrap();
+        match back {
+            WebCmd::PlaceOrder { take_profit, stop_loss, .. } => {
+                assert_eq!(take_profit, Some(500.0));
+                assert_eq!(stop_loss, Some(450.0));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn get_darwin_web_all_roundtrip() {
+        let cmd = WebCmd::GetDarwinWeb { ticker: None };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"ticker\":null"));
+        let back: WebCmd = serde_json::from_str(&json).unwrap();
+        match back {
+            WebCmd::GetDarwinWeb { ticker } => assert!(ticker.is_none()),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn darwin_web_snapshot_excluded_flag() {
+        let snap = DarwinWebSnapshot {
+            ticker: "MFSO".into(), timestamp_ms: 0, quote: 0.0,
+            daily_return_pct: 0.0, monthly_return_pct: 0.0, ytd_return_pct: 0.0,
+            all_time_return_pct: 0.0, dscore: 0.0, ds_experience: 0.0,
+            ds_risk_mgmt: 0.0, ds_risk_adjustment: 0.0, ds_performance: 0.0,
+            ds_scalability: 0.0, ds_market_correlation: 0.0, var_monthly: 0.0,
+            max_drawdown_pct: 0.0, volatility_annual: 0.0, sharpe_ratio: 0.0,
+            sortino_ratio: 0.0, investors: 0, aum: 0.0, capacity_remaining_pct: 0.0,
+            total_trades: 0, win_rate: 0.0, profit_factor: 0.0,
+            avg_holding_time_hours: 0.0, avg_trade_return_pct: 0.0, symbols_traded: 0,
+            excluded: true, exclusion_reason: "correlation".into(), correlation_portfolio: 0.0,
+        };
+        let json = serde_json::to_string(&snap).unwrap();
+        let back: DarwinWebSnapshot = serde_json::from_str(&json).unwrap();
+        assert!(back.excluded);
+        assert_eq!(back.exclusion_reason, "correlation");
+    }
 }
