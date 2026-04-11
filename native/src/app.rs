@@ -26893,12 +26893,11 @@ impl eframe::App for TyphooNApp {
             self.screenshot_requested = false;
         }
 
-        // ── Screenshot: handle captured image ────────────────────────────
+        // ── Screenshot: handle captured image (offload PNG encode to background thread) ──
         {
-            let screenshot_result: Option<Result<String, String>> = ctx.input(|i| {
+            let screenshot_data: Option<(Vec<u8>, u32, u32, std::path::PathBuf)> = ctx.input(|i| {
                 for event in &i.events {
                     if let egui::Event::Screenshot { image, .. } = event {
-                        let sym = "chart";
                         let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
                         let pictures_dir = if let Ok(home) = std::env::var("HOME") {
                             let p = std::path::PathBuf::from(home).join("Pictures");
@@ -26907,26 +26906,26 @@ impl eframe::App for TyphooNApp {
                         } else {
                             std::path::PathBuf::from("/tmp")
                         };
-                        let path = pictures_dir.join(format!("typhoon_{}_{}.png", sym, ts));
-
-                        let w = image.width();
-                        let h = image.height();
+                        let path = pictures_dir.join(format!("typhoon_chart_{}.png", ts));
+                        let w = image.width() as u32;
+                        let h = image.height() as u32;
                         let rgba: Vec<u8> = image.pixels.iter()
                             .flat_map(|c| [c.r(), c.g(), c.b(), c.a()])
                             .collect();
-
-                        return match image::save_buffer(&path, &rgba, w as u32, h as u32, image::ColorType::Rgba8) {
-                            Ok(()) => Some(Ok(format!("Screenshot saved: {}", path.display()))),
-                            Err(e) => Some(Err(format!("Screenshot save failed: {}", e))),
-                        };
+                        return Some((rgba, w, h, path));
                     }
                 }
                 None
             });
-            match screenshot_result {
-                Some(Ok(msg)) => self.log.push_back(LogEntry::info(msg)),
-                Some(Err(msg)) => self.log.push_back(LogEntry::err(msg)),
-                None => {}
+            if let Some((rgba, w, h, path)) = screenshot_data {
+                // PNG encoding + file write on background thread (avoids UI hang on 4K)
+                self.log.push_back(LogEntry::info(format!("Saving screenshot ({w}x{h}) to {}...", path.display())));
+                std::thread::spawn(move || {
+                    match image::save_buffer(&path, &rgba, w, h, image::ColorType::Rgba8) {
+                        Ok(()) => tracing::info!("Screenshot saved: {}", path.display()),
+                        Err(e) => tracing::error!("Screenshot save failed: {}", e),
+                    }
+                });
             }
         }
 
