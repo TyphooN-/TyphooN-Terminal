@@ -147,14 +147,12 @@ Reuse existing render shaders for analytics overlays:
 
 ## Tests
 
-**Total workspace test count: 865** (up from 854 in ADR-093).
+**Total workspace test count: 881** (up from 854 in ADR-093).
 
 - 216 mql5-compiler (unchanged)
-- 522 engine (+11: DataSourceManager roundtrip, resolve_candidates default/
-  unhealthy/override, source_for_key, mark_success/failure, config
-  deny_unknown, override_replaces, status_summary)
+- 535 engine (+24: DataSourceManager 17, OCO/format_order_price 3, Kraken 2, FRED 2)
 - 78 native (unchanged)
-- 49 web-protocol (unchanged)
+- 52 web-protocol (+3: OCO roundtrip, GetDarwinWeb all, excluded flag)
 
 ## Post-Implementation Audit (2026-04-10)
 
@@ -204,6 +202,17 @@ Pivot Points (single arithmetic from prev day — GPU overhead > benefit).
 | Inline sparklines | Done | DARWIN portfolio equity column (40×12px polyline) |
 | `draw_sparkline()` helper | Done | Reusable for any table cell |
 | Zero dead code | Done | No `#[allow(dead_code)]` — all variants wired |
+| Scrollbar position | Done | `auto_shrink(false)` on all 26 ScrollArea instances |
+| Broker connection guards | Done | FILLS/MOVERS/HISTORY/WATCHLISTS/MOST_ACTIVE/PORTFOLIO_HIST check connected |
+| SCOPE popup window | Done | Checkboxes synced with fund_source toggles, POSITIONS scope |
+| Matrix community chat | Done | Guest→user auth, send/receive, auto-refresh, `#typhoon-terminal:matrix.org` |
+| Claude Code CLI | Done | `CLAUDE` command pipes to local `claude --print` |
+| Gemini CLI | Done | `GEMINI` command pipes to local `gemini` binary |
+| AI multi-provider | Done | Claude/GPT/Gemini/Grok/Mistral/Perplexity/Ollama in one window |
+| WebP screenshots | Done | Lossless WebP, SHARE uploads to Matrix chat |
+| SEC EDGAR 429 fix | Done | Retry with exponential backoff on rate limit |
+| CLI OCO + cancel | Done | Full order type parity with native |
+| O(1) deferred loads | Done | `deferred_chart_loads` Vec→VecDeque (pop_front) |
 
 ## Consequences
 

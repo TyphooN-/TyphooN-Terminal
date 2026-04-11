@@ -9779,7 +9779,7 @@ pub struct TyphooNApp {
     /// Receiver for async MTF grid status results (computed in background thread).
     mtf_grid_rx: Option<std::sync::mpsc::Receiver<Vec<(&'static str, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>>>,
     /// Deferred chart loads: indices of charts to load, one per frame (avoids startup freeze).
-    deferred_chart_loads: Vec<usize>,
+    deferred_chart_loads: VecDeque<usize>,
 
     /// Command palette open state.
     command_open: bool,
@@ -12919,7 +12919,7 @@ impl TyphooNApp {
             mtf_enabled: false,
             mtf_grid_status: Vec::new(),
             mtf_grid_rx: None,
-            deferred_chart_loads: Vec::new(),
+            deferred_chart_loads: VecDeque::new(),
             mtf_focused: None,
             mtf_visible: Vec::new(),
             command_open: false,
@@ -14313,7 +14313,7 @@ impl TyphooNApp {
             let tf_idx = self.charts.len() % all_tfs.len();
             let mut chart = ChartState::new(&sym, all_tfs[tf_idx]);
             if let Some(ref cache) = self.cache {
-                { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
+                { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push_back(0); } self.gpu_indicators = gpu; }
             }
             self.charts.push(chart);
         }
@@ -14321,7 +14321,7 @@ impl TyphooNApp {
         if let Some(ref cache) = self.cache {
             for chart in &mut self.charts {
                 if chart.bars.is_empty() {
-                    { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
+                    { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push_back(0); } self.gpu_indicators = gpu; }
                 }
             }
         }
@@ -14585,7 +14585,7 @@ impl TyphooNApp {
                     if let Some(ref cache) = self.cache.clone() {
                         for chart in &mut self.charts {
                             if chart.bars.is_empty() {
-                                { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
+                                { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push_back(0); } self.gpu_indicators = gpu; }
                             }
                         }
                     }
@@ -14599,7 +14599,7 @@ impl TyphooNApp {
             "RELOAD" => {
                 if let Some(ref cache) = self.cache.clone() {
                     for chart in &mut self.charts {
-                        { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
+                        { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push_back(0); } self.gpu_indicators = gpu; }
                     }
                 }
             }
@@ -16826,11 +16826,11 @@ impl TyphooNApp {
                             if self.mtf_enabled {
                                 for chart in &mut self.charts {
                                     if chart.bars.is_empty() {
-                                        { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
+                                        { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push_back(0); } self.gpu_indicators = gpu; }
                                     }
                                 }
                             } else if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                                { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
+                                { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push_back(0); } self.gpu_indicators = gpu; }
                             }
                         }
                     }
@@ -21590,7 +21590,7 @@ impl TyphooNApp {
                             if let Some(ref cache_arc) = self.cache {
                                 let mut gpu = self.gpu_indicators.take();
                                 if !chart.try_load(Arc::as_ref(cache_arc), &mut self.log, gpu.as_mut()) {
-                                    self.deferred_chart_loads.push(self.active_tab);
+                                    self.deferred_chart_loads.push_back(self.active_tab);
                                 }
                                 self.gpu_indicators = gpu;
                             }
@@ -27660,7 +27660,7 @@ impl eframe::App for TyphooNApp {
                 self.charts.iter().enumerate().filter(|(_, c)| c.bars.is_empty()).map(|(i, _)| i).collect()
             } else {
                 let idx = self.active_tab;
-                if self.charts.get(idx).map(|c| c.bars.is_empty()).unwrap_or(false) { vec![idx] } else { vec![] }
+                if self.charts.get(idx).map(|c| c.bars.is_empty()).unwrap_or(false) { VecDeque::from([idx]) } else { VecDeque::new() }
             };
             {
                 // Auto-import DARWIN XLSX if needed (not on LAN client)
@@ -27836,7 +27836,7 @@ impl eframe::App for TyphooNApp {
         // Uses try_load() which returns false if cache Mutex is contended (compaction, MT5 sync).
         // Failed loads go back to the queue and retry next frame — UI never blocks.
         if !self.deferred_chart_loads.is_empty() {
-            let idx = self.deferred_chart_loads[0];
+            let idx = self.deferred_chart_loads[0]; // VecDeque supports indexing
             let mut loaded = false;
             if let Some(cache) = self.cache.clone() {
                 if let Some(chart) = self.charts.get_mut(idx) {
@@ -27852,7 +27852,7 @@ impl eframe::App for TyphooNApp {
                 }
             }
             if loaded {
-                self.deferred_chart_loads.remove(0);
+                self.deferred_chart_loads.pop_front();
             }
             // If !loaded, leave in queue — will retry next frame when Mutex is free
         }
@@ -28019,10 +28019,10 @@ impl eframe::App for TyphooNApp {
                     if changed > 0 {
                         if self.mtf_enabled {
                             for i in 0..self.charts.len() {
-                                self.deferred_chart_loads.push(i);
+                                self.deferred_chart_loads.push_back(i);
                             }
                         } else {
-                            self.deferred_chart_loads.push(self.active_tab);
+                            self.deferred_chart_loads.push_back(self.active_tab);
                         }
                     }
                 }
@@ -29978,7 +29978,7 @@ impl eframe::App for TyphooNApp {
                     if let Some(chart) = self.charts.get_mut(idx) {
                         if chart.bars.is_empty() {
                             if let Some(ref cache) = self.cache {
-                                { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
+                                { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push_back(0); } self.gpu_indicators = gpu; }
                             }
                         }
                     }
@@ -31734,7 +31734,7 @@ impl eframe::App for TyphooNApp {
                         if let Some(ref cache) = self.cache.clone() {
                             for chart in &mut self.charts {
                                 if chart.bars.is_empty() {
-                                    { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
+                                    { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push_back(0); } self.gpu_indicators = gpu; }
                                 }
                             }
                         }
