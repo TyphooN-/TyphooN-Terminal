@@ -9068,8 +9068,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "OUTLIERS",        desc: "Multi-dim outlier scanner: P/E + EV + short ratio + SEC filings" },
     Command { name: "DARWINVAR",       desc: "Outlier scanner on DARWIN VaR95 values + Darwinex corridor check (3.25%-6.5%)" },
     Command { name: "EVOUTLIERS",      desc: "Outlier scanner on enterprise value (EV), grouped by sector" },
-    Command { name: "EXPORT_DARWIN", desc: "Export all DARWIN data to JSON file" },
-    Command { name: "IMPORT_DARWIN", desc: "Import DARWIN data from JSON file" },
+    Command { name: "VAROUTLIER",      desc: "VaR-style IQR outlier analysis: P/E, beta, short ratio by sector/industry" },
     Command { name: "DELETE_DARWIN", desc: "Delete a DARWIN/MT5 account (DELETE_DARWIN TICKER)" },
     Command { name: "SWAPHARVEST",  desc: "Scan MT5 symbols for positive swap carry trades" },
     Command { name: "DARWINEXRADAR", desc: "Export Darwinex symbol radar CSVs (stocks/CFD/crypto/futures)" },
@@ -10525,8 +10524,6 @@ impl TyphooNApp {
                         BrokerCmd::FetchCongressTrades => Some("CONGRESS_TRADES"),
                         BrokerCmd::FredFetch { .. } => Some("FRED_DATA"),
                         BrokerCmd::DarwinImportAll { .. } => Some("DARWIN_IMPORT"),
-                        BrokerCmd::ExportDarwinData => Some("EXPORT_DARWIN"),
-                        BrokerCmd::ImportDarwinData { .. } => Some("IMPORT_DARWIN"),
                         // FetchFilingContent NOT forwarded — SEC EDGAR is public, fetch directly
                         // BrokerCmd::FetchFilingContent { .. } => Some("SEC_FILING"),
                         _ => None,
@@ -15108,23 +15105,6 @@ impl TyphooNApp {
             }
             "DSCORE"        => { self.show_var_mult = true; }
             "DARWIN_BROWSER" => { self.show_darwin_browser = true; }
-            "EXPORT_DARWIN" => {
-                let _ = self.broker_tx.send(BrokerCmd::ExportDarwinData);
-                self.log.push_back(LogEntry::info("Exporting DARWIN data to JSON..."));
-            }
-            "IMPORT_DARWIN" => {
-                // Open file dialog (or use fixed path) — for now use a well-known path
-                let path = dirs_home().join("cache").join("darwin_export.json");
-                match std::fs::read_to_string(&path) {
-                    Ok(json) => {
-                        let _ = self.broker_tx.send(BrokerCmd::ImportDarwinData { json });
-                        self.log.push_back(LogEntry::info(format!("Importing DARWIN data from {}", path.display())));
-                    }
-                    Err(e) => {
-                        self.log.push_back(LogEntry::err(format!("Failed to read {}: {}", path.display(), e)));
-                    }
-                }
-            }
             "SWAPHARVEST" => {
                 if let Some(ref cache) = self.cache {
                     if let Some(conn) = cache.try_connection() {
@@ -15620,6 +15600,79 @@ impl TyphooNApp {
                     self.darwinex_sector_stats = stats;
                     self.darwinex_multi_outliers = Vec::new();
                     self.show_darwinex_outliers = true;
+                }
+            }
+            "VAROUTLIER" | "VAR_OUTLIER" | "VAR_OUTLIERS" => {
+                // VaR-style IQR outlier analysis on fundamentals metrics, grouped by sector/industry.
+                // Combines P/E ratio, beta, and short ratio into a composite risk score per symbol,
+                // then runs IQR detection per sector — like MarketWizardry.org's VaR analysis.
+                use typhoon_engine::core::var;
+                let fund_owned = self.scoped_fundamentals_owned();
+                let scope_label = self.broker_scope_label();
+
+                if fund_owned.len() < 10 {
+                    self.log.push_back(LogEntry::warn(format!(
+                        "Need 10+ symbols with fundamentals data (have {}). Run EVSCRAPE first.",
+                        fund_owned.len()
+                    )));
+                } else {
+                    // Build composite risk score: weighted combination of P/E, beta, short_ratio
+                    // Higher score = higher implied risk (VaR proxy from fundamental data)
+                    let mut pe_data: Vec<(String, String, f64)> = Vec::new();
+                    let mut beta_data: Vec<(String, String, f64)> = Vec::new();
+                    let mut short_data: Vec<(String, String, f64)> = Vec::new();
+                    let mut industry_pe: Vec<(String, String, f64)> = Vec::new(); // by industry
+
+                    for f in &fund_owned {
+                        let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
+                        let industry = if f.industry.is_empty() { sector.clone() } else { f.industry.clone() };
+
+                        if let Some(pe) = f.pe_ratio {
+                            if pe.abs() > 0.1 {
+                                pe_data.push((f.symbol.clone(), sector.clone(), pe.abs()));
+                                industry_pe.push((f.symbol.clone(), industry.clone(), pe.abs()));
+                            }
+                        }
+                        if let Some(beta) = f.beta {
+                            if beta.abs() > 0.01 { beta_data.push((f.symbol.clone(), sector.clone(), beta)); }
+                        }
+                        if let Some(sr) = f.short_ratio {
+                            if sr > 0.0 { short_data.push((f.symbol.clone(), sector.clone(), sr)); }
+                        }
+                    }
+
+                    // Run IQR detection on each metric separately
+                    let (pe_outliers, pe_stats) = if pe_data.len() >= 4 { var::detect_outliers(&pe_data, 1.5) } else { (Vec::new(), Vec::new()) };
+                    let (beta_outliers, _) = if beta_data.len() >= 4 { var::detect_outliers(&beta_data, 1.5) } else { (Vec::new(), Vec::new()) };
+                    let (short_outliers, _) = if short_data.len() >= 4 { var::detect_outliers(&short_data, 1.5) } else { (Vec::new(), Vec::new()) };
+                    let (_industry_outliers, industry_stats) = if industry_pe.len() >= 4 { var::detect_outliers(&industry_pe, 1.5) } else { (Vec::new(), Vec::new()) };
+
+                    // Merge: symbols flagged in 2+ metrics are high-confidence outliers
+                    let mut flag_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                    for o in pe_outliers.iter().chain(beta_outliers.iter()).chain(short_outliers.iter()) {
+                        *flag_count.entry(o.symbol.clone()).or_default() += 1;
+                    }
+                    let multi_flagged: usize = flag_count.values().filter(|&&c| c >= 2).count();
+
+                    self.log.push_back(LogEntry::info(format!(
+                        "VaR outlier scan [{}]: P/E:{} Beta:{} Short:{} outliers | {} flagged in 2+ metrics | {} sectors, {} industries",
+                        scope_label, pe_outliers.len(), beta_outliers.len(), short_outliers.len(),
+                        multi_flagged, pe_stats.len(), industry_stats.len()
+                    )));
+
+                    // Display P/E outliers by sector (primary view) + industry stats
+                    self.darwinex_outliers = pe_outliers;
+                    self.darwinex_sector_stats = pe_stats;
+                    self.darwinex_multi_outliers = Vec::new();
+                    self.show_darwinex_outliers = true;
+
+                    // Log multi-flagged symbols
+                    let mut multi: Vec<(&String, &usize)> = flag_count.iter().filter(|(_, c)| **c >= 2).collect();
+                    multi.sort_by(|a, b| b.1.cmp(a.1));
+                    if !multi.is_empty() {
+                        let names: Vec<String> = multi.iter().take(20).map(|(s, c)| format!("{}({})", s, c)).collect();
+                        self.log.push_back(LogEntry::warn(format!("Multi-metric risk flags: {}", names.join(", "))));
+                    }
                 }
             }
             "DARWINIA_SCAN" | "DARWIN_SCAN" | "GPU_SCAN" => {
