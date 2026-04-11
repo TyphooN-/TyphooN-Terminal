@@ -2148,7 +2148,7 @@ impl ChartState {
                         let dm = data.get(i * 3 + 2).copied().unwrap_or(0.0);
                         // DI+/- valid from index period; ADX valid from index period*2-1
                         let di_warmup = adx_p as usize;
-                        let adx_warmup = adx_p as usize * 2;
+                        let adx_warmup = (adx_p as usize * 2).saturating_sub(1);
                         dip.push(if i < di_warmup || (dp == 0.0 && dm == 0.0) { None } else { Some(dp as f64) });
                         dim.push(if i < di_warmup || (dp == 0.0 && dm == 0.0) { None } else { Some(dm as f64) });
                         adx.push(if i < adx_warmup || a == 0.0 { None } else { Some(a as f64) });
@@ -2198,9 +2198,9 @@ impl ChartState {
                     self.cci = data.iter().enumerate().map(|(i, &v)| if i < 19 { None } else { Some(v as f64) }).collect();
                 } else { self.cci = compute_cci(&self.bars, 20); }
 
-                // Williams %R — GPU (parallel, from OHLC)
+                // Williams %R — GPU (parallel, from OHLC, first valid at period-1)
                 if let Some(data) = gpu.compute_williams_r_gpu(14) {
-                    self.williams_r = data.iter().enumerate().map(|(i, &v)| if i < 14 { None } else { Some(v as f64) }).collect();
+                    self.williams_r = data.iter().enumerate().map(|(i, &v)| if i < 13 { None } else { Some(v as f64) }).collect();
                 } else { self.williams_r = compute_williams_r(&self.bars, 14); }
 
                 // OBV — GPU (sequential, real volume via interleaved [close, vol] buffer)
@@ -2517,7 +2517,7 @@ impl ChartState {
                     for i in 0..n {
                         let m = data.get(i * 2).copied().unwrap_or(0.0);
                         let f = data.get(i * 2 + 1).copied().unwrap_or(0.0);
-                        if m == 0.0 && f == 0.0 { mama.push(None); fama.push(None); }
+                        if i < 6 || (m == 0.0 && f == 0.0) { mama.push(None); fama.push(None); }
                         else { mama.push(Some(m as f64)); fama.push(Some(f as f64)); }
                     }
                     self.ehlers_mama = mama; self.ehlers_fama = fama;
@@ -2526,24 +2526,24 @@ impl ChartState {
                     self.ehlers_mama = m; self.ehlers_fama = f;
                 }
 
-                // Ehlers EBSW — GPU (sub-pane oscillator, 0.0 valid but warmup outputs 0.0)
+                // Ehlers EBSW — GPU (sub-pane oscillator, CPU starts at i=1)
                 if let Some(data) = gpu.compute_ehlers_ebsw_gpu(40) {
-                    self.ehlers_ebsw = data.iter().enumerate().map(|(i, &v)| if i < 40 { None } else { Some(v as f64) }).collect();
+                    self.ehlers_ebsw = data.iter().enumerate().map(|(i, &v)| if i < 2 { None } else { Some(v as f64) }).collect();
                 } else { self.ehlers_ebsw = ehlers_even_better_sinewave(&self.bars, 40); }
 
-                // Ehlers Cyber Cycle — GPU (sub-pane oscillator)
+                // Ehlers Cyber Cycle — GPU (sub-pane oscillator, CPU starts at i=4)
                 if let Some(data) = gpu.compute_ehlers_cyber_gpu() {
-                    self.ehlers_cyber = data.iter().enumerate().map(|(i, &v)| if i < 7 { None } else { Some(v as f64) }).collect();
+                    self.ehlers_cyber = data.iter().enumerate().map(|(i, &v)| if i < 4 { None } else { Some(v as f64) }).collect();
                 } else { self.ehlers_cyber = ehlers_cyber_cycle(&self.bars); }
 
-                // Ehlers CG Oscillator — GPU (parallel)
+                // Ehlers CG Oscillator — GPU (parallel, CPU starts at period-1=9, 0.0 is valid)
                 if let Some(data) = gpu.compute_ehlers_cg_gpu(10) {
-                    self.ehlers_cg = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                    self.ehlers_cg = data.iter().enumerate().map(|(i, &v)| if i < 9 { None } else { Some(v as f64) }).collect();
                 } else { self.ehlers_cg = ehlers_cg_oscillator(&self.bars, 10); }
 
-                // Ehlers Roofing Filter — GPU (sub-pane oscillator)
+                // Ehlers Roofing Filter — GPU (sub-pane oscillator, CPU starts at i=2)
                 if let Some(data) = gpu.compute_ehlers_roof_gpu(10, 48) {
-                    self.ehlers_roof = data.iter().enumerate().map(|(i, &v)| if i < 10 { None } else { Some(v as f64) }).collect();
+                    self.ehlers_roof = data.iter().enumerate().map(|(i, &v)| if i < 2 { None } else { Some(v as f64) }).collect();
                 } else { self.ehlers_roof = ehlers_roofing_filter(&self.bars, 10, 48); }
                 return;
             }
