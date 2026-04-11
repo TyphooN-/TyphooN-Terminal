@@ -9213,7 +9213,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "SAVE_TEMPLATE", desc: "Save current indicators as named template (SAVE_TEMPLATE <name>)" },
     Command { name: "LOAD_TEMPLATE", desc: "Load a saved indicator template (LOAD_TEMPLATE <name>)" },
     Command { name: "TEMPLATES",     desc: "List all available chart templates" },
-    Command { name: "FEAR_GREED",    desc: "Crypto Fear & Greed Index" },
+    Command { name: "CRYPTO_FEAR_GREED", desc: "Crypto Fear & Greed Index (alternative.me)" },
     Command { name: "AI",            desc: "AI assistant chat (Claude/GPT)" },
     Command { name: "MATRIX",        desc: "TyphooN Terminal community chat (Matrix)" },
     Command { name: "WSB",           desc: "Reddit WallStreetBets hot posts" },
@@ -15698,7 +15698,7 @@ impl TyphooNApp {
             "DATA_WINDOW"    => self.show_data_window = true,
             // "ALERTS" handled above (alert builder)
             "ORDER"          => { self.show_order_entry = true; self.order_symbol = self.symbol_input.clone(); }
-            "FEAR_GREED" | "FNG" => {
+            "CRYPTO_FEAR_GREED" | "FEAR_GREED" | "FNG" => {
                 self.show_fear_greed = true;
                 if self.fear_greed_value == 0 {
                     let _ = self.broker_tx.send(BrokerCmd::FetchFearGreed);
