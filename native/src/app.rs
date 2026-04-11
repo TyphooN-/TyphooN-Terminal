@@ -9216,6 +9216,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "CRYPTO_FEAR_GREED", desc: "Crypto Fear & Greed Index (alternative.me)" },
     Command { name: "AI",            desc: "AI assistant chat (Claude/GPT)" },
     Command { name: "MATRIX",        desc: "TyphooN Terminal community chat (Matrix)" },
+    Command { name: "MATRIX_LOGIN",  desc: "Login to Matrix with username/password for community chat" },
     Command { name: "WSB",           desc: "Reddit WallStreetBets hot posts" },
     Command { name: "BARDATA",       desc: "Download bar data for all known symbols from all brokers" },
     Command { name: "INDICES",       desc: "World stock indices dashboard" },
@@ -9622,8 +9623,8 @@ enum BrokerCmd {
     AiChat { provider: String, api_key: String, message: String, history: Vec<(bool, String)> },
     /// Fetch recent messages from a public Matrix room.
     MatrixFetchMessages { room_id: String, access_token: String },
-    /// Register as Matrix guest, join room, return access token + user ID.
-    MatrixGuestJoin { room_id: String },
+    /// Login to Matrix with username/password, join room.
+    MatrixLogin { username: String, password: String, room_id: String },
     /// Send a message to a Matrix room.
     MatrixSendMessage { room_id: String, access_token: String, body: String },
     /// Place equity order via tastytrade.
@@ -11212,39 +11213,39 @@ impl TyphooNApp {
                             }
                         });
                     }
-                    BrokerCmd::MatrixGuestJoin { room_id } => {
+                    BrokerCmd::MatrixLogin { username, password, room_id } => {
                         let client = reqwest::Client::new();
                         let msg_tx = broker_msg_tx_clone.clone();
                         tokio::spawn(async move {
-                            // Step 1: Register as guest
-                            let reg_url = "https://matrix.org/_matrix/client/r0/register?kind=guest";
-                            let reg_body = serde_json::json!({});
-                            match client.post(reg_url).json(&reg_body).send().await {
+                            // Step 1: Login with username/password
+                            let login_url = "https://matrix.org/_matrix/client/r0/login";
+                            let login_body = serde_json::json!({
+                                "type": "m.login.password",
+                                "identifier": { "type": "m.id.user", "user": username },
+                                "password": password,
+                            });
+                            match client.post(login_url).json(&login_body).send().await {
                                 Ok(resp) => {
+                                    let status = resp.status();
                                     if let Ok(json) = resp.json::<serde_json::Value>().await {
                                         let token = json["access_token"].as_str().unwrap_or("").to_string();
                                         let user_id = json["user_id"].as_str().unwrap_or("").to_string();
                                         if token.is_empty() {
-                                            let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix guest register failed: {}", json)));
+                                            let err = json["error"].as_str().unwrap_or("unknown error");
+                                            let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix login failed ({}): {}", status, err)));
                                             return;
                                         }
-                                        // Step 2: Join the room
+                                        // Step 2: Join the room/space
                                         let join_url = format!("https://matrix.org/_matrix/client/r0/join/{}", room_id);
                                         let _ = client.post(&join_url)
                                             .header("Authorization", format!("Bearer {}", token))
                                             .json(&serde_json::json!({}))
                                             .send().await;
-                                        // Step 3: Set display name to "TyphooN-User"
-                                        let name_url = format!("https://matrix.org/_matrix/client/r0/profile/{}/displayname", user_id);
-                                        let _ = client.put(&name_url)
-                                            .header("Authorization", format!("Bearer {}", token))
-                                            .json(&serde_json::json!({"displayname": "TyphooN-User"}))
-                                            .send().await;
                                         let _ = msg_tx.send(BrokerMsg::JsonResult("MatrixAuth".into(),
                                             serde_json::json!({"access_token": token, "user_id": user_id}).to_string()));
                                     }
                                 }
-                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix guest register: {}", e))); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix login: {}", e))); }
                             }
                         });
                     }
@@ -15706,6 +15707,25 @@ impl TyphooNApp {
             }
             "AI" | "AI_CHAT" | "CHAT" => self.show_ai_chat = true,
             "MATRIX" => self.show_matrix_chat = true,
+            "MATRIX_LOGIN" => {
+                // Prompt: store Matrix credentials in keyring, then login
+                let username = typhoon_engine::core::keyring::load("matrix_username").ok().flatten();
+                let password = typhoon_engine::core::keyring::load("matrix_password").ok().flatten();
+                match (username, password) {
+                    (Some(u), Some(p)) => {
+                        self.log.push_back(LogEntry::info(format!("Matrix: logging in as {}...", u)));
+                        let _ = self.broker_tx.send(BrokerCmd::MatrixLogin {
+                            username: u, password: p, room_id: self.matrix_room.clone(),
+                        });
+                    }
+                    _ => {
+                        self.log.push_back(LogEntry::info("Set Matrix credentials in system keyring:"));
+                        self.log.push_back(LogEntry::info("  keyring set typhoon-terminal matrix_username YOUR_USERNAME"));
+                        self.log.push_back(LogEntry::info("  keyring set typhoon-terminal matrix_password YOUR_PASSWORD"));
+                        self.log.push_back(LogEntry::info("Then run MATRIX_LOGIN again."));
+                    }
+                }
+            }
             "WSB" | "REDDIT" | "WALLSTREETBETS" => {
                 self.show_reddit = true;
                 if self.reddit_posts.is_empty() {
@@ -20228,11 +20248,29 @@ impl TyphooNApp {
 
         // Matrix Chat (public room viewer)
         if self.show_matrix_chat {
-            // Auto-join on first open
+            // Try to load Matrix token from keyring on first open
             if self.matrix_access_token.is_empty() && !self.matrix_room.is_empty() {
-                let _ = self.broker_tx.send(BrokerCmd::MatrixGuestJoin { room_id: self.matrix_room.clone() });
-                self.log.push_back(LogEntry::info("Matrix: joining community chat as guest..."));
-                self.matrix_access_token = "pending".to_string(); // prevent re-trigger
+                // Check keyring for stored token
+                if let Ok(Some(token)) = typhoon_engine::core::keyring::load("matrix_access_token") {
+                    self.matrix_access_token = token;
+                    if let Ok(Some(uid)) = typhoon_engine::core::keyring::load("matrix_user_id") {
+                        self.matrix_user_id = uid;
+                    }
+                    self.log.push_back(LogEntry::info(format!("Matrix: restored session as {}", self.matrix_user_id)));
+                    // Join room + fetch
+                    let _ = self.broker_tx.send(BrokerCmd::MatrixFetchMessages {
+                        room_id: self.matrix_room.clone(),
+                        access_token: self.matrix_access_token.clone(),
+                    });
+                } else {
+                    self.matrix_access_token = "none".to_string(); // mark as checked
+                    self.log.push_back(LogEntry::info("Matrix: no credentials — read-only mode. Use MATRIX_LOGIN to authenticate."));
+                    // Fetch without auth (read-only for world-readable rooms)
+                    let _ = self.broker_tx.send(BrokerCmd::MatrixFetchMessages {
+                        room_id: self.matrix_room.clone(),
+                        access_token: String::new(),
+                    });
+                }
             }
             // Auto-refresh every 10 seconds
             if self.matrix_last_fetch.elapsed() > std::time::Duration::from_secs(10)
@@ -20284,8 +20322,8 @@ impl TyphooNApp {
                     });
                     ui.separator();
                     // Send message input
-                    if self.matrix_access_token.is_empty() || self.matrix_access_token == "pending" {
-                        ui.label(egui::RichText::new("Joining room — please wait...").small().color(AXIS_TEXT));
+                    if self.matrix_access_token.is_empty() || self.matrix_access_token == "pending" || self.matrix_access_token == "none" {
+                        ui.label(egui::RichText::new("Read-only — run MATRIX_LOGIN to send messages").small().color(AXIS_TEXT));
                     } else {
                         ui.horizontal(|ui| {
                             let resp = ui.add(
@@ -27925,7 +27963,11 @@ impl eframe::App for TyphooNApp {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
                             self.matrix_access_token = json["access_token"].as_str().unwrap_or("").to_string();
                             self.matrix_user_id = json["user_id"].as_str().unwrap_or("").to_string();
-                            self.log.push_back(LogEntry::info(format!("Matrix: joined as {}", self.matrix_user_id)));
+                            // Save to keyring for session persistence
+                            let _ = typhoon_engine::core::keyring::store("matrix_access_token", &self.matrix_access_token);
+                            let _ = typhoon_engine::core::keyring::store("matrix_user_id", &self.matrix_user_id);
+                            self.log.push_back(LogEntry::info(format!("Matrix: logged in as {}", self.matrix_user_id)));
+                            self.show_matrix_chat = true;
                             // Fetch messages now that we're authed
                             let _ = self.broker_tx.send(BrokerCmd::MatrixFetchMessages {
                                 room_id: self.matrix_room.clone(),
