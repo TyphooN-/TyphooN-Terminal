@@ -9409,6 +9409,9 @@ struct BgDarwinData {
     // ── DARWIN analytics: rolling correlation + diversification ──
     rolling_correlations: Vec<darwin::RollingCorrelation>,
     low_correlation_darwins: Vec<darwin::DiversificationCandidate>,
+
+    // ── Darwinex symbol specs (for scope filtering) ──
+    darwinex_specs: Vec<(String, String, String, i32, f64, f64, f64, f64, String)>,
 }
 
 /// Bottom panel mode.
@@ -11789,15 +11792,17 @@ impl TyphooNApp {
                                                 } else { false }; // conn dropped here
                                                 if skip { skipped += 1; continue; }
 
-                                                // Check scrape_failures blocklist (404 etc)
-                                                let blocklisted = if let Ok(conn) = cache.connection() {
-                                                    conn.query_row(
-                                                        "SELECT reason FROM scrape_failures WHERE symbol = ?1",
-                                                        [ticker.as_str()],
-                                                        |row| row.get::<_, String>(0),
-                                                    ).ok().is_some()
-                                                } else { false };
-                                                if blocklisted { skipped += 1; continue; }
+                                                // Check scrape_failures blocklist (404 etc) — FORCE bypasses
+                                                if !force {
+                                                    let blocklisted = if let Ok(conn) = cache.connection() {
+                                                        conn.query_row(
+                                                            "SELECT reason FROM scrape_failures WHERE symbol = ?1",
+                                                            [ticker.as_str()],
+                                                            |row| row.get::<_, String>(0),
+                                                        ).ok().is_some()
+                                                    } else { false };
+                                                    if blocklisted { skipped += 1; continue; }
+                                                }
 
                                                 if consecutive_fail >= 10 {
                                                     let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
@@ -13584,6 +13589,8 @@ impl TyphooNApp {
                         data.all_fundamentals = fundamentals::get_all_fundamentals(conn).unwrap_or_default();
                         data.upcoming_earnings = fundamentals::get_upcoming_earnings(conn, 50).unwrap_or_default();
                         data.upcoming_dividends = fundamentals::get_upcoming_dividends(conn, 50).unwrap_or_default();
+                        // Darwinex specs for broker_scope filtering (loaded from __SPECS__ CSV in bar_cache)
+                        data.darwinex_specs = darwin::load_all_specs_parsed(conn).unwrap_or_default();
                         tracing::trace!("BG: Phase 1c done in {}ms", phase_start.elapsed().as_millis());
                         let _ = bg_tx.send(data.clone());
 
@@ -14002,14 +14009,21 @@ impl TyphooNApp {
                     .map(|p| p.symbol.replace('/', "").to_uppercase())
                     .collect()
             ),
-            EventSource::Darwinex => Some(
-                self.darwinex_radar_data.iter()
-                    .filter(|(_, _, _, trade_mode, _, _, _, _, _)| *trade_mode != 0)
-                    .map(|(sym, _, _, _, _, _, _, _, _)| {
-                        sym.split('.').next().unwrap_or(sym.as_str()).to_uppercase()
-                    })
-                    .collect()
-            ),
+            EventSource::Darwinex => {
+                if self.darwinex_radar_data.is_empty() {
+                    // Specs not loaded yet — don't filter (show all fundamentals)
+                    None
+                } else {
+                    Some(
+                        self.darwinex_radar_data.iter()
+                            .filter(|(_, _, _, trade_mode, _, _, _, _, _)| *trade_mode != 0)
+                            .map(|(sym, _, _, _, _, _, _, _, _)| {
+                                sym.split('.').next().unwrap_or(sym.as_str()).to_uppercase()
+                            })
+                            .collect()
+                    )
+                }
+            }
             EventSource::Positions => {
                 // All symbols with open positions across any broker
                 let mut syms = std::collections::HashSet::new();
@@ -20804,18 +20818,25 @@ impl TyphooNApp {
                     let total = if self.broker_scope == EventSource::All {
                         self.bg.all_fundamentals.len()
                     } else {
-                        let syms: std::collections::HashSet<String> = match self.broker_scope {
-                            EventSource::Alpaca => self.live_positions.iter().map(|p| p.symbol.replace('/', "").to_uppercase()).collect(),
-                            EventSource::Darwinex => self.darwinex_radar_data.iter().filter(|(_, _, _, tm, _, _, _, _, _)| *tm != 0).map(|(s, _, _, _, _, _, _, _, _)| s.split('.').next().unwrap_or(s.as_str()).to_uppercase()).collect(),
-                            EventSource::Tasty => self.tt_positions.iter().map(|p| p.symbol.replace('/', "").to_uppercase()).collect(),
+                        let syms: Option<std::collections::HashSet<String>> = match self.broker_scope {
+                            EventSource::Alpaca => Some(self.live_positions.iter().map(|p| p.symbol.replace('/', "").to_uppercase()).collect()),
+                            EventSource::Darwinex => {
+                                if self.darwinex_radar_data.is_empty() { None } else {
+                                    Some(self.darwinex_radar_data.iter().filter(|(_, _, _, tm, _, _, _, _, _)| *tm != 0).map(|(s, _, _, _, _, _, _, _, _)| s.split('.').next().unwrap_or(s.as_str()).to_uppercase()).collect())
+                                }
+                            }
+                            EventSource::Tasty => Some(self.tt_positions.iter().map(|p| p.symbol.replace('/', "").to_uppercase()).collect()),
                             EventSource::Positions => {
                                 let mut s: std::collections::HashSet<String> = self.live_positions.iter().map(|p| p.symbol.replace('/', "").to_uppercase()).collect();
                                 for p in &self.tt_positions { s.insert(p.symbol.replace('/', "").to_uppercase()); }
-                                s
+                                Some(s)
                             }
                             _ => return,
                         };
-                        self.bg.all_fundamentals.iter().filter(|f| syms.contains(&f.symbol.to_uppercase())).count()
+                        match syms {
+                            None => self.bg.all_fundamentals.len(),
+                            Some(set) => self.bg.all_fundamentals.iter().filter(|f| set.contains(&f.symbol.to_uppercase())).count(),
+                        }
                     };
                     let lbl = match self.broker_scope {
                         EventSource::All => "ALL", EventSource::Alpaca => "ALPACA",
@@ -27770,6 +27791,11 @@ impl eframe::App for TyphooNApp {
 
         // ── drain background DARWIN data ─────────────────────────────────
         while let Ok(data) = self.bg_rx.try_recv() {
+            // Auto-populate darwinex_radar_data from BG-loaded specs so Darwinex scope
+            // filtering works without requiring manual DARWINEXRADAR command.
+            if !data.darwinex_specs.is_empty() {
+                self.darwinex_radar_data = data.darwinex_specs.clone();
+            }
             self.bg = data;
         }
 
