@@ -9013,7 +9013,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "SEC",           desc: "SEC filings (10-K, 10-Q, 8-K)" },
     Command { name: "INSIDER",       desc: "Insider trades (Form 4)" },
     Command { name: "FUNDAMENTALS",  desc: "Fundamentals viewer (EV, ratios, profile)" },
-    Command { name: "SCOPE",         desc: "Set broker scope filter for fundamental features: SCOPE [ALL|ALPACA|DARWINEX|TASTY]" },
+    Command { name: "SCOPE",         desc: "Set broker scope filter: SCOPE [ALL|ALPACA|DARWINEX|TASTY|POSITIONS]" },
     Command { name: "EV",            desc: "Enterprise Value scanner (all symbols)" },
     Command { name: "EARNINGS",      desc: "Upcoming earnings calendar" },
     Command { name: "DIVIDENDS",     desc: "Upcoming dividend calendar" },
@@ -9261,7 +9261,7 @@ struct WatchlistRow {
 
 /// Upcoming event source filter for the Event Calendar window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EventSource { All, Alpaca, Darwinex, Tasty }
+enum EventSource { All, Alpaca, Darwinex, Tasty, Positions }
 
 /// Upcoming event type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13831,6 +13831,17 @@ impl TyphooNApp {
                     })
                     .collect()
             ),
+            EventSource::Positions => {
+                // All symbols with open positions across any broker
+                let mut syms = std::collections::HashSet::new();
+                for p in &self.live_positions {
+                    syms.insert(p.symbol.replace('/', "").to_uppercase());
+                }
+                for p in &self.tt_positions {
+                    syms.insert(p.symbol.replace('/', "").to_uppercase());
+                }
+                Some(syms)
+            }
         }
     }
 
@@ -13894,6 +13905,7 @@ impl TyphooNApp {
                 EventSource::Alpaca   => r.in_alpaca,
                 EventSource::Darwinex => r.in_darwinex,
                 EventSource::Tasty    => r.in_tasty,
+                EventSource::Positions => r.in_alpaca || r.in_darwinex || r.in_tasty, // positions span all brokers
             };
             let kind_ok = match r.kind {
                 EventKind::Earnings        => show_earnings,
@@ -13940,6 +13952,7 @@ impl TyphooNApp {
         match self.broker_scope {
             EventSource::All => "ALL", EventSource::Alpaca => "ALPACA",
             EventSource::Darwinex => "DARWINEX", EventSource::Tasty => "TASTY",
+            EventSource::Positions => "POSITIONS",
         }
     }
 
@@ -14443,6 +14456,7 @@ impl TyphooNApp {
                     EventSource::Alpaca   => (false, true, false),
                     EventSource::Darwinex => (true, false, false),
                     EventSource::Tasty    => (false, false, true),
+                    EventSource::Positions => (self.fund_source_mt5, self.fund_source_alpaca, self.fund_source_tastytrade),
                 };
                 let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5, use_alpaca, use_tastytrade: use_tasty });
                 self.scrape_fund_running = true;
@@ -14548,9 +14562,10 @@ impl TyphooNApp {
                         let lbl = match self.broker_scope {
                             EventSource::All => "ALL", EventSource::Alpaca => "ALPACA",
                             EventSource::Darwinex => "DARWINEX", EventSource::Tasty => "TASTY",
+                            EventSource::Positions => "POSITIONS",
                         };
                         self.log.push_back(LogEntry::info(format!(
-                            "Broker scope: {lbl} (use SCOPE [ALL|ALPACA|DARWINEX|TASTY] to change)"
+                            "Broker scope: {lbl} (use SCOPE [ALL|ALPACA|DARWINEX|TASTY|POSITIONS] to change)"
                         )));
                         return;
                     }
@@ -14558,9 +14573,10 @@ impl TyphooNApp {
                     "ALPACA" => (EventSource::Alpaca, "ALPACA"),
                     "DARWINEX" | "DARWIN" => (EventSource::Darwinex, "DARWINEX"),
                     "TASTY" | "TASTYTRADE" => (EventSource::Tasty, "TASTY"),
+                    "POSITIONS" | "POS" => (EventSource::Positions, "POSITIONS"),
                     other => {
                         self.log.push_back(LogEntry::err(format!(
-                            "Unknown SCOPE '{other}'. Valid: ALL, ALPACA, DARWINEX, TASTY"
+                            "Unknown SCOPE '{other}'. Valid: ALL, ALPACA, DARWINEX, TASTY, POSITIONS"
                         )));
                         return;
                     }
@@ -16163,6 +16179,7 @@ impl TyphooNApp {
                 EventSource::Alpaca => "alpaca",
                 EventSource::Darwinex => "darwinex",
                 EventSource::Tasty => "tasty",
+                EventSource::Positions => "positions",
             },
             "econ_filter_high": self.econ_filter_high,
             "econ_filter_medium": self.econ_filter_medium,
@@ -16498,6 +16515,7 @@ impl TyphooNApp {
                     Some("alpaca") => EventSource::Alpaca,
                     Some("darwinex") => EventSource::Darwinex,
                     Some("tasty") => EventSource::Tasty,
+                    Some("positions") => EventSource::Positions,
                     _ => EventSource::All,
                 };
                 if let Some(b) = v["econ_filter_high"].as_bool() { self.econ_filter_high = b; }
@@ -23754,6 +23772,7 @@ impl TyphooNApp {
                             EventSource::Alpaca   => r.in_alpaca,
                             EventSource::Darwinex => r.in_darwinex,
                             EventSource::Tasty    => r.in_tasty,
+                            EventSource::Positions => r.in_alpaca || r.in_darwinex || r.in_tasty,
                         };
                         let kind_ok = match r.kind {
                             EventKind::Earnings         => self.event_filter_earnings,
@@ -24758,6 +24777,8 @@ impl TyphooNApp {
 
         // Multi-Dimensional Outlier Scanner
         if self.show_darwinex_outliers {
+            let outlier_scope_label = self.broker_scope_label().to_string();
+            let outlier_scoped_fund = self.scoped_fundamentals_owned();
             egui::Window::new("Outlier Scanner")
                 .open(&mut self.show_darwinex_outliers)
                 .resizable(true).default_size([800.0, 550.0])
@@ -24769,13 +24790,13 @@ impl TyphooNApp {
                     let ol_dim = egui::Color32::from_rgb(100, 100, 120);
 
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(format!("Outlier Analysis — {} outliers, {} sectors", self.darwinex_outliers.len(), self.darwinex_sector_stats.len())).strong());
+                        ui.label(egui::RichText::new(format!("Outlier Analysis [{}] — {} outliers, {} sectors", outlier_scope_label, self.darwinex_outliers.len(), self.darwinex_sector_stats.len())).strong());
                         if ui.small_button("Refresh").clicked() {
-                            // Re-run via command
+                            // Re-run with scope filter (respects SCOPE command)
                             if let Some(ref cache) = self.cache {
                                 if let Some(_conn) = cache.try_connection() {
                                     let mut data: Vec<(String, String, f64)> = Vec::new();
-                                    for f in &self.bg.all_fundamentals {
+                                    for f in &outlier_scoped_fund {
                                         let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
                                         if let Some(mc) = f.market_cap { if mc > 0.0 { data.push((f.symbol.clone(), sector, mc)); } }
                                     }
@@ -28809,20 +28830,22 @@ impl eframe::App for TyphooNApp {
                 // data universe they're looking at (All / Alpaca / Darwinex / Tasty).
                 ui.separator();
                 let (scope_lbl, scope_col) = match self.broker_scope {
-                    EventSource::All      => ("ALL",      egui::Color32::from_rgb(140, 140, 160)),
-                    EventSource::Alpaca   => ("ALPACA",   egui::Color32::from_rgb(255, 160, 60)),
-                    EventSource::Darwinex => ("DARWINEX", egui::Color32::from_rgb(100, 180, 255)),
-                    EventSource::Tasty    => ("TASTY",    egui::Color32::from_rgb(200, 130, 255)),
+                    EventSource::All       => ("ALL",       egui::Color32::from_rgb(140, 140, 160)),
+                    EventSource::Alpaca    => ("ALPACA",    egui::Color32::from_rgb(255, 160, 60)),
+                    EventSource::Darwinex  => ("DARWINEX",  egui::Color32::from_rgb(100, 180, 255)),
+                    EventSource::Tasty     => ("TASTY",     egui::Color32::from_rgb(200, 130, 255)),
+                    EventSource::Positions => ("POSITIONS", egui::Color32::from_rgb(80, 220, 120)),
                 };
                 let scope_btn = egui::Button::new(
                     egui::RichText::new(format!("Scope: {}", scope_lbl)).strong().color(egui::Color32::WHITE)
                 ).fill(scope_col);
-                if ui.add(scope_btn).on_hover_text("Click to cycle scope (All → Alpaca → Darwinex → Tasty → All). Affects OUTLIERS, EVOUTLIERS, Sector Heatmap, Dividend Screener.").clicked() {
+                if ui.add(scope_btn).on_hover_text("Click to cycle scope (All → Alpaca → Darwinex → Tasty → Positions → All). Affects OUTLIERS, EVOUTLIERS, Sector Heatmap, Dividend Screener.").clicked() {
                     self.broker_scope = match self.broker_scope {
-                        EventSource::All      => EventSource::Alpaca,
-                        EventSource::Alpaca   => EventSource::Darwinex,
-                        EventSource::Darwinex => EventSource::Tasty,
-                        EventSource::Tasty    => EventSource::All,
+                        EventSource::All       => EventSource::Alpaca,
+                        EventSource::Alpaca    => EventSource::Darwinex,
+                        EventSource::Darwinex  => EventSource::Tasty,
+                        EventSource::Tasty     => EventSource::Positions,
+                        EventSource::Positions => EventSource::All,
                     };
                     let n = self.scoped_fundamentals().len();
                     self.log.push_back(LogEntry::info(format!(
