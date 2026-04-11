@@ -147,11 +147,12 @@ Reuse existing render shaders for analytics overlays:
 
 ## Tests
 
-**Total workspace test count: 854** (unchanged — shader additions are
-runtime-validated, not unit-tested; UX changes are visual).
+**Total workspace test count: 865** (up from 854 in ADR-093).
 
 - 216 mql5-compiler (unchanged)
-- 511 engine (unchanged)
+- 522 engine (+11: DataSourceManager roundtrip, resolve_candidates default/
+  unhealthy/override, source_for_key, mark_success/failure, config
+  deny_unknown, override_replaces, status_summary)
 - 78 native (unchanged)
 - 49 web-protocol (unchanged)
 

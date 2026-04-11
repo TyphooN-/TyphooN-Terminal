@@ -1588,7 +1588,7 @@ impl ChartState {
 
     /// Cache key for this symbol + timeframe.
     /// Try multiple prefix variants to find data in cache.
-    fn find_cache_key(&self, cache: &SqliteCache) -> String {
+    fn find_cache_key(&self, cache: &SqliteCache, dsm: &typhoon_engine::core::data_source::DataSourceManager) -> String {
         let tf = self.timeframe.cache_suffix();
         let sym = {
             let parts: Vec<&str> = self.symbol.split(':').collect();
@@ -1604,7 +1604,6 @@ impl ChartState {
         let sym_alt = if sym.contains('/') {
             sym.replace('/', "")
         } else {
-            // Check if it looks like a crypto pair (e.g. SOLUSD → SOL/USD)
             let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT","XMR","ZEC","DASH",
                 "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB",
                 "OP","MKR","COMP","SNX","CRV","SUSHI","YFI","BAT","MANA","SAND",
@@ -1617,28 +1616,16 @@ impl ChartState {
             }).unwrap_or_default()
         };
 
-        // Data hierarchy: MT5 (authoritative) > Broker (where user trades) > Kraken (gap-fill)
-        let mut candidates = vec![
-            // Priority 1: MT5 (Darwinex signal account — authoritative)
-            format!("mt5:{}:{}", sym, tf),
-            format!("{}:{}", sym, tf),                    // exact match (often mt5-sourced)
-            // Priority 2: Connected broker (where user actually trades)
-            format!("alpaca:{}:{}", sym, tf),
-            format!("paper_TyphooN:{}:{}", sym, tf),
-            format!("alpaca_paper_TyphooN:{}:{}", sym, tf),
-            format!("default:{}:{}", sym, tf),
-            // Priority 3: CryptoCompare (deep history — 2000 bars/request, back to 2010)
-            format!("cryptocompare:{}:{}", sym, tf),
-            // Priority 4: Kraken (legacy gap-fill — limited to ~720 bars)
-            format!("kraken:{}:{}", sym, tf),
-        ];
-        // Also try slash/no-slash variants for crypto (same priority order)
+        // ADR-038 Phase 2: Use DataSourceManager for priority-ordered candidates
+        let mut candidates = dsm.resolve_candidates(&sym, tf);
+        // Also add legacy key variants for backward compatibility
+        candidates.push(format!("paper_TyphooN:{}:{}", sym.to_uppercase(), tf));
+        candidates.push(format!("alpaca_paper_TyphooN:{}:{}", sym.to_uppercase(), tf));
+        candidates.push(format!("default:{}:{}", sym.to_uppercase(), tf));
+        // Crypto slash/no-slash variants
         if !sym_alt.is_empty() {
-            candidates.push(format!("mt5:{}:{}", sym_alt, tf));
-            candidates.push(format!("{}:{}", sym_alt, tf));
-            candidates.push(format!("alpaca:{}:{}", sym_alt, tf));
-            candidates.push(format!("cryptocompare:{}:{}", sym_alt, tf));
-            candidates.push(format!("kraken:{}:{}", sym_alt, tf));
+            let alt_candidates = dsm.resolve_candidates(&sym_alt, tf);
+            candidates.extend(alt_candidates);
         }
 
         for key in &candidates {
@@ -1647,8 +1634,7 @@ impl ChartState {
             }
         }
 
-        // Fallback: partial-match search via SQL LIKE (avoids pulling full bar_cache
-        // into memory — 3.9GB DB would be a disaster).
+        // Fallback: partial-match search via SQL LIKE
         if let Ok(keys) = cache.search_keys(&sym, 32) {
             let tf_lower = tf.to_lowercase();
             for key in &keys {
@@ -1658,7 +1644,7 @@ impl ChartState {
             }
         }
 
-        // Default fallback
+        // Default fallback: first source in priority order
         format!("mt5:{}:{}", sym, tf)
     }
 
@@ -1821,8 +1807,8 @@ impl ChartState {
     }
 
     /// Load bars from the shared cache, re-compute indicators.
-    fn load(&mut self, cache: &SqliteCache, log: &mut VecDeque<LogEntry>, gpu: Option<&mut gpu_compute::GpuCompute>) {
-        let key = self.find_cache_key(cache);
+    fn load(&mut self, cache: &SqliteCache, log: &mut VecDeque<LogEntry>, gpu: Option<&mut gpu_compute::GpuCompute>, dsm: &typhoon_engine::core::data_source::DataSourceManager) {
+        let key = self.find_cache_key(cache, dsm);
         let tf = self.timeframe.cache_suffix();
 
         // Extract bare symbol for multi-source lookup
@@ -9192,6 +9178,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "PROFILE",       desc: "Trading profile (best symbols, times)" },
     Command { name: "SIGNAL",        desc: "Composite 0-100 trading signal" },
     Command { name: "STATUS",        desc: "Cache, memory, uptime status" },
+    Command { name: "SOURCES",       desc: "Data source priority, health, and per-symbol overrides" },
     // Crypto-specific
     Command { name: "CRYPTO_BACKFILL",desc: "Crypto deep history backfill (CryptoCompare + Kraken)" },
     Command { name: "CRYPTOCOMPARE", desc: "Full CryptoCompare download for symbol (CRYPTOCOMPARE DOGEUSD)" },
@@ -9886,6 +9873,8 @@ pub struct TyphooNApp {
     dwx_logged_in: bool,
     /// Darwinex web scraping configuration (managed DARWINs, schedule, etc.).
     dwx_config: typhoon_engine::core::darwin_web::DarwinWebConfig,
+    /// ADR-038 Phase 2: Pluggable data source manager.
+    data_sources: typhoon_engine::core::data_source::DataSourceManager,
     /// Last scrape result (live snapshots + correlation).
     dwx_last_update: Option<typhoon_engine::core::darwin_web::DarwinWebUpdate>,
     /// Last scrape hour (for hourly auto-timer, checked in update loop).
@@ -12801,6 +12790,7 @@ impl TyphooNApp {
             dwx_driver: None,
             dwx_logged_in: false,
             dwx_config: typhoon_engine::core::darwin_web::DarwinWebConfig::default(),
+            data_sources: typhoon_engine::core::data_source::DataSourceManager::default(),
             dwx_last_update: None,
             dwx_last_scrape_hour: None,
             dwx_rx: None,
@@ -14053,7 +14043,8 @@ impl TyphooNApp {
                 let mut results: Vec<_> = Vec::new();
                 for (label, tf) in need_load_owned {
                     let mut temp = ChartState::new(&sym, tf);
-                    temp.load(&cache, &mut std::collections::VecDeque::new(), None);
+                    let dsm = typhoon_engine::core::data_source::DataSourceManager::default();
+                    temp.load(&cache, &mut std::collections::VecDeque::new(), None, &dsm);
                     if temp.bars.is_empty() {
                         results.push((label, None, None, None, None, None));
                     } else {
@@ -14646,6 +14637,37 @@ impl TyphooNApp {
             "BOOKMAP"       => self.show_bookmap = true,
             "JOURNAL"       => self.show_journal = true,
             "CACHE_STATS"   => self.show_cache_stats = true,
+            "SOURCES" => {
+                // ADR-038 Phase 2: Show data source status
+                self.data_sources.update_health();
+                let summary = self.data_sources.status_summary();
+                for (id, label, healthy, last_ts) in &summary {
+                    let status = if *healthy { "HEALTHY" } else { "DOWN" };
+                    let last = if *last_ts > 0 {
+                        chrono::DateTime::from_timestamp(*last_ts, 0)
+                            .map(|d| d.format("%H:%M:%S").to_string())
+                            .unwrap_or_default()
+                    } else { "never".to_string() };
+                    let level = if *healthy { LogLevel::Info } else { LogLevel::Warn };
+                    self.log.push_back(LogEntry { level, msg: format!("[{}] {} — {} (last: {})", status, label, id, last), timestamp: LogEntry::now_ts() });
+                }
+                if !self.data_sources.overrides.is_empty() {
+                    self.log.push_back(LogEntry::info(format!("Per-symbol overrides: {}", self.data_sources.overrides.len())));
+                    for ovr in &self.data_sources.overrides {
+                        self.log.push_back(LogEntry::info(format!("  {} → {}", ovr.pattern, ovr.sources.join(", "))));
+                    }
+                }
+                // Result card: Summary of sources
+                let metrics: Vec<(String, String, egui::Color32)> = summary.iter().map(|(_, label, healthy, _)| {
+                    let status = if *healthy { "OK" } else { "DOWN" };
+                    let color = if *healthy { egui::Color32::from_rgb(80, 220, 120) } else { egui::Color32::from_rgb(255, 80, 80) };
+                    (label.clone(), status.to_string(), color)
+                }).collect();
+                self.result_card = Some((ResultCard::Summary {
+                    title: "Data Sources".to_string(),
+                    metrics,
+                }, std::time::Instant::now()));
+            }
             "STORAGE"       => self.show_storage = true,
             "LAN_SYNC"      => self.show_lan_sync = true,
             "UNUSUAL_VOLUME" => {

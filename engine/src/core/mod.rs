@@ -17,5 +17,6 @@ pub mod var;
 pub mod keyring;
 pub mod mql5_export;
 pub mod options;
+pub mod data_source;
 pub mod darwin_web;
 pub mod econ_calendar;

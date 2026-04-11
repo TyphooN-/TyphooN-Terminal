@@ -1,6 +1,6 @@
 # ADR-038: Data Source Indicator & Pluggable Broker Hierarchy
 
-**Status:** Implemented (Phase 1)
+**Status:** Implemented (Phase 1 + Phase 2)
 **Date:** 2026-03-21
 
 > **Note:** Extends [ADR-037](037-data-source-hierarchy.md) (Data Source Hierarchy) and [ADR-010](010-multi-account.md) (Multi-Account).
@@ -39,7 +39,7 @@ Each source has strengths (depth of history, real-time freshness, asset coverage
 - When disconnected: invalidate MT5 cache keys, force Alpaca fallback
 - When reconnected: re-sync and restore MT5 as primary
 
-### Phase 2: Pluggable Data Source Queue (Future)
+### Phase 2: Pluggable Data Source Queue (Implemented)
 
 **Architecture:**
 ```
@@ -78,6 +78,16 @@ DataSourceManager {
   ```
 - `DataSourceManager` iterates through priority-ordered sources until one returns data
 - Health checks run on a background timer; unhealthy sources are temporarily skipped
+
+**Implementation** (`engine/src/core/data_source.rs`):
+- `DataSourceEntry` struct: id, cache_prefix, label, priority, healthy, last_success_ts, asset_classes
+- `SymbolOverride` struct: pattern (supports `*` wildcard), ordered source IDs
+- `DataSourceManager`: resolve_candidates(), mark_success/failure(), update_health(), add_override()
+- Default 5 sources: MT5 (prio 1), Alpaca (2), tastytrade (3), CryptoCompare (4), Kraken (5)
+- `SOURCES` console command shows health dashboard with result card
+- `find_cache_key()` uses `DataSourceManager::resolve_candidates()` for priority-ordered lookup
+- 11 unit tests (roundtrip, health, overrides, deny_unknown_fields)
+- Vec<DataSourceEntry> (not HashMap) — 5 entries fits L1 cache, no hash overhead
 
 ## Consequences
 
