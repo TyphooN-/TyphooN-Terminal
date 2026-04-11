@@ -13,6 +13,27 @@ pub struct VaRResult {
     pub z_score: f64,
 }
 
+/// Compute VaR per lot for a symbol from daily close prices.
+/// Formula: VaR_1_Lot = z_score(confidence) × stdDev(daily_returns) × closePrice
+/// Returns (var_1_lot, var_to_price_ratio) or None if insufficient data.
+pub fn compute_var_from_closes(closes: &[f64], confidence: f64) -> Option<(f64, f64)> {
+    if closes.len() < 10 { return None; }
+    // Daily returns
+    let returns: Vec<f64> = closes.windows(2)
+        .filter(|w| w[0] > 0.0 && w[1] > 0.0)
+        .map(|w| w[1] / w[0] - 1.0)
+        .collect();
+    if returns.len() < 5 { return None; }
+    let sd = std_dev(&returns);
+    if sd <= 0.0 { return None; }
+    let z = inverse_cumulative_normal(confidence);
+    let last_price = closes.last().copied().unwrap_or(0.0);
+    if last_price <= 0.0 { return None; }
+    let var_1_lot = z * sd * last_price;
+    let ratio = var_1_lot / last_price; // = z * sd (dimensionless ratio)
+    Some((var_1_lot, ratio * 100.0)) // ratio as percentage
+}
+
 /// Population standard deviation (matches MQL5 MathStandardDeviation).
 pub fn std_dev(values: &[f64]) -> f64 {
     let n = values.len();

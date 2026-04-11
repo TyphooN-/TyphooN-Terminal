@@ -9068,7 +9068,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "OUTLIERS",        desc: "Multi-dim outlier scanner: P/E + EV + short ratio + SEC filings" },
     Command { name: "DARWINVAR",       desc: "Outlier scanner on DARWIN VaR95 values + Darwinex corridor check (3.25%-6.5%)" },
     Command { name: "EVOUTLIERS",      desc: "Outlier scanner on enterprise value (EV), grouped by sector" },
-    Command { name: "VAROUTLIER",      desc: "VaR-style IQR outlier analysis: P/E, beta, short ratio by sector/industry" },
+    Command { name: "VAROUTLIER",      desc: "VaR/Ask ratio IQR analysis per sector/industry (MarketWizardry.org style)" },
+    Command { name: "ATROUTLIER",     desc: "ATR/Price ratio IQR outlier detection per sector (MarketWizardry.org style)" },
     Command { name: "DELETE_DARWIN", desc: "Delete a DARWIN/MT5 account (DELETE_DARWIN TICKER)" },
     Command { name: "SWAPHARVEST",  desc: "Scan MT5 symbols for positive swap carry trades" },
     Command { name: "DARWINEXRADAR", desc: "Export Darwinex symbol radar CSVs (stocks/CFD/crypto/futures)" },
@@ -15603,75 +15604,153 @@ impl TyphooNApp {
                 }
             }
             "VAROUTLIER" | "VAR_OUTLIER" | "VAR_OUTLIERS" => {
-                // VaR-style IQR outlier analysis on fundamentals metrics, grouped by sector/industry.
-                // Combines P/E ratio, beta, and short ratio into a composite risk score per symbol,
-                // then runs IQR detection per sector — like MarketWizardry.org's VaR analysis.
+                // VaR/Ask ratio IQR analysis — replicates MarketWizardry.org methodology.
+                // Computes VaR_1_Lot from daily returns (95% confidence) for each symbol,
+                // then runs 3-level IQR detection: industry → aggregated sector → global.
                 use typhoon_engine::core::var;
                 let fund_owned = self.scoped_fundamentals_owned();
                 let scope_label = self.broker_scope_label();
 
                 if fund_owned.len() < 10 {
                     self.log.push_back(LogEntry::warn(format!(
-                        "Need 10+ symbols with fundamentals data (have {}). Run EVSCRAPE first.",
-                        fund_owned.len()
+                        "Need 10+ symbols with fundamentals data (have {}). Run EVSCRAPE first.", fund_owned.len()
                     )));
-                } else {
-                    // Build composite risk score: weighted combination of P/E, beta, short_ratio
-                    // Higher score = higher implied risk (VaR proxy from fundamental data)
-                    let mut pe_data: Vec<(String, String, f64)> = Vec::new();
-                    let mut beta_data: Vec<(String, String, f64)> = Vec::new();
-                    let mut short_data: Vec<(String, String, f64)> = Vec::new();
-                    let mut industry_pe: Vec<(String, String, f64)> = Vec::new(); // by industry
+                } else if let Some(ref cache) = self.cache {
+                    // Compute VaR/Ask ratio from bar cache for each symbol
+                    let mut var_data: Vec<(String, String, f64)> = Vec::new(); // (sym, sector, ratio%)
+                    let mut industry_data: Vec<(String, String, f64)> = Vec::new(); // (sym, industry, ratio%)
+                    let mut no_bars = 0usize;
 
                     for f in &fund_owned {
                         let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
                         let industry = if f.industry.is_empty() { sector.clone() } else { f.industry.clone() };
-
-                        if let Some(pe) = f.pe_ratio {
-                            if pe.abs() > 0.1 {
-                                pe_data.push((f.symbol.clone(), sector.clone(), pe.abs()));
-                                industry_pe.push((f.symbol.clone(), industry.clone(), pe.abs()));
+                        // Try to load D1 closes from bar cache
+                        let keys = [
+                            format!("mt5:CC:{}:1Day", f.symbol),
+                            format!("mt5:{}:1Day", f.symbol),
+                            format!("alpaca:{}:1Day", f.symbol),
+                        ];
+                        let mut closes: Vec<f64> = Vec::new();
+                        for key in &keys {
+                            if let Ok(Some(bars)) = cache.get_bars_raw(key) {
+                                if bars.len() >= 30 {
+                                    closes = bars.iter().map(|(_, _, _, _, c, _)| *c).collect();
+                                    break;
+                                }
                             }
                         }
-                        if let Some(beta) = f.beta {
-                            if beta.abs() > 0.01 { beta_data.push((f.symbol.clone(), sector.clone(), beta)); }
-                        }
-                        if let Some(sr) = f.short_ratio {
-                            if sr > 0.0 { short_data.push((f.symbol.clone(), sector.clone(), sr)); }
+                        if closes.len() < 30 { no_bars += 1; continue; }
+                        if let Some((_, ratio)) = var::compute_var_from_closes(&closes, 0.95) {
+                            var_data.push((f.symbol.clone(), sector, ratio));
+                            industry_data.push((f.symbol.clone(), industry, ratio));
                         }
                     }
 
-                    // Run IQR detection on each metric separately
-                    let (pe_outliers, pe_stats) = if pe_data.len() >= 4 { var::detect_outliers(&pe_data, 1.5) } else { (Vec::new(), Vec::new()) };
-                    let (beta_outliers, _) = if beta_data.len() >= 4 { var::detect_outliers(&beta_data, 1.5) } else { (Vec::new(), Vec::new()) };
-                    let (short_outliers, _) = if short_data.len() >= 4 { var::detect_outliers(&short_data, 1.5) } else { (Vec::new(), Vec::new()) };
-                    let (_industry_outliers, industry_stats) = if industry_pe.len() >= 4 { var::detect_outliers(&industry_pe, 1.5) } else { (Vec::new(), Vec::new()) };
+                    if var_data.len() < 5 {
+                        self.log.push_back(LogEntry::warn(format!(
+                            "Need 5+ symbols with D1 bar data for VaR (have {}, {} missing bars). Run MT5SYNC first.",
+                            var_data.len(), no_bars
+                        )));
+                    } else {
+                        // 3-level IQR analysis like MarketWizardry.org
+                        let (sector_outliers, sector_stats) = var::detect_outliers(&var_data, 1.5);
+                        let (industry_outliers, industry_stats) = var::detect_outliers(&industry_data, 1.5);
 
-                    // Merge: symbols flagged in 2+ metrics are high-confidence outliers
-                    let mut flag_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-                    for o in pe_outliers.iter().chain(beta_outliers.iter()).chain(short_outliers.iter()) {
-                        *flag_count.entry(o.symbol.clone()).or_default() += 1;
+                        // Global statistics
+                        let mut vals: Vec<f64> = var_data.iter().map(|(_, _, v)| *v).collect();
+                        vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                        let q1 = vals[vals.len() / 4];
+                        let q3 = vals[3 * vals.len() / 4];
+                        let iqr = q3 - q1;
+
+                        self.log.push_back(LogEntry::info(format!(
+                            "VaR/Ask outlier scan [{}]: {} symbols | Sector: {} outliers across {} sectors | Industry: {} outliers across {} industries",
+                            scope_label, var_data.len(), sector_outliers.len(), sector_stats.len(),
+                            industry_outliers.len(), industry_stats.len()
+                        )));
+                        self.log.push_back(LogEntry::info(format!(
+                            "Global VaR/Ask: Q1={:.2}% Q3={:.2}% IQR={:.2}% Bounds=[{:.2}%, {:.2}%]",
+                            q1, q3, iqr, q1 - 1.5 * iqr, q3 + 1.5 * iqr
+                        )));
+
+                        // Show sector-level outliers (primary view)
+                        self.darwinex_outliers = sector_outliers;
+                        self.darwinex_sector_stats = sector_stats;
+                        self.darwinex_multi_outliers = Vec::new();
+                        self.show_darwinex_outliers = true;
                     }
-                    let multi_flagged: usize = flag_count.values().filter(|&&c| c >= 2).count();
+                }
+            }
+            "ATROUTLIER" | "ATR_OUTLIER" => {
+                // ATR/Price ratio IQR analysis — replicates MarketWizardry.org atr-explorer.
+                // Computes ATR(14)/Close for each symbol, groups by sector, runs IQR detection.
+                use typhoon_engine::core::var;
+                let fund_owned = self.scoped_fundamentals_owned();
+                let scope_label = self.broker_scope_label();
 
-                    self.log.push_back(LogEntry::info(format!(
-                        "VaR outlier scan [{}]: P/E:{} Beta:{} Short:{} outliers | {} flagged in 2+ metrics | {} sectors, {} industries",
-                        scope_label, pe_outliers.len(), beta_outliers.len(), short_outliers.len(),
-                        multi_flagged, pe_stats.len(), industry_stats.len()
+                if fund_owned.len() < 10 {
+                    self.log.push_back(LogEntry::warn(format!(
+                        "Need 10+ symbols with fundamentals data (have {}). Run EVSCRAPE first.", fund_owned.len()
                     )));
+                } else if let Some(ref cache) = self.cache {
+                    let mut atr_data: Vec<(String, String, f64)> = Vec::new();
+                    let mut no_bars = 0usize;
 
-                    // Display P/E outliers by sector (primary view) + industry stats
-                    self.darwinex_outliers = pe_outliers;
-                    self.darwinex_sector_stats = pe_stats;
-                    self.darwinex_multi_outliers = Vec::new();
-                    self.show_darwinex_outliers = true;
+                    for f in &fund_owned {
+                        let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
+                        let keys = [
+                            format!("mt5:CC:{}:1Day", f.symbol),
+                            format!("mt5:{}:1Day", f.symbol),
+                            format!("alpaca:{}:1Day", f.symbol),
+                        ];
+                        let mut bars: Vec<(f64, f64, f64, f64)> = Vec::new(); // (o,h,l,c)
+                        for key in &keys {
+                            if let Ok(Some(raw)) = cache.get_bars_raw(key) {
+                                if raw.len() >= 20 {
+                                    bars = raw.iter().map(|(_, o, h, l, c, _)| (*o, *h, *l, *c)).collect();
+                                    break;
+                                }
+                            }
+                        }
+                        if bars.len() < 20 { no_bars += 1; continue; }
+                        // Compute ATR(14)
+                        let period = 14;
+                        let n = bars.len();
+                        let mut atr = 0.0_f64;
+                        for i in 1..n.min(period + 1) {
+                            let tr = (bars[i].1 - bars[i].2)
+                                .max((bars[i].1 - bars[i-1].3).abs())
+                                .max((bars[i].2 - bars[i-1].3).abs());
+                            atr += tr;
+                        }
+                        atr /= period as f64;
+                        for i in (period + 1)..n {
+                            let tr = (bars[i].1 - bars[i].2)
+                                .max((bars[i].1 - bars[i-1].3).abs())
+                                .max((bars[i].2 - bars[i-1].3).abs());
+                            atr = (atr * (period as f64 - 1.0) + tr) / period as f64;
+                        }
+                        let close = bars.last().map(|b| b.3).unwrap_or(0.0);
+                        if close > 0.0 && atr > 0.0 {
+                            atr_data.push((f.symbol.clone(), sector, atr / close * 100.0));
+                        }
+                    }
 
-                    // Log multi-flagged symbols
-                    let mut multi: Vec<(&String, &usize)> = flag_count.iter().filter(|(_, c)| **c >= 2).collect();
-                    multi.sort_by(|a, b| b.1.cmp(a.1));
-                    if !multi.is_empty() {
-                        let names: Vec<String> = multi.iter().take(20).map(|(s, c)| format!("{}({})", s, c)).collect();
-                        self.log.push_back(LogEntry::warn(format!("Multi-metric risk flags: {}", names.join(", "))));
+                    if atr_data.len() < 5 {
+                        self.log.push_back(LogEntry::warn(format!(
+                            "Need 5+ symbols with D1 bar data (have {}, {} missing). Run MT5SYNC first.",
+                            atr_data.len(), no_bars
+                        )));
+                    } else {
+                        let (outliers, stats) = var::detect_outliers(&atr_data, 1.5);
+                        self.log.push_back(LogEntry::info(format!(
+                            "ATR/Price outlier scan [{}]: {} outliers from {} symbols across {} sectors",
+                            scope_label, outliers.len(), atr_data.len(), stats.len()
+                        )));
+                        self.darwinex_outliers = outliers;
+                        self.darwinex_sector_stats = stats;
+                        self.darwinex_multi_outliers = Vec::new();
+                        self.show_darwinex_outliers = true;
                     }
                 }
             }
