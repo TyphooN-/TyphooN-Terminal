@@ -9052,7 +9052,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "OHLC",          desc: "Switch to OHLC bars chart" },
     Command { name: "RENKO",         desc: "Switch to Renko chart" },
     Command { name: "EXPORT_CSV",    desc: "Export chart data to CSV" },
-    Command { name: "SCREENSHOT",    desc: "Save chart as PNG screenshot" },
+    Command { name: "SCREENSHOT",    desc: "Save chart as lossless WebP screenshot" },
+    Command { name: "SHARE",         desc: "Share last screenshot to community chat" },
     Command { name: "NEW_TAB",       desc: "Open new chart tab" },
     Command { name: "CLOSE_TAB",     desc: "Close current chart tab" },
     // DARWIN-specific
@@ -9628,6 +9629,8 @@ enum BrokerCmd {
     MatrixLogin { username: String, password: String, room_id: String },
     /// Send a message to a Matrix room.
     MatrixSendMessage { room_id: String, access_token: String, body: String },
+    /// Upload an image to Matrix and send it as m.image message.
+    MatrixSendImage { room_id: String, access_token: String, file_path: std::path::PathBuf },
     /// Place equity order via tastytrade.
     TastytradeEquityOrder { symbol: String, qty: i64, side: String, order_type: String, price: Option<f64> },
     /// Close an open tastytrade equity position at market (Sell/Buy to Close).
@@ -10411,6 +10414,8 @@ pub struct TyphooNApp {
 
     /// Screenshot requested via SCREENSHOT command (triggers ViewportCommand::Screenshot next frame).
     screenshot_requested: bool,
+    /// Path to the last saved screenshot (for sharing to Matrix chat).
+    last_screenshot_path: Option<std::path::PathBuf>,
 }
 
 impl TyphooNApp {
@@ -11247,6 +11252,63 @@ impl TyphooNApp {
                                     }
                                 }
                                 Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::MatrixSendImage { room_id, access_token, file_path } => {
+                        let client = reqwest::Client::new();
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            // Step 1: Read file
+                            let data = match tokio::fs::read(&file_path).await {
+                                Ok(d) => d,
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Read screenshot: {e}"))); return; }
+                            };
+                            let filename = file_path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "screenshot.webp".into());
+                            let content_type = if filename.ends_with(".webp") { "image/webp" } else { "image/png" };
+
+                            // Step 2: Upload to Matrix content repository
+                            let upload_url = format!("https://matrix.org/_matrix/media/r0/upload?filename={}", filename);
+                            match client.post(&upload_url)
+                                .header("Authorization", format!("Bearer {}", access_token))
+                                .header("Content-Type", content_type)
+                                .body(data.clone())
+                                .send().await
+                            {
+                                Ok(resp) => {
+                                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                        let mxc_url = json["content_uri"].as_str().unwrap_or("").to_string();
+                                        if mxc_url.is_empty() {
+                                            let _ = msg_tx.send(BrokerMsg::Error("Matrix upload: no content_uri returned".into()));
+                                            return;
+                                        }
+                                        // Step 3: Send m.image message
+                                        let txn_id = format!("typhoon_img_{}", chrono::Utc::now().timestamp_millis());
+                                        let send_url = format!("https://matrix.org/_matrix/client/r0/rooms/{}/send/m.room.message/{}", room_id, txn_id);
+                                        let msg_body = serde_json::json!({
+                                            "msgtype": "m.image",
+                                            "body": filename,
+                                            "url": mxc_url,
+                                            "info": { "mimetype": content_type, "size": data.len() },
+                                        });
+                                        match client.put(&send_url)
+                                            .header("Authorization", format!("Bearer {}", access_token))
+                                            .json(&msg_body)
+                                            .send().await
+                                        {
+                                            Ok(r) if r.status().is_success() => {
+                                                let _ = msg_tx.send(BrokerMsg::JsonResult("MatrixSent".into(), "image shared".into()));
+                                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!("Screenshot shared to community chat")));
+                                            }
+                                            Ok(r) => {
+                                                let text = r.text().await.unwrap_or_default();
+                                                let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix send image: {}", text)));
+                                            }
+                                            Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix send: {e}"))); }
+                                        }
+                                    }
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix upload: {e}"))); }
                             }
                         });
                     }
@@ -13299,6 +13361,7 @@ impl TyphooNApp {
             metrics_registry: None,
             metrics_start: std::time::Instant::now(),
             screenshot_requested: false,
+            last_screenshot_path: None,
         };
 
         // ── Prometheus metrics server ────────────────────────────────────────
@@ -14895,6 +14958,24 @@ impl TyphooNApp {
             "SCREENSHOT" => {
                 self.screenshot_requested = true;
                 self.log.push_back(LogEntry::info("Screenshot requested — capturing next frame..."));
+            }
+            "SHARE" | "SCREENSHOT_SHARE" => {
+                if let Some(ref path) = self.last_screenshot_path {
+                    if self.matrix_access_token.is_empty() || self.matrix_access_token == "none" || self.matrix_access_token == "pending" {
+                        self.log.push_back(LogEntry::warn("Not logged into Matrix — use CHAT and set credentials in Settings first"));
+                    } else if path.exists() {
+                        let _ = self.broker_tx.send(BrokerCmd::MatrixSendImage {
+                            room_id: self.matrix_room.clone(),
+                            access_token: self.matrix_access_token.clone(),
+                            file_path: path.clone(),
+                        });
+                        self.log.push_back(LogEntry::info(format!("Sharing screenshot to community chat: {}", path.display())));
+                    } else {
+                        self.log.push_back(LogEntry::warn("Screenshot file not found — take a SCREENSHOT first"));
+                    }
+                } else {
+                    self.log.push_back(LogEntry::warn("No screenshot taken yet — use SCREENSHOT first"));
+                }
             }
             // Tabs
             "NEW_TAB" => {
@@ -27346,7 +27427,7 @@ impl eframe::App for TyphooNApp {
                         } else {
                             std::path::PathBuf::from("/tmp")
                         };
-                        let path = pictures_dir.join(format!("typhoon_chart_{}.png", ts));
+                        let path = pictures_dir.join(format!("typhoon_chart_{}.webp", ts));
                         let w = image.width() as u32;
                         let h = image.height() as u32;
                         let rgba: Vec<u8> = image.pixels.iter()
@@ -27358,12 +27439,19 @@ impl eframe::App for TyphooNApp {
                 None
             });
             if let Some((rgba, w, h, path)) = screenshot_data {
-                // PNG encoding + file write on background thread (avoids UI hang on 4K)
+                // Lossless WebP encoding on background thread (smaller than PNG, no quality loss)
+                let last_screenshot_path = path.clone();
                 self.log.push_back(LogEntry::info(format!("Saving screenshot ({w}x{h}) to {}...", path.display())));
+                self.last_screenshot_path = Some(last_screenshot_path);
                 std::thread::spawn(move || {
-                    match image::save_buffer(&path, &rgba, w, h, image::ColorType::Rgba8) {
-                        Ok(()) => tracing::info!("Screenshot saved: {}", path.display()),
-                        Err(e) => tracing::error!("Screenshot save failed: {}", e),
+                    if let Some(img) = image::RgbaImage::from_raw(w, h, rgba) {
+                        let dyn_img = image::DynamicImage::ImageRgba8(img);
+                        match dyn_img.save(&path) {
+                            Ok(()) => tracing::info!("Screenshot saved: {}", path.display()),
+                            Err(e) => tracing::error!("Screenshot save failed: {}", e),
+                        }
+                    } else {
+                        tracing::error!("Screenshot: failed to construct image from RGBA data");
                     }
                 });
             }
