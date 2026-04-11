@@ -9215,7 +9215,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "TEMPLATES",     desc: "List all available chart templates" },
     Command { name: "FEAR_GREED",    desc: "Crypto Fear & Greed Index" },
     Command { name: "AI",            desc: "AI assistant chat (Claude/GPT)" },
-    Command { name: "MATRIX",        desc: "Matrix chat room viewer" },
+    Command { name: "MATRIX",        desc: "TyphooN Terminal community chat (Matrix)" },
     Command { name: "WSB",           desc: "Reddit WallStreetBets hot posts" },
     Command { name: "BARDATA",       desc: "Download bar data for all known symbols from all brokers" },
     Command { name: "INDICES",       desc: "World stock indices dashboard" },
@@ -9621,7 +9621,11 @@ enum BrokerCmd {
     /// AI chat request (Anthropic Claude or OpenAI GPT).
     AiChat { provider: String, api_key: String, message: String, history: Vec<(bool, String)> },
     /// Fetch recent messages from a public Matrix room.
-    MatrixFetchMessages { room_id: String },
+    MatrixFetchMessages { room_id: String, access_token: String },
+    /// Register as Matrix guest, join room, return access token + user ID.
+    MatrixGuestJoin { room_id: String },
+    /// Send a message to a Matrix room.
+    MatrixSendMessage { room_id: String, access_token: String, body: String },
     /// Place equity order via tastytrade.
     TastytradeEquityOrder { symbol: String, qty: i64, side: String, order_type: String, price: Option<f64> },
     /// Close an open tastytrade equity position at market (Sell/Buy to Close).
@@ -9937,10 +9941,14 @@ pub struct TyphooNApp {
     bardata_log: Vec<String>,
     bardata_active: bool,
     reddit_posts: Vec<(String, String, u64, u64)>, // (title, url, score, comments)
-    /// Matrix chat (public room message viewer).
+    /// Matrix chat (community chat room — send + receive).
     show_matrix_chat: bool,
     matrix_room: String,
     matrix_messages: Vec<(String, String, String)>, // (sender, timestamp, body)
+    matrix_input: String,
+    matrix_access_token: String,
+    matrix_user_id: String,
+    matrix_last_fetch: std::time::Instant,
     /// Real-time bar construction from WebSocket trade stream.
     bar_builder: std::sync::Arc<std::sync::Mutex<typhoon_engine::core::bar_builder::BarBuilder>>,
     stream_active: bool,
@@ -11171,12 +11179,16 @@ impl TyphooNApp {
                             }
                         });
                     }
-                    BrokerCmd::MatrixFetchMessages { room_id } => {
+                    BrokerCmd::MatrixFetchMessages { room_id, access_token } => {
                         let client = reqwest::Client::new();
                         let msg_tx = broker_msg_tx_clone.clone();
                         tokio::spawn(async move {
                             let url = format!("https://matrix.org/_matrix/client/r0/rooms/{}/messages?dir=b&limit=50", room_id);
-                            match client.get(&url).header("User-Agent", "TyphooN-Terminal/1.0").send().await {
+                            let mut req = client.get(&url).header("User-Agent", "TyphooN-Terminal/1.0");
+                            if !access_token.is_empty() {
+                                req = req.header("Authorization", format!("Bearer {}", access_token));
+                            }
+                            match req.send().await {
                                 Ok(resp) => {
                                     if let Ok(json) = resp.json::<serde_json::Value>().await {
                                         let mut msgs = Vec::new();
@@ -11197,6 +11209,68 @@ impl TyphooNApp {
                                     }
                                 }
                                 Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::MatrixGuestJoin { room_id } => {
+                        let client = reqwest::Client::new();
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            // Step 1: Register as guest
+                            let reg_url = "https://matrix.org/_matrix/client/r0/register?kind=guest";
+                            let reg_body = serde_json::json!({});
+                            match client.post(reg_url).json(&reg_body).send().await {
+                                Ok(resp) => {
+                                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                        let token = json["access_token"].as_str().unwrap_or("").to_string();
+                                        let user_id = json["user_id"].as_str().unwrap_or("").to_string();
+                                        if token.is_empty() {
+                                            let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix guest register failed: {}", json)));
+                                            return;
+                                        }
+                                        // Step 2: Join the room
+                                        let join_url = format!("https://matrix.org/_matrix/client/r0/join/{}", room_id);
+                                        let _ = client.post(&join_url)
+                                            .header("Authorization", format!("Bearer {}", token))
+                                            .json(&serde_json::json!({}))
+                                            .send().await;
+                                        // Step 3: Set display name to "TyphooN-User"
+                                        let name_url = format!("https://matrix.org/_matrix/client/r0/profile/{}/displayname", user_id);
+                                        let _ = client.put(&name_url)
+                                            .header("Authorization", format!("Bearer {}", token))
+                                            .json(&serde_json::json!({"displayname": "TyphooN-User"}))
+                                            .send().await;
+                                        let _ = msg_tx.send(BrokerMsg::JsonResult("MatrixAuth".into(),
+                                            serde_json::json!({"access_token": token, "user_id": user_id}).to_string()));
+                                    }
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix guest register: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::MatrixSendMessage { room_id, access_token, body } => {
+                        let client = reqwest::Client::new();
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let txn_id = format!("typhoon_{}", chrono::Utc::now().timestamp_millis());
+                            let url = format!("https://matrix.org/_matrix/client/r0/rooms/{}/send/m.room.message/{}", room_id, txn_id);
+                            let msg_body = serde_json::json!({
+                                "msgtype": "m.text",
+                                "body": body,
+                            });
+                            match client.put(&url)
+                                .header("Authorization", format!("Bearer {}", access_token))
+                                .json(&msg_body)
+                                .send().await {
+                                Ok(resp) => {
+                                    if resp.status().is_success() {
+                                        let _ = msg_tx.send(BrokerMsg::JsonResult("MatrixSent".into(), "ok".into()));
+                                    } else {
+                                        let text = resp.text().await.unwrap_or_default();
+                                        let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix send failed: {}", text)));
+                                    }
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix send: {}", e))); }
                             }
                         });
                     }
@@ -12852,7 +12926,11 @@ impl TyphooNApp {
             bardata_active: false,
             reddit_posts: Vec::new(),
             show_matrix_chat: false,
-            matrix_room: String::new(),
+            matrix_room: "!typhoon_terminal_chat:matrix.org".to_string(), // default community room
+            matrix_input: String::new(),
+            matrix_access_token: String::new(),
+            matrix_user_id: String::new(),
+            matrix_last_fetch: std::time::Instant::now(),
             matrix_messages: Vec::new(),
             bar_builder: std::sync::Arc::new(std::sync::Mutex::new(typhoon_engine::core::bar_builder::BarBuilder::new())),
             stream_active: false,
@@ -20150,24 +20228,52 @@ impl TyphooNApp {
 
         // Matrix Chat (public room viewer)
         if self.show_matrix_chat {
-            egui::Window::new("Matrix Chat")
+            // Auto-join on first open
+            if self.matrix_access_token.is_empty() && !self.matrix_room.is_empty() {
+                let _ = self.broker_tx.send(BrokerCmd::MatrixGuestJoin { room_id: self.matrix_room.clone() });
+                self.log.push_back(LogEntry::info("Matrix: joining community chat as guest..."));
+                self.matrix_access_token = "pending".to_string(); // prevent re-trigger
+            }
+            // Auto-refresh every 10 seconds
+            if self.matrix_last_fetch.elapsed() > std::time::Duration::from_secs(10)
+                && !self.matrix_access_token.is_empty()
+                && self.matrix_access_token != "pending"
+            {
+                let _ = self.broker_tx.send(BrokerCmd::MatrixFetchMessages {
+                    room_id: self.matrix_room.clone(),
+                    access_token: self.matrix_access_token.clone(),
+                });
+                self.matrix_last_fetch = std::time::Instant::now();
+            }
+            egui::Window::new("Community Chat")
                 .open(&mut self.show_matrix_chat)
-                .resizable(true).default_size([450.0, 400.0])
+                .resizable(true).default_size([500.0, 450.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Room ID:");
-                        ui.add(egui::TextEdit::singleline(&mut self.matrix_room).desired_width(250.0).hint_text("!roomid:matrix.org"));
-                        if ui.button("Fetch").clicked() && !self.matrix_room.is_empty() {
-                            let _ = self.broker_tx.send(BrokerCmd::MatrixFetchMessages { room_id: self.matrix_room.clone() });
+                        ui.label(egui::RichText::new("TyphooN Terminal Community").strong());
+                        let status = if self.matrix_access_token == "pending" {
+                            ("Joining...", egui::Color32::YELLOW)
+                        } else if !self.matrix_access_token.is_empty() {
+                            ("Connected", egui::Color32::from_rgb(80, 220, 120))
+                        } else {
+                            ("Disconnected", egui::Color32::from_rgb(255, 80, 80))
+                        };
+                        ui.label(egui::RichText::new(status.0).small().color(status.1));
+                        if !self.matrix_user_id.is_empty() {
+                            ui.label(egui::RichText::new(&self.matrix_user_id).small().color(AXIS_TEXT));
                         }
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical().auto_shrink(false).max_height(320.0).show(ui, |ui| {
+                    // Messages
+                    egui::ScrollArea::vertical().auto_shrink(false).stick_to_bottom(true).max_height(350.0).show(ui, |ui| {
                         if self.matrix_messages.is_empty() {
-                            ui.label(egui::RichText::new("No messages — enter room ID and click Fetch.").color(AXIS_TEXT).small());
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(40.0);
+                                ui.label(egui::RichText::new("Connecting to community chat...").color(AXIS_TEXT));
+                            });
                         }
                         for (sender, ts, body) in &self.matrix_messages {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label(egui::RichText::new(ts).color(AXIS_TEXT).small().monospace());
                                 let sender_hash = sender.bytes().fold(0u8, |a, b| a.wrapping_add(b)) as usize;
                                 let sender_col = WL_COLORS[sender_hash % WL_COLORS.len()];
@@ -20176,6 +20282,30 @@ impl TyphooNApp {
                             });
                         }
                     });
+                    ui.separator();
+                    // Send message input
+                    if self.matrix_access_token.is_empty() || self.matrix_access_token == "pending" {
+                        ui.label(egui::RichText::new("Joining room — please wait...").small().color(AXIS_TEXT));
+                    } else {
+                        ui.horizontal(|ui| {
+                            let resp = ui.add(
+                                egui::TextEdit::singleline(&mut self.matrix_input)
+                                    .desired_width(ui.available_width() - 60.0)
+                                    .hint_text("Type a message...")
+                            );
+                            let send = ui.button("Send").clicked()
+                                || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                            if send && !self.matrix_input.trim().is_empty() {
+                                let body = self.matrix_input.trim().to_string();
+                                self.matrix_input.clear();
+                                let _ = self.broker_tx.send(BrokerCmd::MatrixSendMessage {
+                                    room_id: self.matrix_room.clone(),
+                                    access_token: self.matrix_access_token.clone(),
+                                    body,
+                                });
+                            }
+                        });
+                    }
                 });
         }
 
@@ -27791,10 +27921,27 @@ impl eframe::App for TyphooNApp {
                         if let Ok(posts) = serde_json::from_str::<Vec<(String, String, u64, u64)>>(&text) {
                             self.reddit_posts = posts;
                         }
+                    } else if label == "MatrixAuth" {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                            self.matrix_access_token = json["access_token"].as_str().unwrap_or("").to_string();
+                            self.matrix_user_id = json["user_id"].as_str().unwrap_or("").to_string();
+                            self.log.push_back(LogEntry::info(format!("Matrix: joined as {}", self.matrix_user_id)));
+                            // Fetch messages now that we're authed
+                            let _ = self.broker_tx.send(BrokerCmd::MatrixFetchMessages {
+                                room_id: self.matrix_room.clone(),
+                                access_token: self.matrix_access_token.clone(),
+                            });
+                        }
                     } else if label == "MatrixMessages" {
                         if let Ok(msgs) = serde_json::from_str::<Vec<(String, String, String)>>(&text) {
                             self.matrix_messages = msgs;
                         }
+                    } else if label == "MatrixSent" {
+                        // Re-fetch messages after sending
+                        let _ = self.broker_tx.send(BrokerCmd::MatrixFetchMessages {
+                            room_id: self.matrix_room.clone(),
+                            access_token: self.matrix_access_token.clone(),
+                        });
                     }
                     self.log.push_back(LogEntry::info(format!("{}:\n{}", label, text)));
                 }
