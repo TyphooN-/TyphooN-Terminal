@@ -27866,9 +27866,14 @@ impl eframe::App for TyphooNApp {
                             if self.user_watchlist.is_empty() {
                                 self.watchlist_rows = rows;
                             } else {
-                                // Filter server rows to only the client's local watchlist
+                                // Filter server rows to only the client's local watchlist.
+                                // O(1) per row via HashSet for exact matches, fallback to contains for partials.
+                                let wl_set: std::collections::HashSet<String> = self.user_watchlist.iter().map(|s| s.to_uppercase()).collect();
                                 self.watchlist_rows = rows.into_iter()
-                                    .filter(|r| self.user_watchlist.iter().any(|w| r.symbol.contains(w) || w.contains(&r.symbol)))
+                                    .filter(|r| {
+                                        let sym = r.symbol.to_uppercase();
+                                        wl_set.contains(&sym) || wl_set.iter().any(|w| sym.contains(w.as_str()) || w.contains(&sym))
+                                    })
                                     .collect();
                             }
                         }
@@ -27918,7 +27923,10 @@ impl eframe::App for TyphooNApp {
                 // Merge with any preloaded data already in mtf_grid_status
                 self.mtf_grid_status.extend(results);
                 self.mtf_grid_status.sort_by_key(|r| {
-                    ["M1","M5","M15","M30","H1","H4","D1","W1","MN1"].iter().position(|&l| l == r.0).unwrap_or(99)
+                    match r.0 {
+                        "M1" => 0, "M5" => 1, "M15" => 2, "M30" => 3, "H1" => 4,
+                        "H4" => 5, "D1" => 6, "W1" => 7, "MN1" => 8, _ => 99u8,
+                    }
                 });
                 self.mtf_grid_rx = None; // done
             }
@@ -28083,20 +28091,23 @@ impl eframe::App for TyphooNApp {
                     }
                 }
                 BrokerMsg::Mt5LiveQuotes(quotes) => {
-                    // Update forming bar (last bar) on all charts from MT5 live bid/ask
+                    // Update forming bar (last bar) on all charts from MT5 live bid/ask.
+                    // O(1) per quote: pre-build symbol→chart-indices map to avoid O(quotes×charts).
+                    let mut sym_to_charts: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+                    for (ci, chart) in self.charts.iter().enumerate() {
+                        let s = chart.symbol.replace('/', "").to_uppercase();
+                        let parts: Vec<&str> = s.split(':').collect();
+                        let is_tf = matches!(parts.last().map(|p| p.as_ref()), Some("1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH"));
+                        let bare = if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { s };
+                        sym_to_charts.entry(bare).or_default().push(ci);
+                    }
                     for (sym, bid, ask) in &quotes {
                         let mid = (bid + ask) / 2.0;
                         if mid <= 0.0 { continue; }
                         let sym_upper = sym.to_uppercase();
-                        for chart in &mut self.charts {
-                            let chart_bare = {
-                                let s = chart.symbol.replace('/', "").to_uppercase();
-                                let parts: Vec<&str> = s.split(':').collect();
-                                let is_tf = matches!(parts.last().map(|p| p.as_ref()), Some("1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH"));
-                                if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { s }
-                            };
-                            if chart_bare == sym_upper {
-                                if let Some(bar) = chart.bars.last_mut() {
+                        if let Some(indices) = sym_to_charts.get(&sym_upper) {
+                            for &ci in indices {
+                                if let Some(bar) = self.charts[ci].bars.last_mut() {
                                     bar.close = mid;
                                     if mid > bar.high { bar.high = mid; }
                                     if mid < bar.low { bar.low = mid; }
@@ -28207,18 +28218,34 @@ impl eframe::App for TyphooNApp {
                     self.watchlist_last_update_ts = chrono::Utc::now().timestamp();
                     // Store to KV for LAN clients — dedup to avoid timestamp churn
                     if let Ok(j) = serde_json::to_string(&rows) { self.put_kv_dedup("broker:watchlist", &j); }
-                    // Update forming bars on all charts from watchlist prices
+                    // Update forming bars on all charts from watchlist prices.
+                    // O(1) per row: pre-build symbol→chart-indices map to avoid O(rows×charts).
+                    let mut wl_sym_to_charts: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+                    let mut wl_chart_bares: Vec<String> = Vec::with_capacity(self.charts.len());
+                    for (ci, chart) in self.charts.iter().enumerate() {
+                        let s = chart.symbol.replace('/', "").to_uppercase();
+                        let parts: Vec<&str> = s.split(':').collect();
+                        let is_tf = matches!(parts.last().map(|p| p.as_ref()), Some("1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH"));
+                        let bare = if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { s };
+                        wl_sym_to_charts.entry(bare.clone()).or_default().push(ci);
+                        wl_chart_bares.push(bare);
+                    }
                     for row in &rows {
                         if row.last <= 0.0 { continue; }
                         let row_sym = row.symbol.replace('/', "").to_uppercase();
-                        for chart in &mut self.charts {
-                            let chart_bare = {
-                                let s = chart.symbol.replace('/', "").to_uppercase();
-                                let parts: Vec<&str> = s.split(':').collect();
-                                let is_tf = matches!(parts.last().map(|p| p.as_ref()), Some("1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH"));
-                                if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { s }
-                            };
-                            if chart_bare == row_sym || chart_bare.contains(&row_sym) || row_sym.contains(&chart_bare) {
+                        // Fast path: exact match via HashMap
+                        let mut matched_indices: Vec<usize> = Vec::new();
+                        if let Some(indices) = wl_sym_to_charts.get(&row_sym) {
+                            matched_indices.extend(indices);
+                        }
+                        // Slow path fallback: partial contains match (rare — only for symbols like "BTCUSD" matching "BTC")
+                        for (ci, bare) in wl_chart_bares.iter().enumerate() {
+                            if !matched_indices.contains(&ci) && (bare.contains(&row_sym) || row_sym.contains(bare.as_str())) {
+                                matched_indices.push(ci);
+                            }
+                        }
+                        for ci in matched_indices {
+                            let chart = &mut self.charts[ci];
                                 // Update ext hours candle if ext data available.
                                 // row.last is already set to the ext price by Yahoo enrichment
                                 // (see GetWatchlistQuotes handler) when ext_change_pct != 0.
@@ -28252,20 +28279,27 @@ impl eframe::App for TyphooNApp {
                                 }
                             }
                         }
-                    }
-                    // Route to world indices / forex windows if open
-                    let indices_syms = ["DIA","SPY","QQQ","IWM","EFA","EEM","VGK","EWJ","FXI","EWZ","GLD","SLV","USO","TLT","UUP","BTCUSD"];
-                    let forex_syms = ["EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","NZDUSD","USDCAD","EURGBP","EURJPY","GBPJPY"];
-                    if self.show_world_indices {
-                        let idx_rows: Vec<WatchlistRow> = rows.iter()
-                            .filter(|r| indices_syms.iter().any(|s| r.symbol.eq_ignore_ascii_case(s)))
-                            .cloned().collect();
+                    // Route to world indices / forex windows if open.
+                    // O(1) per row: static HashSets for symbol classification.
+                    if self.show_world_indices || self.show_forex_matrix {
+                        static INDICES: std::sync::LazyLock<std::collections::HashSet<&'static str>> = std::sync::LazyLock::new(|| {
+                            ["DIA","SPY","QQQ","IWM","EFA","EEM","VGK","EWJ","FXI","EWZ","GLD","SLV","USO","TLT","UUP","BTCUSD"].into_iter().collect()
+                        });
+                        static FOREX: std::sync::LazyLock<std::collections::HashSet<&'static str>> = std::sync::LazyLock::new(|| {
+                            ["EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","NZDUSD","USDCAD","EURGBP","EURJPY","GBPJPY"].into_iter().collect()
+                        });
+                        let mut idx_rows: Vec<WatchlistRow> = Vec::new();
+                        let mut fx_rows: Vec<WatchlistRow> = Vec::new();
+                        for row in &rows {
+                            let sym_upper = row.symbol.to_uppercase();
+                            if self.show_world_indices && INDICES.contains(sym_upper.as_str()) {
+                                idx_rows.push(row.clone());
+                            }
+                            if self.show_forex_matrix && FOREX.contains(sym_upper.as_str()) {
+                                fx_rows.push(row.clone());
+                            }
+                        }
                         if !idx_rows.is_empty() { self.world_indices_data = idx_rows; }
-                    }
-                    if self.show_forex_matrix {
-                        let fx_rows: Vec<WatchlistRow> = rows.iter()
-                            .filter(|r| forex_syms.iter().any(|s| r.symbol.eq_ignore_ascii_case(s)))
-                            .cloned().collect();
                         if !fx_rows.is_empty() { self.forex_pairs_data = fx_rows; }
                     }
                     self.watchlist_rows = rows;

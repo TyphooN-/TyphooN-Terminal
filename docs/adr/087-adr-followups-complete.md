@@ -1,6 +1,6 @@
 # ADR-087 — Close Out Remaining ADR Follow-ups (Help auto-gen, Scope Indicator, Session Persistence, EV/Fund Scope, ICS Export, Alert Attention)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-04-09
 
 ## Context

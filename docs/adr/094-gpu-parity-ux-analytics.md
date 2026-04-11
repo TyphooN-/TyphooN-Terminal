@@ -1,6 +1,6 @@
 # ADR-094 — GPU Parity for All Indicators + Analytics UX Overhaul
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-04-10
 
 ## Context

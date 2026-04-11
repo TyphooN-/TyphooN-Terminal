@@ -1,6 +1,6 @@
 # ADR-092 — UX Improvements, GPU Compute Expansion, and Client Parity
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-04-10
 
 ## Context

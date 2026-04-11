@@ -1,6 +1,6 @@
 # ADR-085 — Broker Scope Filter, ForexFactory Calendar, Perf Pass, Unwrap Cleanup
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-04-09
 
 ## Context

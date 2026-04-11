@@ -1,6 +1,6 @@
 # ADR-089 — EasyLanguage + thinkScript Compilers, Phone Order Entry
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-04-09
 
 ## Context

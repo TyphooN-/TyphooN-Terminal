@@ -1,6 +1,6 @@
 # ADR-093 — Darwinex Zero Live Web Scraping via Selenium
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-04-10
 
 ## Context

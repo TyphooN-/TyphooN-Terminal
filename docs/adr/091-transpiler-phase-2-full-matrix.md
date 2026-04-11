@@ -1,6 +1,6 @@
 # ADR-091 — Transpiler Phase 2: Full 9×9 Cross-Language Matrix
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-04-10
 
 ## Context

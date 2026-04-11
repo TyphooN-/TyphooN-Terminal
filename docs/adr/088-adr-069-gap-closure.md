@@ -1,6 +1,6 @@
 # ADR-088 — Close ADR-069 Feature Gap List
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-04-09
 
 ## Context

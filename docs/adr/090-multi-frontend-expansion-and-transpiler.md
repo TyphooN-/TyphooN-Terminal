@@ -1,6 +1,6 @@
 # ADR-090 — Multi-Frontend Expansion + Cross-Language Transpiler
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-04-09
 
 ## Context

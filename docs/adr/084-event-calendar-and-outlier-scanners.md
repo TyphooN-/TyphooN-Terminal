@@ -1,6 +1,6 @@
 # ADR-084 — Event Calendar & Targeted Outlier Scanners
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-04-09
 
 ## Context

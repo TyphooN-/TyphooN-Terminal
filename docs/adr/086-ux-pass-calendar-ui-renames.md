@@ -1,6 +1,6 @@
 # ADR-086 — UX Pass: Calendar UI, Staleness, Alerts, Help, Order Entry, Function Renames
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-04-09
 
 ## Context
