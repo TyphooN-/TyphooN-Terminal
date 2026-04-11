@@ -77,7 +77,7 @@ Existing `econ_events` UI schema is preserved; FF events are mapped into the sam
 The handler-side match arms still accept the old names, so muscle-memory doesn't break. The command palette now shows one entry per unique feature instead of the previous two.
 
 **Future consolidation candidates** (flagged, not done):
-- `CALENDAR` (stub) vs `EVENTS` (new) — overlapping intent; `CALENDAR` should become "macro events" (ForexFactory) and `EVENTS` should stay "per-symbol corporate events". Need to rename the stub.
+- ~~`CALENDAR` (stub)~~ **Resolved:** `CALENDAR` now fully wired — fetches Finnhub economic calendar data and opens the econ calendar panel. `EVENTS` remains per-symbol corporate events.
 - `FUNDAMENTALS` vs `EV` vs `EVSCRAPE` — three commands for adjacent concepts. Candidates for tab-based consolidation.
 - `STREAM` vs `DXLINK_STREAM` — broker-specific but similarly named. Could become `STREAM [ALPACA|TASTY]`.
 

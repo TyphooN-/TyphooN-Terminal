@@ -28,13 +28,14 @@
 ### Analytics
 - DARWIN analytics: 80+ functions, performance attribution, D-Score components, investment velocity, tax lots, rolling correlation, diversification candidates
 - Risk engine: VaR, Monte Carlo, stress test, risk-of-ruin, margin monitor
-- MQL5 + PineScript compilers (82 tests, WASM + WGSL backends)
+- MQL5 compiler + 8 transpiler backends (216 tests, WASM + WGSL + PineScript + ThinkScript + EasyLanguage + AFL + ACSIL + cAlgo + NinjaScript + ProBuilder)
 - GPU backtester + optimizer (SMA cross + NNFX strategies)
 - Compound interest calculator with growth chart
 
 ### Infrastructure
-- 575 tests (82 compiler + 421 engine + 72 native)
-- Zero warnings, zero unsafe blocks, zero TODO/FIXME
+- 854 tests (216 compiler + 511 engine + 78 native + 49 web-protocol)
+  *(Updated 2026-04-10 — was 575 at time of writing)*
+- Zero warnings, zero unsafe blocks, zero production unwrap/expect
 - Prometheus metrics endpoint
 - LAN sync with TLS + PBKDF2 auth + constant-time HMAC
 - Notifications: Discord webhook, Pushover, ntfy.sh (fires on indicator alerts)

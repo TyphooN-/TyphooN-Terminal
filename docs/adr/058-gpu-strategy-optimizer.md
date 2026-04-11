@@ -248,19 +248,19 @@ fn eval_strategy(@builtin(global_invocation_id) id: vec3<u32>) {
 - GPU strategy evaluation shader
 - Results readback and ranking
 
-**Phase 2: Robustness Analysis**
-- Neighbor stability scoring (GPU)
-- Walk-forward validation (GPU, rolling windows)
-- Monte Carlo trade shuffling (GPU)
-- 3D parameter surface visualization (egui_plot or custom wgpu)
+**Phase 2: Robustness Analysis** *(Implemented)*
+- [x] Neighbor stability scoring — ROBUSTNESS_SHADER (GPU parallel)
+- [x] Walk-forward validation — WALK_FORWARD_SHADER (GPU rolling windows)
+- [x] Monte Carlo trade shuffling — MONTE_CARLO_SHADER (GPU parallel)
+- 3D parameter surface visualization — deferred (egui_plot is 2D only)
 
-**Phase 3: Strategy DSL**
-- Parser for strategy definition language
-- Compile DSL → GPU compute shader dispatch
-- Visual strategy builder in egui
+**Phase 3: Strategy DSL** *(Implemented via MQL5 compiler)*
+- [x] Parser for strategy definition language — MQL5 parser (pest grammar)
+- [x] Compile DSL → GPU compute shader dispatch — WGSL codegen backend
+- Visual strategy builder in egui — deferred (text-based MQL5/PineScript input works)
 
-**Phase 4: MQL5 Export**
-- Generate .mqh/.mq5/.mq4 indicator source from strategy indicators
+**Phase 4: MQL5 Export** *(Implemented)*
+- [x] Generate .mqh/.mq5/.mq4 indicator source — mql5_export module + 8 transpiler backends
 - Generate EA source with optimal parameters
 - Export .set files for MT5 tester
 - Validation report generation

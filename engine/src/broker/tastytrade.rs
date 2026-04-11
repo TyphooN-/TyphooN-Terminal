@@ -310,6 +310,22 @@ impl TastytradeBroker {
         Ok(data["data"]["order"]["id"].as_str().unwrap_or("ok").to_string())
     }
 
+    /// Cancel an open order by order ID.
+    pub async fn cancel_order(&self, order_id: &str) -> Result<(), String> {
+        let token = self.auth_header().ok_or("Not authenticated")?;
+        let acct = self.account_number.as_ref().ok_or("No account selected")?;
+        let url = format!("{}/accounts/{}/orders/{}", self.base_url, acct, order_id);
+        let resp = self.client.delete(&url)
+            .header("Authorization", &token)
+            .send().await
+            .map_err(|e| format!("Cancel order failed: {e}"))?;
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Cancel rejected: {text}"));
+        }
+        Ok(())
+    }
+
     /// Close an open equity position at market.
     /// Looks up the current position quantity and submits a market order
     /// in the opposite direction for the full size.

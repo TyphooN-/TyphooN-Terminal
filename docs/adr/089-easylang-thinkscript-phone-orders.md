@@ -122,7 +122,7 @@ Invalid commands are dropped with a `tracing::warn!` and never reach the native 
 
 **Native relay (`native/src/app.rs` web cmd drain):**
 - `PlaceOrder` → translates to the appropriate `BrokerCmd::AlpacaMarketOrder` / `AlpacaLimitOrder` / `AlpacaStopOrder` / `TastytradeEquityOrder` depending on broker + type
-- `CancelOrder` → `BrokerCmd::AlpacaCancelOrder` (tastytrade cancel not yet wired — returns `ok:false`)
+- `CancelOrder` → `BrokerCmd::AlpacaCancelOrder` (Alpaca) or `BrokerCmd::TastytradeCancelOrder` (tastytrade, wired in ADR-094)
 - `ClosePosition` → `BrokerCmd::ClosePosition` (Alpaca) or `BrokerCmd::TastytradeClosePosition` (Tasty, from ADR-088)
 
 Every dispatch replies via `web_msg_tx` with a `WebMsg::OrderResult { ok, message }` confirming which broker received the order. The host operator also sees a local log line mirroring every web-originated order so they can't miss them.
@@ -155,7 +155,7 @@ Every dispatch replies via `web_msg_tx` with a `WebMsg::OrderResult { ok, messag
 **Trade-offs:**
 - EasyLanguage and thinkScript frontends are line-based scanners, not full AST parsers. They handle the common community-indicator cases but will misparse anything exotic (nested if blocks, anonymous functions, multi-line conditional expressions). A future hard requirement for one of these would justify a proper pest grammar.
 - Phone order entry trusts the web-server's passphrase + TLS for auth. There is no additional per-order confirmation step. If a phone is stolen with an active session, an attacker could place orders. Mitigation: the passphrase should be strong, and the user can reset it via Settings which invalidates existing sessions.
-- Tastytrade cancel is not yet wired — returns `ok:false` with an explanatory message. Follow-up ADR if needed.
+- ~~Tastytrade cancel is not yet wired~~ **Wired in ADR-094.** `TastytradeBroker::cancel_order()` sends DELETE to `/accounts/{id}/orders/{order_id}`. `BrokerCmd::TastytradeCancelOrder` dispatched from web and native.
 - ~~Phone UI does not yet expose the order entry form — only the protocol exists.~~ **Landed in follow-up.** `web/src/app.rs` now has a `Trade` tab (broker dropdown, symbol, side, type, qty, conditional limit/stop price), two-step review-then-send confirm so a stray tap can't fire an order, inline validation mirroring the server whitelist, and an `OrderResult` toast banner. The Positions tab has a per-row `Close` button; the Orders tab has a per-row `Cancel` button. Both use the broker currently selected in the Trade tab.
 - No new audio/sound library was added. Alert attention uses `ViewportCommand::RequestUserAttention` (from ADR-087) which is sufficient.
 

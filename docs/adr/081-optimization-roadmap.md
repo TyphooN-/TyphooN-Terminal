@@ -9,7 +9,7 @@ Comprehensive audit of the TyphooN-Terminal codebase identified 10 actionable op
 ## Items
 
 ### GPU (High Impact)
-- [x] **Dynamic shader parameters** — MACD periods (fast/slow/signal) now configurable via DragValue UI in indicator settings. CPU path uses user values. GPU shader still uses standard 12/26/9 (dynamic GPU params requires custom bind group layout — tracked as future enhancement).
+- [x] **Dynamic shader parameters** — MACD periods (fast/slow/signal) now configurable via DragValue UI in indicator settings. Both CPU and GPU paths use user values. GPU shader uses bit-packed periods: `fast | (slow << 8) | (signal << 16)` in the existing params.period uniform — no custom bind group needed (ADR-094).
 - [x] **GPU health dashboard** — GPU Indicators / GPU DARWIN Analytics status shown in Help window (Active/CPU fallback).
 
 ### UX (Medium-High Impact)

@@ -57,8 +57,8 @@ The button is disabled when there's insufficient data (tooltip still visible). U
 
 ## Items from ADR-069 explicitly NOT addressed (deferred with reason)
 
-- **EasyLanguage compiler** (third frontend for MQL5 IR pipeline) — significant scope (full lexer + parser + AST + IR lowering). Not on the critical path for daily trading use.
-- **thinkScript compiler** (fourth frontend) — same reasoning.
+- ~~**EasyLanguage compiler**~~ **Implemented in ADR-089/090.** Full transpiler backend with 216 tests.
+- ~~**thinkScript compiler**~~ **Implemented in ADR-089/090.** Full transpiler backend.
 - **Forex cross-rate matrix** — already implemented as `FOREX` command per the ADR-069 status table.
 - **Dark pool volume (SqueezMetrics)** — requires paid data feed access; researched but no free source.
 - **OCO order type** — Alpaca limitation (as noted in ADR-069). Not a terminal-side gap.
@@ -66,21 +66,20 @@ The button is disabled when there's insufficient data (tooltip still visible). U
 
 ## ADR-073 deferred items (WASM web client Phase 2)
 
-Listed for completeness; all still deferred from Phase 1:
-- Order entry from phone
-- Indicators / drawing tools / MTF grid on phone
-- DARWIN analytics on phone
-- Push notifications (already shipped via Discord/Pushover/ntfy for native; web-native push is separate scope)
-
-These remain out of scope because each one roughly doubles the WASM bundle size and the intended use-case is read-only monitoring from a phone.
+Status update (2026-04-10):
+- ~~Order entry from phone~~ **Implemented in ADR-089.** Trade tab with broker dropdown, symbol, side, type, qty. Two-step confirm. Close/cancel buttons.
+- ~~Indicators on phone~~ **Implemented in ADR-092.** Server-computed indicators via GetIndicators WebCmd, rendered as polyline overlays.
+- Drawing tools / MTF grid on phone — still deferred (complex UI, low priority for mobile)
+- DARWIN analytics on phone — **Implemented in ADR-093.** GetDarwinWeb command + DarwinWebUpdate push.
+- Push notifications — **Implemented in ADR-092.** BarUpdate/PositionUpdate/AccountUpdate WebMsg push replaces polling.
 
 ## Tests
 
-All 697 tests still pass (no new tests added — changes are UI-wiring and broker call-through, not new logic worth unit-testing in isolation).
-- 497 engine
-- 108 mql5-compiler
+854 tests pass *(updated 2026-04-10 — was 697 at time of writing)*.
+- 511 engine
+- 216 mql5-compiler
 - 78 native
-- 14 web-protocol
+- 49 web-protocol
 
 `cargo audit`: clean aside from the known `paste` warning via `image` crate (unrelated transitive dep).
 

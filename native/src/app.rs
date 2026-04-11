@@ -2111,8 +2111,8 @@ impl ChartState {
                     self.atr = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
                 } else { self.atr = compute_atr(&self.bars, atr_p as usize); }
 
-                // MACD — sequential GPU (warmup: 26 bars for EMA26, +9 for signal)
-                if let Some(data) = gpu.compute_macd_gpu() {
+                // MACD — sequential GPU with dynamic periods (ADR-081 follow-up)
+                if let Some(data) = gpu.compute_macd_gpu_dynamic(self.macd_fast, self.macd_slow, self.macd_signal_p) {
                     // Reuse existing Vec allocations (clear + refill instead of new Vec)
                     self.macd_line.clear(); self.macd_signal.clear(); self.macd_hist.clear();
                     self.macd_line.reserve(n); self.macd_signal.reserve(n); self.macd_hist.reserve(n);
@@ -2120,7 +2120,7 @@ impl ChartState {
                         let l = data.get(i * 3).copied().unwrap_or(0.0);
                         let s = data.get(i * 3 + 1).copied().unwrap_or(0.0);
                         let h = data.get(i * 3 + 2).copied().unwrap_or(0.0);
-                        if i < 26 || (l == 0.0 && s == 0.0 && h == 0.0) {
+                        if i < self.macd_slow as usize || (l == 0.0 && s == 0.0 && h == 0.0) {
                             self.macd_line.push(None); self.macd_signal.push(None); self.macd_hist.push(None);
                         } else {
                             self.macd_line.push(Some(l as f64)); self.macd_signal.push(Some(s as f64)); self.macd_hist.push(Some(h as f64));
@@ -9652,6 +9652,8 @@ enum BrokerCmd {
     /// Get Kraken account balance.
     KrakenGetBalance,
     /// Place an order on Kraken.
+    /// Cancel a tastytrade order by order ID.
+    TastytradeCancelOrder { order_id: String },
     KrakenPlaceOrder { pair: String, side: String, order_type: String, volume: f64, price: Option<f64> },
     /// Cancel a Kraken order by transaction ID.
     KrakenCancelOrder { txid: String },
@@ -11065,6 +11067,14 @@ impl TyphooNApp {
                             match b.cancel_order(&order_id).await {
                                 Ok(_) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Order {} cancelled", order_id))); }
                                 Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Cancel failed: {}", e))); }
+                            }
+                        }
+                    }
+                    BrokerCmd::TastytradeCancelOrder { order_id } => {
+                        if let Some(ref mut tt) = tt_broker {
+                            match tt.cancel_order(&order_id).await {
+                                Ok(_) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Tastytrade order {} cancelled", order_id))); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Tastytrade cancel failed: {}", e))); }
                             }
                         }
                     }
@@ -27830,10 +27840,13 @@ impl eframe::App for TyphooNApp {
                                     message: format!("Cancel {} dispatched to Alpaca", order_id),
                                 }
                             }
-                            "tastytrade" => typhoon_web_protocol::WebMsg::OrderResult {
-                                ok: false,
-                                message: "Tastytrade cancel not yet wired".into(),
-                            },
+                            "tastytrade" => {
+                                let _ = self.broker_tx.send(BrokerCmd::TastytradeCancelOrder { order_id: order_id.clone() });
+                                typhoon_web_protocol::WebMsg::OrderResult {
+                                    ok: true,
+                                    message: format!("Cancel {} dispatched to tastytrade", order_id),
+                                }
+                            }
                             other => typhoon_web_protocol::WebMsg::OrderResult {
                                 ok: false,
                                 message: format!("Unknown broker: {other}"),

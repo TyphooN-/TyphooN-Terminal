@@ -918,8 +918,15 @@ impl GpuCompute {
     }
 
     /// Compute MACD on GPU. Returns [macd, signal, histogram] × bar_count.
+    /// Compute MACD on GPU with user-configurable periods.
+    /// Periods are bit-packed: fast | (slow << 8) | (signal << 16).
+    pub fn compute_macd_gpu_dynamic(&self, fast: u32, slow: u32, signal: u32) -> Option<Vec<f32>> {
+        let packed = (fast & 0xFF) | ((slow & 0xFF) << 8) | ((signal & 0xFF) << 16);
+        self.dispatch_indicator(&self.macd_pipeline, packed, false)
+    }
+
     pub fn compute_macd_gpu(&self) -> Option<Vec<f32>> {
-        self.dispatch_indicator(&self.macd_pipeline, 0, false)
+        self.compute_macd_gpu_dynamic(12, 26, 9)
     }
 
     /// Compute ATR on GPU. Returns f32 per bar. Requires OHLC upload.
@@ -1986,22 +1993,32 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 const MACD_SHADER: &str = r#"
 // MACD Compute Shader — sequential (two EMAs + signal EMA)
 // Output: [macd_line, signal, histogram] per bar = 3 floats per bar
+// params.period encodes 3 values: fast | (slow << 8) | (signal << 16)
+// Default: 12 | (26 << 8) | (9 << 16) = 0x0009_1A0C
 struct Params {
-    period: u32,       // unused (fast=12, slow=26, signal=9 hardcoded)
+    period: u32,       // bit-packed: [7:0]=fast, [15:8]=slow, [23:16]=signal
     bar_count: u32,
 }
 
 @group(0) @binding(0) var<storage, read> bars: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;  // [macd0, sig0, hist0, ...]
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
 @group(0) @binding(2) var<uniform> params: Params;
 
 @compute @workgroup_size(1)
 fn main() {
-    let k_fast: f32 = 2.0 / 13.0;  // EMA(12)
-    let k_slow: f32 = 2.0 / 27.0;  // EMA(26)
-    let k_sig: f32 = 2.0 / 10.0;   // EMA(9) of MACD
+    // Unpack periods from bit-packed param
+    let fast_p = params.period & 0xFFu;
+    let slow_p = (params.period >> 8u) & 0xFFu;
+    let sig_p = (params.period >> 16u) & 0xFFu;
+    // Fallback to standard if zero
+    let fast = select(fast_p, 12u, fast_p == 0u);
+    let slow = select(slow_p, 26u, slow_p == 0u);
+    let sig = select(sig_p, 9u, sig_p == 0u);
 
-    // Seed EMAs
+    let k_fast: f32 = 2.0 / (f32(fast) + 1.0);
+    let k_slow: f32 = 2.0 / (f32(slow) + 1.0);
+    let k_sig: f32 = 2.0 / (f32(sig) + 1.0);
+
     var ema_fast: f32 = bars[0];
     var ema_slow: f32 = bars[0];
     var signal: f32 = 0.0;
@@ -2016,7 +2033,7 @@ fn main() {
         }
         let macd_line = ema_fast - ema_slow;
 
-        if (i >= 26u && !macd_started) {
+        if (i >= slow && !macd_started) {
             signal = macd_line;
             macd_started = true;
         } else if (macd_started) {
