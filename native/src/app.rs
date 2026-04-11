@@ -9623,6 +9623,8 @@ enum BrokerCmd {
     AlpacaSetTP { symbol: String, price: f64 },
     /// AI chat request (Anthropic Claude or OpenAI GPT).
     AiChat { provider: String, api_key: String, message: String, history: Vec<(bool, String)> },
+    /// Join a Matrix room (idempotent — no-op if already joined).
+    MatrixJoinRoom { room_id: String, access_token: String },
     /// Fetch recent messages from a public Matrix room.
     MatrixFetchMessages { room_id: String, access_token: String },
     /// Send a message to a Matrix room.
@@ -11218,11 +11220,36 @@ impl TyphooNApp {
                             }
                         });
                     }
+                    BrokerCmd::MatrixJoinRoom { room_id, access_token } => {
+                        let client = reqwest::Client::new();
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let encoded_room = room_id.replace('!', "%21").replace(':', "%3A");
+                            let url = format!("https://matrix.org/_matrix/client/v3/join/{}", encoded_room);
+                            match client.post(&url)
+                                .header("Authorization", format!("Bearer {}", access_token))
+                                .json(&serde_json::json!({}))
+                                .send().await {
+                                Ok(resp) if resp.status().is_success() => {
+                                    let _ = msg_tx.send(BrokerMsg::JsonResult("MatrixJoined".into(), "ok".into()));
+                                }
+                                Ok(resp) => {
+                                    let text = resp.text().await.unwrap_or_default();
+                                    // M_ALREADY_JOINED is fine
+                                    if !text.contains("already") {
+                                        let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix join: {}", text)));
+                                    }
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix join: {}", e))); }
+                            }
+                        });
+                    }
                     BrokerCmd::MatrixFetchMessages { room_id, access_token } => {
                         let client = reqwest::Client::new();
                         let msg_tx = broker_msg_tx_clone.clone();
                         tokio::spawn(async move {
-                            let url = format!("https://matrix.org/_matrix/client/r0/rooms/{}/messages?dir=b&limit=50", room_id);
+                            let encoded_room = room_id.replace('!', "%21").replace(':', "%3A");
+                            let url = format!("https://matrix.org/_matrix/client/r0/rooms/{}/messages?dir=b&limit=50", encoded_room);
                             let mut req = client.get(&url).header("User-Agent", "TyphooN-Terminal/1.0");
                             if !access_token.is_empty() {
                                 req = req.header("Authorization", format!("Bearer {}", access_token));
@@ -11280,7 +11307,8 @@ impl TyphooNApp {
                                         }
                                         // Step 3: Send m.image message
                                         let txn_id = format!("typhoon_img_{}", chrono::Utc::now().timestamp_millis());
-                                        let send_url = format!("https://matrix.org/_matrix/client/r0/rooms/{}/send/m.room.message/{}", room_id, txn_id);
+                                        let encoded_room = room_id.replace('!', "%21").replace(':', "%3A");
+                                        let send_url = format!("https://matrix.org/_matrix/client/r0/rooms/{}/send/m.room.message/{}", encoded_room, txn_id);
                                         let msg_body = serde_json::json!({
                                             "msgtype": "m.image",
                                             "body": filename,
@@ -11313,7 +11341,8 @@ impl TyphooNApp {
                         let msg_tx = broker_msg_tx_clone.clone();
                         tokio::spawn(async move {
                             let txn_id = format!("typhoon_{}", chrono::Utc::now().timestamp_millis());
-                            let url = format!("https://matrix.org/_matrix/client/r0/rooms/{}/send/m.room.message/{}", room_id, txn_id);
+                            let encoded_room = room_id.replace('!', "%21").replace(':', "%3A");
+                            let url = format!("https://matrix.org/_matrix/client/r0/rooms/{}/send/m.room.message/{}", encoded_room, txn_id);
                             let msg_body = serde_json::json!({
                                 "msgtype": "m.text",
                                 "body": body,
@@ -13103,7 +13132,7 @@ impl TyphooNApp {
             show_hv_cone: false,
             show_sector_heatmap: false,
             show_dividends: false,
-            broker_scope: EventSource::All,
+            broker_scope: EventSource::Darwinex, // matches fund_source defaults (mt5=true, alpaca=false, tasty=false)
             show_event_calendar: false,
             event_calendar_rows: Vec::new(),
             event_filter_source: EventSource::All,
@@ -17401,7 +17430,11 @@ impl TyphooNApp {
                                     let _ = keyring::store(keyring::keys::MATRIX_USER_ID, &self.matrix_user_id);
                                 }
                                 self.log.push_back(LogEntry::info("Matrix token saved to keyring"));
-                                // Join room with the token
+                                // Join room + fetch messages
+                                let _ = self.broker_tx.send(BrokerCmd::MatrixJoinRoom {
+                                    room_id: self.matrix_room.clone(),
+                                    access_token: self.matrix_access_token.clone(),
+                                });
                                 let _ = self.broker_tx.send(BrokerCmd::MatrixFetchMessages {
                                     room_id: self.matrix_room.clone(),
                                     access_token: self.matrix_access_token.clone(),
@@ -17427,6 +17460,14 @@ impl TyphooNApp {
                         ui.checkbox(&mut self.fund_source_alpaca, "Alpaca");
                         ui.checkbox(&mut self.fund_source_tastytrade, "TastyTrade");
                     });
+                    // Sync broker_scope from checkbox state
+                    self.broker_scope = match (self.fund_source_mt5, self.fund_source_alpaca, self.fund_source_tastytrade) {
+                        (true, true, true) | (true, true, false) | (true, false, true)
+                        | (false, true, true) | (false, false, false) => EventSource::All,
+                        (false, true, false) => EventSource::Alpaca,
+                        (true, false, false) => EventSource::Darwinex,
+                        (false, false, true) => EventSource::Tasty,
+                    };
 
                     ui.add_space(10.0);
                     ui.heading("Data Sources");
@@ -20562,6 +20603,10 @@ impl TyphooNApp {
                     }
                     self.log.push_back(LogEntry::info(format!("Matrix: restored session as {}", self.matrix_user_id)));
                     // Join room + fetch
+                    let _ = self.broker_tx.send(BrokerCmd::MatrixJoinRoom {
+                        room_id: self.matrix_room.clone(),
+                        access_token: self.matrix_access_token.clone(),
+                    });
                     let _ = self.broker_tx.send(BrokerCmd::MatrixFetchMessages {
                         room_id: self.matrix_room.clone(),
                         access_token: self.matrix_access_token.clone(),
@@ -20753,9 +20798,23 @@ impl TyphooNApp {
                     };
 
                     ui.separator();
-                    // Show count AFTER scope is synced (same frame)
-                    // Can't call self.scoped_fundamentals() here due to borrow, so count directly
-                    let total = self.bg.all_fundamentals.len();
+                    // Show scoped count (inline — can't call broker_scope_symbols() due to borrow)
+                    let total = if self.broker_scope == EventSource::All {
+                        self.bg.all_fundamentals.len()
+                    } else {
+                        let syms: std::collections::HashSet<String> = match self.broker_scope {
+                            EventSource::Alpaca => self.live_positions.iter().map(|p| p.symbol.replace('/', "").to_uppercase()).collect(),
+                            EventSource::Darwinex => self.darwinex_radar_data.iter().filter(|(_, _, _, tm, _, _, _, _, _)| *tm != 0).map(|(s, _, _, _, _, _, _, _, _)| s.split('.').next().unwrap_or(s.as_str()).to_uppercase()).collect(),
+                            EventSource::Tasty => self.tt_positions.iter().map(|p| p.symbol.replace('/', "").to_uppercase()).collect(),
+                            EventSource::Positions => {
+                                let mut s: std::collections::HashSet<String> = self.live_positions.iter().map(|p| p.symbol.replace('/', "").to_uppercase()).collect();
+                                for p in &self.tt_positions { s.insert(p.symbol.replace('/', "").to_uppercase()); }
+                                s
+                            }
+                            _ => return,
+                        };
+                        self.bg.all_fundamentals.iter().filter(|f| syms.contains(&f.symbol.to_uppercase())).count()
+                    };
                     let lbl = match self.broker_scope {
                         EventSource::All => "ALL", EventSource::Alpaca => "ALPACA",
                         EventSource::Darwinex => "DARWINEX", EventSource::Tasty => "TASTY",
@@ -23270,6 +23329,14 @@ impl TyphooNApp {
                         ui.checkbox(&mut self.fund_source_alpaca, "Alpaca");
                         ui.checkbox(&mut self.fund_source_tastytrade, "TastyTrade");
                     });
+                    // Sync broker_scope from checkbox state
+                    self.broker_scope = match (self.fund_source_mt5, self.fund_source_alpaca, self.fund_source_tastytrade) {
+                        (true, true, true) | (true, true, false) | (true, false, true)
+                        | (false, true, true) | (false, false, false) => EventSource::All,
+                        (false, true, false) => EventSource::Alpaca,
+                        (true, false, false) => EventSource::Darwinex,
+                        (false, false, true) => EventSource::Tasty,
+                    };
 
                     // Last message
                     if !self.scrape_fund_last_msg.is_empty() {
@@ -28286,6 +28353,8 @@ impl eframe::App for TyphooNApp {
                         if let Ok(msgs) = serde_json::from_str::<Vec<(String, String, String)>>(&text) {
                             self.matrix_messages = msgs;
                         }
+                    } else if label == "MatrixJoined" {
+                        self.log.push_back(LogEntry::info("Matrix: joined community room"));
                     } else if label == "MatrixSent" {
                         // Re-fetch messages after sending
                         let _ = self.broker_tx.send(BrokerCmd::MatrixFetchMessages {
