@@ -12927,7 +12927,7 @@ impl TyphooNApp {
             bardata_active: false,
             reddit_posts: Vec::new(),
             show_matrix_chat: false,
-            matrix_room: "!PywMgEZlTbsHosUTZh:matrix.org".to_string(), // TyphooN-Terminal community chat room
+            matrix_room: "!SWsYKZXXtuHJVtTMOA:matrix.org".to_string(), // TyphooN Terminal Chat (public, unencrypted)
             matrix_input: String::new(),
             matrix_access_token: String::new(),
             matrix_user_id: String::new(),
