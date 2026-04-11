@@ -57,6 +57,10 @@ pub mod keys {
     pub const OPENAI_KEY: &str = "openai_api_key";
     pub const KRAKEN_API_KEY: &str = "kraken_api_key";
     pub const KRAKEN_API_SECRET: &str = "kraken_api_secret";
+    pub const GEMINI_KEY: &str = "gemini_api_key";
+    pub const XAI_KEY: &str = "xai_api_key";
+    pub const MISTRAL_KEY: &str = "mistral_api_key";
+    pub const PERPLEXITY_KEY: &str = "perplexity_api_key";
 }
 
 #[cfg(test)]

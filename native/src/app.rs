@@ -9214,8 +9214,9 @@ const COMMANDS: &[Command] = &[
     Command { name: "LOAD_TEMPLATE", desc: "Load a saved indicator template (LOAD_TEMPLATE <name>)" },
     Command { name: "TEMPLATES",     desc: "List all available chart templates" },
     Command { name: "CRYPTO_FEAR_GREED", desc: "Crypto Fear & Greed Index (alternative.me)" },
-    Command { name: "AI",            desc: "AI assistant chat (Claude API / OpenAI API)" },
-    Command { name: "CLAUDE",        desc: "Claude Code CLI — uses local claude binary (no API key needed)" },
+    Command { name: "AI",            desc: "AI assistant (Claude/GPT/Gemini/Grok/Mistral/Perplexity API)" },
+    Command { name: "CLAUDE",        desc: "Claude Code CLI — local claude binary (no API key)" },
+    Command { name: "GEMINI",        desc: "Gemini CLI — local gemini binary (no API key)" },
     Command { name: "CHAT",          desc: "TyphooN Terminal community chat" },
     Command { name: "WSB",           desc: "Reddit WallStreetBets hot posts" },
     Command { name: "BARDATA",       desc: "Download bar data for all known symbols from all brokers" },
@@ -9927,12 +9928,21 @@ pub struct TyphooNApp {
     /// AI chat (Anthropic Claude / OpenAI GPT).
     anthropic_key: String,
     openai_key: String,
+    gemini_key: String,
+    xai_key: String,       // Grok (xAI)
+    mistral_key: String,
+    perplexity_key: String,
     show_ai_chat: bool,
     /// Claude Code CLI chat window.
     show_claude_code: bool,
     claude_code_input: String,
     claude_code_history: Vec<(bool, String)>, // (is_user, message)
     claude_code_rx: Option<std::sync::mpsc::Receiver<String>>,
+    /// Gemini CLI chat window.
+    show_gemini_cli: bool,
+    gemini_cli_input: String,
+    gemini_cli_history: Vec<(bool, String)>,
+    gemini_cli_rx: Option<std::sync::mpsc::Receiver<String>>,
     ai_chat_history: Vec<(bool, String)>, // (is_user, message)
     ai_chat_input: String,
     ai_provider: usize, // 0=Claude, 1=GPT
@@ -11156,7 +11166,9 @@ impl TyphooNApp {
                                 .map(|(is_user, text)| serde_json::json!({"role": if *is_user { "user" } else { "assistant" }, "content": text}))
                                 .chain(std::iter::once(serde_json::json!({"role": "user", "content": message})))
                                 .collect();
+
                             if provider == "claude" {
+                                // Anthropic uses its own API format (not OpenAI-compatible)
                                 let body = serde_json::json!({"model": "claude-sonnet-4-20250514", "max_tokens": 1024, "messages": msgs});
                                 match client.post("https://api.anthropic.com/v1/messages")
                                     .header("x-api-key", &api_key).header("anthropic-version", "2023-06-01")
@@ -11167,22 +11179,40 @@ impl TyphooNApp {
                                             .unwrap_or_else(|| "(no response)".into());
                                         let _ = msg_tx.send(BrokerMsg::JsonResult("AiChat".into(), text));
                                     }
-                                    Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Claude: {}", e))); }
+                                    Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Claude API: {}", e))); }
                                 }
                             } else {
+                                // OpenAI-compatible endpoint (GPT, Gemini, Grok, Mistral, Perplexity, Ollama)
+                                let (url, model, auth_header) = match provider.as_str() {
+                                    "openai" => ("https://api.openai.com/v1/chat/completions", "gpt-4o", format!("Bearer {}", api_key)),
+                                    "gemini" => ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash", format!("Bearer {}", api_key)),
+                                    "grok" => ("https://api.x.ai/v1/chat/completions", "grok-3-mini", format!("Bearer {}", api_key)),
+                                    "mistral" => ("https://api.mistral.ai/v1/chat/completions", "mistral-large-latest", format!("Bearer {}", api_key)),
+                                    "perplexity" => ("https://api.perplexity.ai/chat/completions", "sonar-pro", format!("Bearer {}", api_key)),
+                                    "local" => {
+                                        // Ollama / LM Studio: local OpenAI-compatible server
+                                        let local_url = if api_key.starts_with("http") { api_key.as_str() } else { "http://localhost:11434" };
+                                        // Leak-safe: use a static-ish string for the URL
+                                        (if local_url.contains("11434") { "http://localhost:11434/v1/chat/completions" } else { "http://localhost:1234/v1/chat/completions" },
+                                         "llama3.2", String::new())
+                                    }
+                                    _ => ("https://api.openai.com/v1/chat/completions", "gpt-4o", format!("Bearer {}", api_key)),
+                                };
                                 let mut all = vec![serde_json::json!({"role": "system", "content": "You are a trading assistant for TyphooN Terminal."})];
                                 all.extend(msgs);
-                                let body = serde_json::json!({"model": "gpt-4o", "messages": all, "max_tokens": 1024});
-                                match client.post("https://api.openai.com/v1/chat/completions")
-                                    .header("Authorization", format!("Bearer {}", api_key))
-                                    .header("content-type", "application/json").json(&body).send().await {
+                                let body = serde_json::json!({"model": model, "messages": all, "max_tokens": 1024});
+                                let mut req = client.post(url).header("content-type", "application/json").json(&body);
+                                if !auth_header.is_empty() {
+                                    req = req.header("Authorization", &auth_header);
+                                }
+                                match req.send().await {
                                     Ok(resp) => {
                                         let text = resp.json::<serde_json::Value>().await.ok()
                                             .and_then(|j| j["choices"][0]["message"]["content"].as_str().map(|s| s.to_string()))
                                             .unwrap_or_else(|| "(no response)".into());
                                         let _ = msg_tx.send(BrokerMsg::JsonResult("AiChat".into(), text));
                                     }
-                                    Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("OpenAI: {}", e))); }
+                                    Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("{} API: {}", provider, e))); }
                                 }
                             }
                         });
@@ -12920,11 +12950,19 @@ impl TyphooNApp {
             ntfy_topic: String::new(),
             anthropic_key: String::new(),
             openai_key: String::new(),
+            gemini_key: String::new(),
+            xai_key: String::new(),
+            mistral_key: String::new(),
+            perplexity_key: String::new(),
             show_ai_chat: false,
             show_claude_code: false,
             claude_code_input: String::new(),
             claude_code_history: Vec::new(),
             claude_code_rx: None,
+            show_gemini_cli: false,
+            gemini_cli_input: String::new(),
+            gemini_cli_history: Vec::new(),
+            gemini_cli_rx: None,
             ai_chat_history: Vec::new(),
             ai_chat_input: String::new(),
             ai_provider: 0,
@@ -15719,6 +15757,17 @@ impl TyphooNApp {
                 }
             }
             "AI" | "AI_CHAT" => self.show_ai_chat = true,
+            "GEMINI" | "GEMINI_CLI" | "GEMINI-CLI" => {
+                match std::process::Command::new("which").arg("gemini").output() {
+                    Ok(out) if out.status.success() => {
+                        self.show_gemini_cli = true;
+                        self.log.push_back(LogEntry::info("Gemini CLI detected — opening chat"));
+                    }
+                    _ => {
+                        self.log.push_back(LogEntry::err("Gemini CLI not found in PATH. Install: npm install -g @anthropic-ai/gemini-cli or pip install gemini-cli"));
+                    }
+                }
+            }
             "CLAUDE" | "CLAUDE_CODE" | "CLAUDE-CODE" => {
                 // Check if claude binary exists
                 match std::process::Command::new("which").arg("claude").output() {
@@ -17019,6 +17068,7 @@ impl TyphooNApp {
         self.show_compound_calc = false;
         self.show_ai_chat = false;
         self.show_claude_code = false;
+        self.show_gemini_cli = false;
         self.show_matrix_chat = false;
         self.show_reddit = false;
         self.show_bardata = false;
@@ -17197,6 +17247,18 @@ impl TyphooNApp {
                         ui.end_row();
                         ui.label("Kraken API Secret:");
                         ui.add(egui::TextEdit::singleline(&mut self.kraken_api_secret).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("Gemini API Key:");
+                        ui.add(egui::TextEdit::singleline(&mut self.gemini_key).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("Grok (xAI) Key:");
+                        ui.add(egui::TextEdit::singleline(&mut self.xai_key).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("Mistral API Key:");
+                        ui.add(egui::TextEdit::singleline(&mut self.mistral_key).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("Perplexity Key:");
+                        ui.add(egui::TextEdit::singleline(&mut self.perplexity_key).desired_width(250.0).password(true));
                         ui.end_row();
                         ui.label("Matrix Username:");
                         ui.add(egui::TextEdit::singleline(&mut self.matrix_username).desired_width(250.0));
@@ -20254,6 +20316,11 @@ impl TyphooNApp {
                         ui.label("Provider:");
                         ui.radio_value(&mut self.ai_provider, 0, "Claude");
                         ui.radio_value(&mut self.ai_provider, 1, "GPT");
+                        ui.radio_value(&mut self.ai_provider, 2, "Gemini");
+                        ui.radio_value(&mut self.ai_provider, 3, "Grok");
+                        ui.radio_value(&mut self.ai_provider, 4, "Mistral");
+                        ui.radio_value(&mut self.ai_provider, 5, "Perplexity");
+                        ui.radio_value(&mut self.ai_provider, 6, "Local");
                     });
                     ui.separator();
                     // Chat history
@@ -20278,9 +20345,17 @@ impl TyphooNApp {
                         if send && !self.ai_chat_input.is_empty() {
                             let msg = self.ai_chat_input.clone();
                             self.ai_chat_history.push((true, msg.clone()));
-                            let key = if self.ai_provider == 0 { self.anthropic_key.clone() } else { self.openai_key.clone() };
-                            let provider = if self.ai_provider == 0 { "claude" } else { "openai" };
-                            if key.is_empty() {
+                            let (provider, key) = match self.ai_provider {
+                                0 => ("claude", self.anthropic_key.clone()),
+                                1 => ("openai", self.openai_key.clone()),
+                                2 => ("gemini", self.gemini_key.clone()),
+                                3 => ("grok", self.xai_key.clone()),
+                                4 => ("mistral", self.mistral_key.clone()),
+                                5 => ("perplexity", self.perplexity_key.clone()),
+                                6 => ("local", "http://localhost:11434".to_string()), // Ollama default
+                                _ => ("openai", self.openai_key.clone()),
+                            };
+                            if key.is_empty() && self.ai_provider != 6 {
                                 self.ai_chat_history.push((false, "Set API key in Settings first.".into()));
                             } else {
                                 let _ = self.broker_tx.send(BrokerCmd::AiChat {
@@ -20370,6 +20445,72 @@ impl TyphooNApp {
                                     Err(e) => {
                                         let _ = tx.send(format!("Failed to run claude CLI: {e}"));
                                     }
+                                }
+                            });
+                        }
+                    });
+                });
+        }
+
+        // ── Gemini CLI chat ──
+        if let Some(ref rx) = self.gemini_cli_rx {
+            if let Ok(response) = rx.try_recv() {
+                self.gemini_cli_history.push((false, response));
+                self.gemini_cli_rx = None;
+            }
+        }
+        if self.show_gemini_cli {
+            egui::Window::new("Gemini CLI")
+                .open(&mut self.show_gemini_cli)
+                .resizable(true).default_size([550.0, 450.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("Gemini CLI — uses your local gemini binary").small().color(AXIS_TEXT));
+                    ui.separator();
+                    egui::ScrollArea::vertical().auto_shrink(false).max_height(340.0).stick_to_bottom(true).show(ui, |ui| {
+                        if self.gemini_cli_history.is_empty() {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(40.0);
+                                ui.label(egui::RichText::new("Ask Gemini anything — uses your local gemini CLI").color(AXIS_TEXT));
+                            });
+                        }
+                        for (is_user, msg) in &self.gemini_cli_history {
+                            let (align, color, prefix) = if *is_user {
+                                (egui::Align::RIGHT, egui::Color32::from_rgb(80, 140, 255), "You")
+                            } else {
+                                (egui::Align::LEFT, egui::Color32::from_rgb(100, 200, 220), "Gemini")
+                            };
+                            ui.with_layout(egui::Layout::top_down(align), |ui| {
+                                ui.label(egui::RichText::new(prefix).strong().small().color(color));
+                                ui.label(egui::RichText::new(msg).small());
+                            });
+                            ui.add_space(4.0);
+                        }
+                        if self.gemini_cli_rx.is_some() {
+                            ui.horizontal(|ui| { ui.spinner(); ui.label(egui::RichText::new("Thinking...").small().color(AXIS_TEXT)); });
+                        }
+                    });
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        let resp = ui.add(egui::TextEdit::singleline(&mut self.gemini_cli_input)
+                            .desired_width(ui.available_width() - 60.0).hint_text("Ask Gemini..."));
+                        let send = ui.button("Send").clicked() || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                        if send && !self.gemini_cli_input.trim().is_empty() && self.gemini_cli_rx.is_none() {
+                            let msg = self.gemini_cli_input.trim().to_string();
+                            self.gemini_cli_input.clear();
+                            self.gemini_cli_history.push((true, msg.clone()));
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            self.gemini_cli_rx = Some(rx);
+                            std::thread::spawn(move || {
+                                match std::process::Command::new("gemini").arg(&msg).output() {
+                                    Ok(output) => {
+                                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                                        let response = if !stdout.trim().is_empty() { stdout.trim().to_string() }
+                                            else if !stderr.trim().is_empty() { format!("Error: {}", stderr.trim()) }
+                                            else { "(empty response)".to_string() };
+                                        let _ = tx.send(response);
+                                    }
+                                    Err(e) => { let _ = tx.send(format!("Failed to run gemini CLI: {e}")); }
                                 }
                             });
                         }
@@ -27263,6 +27404,10 @@ impl eframe::App for TyphooNApp {
                     (keyring::keys::OPENAI_KEY, "openai_key"),
                     (keyring::keys::KRAKEN_API_KEY, "kraken_api_key"),
                     (keyring::keys::KRAKEN_API_SECRET, "kraken_api_secret"),
+                    (keyring::keys::GEMINI_KEY, "gemini_key"),
+                    (keyring::keys::XAI_KEY, "xai_key"),
+                    (keyring::keys::MISTRAL_KEY, "mistral_key"),
+                    (keyring::keys::PERPLEXITY_KEY, "perplexity_key"),
                     ("matrix_username", "matrix_username"),
                     ("matrix_password", "matrix_password"),
                     ("matrix_access_token", "matrix_access_token"),
@@ -27307,6 +27452,10 @@ impl eframe::App for TyphooNApp {
                         k if k == keyring::keys::OPENAI_KEY => self.openai_key = val.clone(),
                         k if k == keyring::keys::KRAKEN_API_KEY => self.kraken_api_key = val.clone(),
                         k if k == keyring::keys::KRAKEN_API_SECRET => self.kraken_api_secret = val.clone(),
+                        k if k == keyring::keys::GEMINI_KEY => self.gemini_key = val.clone(),
+                        k if k == keyring::keys::XAI_KEY => self.xai_key = val.clone(),
+                        k if k == keyring::keys::MISTRAL_KEY => self.mistral_key = val.clone(),
+                        k if k == keyring::keys::PERPLEXITY_KEY => self.perplexity_key = val.clone(),
                         "matrix_username" => self.matrix_username = val.clone(),
                         "matrix_password" => self.matrix_password = val.clone(),
                         "matrix_access_token" => self.matrix_access_token = val.clone(),
