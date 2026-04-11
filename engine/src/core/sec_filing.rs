@@ -718,7 +718,7 @@ pub async fn scrape_all_portfolio_symbols(db_path: PathBuf) -> Result<ScrapeStat
     let db = db_path.clone();
     let symbols: Vec<String> = tokio::task::spawn_blocking(move || {
         let conn = open_conn(&db)?;
-        let mut syms: Vec<String> = Vec::new();
+        let mut sym_set: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // From darwin_deals
         if let Ok(mut stmt) = conn.prepare(
@@ -727,9 +727,7 @@ pub async fn scrape_all_portfolio_symbols(db_path: PathBuf) -> Result<ScrapeStat
             if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
                 for row in rows.flatten() {
                     let sym = row.trim().to_uppercase();
-                    if is_equity_symbol(&sym) && !syms.contains(&sym) {
-                        syms.push(sym);
-                    }
+                    if is_equity_symbol(&sym) { sym_set.insert(sym); }
                 }
             }
         }
@@ -741,21 +739,18 @@ pub async fn scrape_all_portfolio_symbols(db_path: PathBuf) -> Result<ScrapeStat
             if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
                 for row in rows.flatten() {
                     let parts: Vec<&str> = row.split(':').collect();
-                    // mt5:CC:SYMBOL:timeframe — symbol is at index 2 (4-part keys)
-                    // mt5:SYMBOL:timeframe — symbol is at index 1 (3-part keys)
                     let sym_opt = if parts.len() >= 4 {
                         Some(parts[2].to_uppercase())
                     } else if parts.len() >= 3 {
                         Some(parts[1].to_uppercase())
                     } else { None };
                     if let Some(sym) = sym_opt {
-                        if is_equity_symbol(&sym) && !syms.contains(&sym) {
-                            syms.push(sym);
-                        }
+                        if is_equity_symbol(&sym) { sym_set.insert(sym); }
                     }
                 }
             }
         }
+        let syms: Vec<String> = sym_set.into_iter().collect();
 
         Ok::<_, String>(syms)
     }).await.map_err(|e| format!("spawn_blocking: {e}"))??;

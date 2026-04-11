@@ -2071,7 +2071,7 @@ impl ChartState {
                 // RSI — sequential GPU
                 let rsi_p = self.rsi_period;
                 if let Some(data) = gpu.compute_rsi_gpu(rsi_p) {
-                    self.rsi = data.iter().enumerate().map(|(i, &v)| if i <= rsi_p as usize || v == 0.0 { None } else { Some(v as f64) }).collect();
+                    self.rsi = data.iter().enumerate().map(|(i, &v)| if i < rsi_p as usize || v == 0.0 { None } else { Some(v as f64) }).collect();
                 } else { self.rsi = compute_rsi(&self.bars, rsi_p as usize); }
 
                 // Fisher — sequential GPU (uses midpoints)
@@ -2082,7 +2082,7 @@ impl ChartState {
                     for i in 0..n {
                         let fv = data.get(i * 2).copied().unwrap_or(0.0);
                         let sv = data.get(i * 2 + 1).copied().unwrap_or(0.0);
-                        if fv == 0.0 && sv == 0.0 { f.push(None); fs.push(None); }
+                        if i < fisher_p as usize || (fv == 0.0 && sv == 0.0) { f.push(None); fs.push(None); }
                         else { f.push(Some(fv as f64)); fs.push(Some(sv as f64)); }
                     }
                     self.fisher = f; self.fisher_signal = fs;
@@ -2146,11 +2146,12 @@ impl ChartState {
                         let a = data.get(i * 3).copied().unwrap_or(0.0);
                         let dp = data.get(i * 3 + 1).copied().unwrap_or(0.0);
                         let dm = data.get(i * 3 + 2).copied().unwrap_or(0.0);
-                        if i < adx_p as usize * 2 || (a == 0.0 && dp == 0.0 && dm == 0.0) {
-                            adx.push(None); dip.push(None); dim.push(None);
-                        } else {
-                            adx.push(Some(a as f64)); dip.push(Some(dp as f64)); dim.push(Some(dm as f64));
-                        }
+                        // DI+/- valid from index period; ADX valid from index period*2-1
+                        let di_warmup = adx_p as usize;
+                        let adx_warmup = adx_p as usize * 2;
+                        dip.push(if i < di_warmup || (dp == 0.0 && dm == 0.0) { None } else { Some(dp as f64) });
+                        dim.push(if i < di_warmup || (dp == 0.0 && dm == 0.0) { None } else { Some(dm as f64) });
+                        adx.push(if i < adx_warmup || a == 0.0 { None } else { Some(a as f64) });
                     }
                     self.adx = adx; self.di_plus = dip; self.di_minus = dim;
                 } else {
@@ -2192,9 +2193,9 @@ impl ChartState {
                     self.hma = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
                 } else { self.hma = compute_hma(&self.bars, 20); }
 
-                // CCI — GPU (parallel, from OHLC, warmup: period bars)
+                // CCI — GPU (parallel, from OHLC, warmup: period-1 bars)
                 if let Some(data) = gpu.compute_cci_gpu(20) {
-                    self.cci = data.iter().enumerate().map(|(i, &v)| if i < 20 { None } else { Some(v as f64) }).collect();
+                    self.cci = data.iter().enumerate().map(|(i, &v)| if i < 19 { None } else { Some(v as f64) }).collect();
                 } else { self.cci = compute_cci(&self.bars, 20); }
 
                 // Williams %R — GPU (parallel, from OHLC)
