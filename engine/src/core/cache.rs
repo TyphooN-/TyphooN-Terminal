@@ -1304,6 +1304,10 @@ impl SqliteCache {
         }).map_err(|e| format!("Query failed: {e}"))?;
         for row in rows {
             if let Ok((key, data)) = row {
+                // Skip MT5 metadata entries (raw text, not bar data)
+                if key.contains("__SPECS__") || key.contains("__SYMBOLS__") || key.contains("__SERVER__") {
+                    continue;
+                }
                 let bytes = match maybe_decompress(data) {
                     Ok(b) => b,
                     Err(e) => { tracing::warn!("repair_bar_counts: decompress failed for {key}: {e}"); continue; }
