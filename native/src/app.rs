@@ -10154,6 +10154,8 @@ pub struct TyphooNApp {
     fund_source_mt5: bool,
     fund_source_alpaca: bool,
     fund_source_tastytrade: bool,
+    /// ADR-094: SCOPE popup window with source checkboxes.
+    show_scope_window: bool,
     // Scrape status dashboard
     show_scrape_status: bool,
     scrape_fund_running: bool,
@@ -13019,6 +13021,7 @@ impl TyphooNApp {
             fund_source_mt5: true,
             fund_source_alpaca: false,
             fund_source_tastytrade: false,
+            show_scope_window: false,
             show_scrape_status: false,
             scrape_fund_running: false,
             scrape_fund_ok: 0,
@@ -14558,15 +14561,9 @@ impl TyphooNApp {
                 // SCOPE [ALL|ALPACA|DARWINEX|TASTY] — global broker filter for fundamental features.
                 let arg = s.trim_start_matches("SCOPE").trim();
                 let (new_scope, label) = match arg {
-                    "" => { // show current
-                        let lbl = match self.broker_scope {
-                            EventSource::All => "ALL", EventSource::Alpaca => "ALPACA",
-                            EventSource::Darwinex => "DARWINEX", EventSource::Tasty => "TASTY",
-                            EventSource::Positions => "POSITIONS",
-                        };
-                        self.log.push_back(LogEntry::info(format!(
-                            "Broker scope: {lbl} (use SCOPE [ALL|ALPACA|DARWINEX|TASTY|POSITIONS] to change)"
-                        )));
+                    "" => {
+                        // No arg: open SCOPE popup window
+                        self.show_scope_window = true;
                         return;
                     }
                     "ALL" => (EventSource::All, "ALL"),
@@ -14582,6 +14579,14 @@ impl TyphooNApp {
                     }
                 };
                 self.broker_scope = new_scope;
+                // Sync fund_source toggles with scope
+                match new_scope {
+                    EventSource::All => { self.fund_source_mt5 = true; self.fund_source_alpaca = true; self.fund_source_tastytrade = true; }
+                    EventSource::Alpaca => { self.fund_source_mt5 = false; self.fund_source_alpaca = true; self.fund_source_tastytrade = false; }
+                    EventSource::Darwinex => { self.fund_source_mt5 = true; self.fund_source_alpaca = false; self.fund_source_tastytrade = false; }
+                    EventSource::Tasty => { self.fund_source_mt5 = false; self.fund_source_alpaca = false; self.fund_source_tastytrade = true; }
+                    EventSource::Positions => { self.fund_source_mt5 = true; self.fund_source_alpaca = true; self.fund_source_tastytrade = true; }
+                }
                 let n = self.scoped_fundamentals().len();
                 self.log.push_back(LogEntry::info(format!(
                     "Broker scope → {label} ({} fundamentals in scope)", n
@@ -20229,6 +20234,54 @@ impl TyphooNApp {
         }
 
         // Risk Calculator — wired to engine risk.rs
+        // ── SCOPE popup window with source checkboxes ──
+        if self.show_scope_window {
+            let scope_label = self.broker_scope_label().to_string();
+            let n_scoped = self.scoped_fundamentals().len();
+            egui::Window::new("Scope — Symbol Sources")
+                .open(&mut self.show_scope_window)
+                .resizable(false).default_size([320.0, 220.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new(format!("Current scope: {} ({} symbols)", scope_label, n_scoped)).strong());
+                    ui.separator();
+                    ui.label("Symbol sources for fundamentals scraping + analytics:");
+                    ui.add_space(4.0);
+                    let mt5_changed = ui.checkbox(&mut self.fund_source_mt5, "MT5 / Darwinex").changed();
+                    let alp_changed = ui.checkbox(&mut self.fund_source_alpaca, "Alpaca").changed();
+                    let tt_changed = ui.checkbox(&mut self.fund_source_tastytrade, "tastytrade").changed();
+                    // Sync scope enum from checkboxes
+                    if mt5_changed || alp_changed || tt_changed {
+                        self.broker_scope = match (self.fund_source_mt5, self.fund_source_alpaca, self.fund_source_tastytrade) {
+                            (true, true, true) => EventSource::All,
+                            (false, true, false) => EventSource::Alpaca,
+                            (true, false, false) => EventSource::Darwinex,
+                            (false, false, true) => EventSource::Tasty,
+                            _ => EventSource::All, // mixed selection defaults to All
+                        };
+                    }
+                    ui.separator();
+                    ui.label("Quick presets:");
+                    ui.horizontal(|ui| {
+                        if ui.button("ALL").clicked() {
+                            self.fund_source_mt5 = true; self.fund_source_alpaca = true; self.fund_source_tastytrade = true;
+                            self.broker_scope = EventSource::All;
+                        }
+                        if ui.button("Alpaca Only").clicked() {
+                            self.fund_source_mt5 = false; self.fund_source_alpaca = true; self.fund_source_tastytrade = false;
+                            self.broker_scope = EventSource::Alpaca;
+                        }
+                        if ui.button("Darwinex Only").clicked() {
+                            self.fund_source_mt5 = true; self.fund_source_alpaca = false; self.fund_source_tastytrade = false;
+                            self.broker_scope = EventSource::Darwinex;
+                        }
+                        if ui.button("Positions").clicked() {
+                            self.fund_source_mt5 = true; self.fund_source_alpaca = true; self.fund_source_tastytrade = true;
+                            self.broker_scope = EventSource::Positions;
+                        }
+                    });
+                });
+        }
+
         if self.show_risk_calc {
             egui::Window::new("Risk Calculator")
                 .open(&mut self.show_risk_calc)
@@ -28839,7 +28892,7 @@ impl eframe::App for TyphooNApp {
                 let scope_btn = egui::Button::new(
                     egui::RichText::new(format!("Scope: {}", scope_lbl)).strong().color(egui::Color32::WHITE)
                 ).fill(scope_col);
-                if ui.add(scope_btn).on_hover_text("Click to cycle scope (All → Alpaca → Darwinex → Tasty → Positions → All). Affects OUTLIERS, EVOUTLIERS, Sector Heatmap, Dividend Screener.").clicked() {
+                if ui.add(scope_btn).on_hover_text("Left-click: cycle scope. Right-click: open scope settings.").clicked() {
                     self.broker_scope = match self.broker_scope {
                         EventSource::All       => EventSource::Alpaca,
                         EventSource::Alpaca    => EventSource::Darwinex,
@@ -28847,6 +28900,14 @@ impl eframe::App for TyphooNApp {
                         EventSource::Tasty     => EventSource::Positions,
                         EventSource::Positions => EventSource::All,
                     };
+                    // Sync fund_source toggles
+                    match self.broker_scope {
+                        EventSource::All => { self.fund_source_mt5 = true; self.fund_source_alpaca = true; self.fund_source_tastytrade = true; }
+                        EventSource::Alpaca => { self.fund_source_mt5 = false; self.fund_source_alpaca = true; self.fund_source_tastytrade = false; }
+                        EventSource::Darwinex => { self.fund_source_mt5 = true; self.fund_source_alpaca = false; self.fund_source_tastytrade = false; }
+                        EventSource::Tasty => { self.fund_source_mt5 = false; self.fund_source_alpaca = false; self.fund_source_tastytrade = true; }
+                        EventSource::Positions => { self.fund_source_mt5 = true; self.fund_source_alpaca = true; self.fund_source_tastytrade = true; }
+                    }
                     let n = self.scoped_fundamentals().len();
                     self.log.push_back(LogEntry::info(format!(
                         "Broker scope → {} ({} fundamentals in scope)",
