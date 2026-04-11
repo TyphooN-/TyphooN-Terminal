@@ -5,13 +5,26 @@
 //!
 //! Requires ChromeDriver installed on the system.
 //! Browser runs visible (not headless) so the user can solve CAPTCHAs.
+//!
+//! Tabs scraped per DARWIN (all except Signal Account):
+//!   - Overview (quote, returns, D-Score, risk metrics, investor data)
+//!   - Return/Performance (monthly returns grid, equity curve)
+//!   - Risk (VaR history, drawdown periods)
+//!   - Investable Attributes (D-Score component history)
+//!   - Investor (investor count + AuM timeline)
+//!
+//! Portfolio-level pages scraped:
+//!   - /portfolio/correlation (N×N matrix)
+//!   - /portfolio/performance (portfolio equity curve, monthly returns)
+//!   - /portfolio/risk (portfolio VaR history, drawdown)
+//!   - /portfolio/allocation (DARWIN weights)
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use thirtyfour::prelude::*;
 use std::time::Duration;
 
-// ── Keyring Keys ───────────────────────────────────────────────────
+// ── Keyring Keys ────────��──────────────────────────────────────────
 
 pub mod keys {
     pub const DARWINEX_EMAIL: &str = "darwinex_email";
@@ -30,7 +43,8 @@ mod selectors {
     pub const CAPTCHA_FRAME: &str = "iframe[src*='captcha'], iframe[src*='recaptcha'], .g-recaptcha, .h-captcha, iframe[src*='turnstile']";
     // Dashboard — presence means login succeeded
     pub const DASHBOARD_MARKER: &str = ".dashboard, [data-page='dashboard'], .portfolio-overview, .main-content";
-    // DARWIN profile page — quote & returns
+
+    // ── DARWIN profile page — Overview tab ──────────────────────────
     pub const DARWIN_QUOTE: &str = ".darwin-quote, [data-field='quote'], .current-quote";
     pub const DARWIN_DAILY_RETURN: &str = ".daily-return, [data-field='daily_return']";
     pub const DARWIN_MONTHLY_RETURN: &str = ".monthly-return, [data-field='monthly_return']";
@@ -64,27 +78,90 @@ mod selectors {
     pub const DARWIN_AVG_HOLD_TIME: &str = ".avg-hold-time, [data-field='avg_holding_time']";
     pub const DARWIN_AVG_TRADE_RETURN: &str = ".avg-trade-return, [data-field='avg_trade_return']";
     pub const DARWIN_SYMBOLS_TRADED: &str = ".symbols-traded, [data-field='symbols_traded']";
+
+    // ── Tab navigation ─────────────────────────────────────────────
+    // Tab selectors for clicking (the actual tab buttons/links on the DARWIN profile)
+    pub const TAB_RETURN: &str = "a[href*='return'], a[href*='performance'], [data-tab='return'], [data-tab='performance'], .tab-return, .tab-performance, nav a:nth-child(2), .nav-tabs li:nth-child(2) a";
+    pub const TAB_RISK: &str = "a[href*='risk'], [data-tab='risk'], .tab-risk, nav a:nth-child(3), .nav-tabs li:nth-child(3) a";
+    pub const TAB_INVESTABLE: &str = "a[href*='investable'], a[href*='attributes'], [data-tab='investable'], .tab-investable, nav a:nth-child(4), .nav-tabs li:nth-child(4) a";
+    pub const TAB_INVESTOR: &str = "a[href*='investor'], [data-tab='investor'], .tab-investor, nav a:nth-child(5), .nav-tabs li:nth-child(5) a";
+
+    // ── Return/Performance tab ─────────────────────────────────────
+    // Monthly returns grid: table rows with year + 12 monthly cells
+    pub const MONTHLY_RETURNS_TABLE: &str = ".monthly-returns, table.returns-table, [data-section='monthly-returns'], .return-grid";
+    pub const MONTHLY_RETURNS_ROW: &str = "tr[data-year], .returns-row, tbody tr";
+    pub const MONTHLY_RETURNS_CELL: &str = "td[data-month], .return-cell, td";
+    // Equity curve data points
+    pub const EQUITY_CURVE_POINT: &str = "[data-equity], .equity-point, .chart-point";
+    // All-time return from performance page (may have more granular data)
+    pub const PERF_CAGR: &str = ".cagr, [data-field='cagr']";
+    pub const PERF_BEST_MONTH: &str = ".best-month, [data-field='best_month']";
+    pub const PERF_WORST_MONTH: &str = ".worst-month, [data-field='worst_month']";
+    pub const PERF_AVG_MONTH: &str = ".avg-month, [data-field='avg_month']";
+    pub const PERF_POSITIVE_MONTHS: &str = ".positive-months, [data-field='positive_months']";
+    pub const PERF_NEGATIVE_MONTHS: &str = ".negative-months, [data-field='negative_months']";
+
+    // ── Risk tab ─────────���─────────────────────────────────────────
+    pub const VAR_HISTORY_ROW: &str = "[data-var-date], .var-history-row, .risk-history tr";
+    pub const DRAWDOWN_PERIOD_ROW: &str = "[data-drawdown], .drawdown-row, .drawdown-period";
+    pub const RISK_CURRENT_VAR: &str = ".current-var, [data-field='current_var']";
+    pub const RISK_AVG_VAR: &str = ".avg-var, [data-field='avg_var']";
+    pub const RISK_MAX_VAR: &str = ".max-var, [data-field='max_var']";
+    pub const RISK_MIN_VAR: &str = ".min-var, [data-field='min_var']";
+    pub const RISK_VAR_VIOLATIONS: &str = ".var-violations, [data-field='var_violations']";
+
+    // ── Investable Attributes tab ───────��──────────────────────────
+    pub const DSCORE_HISTORY_ROW: &str = "[data-dscore-date], .dscore-history-row";
+    pub const _DSCORE_HISTORY_POINT: &str = "[data-dscore-value], .dscore-point";
+
+    // ── Investor tab ────────────��──────────────────────────────────
+    pub const INVESTOR_FLOW_ROW: &str = "[data-investor-date], .investor-flow-row, .investor-history tr";
+    pub const INVESTOR_FLOW_COUNT: &str = "[data-investor-count], .investor-count-cell, td:nth-child(2)";
+    pub const INVESTOR_FLOW_AUM: &str = "[data-investor-aum], .investor-aum-cell, td:nth-child(3)";
+    pub const INVESTOR_CAPITAL_IN: &str = ".capital-in, [data-field='capital_in']";
+    pub const INVESTOR_CAPITAL_OUT: &str = ".capital-out, [data-field='capital_out']";
+    pub const INVESTOR_NET_FLOW: &str = ".net-flow, [data-field='net_flow']";
+    pub const INVESTOR_DIVERGENCE: &str = ".divergence, [data-field='divergence_pct']";
+
+    // ── Portfolio-level pages ──────────────────────────────────────
     // Correlation page
-    pub const _CORRELATION_TABLE: &str = ".correlation-matrix, table.correlation";
     pub const CORRELATION_CELL: &str = "td[data-correlation]";
+    // Performance page
+    pub const _PORTFOLIO_EQUITY: &str = ".portfolio-equity, [data-field='portfolio_return']";
+    pub const PORTFOLIO_MONTHLY_TABLE: &str = ".portfolio-monthly-returns, .portfolio-returns-table";
+    pub const PORTFOLIO_TOTAL_RETURN: &str = ".total-return, [data-field='total_return']";
+    pub const PORTFOLIO_CAGR: &str = ".portfolio-cagr, [data-field='portfolio_cagr']";
+    pub const PORTFOLIO_BEST_MONTH: &str = ".portfolio-best-month, [data-field='portfolio_best_month']";
+    pub const PORTFOLIO_WORST_MONTH: &str = ".portfolio-worst-month, [data-field='portfolio_worst_month']";
+    // Risk page
+    pub const PORTFOLIO_VAR: &str = ".portfolio-var, [data-field='portfolio_var']";
+    pub const PORTFOLIO_MAX_DD: &str = ".portfolio-max-dd, [data-field='portfolio_max_dd']";
+    pub const PORTFOLIO_DIVERSIFICATION: &str = ".diversification-benefit, [data-field='diversification']";
+    pub const PORTFOLIO_VAR_HISTORY_ROW: &str = ".portfolio-var-row, [data-portfolio-var-date]";
+    // Allocation page
+    pub const ALLOCATION_ROW: &str = ".allocation-row, [data-darwin-allocation], .allocation-table tr";
+    pub const ALLOCATION_TICKER: &str = "[data-allocation-ticker], .allocation-ticker, td:nth-child(1)";
+    pub const ALLOCATION_WEIGHT: &str = "[data-allocation-weight], .allocation-weight, td:nth-child(2)";
+    pub const ALLOCATION_INVESTED: &str = "[data-allocation-invested], .allocation-invested, td:nth-child(3)";
+    pub const ALLOCATION_PNL: &str = "[data-allocation-pnl], .allocation-pnl, td:nth-child(4)";
 }
 
-// ── Data Types ─────────────────────────────────────────────────────
+// ── Data Types ───────��─────────────────────────────────────────────
 
 /// Live snapshot of a single DARWIN from darwinexzero.com.
-/// Covers 100% of the Strategy Analysis tab fields.
+/// Covers the Overview tab fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DarwinWebSnapshot {
     pub ticker: String,
     pub timestamp_ms: i64,
-    // ── Quote & Returns ────────────────────────────────────────
+    // ── Quote & Returns ────────────��───────────────────────────
     pub quote: f64,
     pub daily_return_pct: f64,
     pub monthly_return_pct: f64,
     pub ytd_return_pct: f64,
     pub all_time_return_pct: f64,
-    // ── D-Score Components ─────────────────────────────────────
+    // ── D-Score Components ���────────────────────────────────────
     pub dscore: f64,
     pub ds_experience: f64,       // Ex (experience)
     pub ds_risk_mgmt: f64,        // Rs (risk stability)
@@ -92,24 +169,24 @@ pub struct DarwinWebSnapshot {
     pub ds_performance: f64,      // Pf (performance fee)
     pub ds_scalability: f64,      // Sc (scalability/capacity)
     pub ds_market_correlation: f64, // Mc (market correlation)
-    // ── Risk Metrics ───────────────────────────────────────────
+    // ── Risk Metrics ─────��─────────────────────────────────────
     pub var_monthly: f64,         // monthly VaR
     pub max_drawdown_pct: f64,
     pub volatility_annual: f64,
     pub sharpe_ratio: f64,
     pub sortino_ratio: f64,
-    // ── Investor Data ──────────────────────────────────────────
+    // ── Investor Data ─────────────��────────────────────────────
     pub investors: u32,
     pub aum: f64,
     pub capacity_remaining_pct: f64,
-    // ── Trading Stats ──────────────────────────────────────────
+    // ── Trading Stats ───────────��──────────────────────────────
     pub total_trades: u32,
     pub win_rate: f64,
     pub profit_factor: f64,
     pub avg_holding_time_hours: f64,
     pub avg_trade_return_pct: f64,
     pub symbols_traded: u32,
-    // ── Status ──────────────────────────────────────────────────
+    // ── Status ───────���──────────────────────────────────────────
     /// Whether this DARWIN is excluded/suspended on Darwinex (auto-detected).
     pub excluded: bool,
     /// Exclusion reason if applicable (e.g. "correlation", "VaR breach", "suspended").
@@ -117,6 +194,173 @@ pub struct DarwinWebSnapshot {
     // ── Correlation ────────────────────────────────────────────
     /// Average pairwise correlation with other active DARWINs.
     pub correlation_portfolio: f64,
+}
+
+/// Monthly returns grid for a single DARWIN (year × month).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DarwinMonthlyReturns {
+    pub ticker: String,
+    /// Each entry: (year, [jan, feb, ..., dec]) — None if no data for that month.
+    pub rows: Vec<MonthlyReturnRow>,
+    /// Performance stats from the Return tab.
+    pub cagr: f64,
+    pub best_month_pct: f64,
+    pub worst_month_pct: f64,
+    pub avg_month_pct: f64,
+    pub positive_months: u32,
+    pub negative_months: u32,
+}
+
+/// One row of the monthly returns grid (one year).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MonthlyReturnRow {
+    pub year: u16,
+    /// 12 entries (Jan=0 .. Dec=11). None if no data for that month.
+    pub months: [Option<f64>; 12],
+    /// Full-year return if shown.
+    pub year_total: Option<f64>,
+}
+
+/// Equity curve time series for a DARWIN (from Return tab chart data).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DarwinEquityCurve {
+    pub ticker: String,
+    /// (timestamp_ms, nav_value) points.
+    pub points: Vec<EquityPoint>,
+}
+
+/// A single equity curve data point.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EquityPoint {
+    pub timestamp_ms: i64,
+    pub value: f64,
+}
+
+/// VaR history for a DARWIN (from Risk tab).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DarwinVaRHistory {
+    pub ticker: String,
+    /// (timestamp_ms, var_pct) series.
+    pub points: Vec<VaRPoint>,
+    /// Summary risk stats from the Risk tab.
+    pub current_var: f64,
+    pub avg_var: f64,
+    pub max_var: f64,
+    pub min_var: f64,
+    pub var_violations: u32,
+    /// Drawdown periods: (start_ms, end_ms, depth_pct).
+    pub drawdown_periods: Vec<DrawdownPeriod>,
+}
+
+/// A single VaR data point.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaRPoint {
+    pub timestamp_ms: i64,
+    pub var_pct: f64,
+}
+
+/// A drawdown period with start/end dates and depth.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrawdownPeriod {
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub depth_pct: f64,
+    /// Recovery time in days (0 if still in drawdown).
+    pub recovery_days: u32,
+}
+
+/// D-Score component history for a DARWIN (from Investable Attributes tab).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DarwinDScoreHistory {
+    pub ticker: String,
+    /// (timestamp_ms, dscore, ex, rs, ra, pf, sc, mc) series.
+    pub points: Vec<DScorePoint>,
+}
+
+/// A single D-Score history data point.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DScorePoint {
+    pub timestamp_ms: i64,
+    pub dscore: f64,
+    pub experience: f64,
+    pub risk_stability: f64,
+    pub risk_adjustment: f64,
+    pub performance: f64,
+    pub scalability: f64,
+    pub market_correlation: f64,
+}
+
+/// Investor flow data for a DARWIN (from Investor tab).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DarwinInvestorFlow {
+    pub ticker: String,
+    /// Time series of investor count + AuM.
+    pub points: Vec<InvestorFlowPoint>,
+    /// Summary: net capital flow.
+    pub capital_in: f64,
+    pub capital_out: f64,
+    pub net_flow: f64,
+    /// Signal vs Quote divergence (%).
+    pub divergence_pct: f64,
+}
+
+/// A single investor flow data point.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InvestorFlowPoint {
+    pub timestamp_ms: i64,
+    pub investor_count: u32,
+    pub aum: f64,
+}
+
+/// Portfolio-level performance data from /portfolio/performance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortfolioPerformance {
+    pub total_return_pct: f64,
+    pub cagr: f64,
+    pub best_month_pct: f64,
+    pub worst_month_pct: f64,
+    /// Monthly returns grid for the portfolio.
+    pub monthly_returns: Vec<MonthlyReturnRow>,
+    /// Equity curve points.
+    pub equity_points: Vec<EquityPoint>,
+}
+
+/// Portfolio-level risk data from /portfolio/risk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortfolioRisk {
+    pub current_var: f64,
+    pub max_drawdown_pct: f64,
+    /// Diversification benefit: how much the portfolio VaR is reduced vs
+    /// sum-of-individual VaRs (positive = good diversification).
+    pub diversification_benefit_pct: f64,
+    /// Portfolio VaR over time.
+    pub var_history: Vec<VaRPoint>,
+}
+
+/// Single DARWIN allocation entry from /portfolio/allocation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DarwinAllocation {
+    pub ticker: String,
+    /// Current weight in portfolio (0.0–100.0 %).
+    pub weight_pct: f64,
+    /// Capital invested in this DARWIN.
+    pub invested: f64,
+    /// P&L from this DARWIN.
+    pub pnl: f64,
 }
 
 /// Pairwise correlation between two DARWINs from the web dashboard.
@@ -207,6 +451,24 @@ pub struct DarwinWebUpdate {
     /// Pairs that exceed the correlation threshold (excluding excluded DARWINs).
     pub correlation_alerts: Vec<CorrelationAlert>,
     pub timestamp_ms: i64,
+    // ── Expanded tab data (per-DARWIN) ─────────────────────────
+    pub monthly_returns: Vec<DarwinMonthlyReturns>,
+    pub equity_curves: Vec<DarwinEquityCurve>,
+    pub var_histories: Vec<DarwinVaRHistory>,
+    pub dscore_histories: Vec<DarwinDScoreHistory>,
+    pub investor_flows: Vec<DarwinInvestorFlow>,
+    // ── Portfolio-level data ───────��───────────────────────────
+    pub portfolio_performance: Option<PortfolioPerformance>,
+    pub portfolio_risk: Option<PortfolioRisk>,
+    pub allocations: Vec<DarwinAllocation>,
+}
+
+/// Warnings from snapshot validation (non-fatal issues).
+#[derive(Debug, Clone)]
+pub struct ScrapeWarning {
+    pub ticker: String,
+    pub field: String,
+    pub message: String,
 }
 
 // ── KV Cache Keys ──────────────────────────────────────────────────
@@ -216,20 +478,47 @@ pub mod cache_keys {
     pub const CONFIG: &str = "dwx_web:config";
     pub const CORRELATION: &str = "dwx_web:correlation";
     pub const LAST_SCRAPE: &str = "dwx_web:last_scrape";
+    pub const PORTFOLIO_PERF: &str = "dwx_web:portfolio_performance";
+    pub const PORTFOLIO_RISK: &str = "dwx_web:portfolio_risk";
+    pub const ALLOCATIONS: &str = "dwx_web:allocations";
 
     /// Per-DARWIN snapshot key.
     pub fn snapshot(ticker: &str) -> String {
         format!("dwx_web:{}:snapshot", ticker.to_uppercase())
     }
+    /// Per-DARWIN monthly returns key.
+    pub fn monthly_returns(ticker: &str) -> String {
+        format!("dwx_web:{}:monthly_returns", ticker.to_uppercase())
+    }
+    /// Per-DARWIN equity curve key.
+    pub fn equity_curve(ticker: &str) -> String {
+        format!("dwx_web:{}:equity_curve", ticker.to_uppercase())
+    }
+    /// Per-DARWIN VaR history key.
+    pub fn var_history(ticker: &str) -> String {
+        format!("dwx_web:{}:var_history", ticker.to_uppercase())
+    }
+    /// Per-DARWIN D-Score history key.
+    pub fn dscore_history(ticker: &str) -> String {
+        format!("dwx_web:{}:dscore_history", ticker.to_uppercase())
+    }
+    /// Per-DARWIN investor flow key.
+    pub fn investor_flow(ticker: &str) -> String {
+        format!("dwx_web:{}:investor_flow", ticker.to_uppercase())
+    }
 }
 
-// ── Constants ──────────────────────────────────────────────────────
+// ── Constants ────────��─────────────────────────────────────────────
 
 const CHROMEDRIVER_URL: &str = "http://localhost:9515";
 const DARWINEX_LOGIN_URL: &str = "https://www.darwinexzero.com/login";
 const DARWINEX_DASHBOARD_URL: &str = "https://www.darwinexzero.com/dashboard";
 const CAPTCHA_POLL_MS: u64 = 500;
 const CAPTCHA_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes for user to solve
+const PAGE_LOAD_WAIT: Duration = Duration::from_secs(3);
+const TAB_SWITCH_WAIT: Duration = Duration::from_secs(2);
+/// Max retries for scraping a single page/element.
+const MAX_RETRIES: u32 = 2;
 
 // ── Browser Lifecycle ──────────────────────────────────────────────
 
@@ -255,7 +544,7 @@ pub async fn close_browser(driver: WebDriver) -> Result<(), String> {
     driver.quit().await.map_err(|e| format!("Browser close error: {e}"))
 }
 
-// ── Login Flow ─────────────────────────────────────────────────────
+// ── Login Flow ─────────────��────────────────────��──────────────────
 
 /// Log in to darwinexzero.com. Returns true if CAPTCHA was encountered
 /// (user must solve it in the visible browser window).
@@ -382,7 +671,7 @@ pub async fn restore_cookies(driver: &WebDriver, cookies: &[SerializableCookie])
     Ok(())
 }
 
-// ── Scraping ───────────────────────────────────────────────────────
+// ── Scraping Helpers ──────────���───────────────────────────────────
 
 /// Parse a numeric string (possibly with %, $, commas, or other formatting).
 fn parse_numeric(text: &str) -> f64 {
@@ -404,99 +693,518 @@ async fn scrape_numeric(driver: &WebDriver, selector: &str) -> f64 {
     }
 }
 
+/// Try to click a tab/link element. Returns true if found and clicked.
+async fn click_tab(driver: &WebDriver, selector: &str) -> bool {
+    match driver.find(By::Css(selector)).await {
+        Ok(elem) => {
+            if elem.click().await.is_ok() {
+                tokio::time::sleep(TAB_SWITCH_WAIT).await;
+                true
+            } else {
+                false
+            }
+        }
+        Err(_) => false,
+    }
+}
+
+/// Parse a date string (various formats) to a unix timestamp in ms.
+/// Returns 0 if parsing fails.
+fn parse_date_to_ms(text: &str) -> i64 {
+    let trimmed = text.trim();
+    // Try full date formats first
+    for fmt in &["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"] {
+        if let Ok(dt) = chrono::NaiveDate::parse_from_str(trimmed, fmt) {
+            return dt.and_hms_opt(0, 0, 0)
+                .map(|ndt| ndt.and_utc().timestamp_millis())
+                .unwrap_or(0);
+        }
+    }
+    // Try month+year (no day — default to 1st)
+    for fmt in &["%b %Y", "%B %Y"] {
+        // NaiveDate needs a day, so prepend "01 " and adjust format
+        let with_day = format!("01 {}", trimmed);
+        let day_fmt = format!("%d {}", fmt);
+        if let Ok(dt) = chrono::NaiveDate::parse_from_str(&with_day, &day_fmt) {
+            return dt.and_hms_opt(0, 0, 0)
+                .map(|ndt| ndt.and_utc().timestamp_millis())
+                .unwrap_or(0);
+        }
+    }
+    // Try year-only
+    if let Ok(year) = trimmed.parse::<i32>() {
+        if (2000..=2100).contains(&year) {
+            if let Some(dt) = chrono::NaiveDate::from_ymd_opt(year, 1, 1) {
+                return dt.and_hms_opt(0, 0, 0)
+                    .map(|ndt| ndt.and_utc().timestamp_millis())
+                    .unwrap_or(0);
+            }
+        }
+    }
+    0
+}
+
+/// Validate a snapshot — returns warnings for suspicious values.
+pub fn validate_snapshot(snap: &DarwinWebSnapshot) -> Vec<ScrapeWarning> {
+    let mut warnings = Vec::new();
+    let t = &snap.ticker;
+
+    if snap.quote <= 0.0 {
+        warnings.push(ScrapeWarning {
+            ticker: t.clone(),
+            field: "quote".into(),
+            message: format!("{t}: quote is {:.2} (expected > 0)", snap.quote),
+        });
+    }
+    if snap.dscore <= 0.0 && snap.all_time_return_pct != 0.0 {
+        warnings.push(ScrapeWarning {
+            ticker: t.clone(),
+            field: "dscore".into(),
+            message: format!("{t}: D-Score is 0 but has returns — selectors may be broken"),
+        });
+    }
+    if snap.var_monthly <= 0.0 {
+        warnings.push(ScrapeWarning {
+            ticker: t.clone(),
+            field: "var_monthly".into(),
+            message: format!("{t}: VaR is {:.2} (expected > 0)", snap.var_monthly),
+        });
+    }
+    // Count how many key fields are zero — if nearly all are 0, page likely didn't load
+    let zero_count = [
+        snap.quote, snap.dscore, snap.var_monthly, snap.sharpe_ratio,
+        snap.all_time_return_pct, snap.aum,
+    ].iter().filter(|v| **v == 0.0).count();
+    if zero_count >= 5 {
+        warnings.push(ScrapeWarning {
+            ticker: t.clone(),
+            field: "all".into(),
+            message: format!("{t}: {zero_count}/6 key fields are 0.0 — page may not have loaded"),
+        });
+    }
+
+    warnings
+}
+
+// ── Per-DARWIN Scraping ───────���───────────────────────────────────
+
 /// Build the DARWIN profile URL for a given ticker.
 fn darwin_profile_url(ticker: &str) -> String {
     format!("https://www.darwinexzero.com/darwin/{}", ticker.to_uppercase())
 }
 
-/// Scrape a single DARWIN's profile page for live stats.
+/// Scrape a single DARWIN's profile page — Overview tab (with retry).
 pub async fn scrape_darwin(driver: &WebDriver, ticker: &str) -> Result<DarwinWebSnapshot, String> {
     let url = darwin_profile_url(ticker);
-    driver.goto(&url).await
-        .map_err(|e| format!("Navigate to {ticker} profile failed: {e}"))?;
 
-    // Wait for page to render
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    for attempt in 0..=MAX_RETRIES {
+        driver.goto(&url).await
+            .map_err(|e| format!("Navigate to {ticker} profile failed: {e}"))?;
+        tokio::time::sleep(PAGE_LOAD_WAIT).await;
 
-    let now_ms = chrono::Utc::now().timestamp_millis();
+        let now_ms = chrono::Utc::now().timestamp_millis();
 
-    // Quote & returns
-    let quote = scrape_numeric(driver, selectors::DARWIN_QUOTE).await;
-    let daily_return_pct = scrape_numeric(driver, selectors::DARWIN_DAILY_RETURN).await;
-    let monthly_return_pct = scrape_numeric(driver, selectors::DARWIN_MONTHLY_RETURN).await;
-    let ytd_return_pct = scrape_numeric(driver, selectors::DARWIN_YTD_RETURN).await;
-    let all_time_return_pct = scrape_numeric(driver, selectors::DARWIN_ALL_TIME_RETURN).await;
+        // Quote & returns
+        let quote = scrape_numeric(driver, selectors::DARWIN_QUOTE).await;
+        let daily_return_pct = scrape_numeric(driver, selectors::DARWIN_DAILY_RETURN).await;
+        let monthly_return_pct = scrape_numeric(driver, selectors::DARWIN_MONTHLY_RETURN).await;
+        let ytd_return_pct = scrape_numeric(driver, selectors::DARWIN_YTD_RETURN).await;
+        let all_time_return_pct = scrape_numeric(driver, selectors::DARWIN_ALL_TIME_RETURN).await;
 
-    // D-Score components
-    let dscore = scrape_numeric(driver, selectors::DARWIN_DSCORE).await;
-    let ds_experience = scrape_numeric(driver, selectors::DARWIN_DS_EXPERIENCE).await;
-    let ds_risk_mgmt = scrape_numeric(driver, selectors::DARWIN_DS_RISK_MGMT).await;
-    let ds_risk_adjustment = scrape_numeric(driver, selectors::DARWIN_DS_RISK_ADJ).await;
-    let ds_performance = scrape_numeric(driver, selectors::DARWIN_DS_PERFORMANCE).await;
-    let ds_scalability = scrape_numeric(driver, selectors::DARWIN_DS_SCALABILITY).await;
-    let ds_market_correlation = scrape_numeric(driver, selectors::DARWIN_DS_MARKET_CORR).await;
+        // D-Score components
+        let dscore = scrape_numeric(driver, selectors::DARWIN_DSCORE).await;
+        let ds_experience = scrape_numeric(driver, selectors::DARWIN_DS_EXPERIENCE).await;
+        let ds_risk_mgmt = scrape_numeric(driver, selectors::DARWIN_DS_RISK_MGMT).await;
+        let ds_risk_adjustment = scrape_numeric(driver, selectors::DARWIN_DS_RISK_ADJ).await;
+        let ds_performance = scrape_numeric(driver, selectors::DARWIN_DS_PERFORMANCE).await;
+        let ds_scalability = scrape_numeric(driver, selectors::DARWIN_DS_SCALABILITY).await;
+        let ds_market_correlation = scrape_numeric(driver, selectors::DARWIN_DS_MARKET_CORR).await;
 
-    // Risk metrics
-    let var_monthly = scrape_numeric(driver, selectors::DARWIN_VAR).await;
-    let max_drawdown_pct = scrape_numeric(driver, selectors::DARWIN_MAX_DD).await;
-    let volatility_annual = scrape_numeric(driver, selectors::DARWIN_VOL).await;
-    let sharpe_ratio = scrape_numeric(driver, selectors::DARWIN_SHARPE).await;
-    let sortino_ratio = scrape_numeric(driver, selectors::DARWIN_SORTINO).await;
+        // Risk metrics
+        let var_monthly = scrape_numeric(driver, selectors::DARWIN_VAR).await;
+        let max_drawdown_pct = scrape_numeric(driver, selectors::DARWIN_MAX_DD).await;
+        let volatility_annual = scrape_numeric(driver, selectors::DARWIN_VOL).await;
+        let sharpe_ratio = scrape_numeric(driver, selectors::DARWIN_SHARPE).await;
+        let sortino_ratio = scrape_numeric(driver, selectors::DARWIN_SORTINO).await;
 
-    // Investor data
-    let investors = scrape_numeric(driver, selectors::DARWIN_INVESTORS).await as u32;
-    let aum = scrape_numeric(driver, selectors::DARWIN_AUM).await;
-    let capacity_remaining_pct = scrape_numeric(driver, selectors::DARWIN_CAPACITY).await;
+        // Investor data
+        let investors = scrape_numeric(driver, selectors::DARWIN_INVESTORS).await as u32;
+        let aum = scrape_numeric(driver, selectors::DARWIN_AUM).await;
+        let capacity_remaining_pct = scrape_numeric(driver, selectors::DARWIN_CAPACITY).await;
 
-    // Exclusion status (auto-detected from page)
-    let excluded = driver.find(By::Css(selectors::DARWIN_EXCLUDED)).await.is_ok();
-    let exclusion_reason = match driver.find(By::Css(selectors::DARWIN_EXCLUSION_REASON)).await {
-        Ok(elem) => elem.text().await.unwrap_or_default(),
-        Err(_) => String::new(),
+        // Exclusion status (auto-detected from page)
+        let excluded = driver.find(By::Css(selectors::DARWIN_EXCLUDED)).await.is_ok();
+        let exclusion_reason = match driver.find(By::Css(selectors::DARWIN_EXCLUSION_REASON)).await {
+            Ok(elem) => elem.text().await.unwrap_or_default(),
+            Err(_) => String::new(),
+        };
+
+        // Trading stats (strategy analysis tab)
+        let total_trades = scrape_numeric(driver, selectors::DARWIN_TOTAL_TRADES).await as u32;
+        let win_rate = scrape_numeric(driver, selectors::DARWIN_WIN_RATE).await;
+        let profit_factor = scrape_numeric(driver, selectors::DARWIN_PROFIT_FACTOR).await;
+        let avg_holding_time_hours = scrape_numeric(driver, selectors::DARWIN_AVG_HOLD_TIME).await;
+        let avg_trade_return_pct = scrape_numeric(driver, selectors::DARWIN_AVG_TRADE_RETURN).await;
+        let symbols_traded = scrape_numeric(driver, selectors::DARWIN_SYMBOLS_TRADED).await as u32;
+
+        let snap = DarwinWebSnapshot {
+            ticker: ticker.to_uppercase(),
+            timestamp_ms: now_ms,
+            quote,
+            daily_return_pct,
+            monthly_return_pct,
+            ytd_return_pct,
+            all_time_return_pct,
+            dscore,
+            ds_experience,
+            ds_risk_mgmt,
+            ds_risk_adjustment,
+            ds_performance,
+            ds_scalability,
+            ds_market_correlation,
+            var_monthly,
+            max_drawdown_pct,
+            volatility_annual,
+            sharpe_ratio,
+            sortino_ratio,
+            investors,
+            aum,
+            capacity_remaining_pct,
+            total_trades,
+            win_rate,
+            profit_factor,
+            avg_holding_time_hours,
+            avg_trade_return_pct,
+            symbols_traded,
+            excluded,
+            exclusion_reason,
+            correlation_portfolio: 0.0, // filled from correlation page
+        };
+
+        // Validate — retry if most fields are zero (page didn't load)
+        let warnings = validate_snapshot(&snap);
+        let critical = warnings.iter().any(|w| w.field == "all");
+        if critical && attempt < MAX_RETRIES {
+            tracing::warn!(
+                "{ticker}: snapshot validation failed (attempt {}/{}) — retrying",
+                attempt + 1, MAX_RETRIES + 1
+            );
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+
+        // Log non-critical warnings
+        for w in &warnings {
+            if w.field != "all" {
+                tracing::warn!("DWX scrape warning: {}", w.message);
+            }
+        }
+
+        return Ok(snap);
+    }
+
+    Err(format!("{ticker}: scrape failed after {} attempts — page did not load", MAX_RETRIES + 1))
+}
+
+/// Scrape the Return/Performance tab for a single DARWIN.
+/// Must be called while already on the DARWIN profile page.
+pub async fn scrape_return_tab(driver: &WebDriver, ticker: &str) -> DarwinMonthlyReturns {
+    let mut result = DarwinMonthlyReturns {
+        ticker: ticker.to_uppercase(),
+        rows: Vec::new(),
+        cagr: 0.0,
+        best_month_pct: 0.0,
+        worst_month_pct: 0.0,
+        avg_month_pct: 0.0,
+        positive_months: 0,
+        negative_months: 0,
     };
 
-    // Trading stats (strategy analysis tab)
-    let total_trades = scrape_numeric(driver, selectors::DARWIN_TOTAL_TRADES).await as u32;
-    let win_rate = scrape_numeric(driver, selectors::DARWIN_WIN_RATE).await;
-    let profit_factor = scrape_numeric(driver, selectors::DARWIN_PROFIT_FACTOR).await;
-    let avg_holding_time_hours = scrape_numeric(driver, selectors::DARWIN_AVG_HOLD_TIME).await;
-    let avg_trade_return_pct = scrape_numeric(driver, selectors::DARWIN_AVG_TRADE_RETURN).await;
-    let symbols_traded = scrape_numeric(driver, selectors::DARWIN_SYMBOLS_TRADED).await as u32;
+    // Click Return/Performance tab
+    if !click_tab(driver, selectors::TAB_RETURN).await {
+        tracing::warn!("{ticker}: Return tab not found — skipping");
+        return result;
+    }
 
-    Ok(DarwinWebSnapshot {
-        ticker: ticker.to_uppercase(),
-        timestamp_ms: now_ms,
-        quote,
-        daily_return_pct,
-        monthly_return_pct,
-        ytd_return_pct,
-        all_time_return_pct,
-        dscore,
-        ds_experience,
-        ds_risk_mgmt,
-        ds_risk_adjustment,
-        ds_performance,
-        ds_scalability,
-        ds_market_correlation,
-        var_monthly,
-        max_drawdown_pct,
-        volatility_annual,
-        sharpe_ratio,
-        sortino_ratio,
-        investors,
-        aum,
-        capacity_remaining_pct,
-        total_trades,
-        win_rate,
-        profit_factor,
-        avg_holding_time_hours,
-        avg_trade_return_pct,
-        symbols_traded,
-        excluded,
-        exclusion_reason,
-        correlation_portfolio: 0.0, // filled from correlation page
-    })
+    // Scrape performance stats
+    result.cagr = scrape_numeric(driver, selectors::PERF_CAGR).await;
+    result.best_month_pct = scrape_numeric(driver, selectors::PERF_BEST_MONTH).await;
+    result.worst_month_pct = scrape_numeric(driver, selectors::PERF_WORST_MONTH).await;
+    result.avg_month_pct = scrape_numeric(driver, selectors::PERF_AVG_MONTH).await;
+    result.positive_months = scrape_numeric(driver, selectors::PERF_POSITIVE_MONTHS).await as u32;
+    result.negative_months = scrape_numeric(driver, selectors::PERF_NEGATIVE_MONTHS).await as u32;
+
+    // Scrape monthly returns table
+    if let Ok(table) = driver.find(By::Css(selectors::MONTHLY_RETURNS_TABLE)).await {
+        if let Ok(rows) = table.find_all(By::Css(selectors::MONTHLY_RETURNS_ROW)).await {
+            for row in &rows {
+                if let Ok(cells) = row.find_all(By::Css(selectors::MONTHLY_RETURNS_CELL)).await {
+                    if cells.is_empty() { continue; }
+                    // First cell is usually the year
+                    let year_text = cells[0].text().await.unwrap_or_default();
+                    let year = parse_numeric(&year_text) as u16;
+                    if year < 2000 || year > 2100 { continue; }
+
+                    let mut months = [None; 12];
+                    // Cells 1..=12 are months (Jan..Dec)
+                    for (i, cell) in cells.iter().skip(1).take(12).enumerate() {
+                        let text = cell.text().await.unwrap_or_default();
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() && trimmed != "-" && trimmed != "N/A" {
+                            months[i] = Some(parse_numeric(trimmed));
+                        }
+                    }
+                    // Last cell might be year total
+                    let year_total = if cells.len() > 13 {
+                        let text = cells[cells.len() - 1].text().await.unwrap_or_default();
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() && trimmed != "-" {
+                            Some(parse_numeric(trimmed))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    result.rows.push(MonthlyReturnRow { year, months, year_total });
+                }
+            }
+        }
+    }
+
+    result
 }
+
+/// Scrape the Risk tab for a single DARWIN.
+/// Must be called while already on the DARWIN profile page.
+pub async fn scrape_risk_tab(driver: &WebDriver, ticker: &str) -> DarwinVaRHistory {
+    let mut result = DarwinVaRHistory {
+        ticker: ticker.to_uppercase(),
+        points: Vec::new(),
+        current_var: 0.0,
+        avg_var: 0.0,
+        max_var: 0.0,
+        min_var: 0.0,
+        var_violations: 0,
+        drawdown_periods: Vec::new(),
+    };
+
+    // Click Risk tab
+    if !click_tab(driver, selectors::TAB_RISK).await {
+        tracing::warn!("{ticker}: Risk tab not found — skipping");
+        return result;
+    }
+
+    // Scrape summary risk stats
+    result.current_var = scrape_numeric(driver, selectors::RISK_CURRENT_VAR).await;
+    result.avg_var = scrape_numeric(driver, selectors::RISK_AVG_VAR).await;
+    result.max_var = scrape_numeric(driver, selectors::RISK_MAX_VAR).await;
+    result.min_var = scrape_numeric(driver, selectors::RISK_MIN_VAR).await;
+    result.var_violations = scrape_numeric(driver, selectors::RISK_VAR_VIOLATIONS).await as u32;
+
+    // Scrape VaR history rows
+    if let Ok(rows) = driver.find_all(By::Css(selectors::VAR_HISTORY_ROW)).await {
+        for row in &rows {
+            let date_attr = row.attr("data-var-date").await.ok().flatten().unwrap_or_default();
+            let ts = parse_date_to_ms(&date_attr);
+            let var_text = row.text().await.unwrap_or_default();
+            let var_pct = parse_numeric(&var_text);
+            if ts > 0 {
+                result.points.push(VaRPoint { timestamp_ms: ts, var_pct });
+            }
+        }
+    }
+
+    // Scrape drawdown periods
+    if let Ok(rows) = driver.find_all(By::Css(selectors::DRAWDOWN_PERIOD_ROW)).await {
+        for row in &rows {
+            let start_attr = row.attr("data-start").await.ok().flatten().unwrap_or_default();
+            let end_attr = row.attr("data-end").await.ok().flatten().unwrap_or_default();
+            let depth_text = row.text().await.unwrap_or_default();
+            let start_ms = parse_date_to_ms(&start_attr);
+            let end_ms = parse_date_to_ms(&end_attr);
+            let depth_pct = parse_numeric(&depth_text);
+            let recovery_attr = row.attr("data-recovery-days").await.ok().flatten().unwrap_or_default();
+            let recovery_days = parse_numeric(&recovery_attr) as u32;
+            if start_ms > 0 {
+                result.drawdown_periods.push(DrawdownPeriod {
+                    start_ms, end_ms, depth_pct, recovery_days,
+                });
+            }
+        }
+    }
+
+    result
+}
+
+/// Scrape the Investable Attributes tab for D-Score history.
+/// Must be called while already on the DARWIN profile page.
+pub async fn scrape_investable_tab(driver: &WebDriver, ticker: &str) -> DarwinDScoreHistory {
+    let mut result = DarwinDScoreHistory {
+        ticker: ticker.to_uppercase(),
+        points: Vec::new(),
+    };
+
+    // Click Investable Attributes tab
+    if !click_tab(driver, selectors::TAB_INVESTABLE).await {
+        tracing::warn!("{ticker}: Investable Attributes tab not found — skipping");
+        return result;
+    }
+
+    // Scrape D-Score history data points
+    if let Ok(rows) = driver.find_all(By::Css(selectors::DSCORE_HISTORY_ROW)).await {
+        for row in &rows {
+            let date_attr = row.attr("data-dscore-date").await.ok().flatten().unwrap_or_default();
+            let ts = parse_date_to_ms(&date_attr);
+            if ts == 0 { continue; }
+
+            // Try to get individual component values from the row
+            let dscore_val = row.attr("data-dscore-value").await.ok().flatten()
+                .map(|v| parse_numeric(&v)).unwrap_or(0.0);
+            let ex = row.attr("data-ex").await.ok().flatten()
+                .map(|v| parse_numeric(&v)).unwrap_or(0.0);
+            let rs = row.attr("data-rs").await.ok().flatten()
+                .map(|v| parse_numeric(&v)).unwrap_or(0.0);
+            let ra = row.attr("data-ra").await.ok().flatten()
+                .map(|v| parse_numeric(&v)).unwrap_or(0.0);
+            let pf = row.attr("data-pf").await.ok().flatten()
+                .map(|v| parse_numeric(&v)).unwrap_or(0.0);
+            let sc = row.attr("data-sc").await.ok().flatten()
+                .map(|v| parse_numeric(&v)).unwrap_or(0.0);
+            let mc = row.attr("data-mc").await.ok().flatten()
+                .map(|v| parse_numeric(&v)).unwrap_or(0.0);
+
+            result.points.push(DScorePoint {
+                timestamp_ms: ts,
+                dscore: dscore_val,
+                experience: ex,
+                risk_stability: rs,
+                risk_adjustment: ra,
+                performance: pf,
+                scalability: sc,
+                market_correlation: mc,
+            });
+        }
+    }
+
+    result
+}
+
+/// Scrape the Investor tab for investor count + AuM history.
+/// Must be called while already on the DARWIN profile page.
+pub async fn scrape_investor_tab(driver: &WebDriver, ticker: &str) -> DarwinInvestorFlow {
+    let mut result = DarwinInvestorFlow {
+        ticker: ticker.to_uppercase(),
+        points: Vec::new(),
+        capital_in: 0.0,
+        capital_out: 0.0,
+        net_flow: 0.0,
+        divergence_pct: 0.0,
+    };
+
+    // Click Investor tab
+    if !click_tab(driver, selectors::TAB_INVESTOR).await {
+        tracing::warn!("{ticker}: Investor tab not found — skipping");
+        return result;
+    }
+
+    // Scrape summary flow stats
+    result.capital_in = scrape_numeric(driver, selectors::INVESTOR_CAPITAL_IN).await;
+    result.capital_out = scrape_numeric(driver, selectors::INVESTOR_CAPITAL_OUT).await;
+    result.net_flow = scrape_numeric(driver, selectors::INVESTOR_NET_FLOW).await;
+    result.divergence_pct = scrape_numeric(driver, selectors::INVESTOR_DIVERGENCE).await;
+
+    // Scrape investor flow history rows
+    if let Ok(rows) = driver.find_all(By::Css(selectors::INVESTOR_FLOW_ROW)).await {
+        for row in &rows {
+            let date_attr = row.attr("data-investor-date").await.ok().flatten().unwrap_or_default();
+            let ts = parse_date_to_ms(&date_attr);
+            if ts == 0 { continue; }
+
+            // Get count and AuM from cells within the row
+            let count_text = match row.find(By::Css(selectors::INVESTOR_FLOW_COUNT)).await {
+                Ok(cell) => cell.text().await.unwrap_or_default(),
+                Err(_) => String::new(),
+            };
+            let aum_text = match row.find(By::Css(selectors::INVESTOR_FLOW_AUM)).await {
+                Ok(cell) => cell.text().await.unwrap_or_default(),
+                Err(_) => String::new(),
+            };
+
+            result.points.push(InvestorFlowPoint {
+                timestamp_ms: ts,
+                investor_count: parse_numeric(&count_text) as u32,
+                aum: parse_numeric(&aum_text),
+            });
+        }
+    }
+
+    result
+}
+
+/// Scrape equity curve data points from chart elements on the current page.
+async fn scrape_equity_curve(driver: &WebDriver, ticker: &str) -> DarwinEquityCurve {
+    let mut points = Vec::new();
+
+    if let Ok(elems) = driver.find_all(By::Css(selectors::EQUITY_CURVE_POINT)).await {
+        for elem in &elems {
+            let mut ts_attr = elem.attr("data-timestamp").await.ok().flatten().unwrap_or_default();
+            if ts_attr.is_empty() {
+                ts_attr = elem.attr("data-date").await.ok().flatten().unwrap_or_default();
+            }
+            let mut val_attr = elem.attr("data-equity").await.ok().flatten().unwrap_or_default();
+            if val_attr.is_empty() {
+                val_attr = elem.attr("data-value").await.ok().flatten().unwrap_or_default();
+            }
+
+            let ts = if ts_attr.contains('-') || ts_attr.contains('/') {
+                parse_date_to_ms(&ts_attr)
+            } else {
+                parse_numeric(&ts_attr) as i64
+            };
+            let value = parse_numeric(&val_attr);
+
+            if ts > 0 && value > 0.0 {
+                points.push(EquityPoint { timestamp_ms: ts, value });
+            }
+        }
+    }
+
+    DarwinEquityCurve {
+        ticker: ticker.to_uppercase(),
+        points,
+    }
+}
+
+/// Scrape ALL tabs for a single DARWIN (Overview + Return + Risk + Investable + Investor).
+/// Navigates to the DARWIN profile and clicks through each tab.
+pub async fn scrape_darwin_full(
+    driver: &WebDriver,
+    ticker: &str,
+) -> Result<(DarwinWebSnapshot, DarwinMonthlyReturns, DarwinEquityCurve, DarwinVaRHistory, DarwinDScoreHistory, DarwinInvestorFlow), String> {
+    // 1. Overview tab (includes navigation to the DARWIN page)
+    let snapshot = scrape_darwin(driver, ticker).await?;
+
+    // 2. Return/Performance tab (we're already on the DARWIN profile page)
+    let monthly_returns = scrape_return_tab(driver, ticker).await;
+
+    // 3. Scrape equity curve from the Return tab (while we're on it)
+    let equity_curve = scrape_equity_curve(driver, ticker).await;
+
+    // 4. Risk tab
+    let var_history = scrape_risk_tab(driver, ticker).await;
+
+    // 5. Investable Attributes tab
+    let dscore_history = scrape_investable_tab(driver, ticker).await;
+
+    // 6. Investor tab
+    let investor_flow = scrape_investor_tab(driver, ticker).await;
+
+    Ok((snapshot, monthly_returns, equity_curve, var_history, dscore_history, investor_flow))
+}
+
+// ── Portfolio-Level Scraping ──────────────────────────────────────
 
 /// Scrape the portfolio correlation matrix from the correlation page.
 pub async fn scrape_correlation(
@@ -507,7 +1215,7 @@ pub async fn scrape_correlation(
     driver.goto("https://www.darwinexzero.com/portfolio/correlation").await
         .map_err(|e| format!("Navigate to correlation page failed: {e}"))?;
 
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    tokio::time::sleep(PAGE_LOAD_WAIT).await;
 
     let mut correlations = Vec::new();
 
@@ -545,7 +1253,158 @@ pub async fn scrape_correlation(
     Ok(correlations)
 }
 
-/// Full scrape cycle: all managed DARWINs + correlation matrix.
+/// Scrape portfolio performance from /portfolio/performance.
+pub async fn scrape_portfolio_performance(driver: &WebDriver) -> Option<PortfolioPerformance> {
+    if driver.goto("https://www.darwinexzero.com/portfolio/performance").await.is_err() {
+        tracing::warn!("Failed to navigate to portfolio/performance");
+        return None;
+    }
+    tokio::time::sleep(PAGE_LOAD_WAIT).await;
+
+    let total_return_pct = scrape_numeric(driver, selectors::PORTFOLIO_TOTAL_RETURN).await;
+    let cagr = scrape_numeric(driver, selectors::PORTFOLIO_CAGR).await;
+    let best_month_pct = scrape_numeric(driver, selectors::PORTFOLIO_BEST_MONTH).await;
+    let worst_month_pct = scrape_numeric(driver, selectors::PORTFOLIO_WORST_MONTH).await;
+
+    // Scrape monthly returns table (same format as per-DARWIN)
+    let mut monthly_returns = Vec::new();
+    if let Ok(table) = driver.find(By::Css(selectors::PORTFOLIO_MONTHLY_TABLE)).await {
+        if let Ok(rows) = table.find_all(By::Css(selectors::MONTHLY_RETURNS_ROW)).await {
+            for row in &rows {
+                if let Ok(cells) = row.find_all(By::Css(selectors::MONTHLY_RETURNS_CELL)).await {
+                    if cells.is_empty() { continue; }
+                    let year_text = cells[0].text().await.unwrap_or_default();
+                    let year = parse_numeric(&year_text) as u16;
+                    if year < 2000 || year > 2100 { continue; }
+
+                    let mut months = [None; 12];
+                    for (i, cell) in cells.iter().skip(1).take(12).enumerate() {
+                        let text = cell.text().await.unwrap_or_default();
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() && trimmed != "-" && trimmed != "N/A" {
+                            months[i] = Some(parse_numeric(trimmed));
+                        }
+                    }
+                    let year_total = if cells.len() > 13 {
+                        let text = cells[cells.len() - 1].text().await.unwrap_or_default();
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() && trimmed != "-" { Some(parse_numeric(trimmed)) } else { None }
+                    } else { None };
+
+                    monthly_returns.push(MonthlyReturnRow { year, months, year_total });
+                }
+            }
+        }
+    }
+
+    // Scrape equity curve
+    let mut equity_points = Vec::new();
+    if let Ok(elems) = driver.find_all(By::Css(selectors::EQUITY_CURVE_POINT)).await {
+        for elem in &elems {
+            let mut ts_attr = elem.attr("data-timestamp").await.ok().flatten().unwrap_or_default();
+            if ts_attr.is_empty() {
+                ts_attr = elem.attr("data-date").await.ok().flatten().unwrap_or_default();
+            }
+            let mut val_attr = elem.attr("data-equity").await.ok().flatten().unwrap_or_default();
+            if val_attr.is_empty() {
+                val_attr = elem.attr("data-value").await.ok().flatten().unwrap_or_default();
+            }
+            let ts = if ts_attr.contains('-') { parse_date_to_ms(&ts_attr) } else { parse_numeric(&ts_attr) as i64 };
+            let value = parse_numeric(&val_attr);
+            if ts > 0 && value != 0.0 {
+                equity_points.push(EquityPoint { timestamp_ms: ts, value });
+            }
+        }
+    }
+
+    Some(PortfolioPerformance {
+        total_return_pct,
+        cagr,
+        best_month_pct,
+        worst_month_pct,
+        monthly_returns,
+        equity_points,
+    })
+}
+
+/// Scrape portfolio risk from /portfolio/risk.
+pub async fn scrape_portfolio_risk(driver: &WebDriver) -> Option<PortfolioRisk> {
+    if driver.goto("https://www.darwinexzero.com/portfolio/risk").await.is_err() {
+        tracing::warn!("Failed to navigate to portfolio/risk");
+        return None;
+    }
+    tokio::time::sleep(PAGE_LOAD_WAIT).await;
+
+    let current_var = scrape_numeric(driver, selectors::PORTFOLIO_VAR).await;
+    let max_drawdown_pct = scrape_numeric(driver, selectors::PORTFOLIO_MAX_DD).await;
+    let diversification_benefit_pct = scrape_numeric(driver, selectors::PORTFOLIO_DIVERSIFICATION).await;
+
+    // VaR history
+    let mut var_history = Vec::new();
+    if let Ok(rows) = driver.find_all(By::Css(selectors::PORTFOLIO_VAR_HISTORY_ROW)).await {
+        for row in &rows {
+            let date_attr = row.attr("data-portfolio-var-date").await.ok().flatten().unwrap_or_default();
+            let ts = parse_date_to_ms(&date_attr);
+            let var_text = row.text().await.unwrap_or_default();
+            let var_pct = parse_numeric(&var_text);
+            if ts > 0 {
+                var_history.push(VaRPoint { timestamp_ms: ts, var_pct });
+            }
+        }
+    }
+
+    Some(PortfolioRisk {
+        current_var,
+        max_drawdown_pct,
+        diversification_benefit_pct,
+        var_history,
+    })
+}
+
+/// Scrape portfolio allocation from /portfolio/allocation.
+pub async fn scrape_portfolio_allocation(driver: &WebDriver) -> Vec<DarwinAllocation> {
+    let mut allocations = Vec::new();
+
+    if driver.goto("https://www.darwinexzero.com/portfolio/allocation").await.is_err() {
+        tracing::warn!("Failed to navigate to portfolio/allocation");
+        return allocations;
+    }
+    tokio::time::sleep(PAGE_LOAD_WAIT).await;
+
+    if let Ok(rows) = driver.find_all(By::Css(selectors::ALLOCATION_ROW)).await {
+        for row in &rows {
+            let ticker_text = match row.find(By::Css(selectors::ALLOCATION_TICKER)).await {
+                Ok(cell) => cell.text().await.unwrap_or_default(),
+                Err(_) => continue,
+            };
+            let ticker = ticker_text.trim().to_uppercase();
+            if ticker.is_empty() || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
+                continue;
+            }
+
+            let weight_pct = match row.find(By::Css(selectors::ALLOCATION_WEIGHT)).await {
+                Ok(cell) => parse_numeric(&cell.text().await.unwrap_or_default()),
+                Err(_) => 0.0,
+            };
+            let invested = match row.find(By::Css(selectors::ALLOCATION_INVESTED)).await {
+                Ok(cell) => parse_numeric(&cell.text().await.unwrap_or_default()),
+                Err(_) => 0.0,
+            };
+            let pnl = match row.find(By::Css(selectors::ALLOCATION_PNL)).await {
+                Ok(cell) => parse_numeric(&cell.text().await.unwrap_or_default()),
+                Err(_) => 0.0,
+            };
+
+            allocations.push(DarwinAllocation { ticker, weight_pct, invested, pnl });
+        }
+    }
+
+    allocations
+}
+
+// ── Full Scrape Cycle ─────────────────────────────────────────────
+
+/// Full scrape cycle: all managed DARWINs (all tabs) + portfolio pages.
 /// Caches results via the provided put_kv function.
 pub async fn scrape_all<F>(
     driver: &WebDriver,
@@ -556,16 +1415,40 @@ where
     F: FnMut(&str, &str) -> Result<(), String>,
 {
     let mut snapshots = Vec::with_capacity(config.managed_darwins.len());
+    let mut monthly_returns = Vec::with_capacity(config.managed_darwins.len());
+    let mut equity_curves = Vec::with_capacity(config.managed_darwins.len());
+    let mut var_histories = Vec::with_capacity(config.managed_darwins.len());
+    let mut dscore_histories = Vec::with_capacity(config.managed_darwins.len());
+    let mut investor_flows = Vec::with_capacity(config.managed_darwins.len());
 
     for ticker in &config.managed_darwins {
-        match scrape_darwin(driver, ticker).await {
-            Ok(snapshot) => {
-                // Cache individual snapshot
-                let key = cache_keys::snapshot(ticker);
+        match scrape_darwin_full(driver, ticker).await {
+            Ok((snapshot, mr, ec, vh, dh, ifl)) => {
+                // Cache individual results
                 if let Ok(json) = serde_json::to_string(&snapshot) {
-                    let _ = cache_fn(&key, &json);
+                    let _ = cache_fn(&cache_keys::snapshot(ticker), &json);
+                }
+                if let Ok(json) = serde_json::to_string(&mr) {
+                    let _ = cache_fn(&cache_keys::monthly_returns(ticker), &json);
+                }
+                if let Ok(json) = serde_json::to_string(&ec) {
+                    let _ = cache_fn(&cache_keys::equity_curve(ticker), &json);
+                }
+                if let Ok(json) = serde_json::to_string(&vh) {
+                    let _ = cache_fn(&cache_keys::var_history(ticker), &json);
+                }
+                if let Ok(json) = serde_json::to_string(&dh) {
+                    let _ = cache_fn(&cache_keys::dscore_history(ticker), &json);
+                }
+                if let Ok(json) = serde_json::to_string(&ifl) {
+                    let _ = cache_fn(&cache_keys::investor_flow(ticker), &json);
                 }
                 snapshots.push(snapshot);
+                monthly_returns.push(mr);
+                equity_curves.push(ec);
+                var_histories.push(vh);
+                dscore_histories.push(dh);
+                investor_flows.push(ifl);
             }
             Err(e) => {
                 tracing::error!("Failed to scrape {ticker}: {e}");
@@ -573,12 +1456,37 @@ where
         }
     }
 
+    // ── Portfolio-level pages ──────────────────────────────────────
+
     // Scrape correlation matrix
     let correlations = scrape_correlation(driver, &config.managed_darwins).await
         .unwrap_or_default();
 
-    // Determine which DARWINs are active (not excluded — auto-detected from scrape)
-    // Use HashSet for O(1) lookups in correlation analysis
+    // Scrape portfolio performance
+    let portfolio_performance = scrape_portfolio_performance(driver).await;
+    if let Some(ref pp) = portfolio_performance {
+        if let Ok(json) = serde_json::to_string(pp) {
+            let _ = cache_fn(cache_keys::PORTFOLIO_PERF, &json);
+        }
+    }
+
+    // Scrape portfolio risk
+    let portfolio_risk = scrape_portfolio_risk(driver).await;
+    if let Some(ref pr) = portfolio_risk {
+        if let Ok(json) = serde_json::to_string(pr) {
+            let _ = cache_fn(cache_keys::PORTFOLIO_RISK, &json);
+        }
+    }
+
+    // Scrape portfolio allocation
+    let allocations = scrape_portfolio_allocation(driver).await;
+    if let Ok(json) = serde_json::to_string(&allocations) {
+        let _ = cache_fn(cache_keys::ALLOCATIONS, &json);
+    }
+
+    // ── Correlation analysis ──────────────────────────────────────
+
+    // Determine which DARWINs are active (not excluded)
     let active: HashSet<String> = snapshots.iter()
         .filter(|s| !s.excluded)
         .map(|s| s.ticker.clone())
@@ -598,8 +1506,6 @@ where
 
     // Update correlation_portfolio on snapshots if we have correlation data
     for snap in &mut snapshots {
-        // Average correlation of this DARWIN with other active DARWINs only
-        // Use fold to avoid Vec allocation
         let (sum, count) = correlations.iter()
             .filter(|c| {
                 let involves_snap = c.darwin_a == snap.ticker || c.darwin_b == snap.ticker;
@@ -612,7 +1518,7 @@ where
         }
     }
 
-    // Check for correlation violations among active (non-excluded) DARWINs
+    // Check for correlation violations among active DARWINs
     let mut correlation_alerts = Vec::new();
     for corr in &correlations {
         if active.contains(&corr.darwin_a)
@@ -658,6 +1564,14 @@ where
         correlations,
         correlation_alerts,
         timestamp_ms: now_ms,
+        monthly_returns,
+        equity_curves,
+        var_histories,
+        dscore_histories,
+        investor_flows,
+        portfolio_performance,
+        portfolio_risk,
+        allocations,
     };
 
     Ok(update)
@@ -910,6 +1824,14 @@ mod tests {
         assert_eq!(cache_keys::CONFIG, "dwx_web:config");
         assert_eq!(cache_keys::CORRELATION, "dwx_web:correlation");
         assert_eq!(cache_keys::LAST_SCRAPE, "dwx_web:last_scrape");
+        assert_eq!(cache_keys::PORTFOLIO_PERF, "dwx_web:portfolio_performance");
+        assert_eq!(cache_keys::PORTFOLIO_RISK, "dwx_web:portfolio_risk");
+        assert_eq!(cache_keys::ALLOCATIONS, "dwx_web:allocations");
+        assert_eq!(cache_keys::monthly_returns("tpn"), "dwx_web:TPN:monthly_returns");
+        assert_eq!(cache_keys::equity_curve("ajt"), "dwx_web:AJT:equity_curve");
+        assert_eq!(cache_keys::var_history("XUQF"), "dwx_web:XUQF:var_history");
+        assert_eq!(cache_keys::dscore_history("tpn"), "dwx_web:TPN:dscore_history");
+        assert_eq!(cache_keys::investor_flow("ajt"), "dwx_web:AJT:investor_flow");
     }
 
     #[test]
@@ -923,12 +1845,279 @@ mod tests {
 
     #[test]
     fn snapshot_deny_unknown_fields() {
-        // Valid JSON with one extra field "extra" — should fail
         let snap = test_snapshot();
         let mut json = serde_json::to_string(&snap).unwrap();
-        // Inject unknown field before closing brace
         json.pop(); // remove '}'
         json.push_str(r#","extra":1}"#);
         assert!(serde_json::from_str::<DarwinWebSnapshot>(&json).is_err());
+    }
+
+    #[test]
+    fn parse_date_to_ms_formats() {
+        assert!(parse_date_to_ms("2024-01-15") > 0);
+        assert!(parse_date_to_ms("15/01/2024") > 0);
+        assert!(parse_date_to_ms("Jan 2024") > 0);
+        assert!(parse_date_to_ms("2024") > 0);
+        assert_eq!(parse_date_to_ms(""), 0);
+        assert_eq!(parse_date_to_ms("garbage"), 0);
+    }
+
+    #[test]
+    fn validate_snapshot_healthy() {
+        let snap = test_snapshot();
+        let warnings = validate_snapshot(&snap);
+        assert!(warnings.is_empty(), "healthy snapshot should have no warnings");
+    }
+
+    #[test]
+    fn validate_snapshot_all_zeros() {
+        let mut snap = test_snapshot();
+        snap.quote = 0.0;
+        snap.dscore = 0.0;
+        snap.var_monthly = 0.0;
+        snap.sharpe_ratio = 0.0;
+        snap.all_time_return_pct = 0.0;
+        snap.aum = 0.0;
+        let warnings = validate_snapshot(&snap);
+        assert!(warnings.iter().any(|w| w.field == "all"),
+            "all-zeros snapshot should trigger 'all' warning");
+    }
+
+    #[test]
+    fn validate_snapshot_zero_quote() {
+        let mut snap = test_snapshot();
+        snap.quote = 0.0;
+        let warnings = validate_snapshot(&snap);
+        assert!(warnings.iter().any(|w| w.field == "quote"));
+    }
+
+    #[test]
+    fn monthly_return_row_roundtrip() {
+        let row = MonthlyReturnRow {
+            year: 2024,
+            months: [Some(1.2), Some(-0.5), None, Some(2.1), None, None,
+                     Some(0.3), None, Some(-1.1), Some(0.8), None, Some(3.2)],
+            year_total: Some(6.0),
+        };
+        let json = serde_json::to_string(&row).unwrap();
+        let back: MonthlyReturnRow = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.year, 2024);
+        assert_eq!(back.months[0], Some(1.2));
+        assert_eq!(back.months[2], None);
+        assert_eq!(back.year_total, Some(6.0));
+    }
+
+    #[test]
+    fn equity_point_roundtrip() {
+        let pt = EquityPoint { timestamp_ms: 1700000000000, value: 125.67 };
+        let json = serde_json::to_string(&pt).unwrap();
+        let back: EquityPoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.timestamp_ms, 1700000000000);
+        assert!((back.value - 125.67).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn var_point_roundtrip() {
+        let pt = VaRPoint { timestamp_ms: 1700000000000, var_pct: 4.5 };
+        let json = serde_json::to_string(&pt).unwrap();
+        let back: VaRPoint = serde_json::from_str(&json).unwrap();
+        assert!((back.var_pct - 4.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn drawdown_period_roundtrip() {
+        let dd = DrawdownPeriod {
+            start_ms: 1700000000000,
+            end_ms: 1700500000000,
+            depth_pct: 8.3,
+            recovery_days: 15,
+        };
+        let json = serde_json::to_string(&dd).unwrap();
+        let back: DrawdownPeriod = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.recovery_days, 15);
+        assert!((back.depth_pct - 8.3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn dscore_point_roundtrip() {
+        let pt = DScorePoint {
+            timestamp_ms: 1700000000000,
+            dscore: 65.0,
+            experience: 8.0,
+            risk_stability: 7.5,
+            risk_adjustment: 6.0,
+            performance: 9.0,
+            scalability: 5.0,
+            market_correlation: 4.0,
+        };
+        let json = serde_json::to_string(&pt).unwrap();
+        let back: DScorePoint = serde_json::from_str(&json).unwrap();
+        assert!((back.dscore - 65.0).abs() < f64::EPSILON);
+        assert!((back.experience - 8.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn investor_flow_point_roundtrip() {
+        let pt = InvestorFlowPoint {
+            timestamp_ms: 1700000000000,
+            investor_count: 42,
+            aum: 150000.0,
+        };
+        let json = serde_json::to_string(&pt).unwrap();
+        let back: InvestorFlowPoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.investor_count, 42);
+    }
+
+    #[test]
+    fn darwin_allocation_roundtrip() {
+        let alloc = DarwinAllocation {
+            ticker: "TPN".to_string(),
+            weight_pct: 25.0,
+            invested: 50000.0,
+            pnl: 1234.56,
+        };
+        let json = serde_json::to_string(&alloc).unwrap();
+        let back: DarwinAllocation = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.ticker, "TPN");
+        assert!((back.weight_pct - 25.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn portfolio_performance_roundtrip() {
+        let pp = PortfolioPerformance {
+            total_return_pct: 45.2,
+            cagr: 12.5,
+            best_month_pct: 8.3,
+            worst_month_pct: -5.1,
+            monthly_returns: vec![MonthlyReturnRow {
+                year: 2024,
+                months: [Some(1.0); 12],
+                year_total: Some(12.0),
+            }],
+            equity_points: vec![EquityPoint { timestamp_ms: 1700000000000, value: 100.0 }],
+        };
+        let json = serde_json::to_string(&pp).unwrap();
+        let back: PortfolioPerformance = serde_json::from_str(&json).unwrap();
+        assert!((back.cagr - 12.5).abs() < f64::EPSILON);
+        assert_eq!(back.monthly_returns.len(), 1);
+    }
+
+    #[test]
+    fn portfolio_risk_roundtrip() {
+        let pr = PortfolioRisk {
+            current_var: 4.5,
+            max_drawdown_pct: 12.0,
+            diversification_benefit_pct: 15.3,
+            var_history: vec![VaRPoint { timestamp_ms: 1700000000000, var_pct: 4.5 }],
+        };
+        let json = serde_json::to_string(&pr).unwrap();
+        let back: PortfolioRisk = serde_json::from_str(&json).unwrap();
+        assert!((back.diversification_benefit_pct - 15.3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn darwin_monthly_returns_roundtrip() {
+        let mr = DarwinMonthlyReturns {
+            ticker: "TPN".to_string(),
+            rows: vec![MonthlyReturnRow {
+                year: 2024,
+                months: [Some(1.2), None, Some(-0.5), None, None, None,
+                         None, None, None, None, None, None],
+                year_total: Some(0.7),
+            }],
+            cagr: 10.5,
+            best_month_pct: 5.0,
+            worst_month_pct: -3.0,
+            avg_month_pct: 0.8,
+            positive_months: 8,
+            negative_months: 4,
+        };
+        let json = serde_json::to_string(&mr).unwrap();
+        let back: DarwinMonthlyReturns = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.ticker, "TPN");
+        assert_eq!(back.positive_months, 8);
+    }
+
+    #[test]
+    fn darwin_var_history_roundtrip() {
+        let vh = DarwinVaRHistory {
+            ticker: "TPN".to_string(),
+            points: vec![VaRPoint { timestamp_ms: 1700000000000, var_pct: 4.5 }],
+            current_var: 4.5,
+            avg_var: 4.0,
+            max_var: 6.5,
+            min_var: 2.1,
+            var_violations: 3,
+            drawdown_periods: vec![DrawdownPeriod {
+                start_ms: 1700000000000,
+                end_ms: 1700500000000,
+                depth_pct: 8.3,
+                recovery_days: 15,
+            }],
+        };
+        let json = serde_json::to_string(&vh).unwrap();
+        let back: DarwinVaRHistory = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.var_violations, 3);
+        assert_eq!(back.drawdown_periods.len(), 1);
+    }
+
+    #[test]
+    fn darwin_dscore_history_roundtrip() {
+        let dh = DarwinDScoreHistory {
+            ticker: "TPN".to_string(),
+            points: vec![DScorePoint {
+                timestamp_ms: 1700000000000,
+                dscore: 65.0, experience: 8.0, risk_stability: 7.5,
+                risk_adjustment: 6.0, performance: 9.0, scalability: 5.0,
+                market_correlation: 4.0,
+            }],
+        };
+        let json = serde_json::to_string(&dh).unwrap();
+        let back: DarwinDScoreHistory = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.points.len(), 1);
+    }
+
+    #[test]
+    fn darwin_investor_flow_roundtrip() {
+        let ifl = DarwinInvestorFlow {
+            ticker: "TPN".to_string(),
+            points: vec![InvestorFlowPoint {
+                timestamp_ms: 1700000000000,
+                investor_count: 42,
+                aum: 150000.0,
+            }],
+            capital_in: 200000.0,
+            capital_out: 50000.0,
+            net_flow: 150000.0,
+            divergence_pct: 1.5,
+        };
+        let json = serde_json::to_string(&ifl).unwrap();
+        let back: DarwinInvestorFlow = serde_json::from_str(&json).unwrap();
+        assert!((back.net_flow - 150000.0).abs() < f64::EPSILON);
+        assert!((back.divergence_pct - 1.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn darwin_web_update_roundtrip() {
+        let update = DarwinWebUpdate {
+            snapshots: vec![test_snapshot()],
+            correlations: vec![DarwinWebCorrelation {
+                darwin_a: "TPN".into(), darwin_b: "AJT".into(), correlation: 0.42,
+            }],
+            correlation_alerts: Vec::new(),
+            timestamp_ms: 1700000000000,
+            monthly_returns: Vec::new(),
+            equity_curves: Vec::new(),
+            var_histories: Vec::new(),
+            dscore_histories: Vec::new(),
+            investor_flows: Vec::new(),
+            portfolio_performance: None,
+            portfolio_risk: None,
+            allocations: Vec::new(),
+        };
+        let json = serde_json::to_string(&update).unwrap();
+        let back: DarwinWebUpdate = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.snapshots.len(), 1);
+        assert_eq!(back.correlations.len(), 1);
     }
 }

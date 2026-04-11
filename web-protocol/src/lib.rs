@@ -214,6 +214,15 @@ pub enum WebMsg {
         snapshots: Vec<DarwinWebSnapshot>,
         correlations: Vec<DarwinWebCorrelation>,
         correlation_alerts: Vec<DarwinCorrelationAlert>,
+        // ── ADR-095: expanded tab data ──
+        monthly_returns: Vec<DarwinMonthlyReturns>,
+        equity_curves: Vec<DarwinEquityCurve>,
+        var_histories: Vec<DarwinVaRHistory>,
+        dscore_histories: Vec<DarwinDScoreHistory>,
+        investor_flows: Vec<DarwinInvestorFlow>,
+        portfolio_performance: Option<PortfolioPerformance>,
+        portfolio_risk: Option<PortfolioRisk>,
+        allocations: Vec<DarwinAllocation>,
     },
 }
 
@@ -354,6 +363,140 @@ pub struct DarwinCorrelationAlert {
     pub correlation: f64,
     pub threshold: f64,
     pub suggestion: String,
+}
+
+// ── ADR-095: Expanded DARWIN web scraping types ─────────────────────
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct MonthlyReturnRow {
+    pub year: u16,
+    pub months: [Option<f64>; 12],
+    pub year_total: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DarwinMonthlyReturns {
+    pub ticker: String,
+    pub rows: Vec<MonthlyReturnRow>,
+    pub cagr: f64,
+    pub best_month_pct: f64,
+    pub worst_month_pct: f64,
+    pub avg_month_pct: f64,
+    pub positive_months: u32,
+    pub negative_months: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct EquityPoint {
+    pub timestamp_ms: i64,
+    pub value: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DarwinEquityCurve {
+    pub ticker: String,
+    pub points: Vec<EquityPoint>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct VaRPoint {
+    pub timestamp_ms: i64,
+    pub var_pct: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DrawdownPeriod {
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub depth_pct: f64,
+    pub recovery_days: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DarwinVaRHistory {
+    pub ticker: String,
+    pub points: Vec<VaRPoint>,
+    pub current_var: f64,
+    pub avg_var: f64,
+    pub max_var: f64,
+    pub min_var: f64,
+    pub var_violations: u32,
+    pub drawdown_periods: Vec<DrawdownPeriod>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DScorePoint {
+    pub timestamp_ms: i64,
+    pub dscore: f64,
+    pub experience: f64,
+    pub risk_stability: f64,
+    pub risk_adjustment: f64,
+    pub performance: f64,
+    pub scalability: f64,
+    pub market_correlation: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DarwinDScoreHistory {
+    pub ticker: String,
+    pub points: Vec<DScorePoint>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct InvestorFlowPoint {
+    pub timestamp_ms: i64,
+    pub investor_count: u32,
+    pub aum: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DarwinInvestorFlow {
+    pub ticker: String,
+    pub points: Vec<InvestorFlowPoint>,
+    pub capital_in: f64,
+    pub capital_out: f64,
+    pub net_flow: f64,
+    pub divergence_pct: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct PortfolioPerformance {
+    pub total_return_pct: f64,
+    pub cagr: f64,
+    pub best_month_pct: f64,
+    pub worst_month_pct: f64,
+    pub monthly_returns: Vec<MonthlyReturnRow>,
+    pub equity_points: Vec<EquityPoint>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct PortfolioRisk {
+    pub current_var: f64,
+    pub max_drawdown_pct: f64,
+    pub diversification_benefit_pct: f64,
+    pub var_history: Vec<VaRPoint>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DarwinAllocation {
+    pub ticker: String,
+    pub weight_pct: f64,
+    pub invested: f64,
+    pub pnl: f64,
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
@@ -956,10 +1099,89 @@ mod tests {
                 correlation: 0.42,
             }],
             correlation_alerts: vec![],
+            monthly_returns: vec![],
+            equity_curves: vec![],
+            var_histories: vec![],
+            dscore_histories: vec![],
+            investor_flows: vec![],
+            portfolio_performance: None,
+            portfolio_risk: None,
+            allocations: vec![],
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: WebMsg = serde_json::from_str(&json).unwrap();
         assert_eq!(format!("{back:?}"), format!("{msg:?}"));
+    }
+
+    #[test]
+    fn darwin_monthly_returns_roundtrip() {
+        let mr = DarwinMonthlyReturns {
+            ticker: "TPN".into(),
+            rows: vec![MonthlyReturnRow {
+                year: 2024,
+                months: [Some(1.2), None, Some(-0.5), None, None, None,
+                         None, None, None, None, None, None],
+                year_total: Some(0.7),
+            }],
+            cagr: 10.5, best_month_pct: 5.0, worst_month_pct: -3.0,
+            avg_month_pct: 0.8, positive_months: 8, negative_months: 4,
+        };
+        let json = serde_json::to_string(&mr).unwrap();
+        let back: DarwinMonthlyReturns = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.ticker, "TPN");
+        assert_eq!(back.positive_months, 8);
+    }
+
+    #[test]
+    fn darwin_var_history_roundtrip() {
+        let vh = DarwinVaRHistory {
+            ticker: "TPN".into(),
+            points: vec![VaRPoint { timestamp_ms: 1700000000000, var_pct: 4.5 }],
+            current_var: 4.5, avg_var: 4.0, max_var: 6.5, min_var: 2.1,
+            var_violations: 3,
+            drawdown_periods: vec![DrawdownPeriod {
+                start_ms: 1700000000000, end_ms: 1700500000000,
+                depth_pct: 8.3, recovery_days: 15,
+            }],
+        };
+        let json = serde_json::to_string(&vh).unwrap();
+        let back: DarwinVaRHistory = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.var_violations, 3);
+    }
+
+    #[test]
+    fn darwin_allocation_roundtrip() {
+        let alloc = DarwinAllocation {
+            ticker: "TPN".into(), weight_pct: 25.0, invested: 50000.0, pnl: 1234.56,
+        };
+        let json = serde_json::to_string(&alloc).unwrap();
+        let back: DarwinAllocation = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.ticker, "TPN");
+        assert!((back.weight_pct - 25.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn portfolio_performance_roundtrip() {
+        let pp = PortfolioPerformance {
+            total_return_pct: 45.2, cagr: 12.5,
+            best_month_pct: 8.3, worst_month_pct: -5.1,
+            monthly_returns: vec![], equity_points: vec![],
+        };
+        let json = serde_json::to_string(&pp).unwrap();
+        let back: PortfolioPerformance = serde_json::from_str(&json).unwrap();
+        assert!((back.cagr - 12.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn portfolio_risk_roundtrip() {
+        let pr = PortfolioRisk {
+            current_var: 4.5, max_drawdown_pct: 12.0,
+            diversification_benefit_pct: 15.3,
+            var_history: vec![],
+        };
+        let json = serde_json::to_string(&pr).unwrap();
+        let back: PortfolioRisk = serde_json::from_str(&json).unwrap();
+        assert!((back.diversification_benefit_pct - 15.3).abs() < f64::EPSILON);
     }
 
     #[test]

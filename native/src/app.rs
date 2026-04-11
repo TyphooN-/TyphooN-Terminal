@@ -15217,9 +15217,13 @@ impl TyphooNApp {
                 let last = self.dwx_last_update.as_ref()
                     .map(|u| {
                         let dt = chrono::DateTime::from_timestamp_millis(u.timestamp_ms).unwrap_or_default();
-                        format!("{} ({} DARWINs, {} correlations, {} alerts)",
+                        format!("{} ({} DARWINs, {} corr, {} alerts, {} alloc{}{})",
                             dt.format("%Y-%m-%d %H:%M:%S"),
-                            u.snapshots.len(), u.correlations.len(), u.correlation_alerts.len())
+                            u.snapshots.len(), u.correlations.len(), u.correlation_alerts.len(),
+                            u.allocations.len(),
+                            if u.portfolio_performance.is_some() { ", perf" } else { "" },
+                            if u.portfolio_risk.is_some() { ", risk" } else { "" },
+                        )
                     })
                     .unwrap_or_else(|| "never".to_string());
                 self.log.push_back(LogEntry::info(format!("DWX Status: {} | Auto: {} | DARWINs: {} | Excluded: {} | Last scrape: {}", status, auto, darwins, excluded, last)));
@@ -27931,12 +27935,23 @@ impl eframe::App for TyphooNApp {
                                 dismissed: false,
                             });
                         }
+                        let n_monthly = update.monthly_returns.len();
+                        let n_alloc = update.allocations.len();
+                        let has_perf = update.portfolio_performance.is_some();
+                        let has_risk = update.portfolio_risk.is_some();
                         self.dwx_last_update = Some(update);
                         self.dwx_logged_in = true;
                         self.log.push_back(LogEntry::info(format!(
-                            "DWX scrape complete: {} DARWINs, {} correlations, {} alerts",
-                            n_snap, n_corr, n_alerts
+                            "DWX scrape complete: {} DARWINs (all tabs), {} correlations, {} alerts, {} allocations{}{}",
+                            n_snap, n_corr, n_alerts, n_alloc,
+                            if has_perf { ", portfolio perf" } else { "" },
+                            if has_risk { ", portfolio risk" } else { "" },
                         )));
+                        if n_monthly > 0 {
+                            self.log.push_back(LogEntry::info(format!(
+                                "  Monthly returns: {n_monthly}, equity curves: {n_snap}, VaR histories: {n_snap}, D-Score histories: {n_snap}, investor flows: {n_snap}"
+                            )));
+                        }
                     }
                     Err(e) => {
                         self.log.push_back(LogEntry::err(format!("DWX scrape failed: {}", e)));
@@ -28717,8 +28732,11 @@ impl eframe::App for TyphooNApp {
                     typhoon_web_protocol::WebCmd::GetDarwinWeb { ticker } => {
                         // Return cached DWX web data to web client
                         if let Some(ref update) = self.dwx_last_update {
+                            let ticker_filter = ticker.as_ref().map(|t| t.to_uppercase());
+                            let matches_ticker = |t: &str| ticker_filter.as_ref().map_or(true, |f| t == f);
+
                             let snapshots: Vec<typhoon_web_protocol::DarwinWebSnapshot> = update.snapshots.iter()
-                                .filter(|s| ticker.as_ref().map_or(true, |t| s.ticker == t.to_uppercase()))
+                                .filter(|s| matches_ticker(&s.ticker))
                                 .map(|s| typhoon_web_protocol::DarwinWebSnapshot {
                                     ticker: s.ticker.clone(),
                                     timestamp_ms: s.timestamp_ms,
@@ -28769,9 +28787,94 @@ impl eframe::App for TyphooNApp {
                                     suggestion: a.suggestion.clone(),
                                 })
                                 .collect();
+                            // Map expanded tab data
+                            let monthly_returns: Vec<typhoon_web_protocol::DarwinMonthlyReturns> = update.monthly_returns.iter()
+                                .filter(|mr| matches_ticker(&mr.ticker))
+                                .map(|mr| typhoon_web_protocol::DarwinMonthlyReturns {
+                                    ticker: mr.ticker.clone(),
+                                    rows: mr.rows.iter().map(|r| typhoon_web_protocol::MonthlyReturnRow {
+                                        year: r.year, months: r.months, year_total: r.year_total,
+                                    }).collect(),
+                                    cagr: mr.cagr, best_month_pct: mr.best_month_pct,
+                                    worst_month_pct: mr.worst_month_pct, avg_month_pct: mr.avg_month_pct,
+                                    positive_months: mr.positive_months, negative_months: mr.negative_months,
+                                }).collect();
+                            let equity_curves: Vec<typhoon_web_protocol::DarwinEquityCurve> = update.equity_curves.iter()
+                                .filter(|ec| matches_ticker(&ec.ticker))
+                                .map(|ec| typhoon_web_protocol::DarwinEquityCurve {
+                                    ticker: ec.ticker.clone(),
+                                    points: ec.points.iter().map(|p| typhoon_web_protocol::EquityPoint {
+                                        timestamp_ms: p.timestamp_ms, value: p.value,
+                                    }).collect(),
+                                }).collect();
+                            let var_histories: Vec<typhoon_web_protocol::DarwinVaRHistory> = update.var_histories.iter()
+                                .filter(|vh| matches_ticker(&vh.ticker))
+                                .map(|vh| typhoon_web_protocol::DarwinVaRHistory {
+                                    ticker: vh.ticker.clone(),
+                                    points: vh.points.iter().map(|p| typhoon_web_protocol::VaRPoint {
+                                        timestamp_ms: p.timestamp_ms, var_pct: p.var_pct,
+                                    }).collect(),
+                                    current_var: vh.current_var, avg_var: vh.avg_var,
+                                    max_var: vh.max_var, min_var: vh.min_var,
+                                    var_violations: vh.var_violations,
+                                    drawdown_periods: vh.drawdown_periods.iter().map(|dd| typhoon_web_protocol::DrawdownPeriod {
+                                        start_ms: dd.start_ms, end_ms: dd.end_ms,
+                                        depth_pct: dd.depth_pct, recovery_days: dd.recovery_days,
+                                    }).collect(),
+                                }).collect();
+                            let dscore_histories: Vec<typhoon_web_protocol::DarwinDScoreHistory> = update.dscore_histories.iter()
+                                .filter(|dh| matches_ticker(&dh.ticker))
+                                .map(|dh| typhoon_web_protocol::DarwinDScoreHistory {
+                                    ticker: dh.ticker.clone(),
+                                    points: dh.points.iter().map(|p| typhoon_web_protocol::DScorePoint {
+                                        timestamp_ms: p.timestamp_ms, dscore: p.dscore,
+                                        experience: p.experience, risk_stability: p.risk_stability,
+                                        risk_adjustment: p.risk_adjustment, performance: p.performance,
+                                        scalability: p.scalability, market_correlation: p.market_correlation,
+                                    }).collect(),
+                                }).collect();
+                            let investor_flows: Vec<typhoon_web_protocol::DarwinInvestorFlow> = update.investor_flows.iter()
+                                .filter(|ifl| matches_ticker(&ifl.ticker))
+                                .map(|ifl| typhoon_web_protocol::DarwinInvestorFlow {
+                                    ticker: ifl.ticker.clone(),
+                                    points: ifl.points.iter().map(|p| typhoon_web_protocol::InvestorFlowPoint {
+                                        timestamp_ms: p.timestamp_ms, investor_count: p.investor_count, aum: p.aum,
+                                    }).collect(),
+                                    capital_in: ifl.capital_in, capital_out: ifl.capital_out,
+                                    net_flow: ifl.net_flow, divergence_pct: ifl.divergence_pct,
+                                }).collect();
+                            let portfolio_performance = update.portfolio_performance.as_ref().map(|pp| {
+                                typhoon_web_protocol::PortfolioPerformance {
+                                    total_return_pct: pp.total_return_pct, cagr: pp.cagr,
+                                    best_month_pct: pp.best_month_pct, worst_month_pct: pp.worst_month_pct,
+                                    monthly_returns: pp.monthly_returns.iter().map(|r| typhoon_web_protocol::MonthlyReturnRow {
+                                        year: r.year, months: r.months, year_total: r.year_total,
+                                    }).collect(),
+                                    equity_points: pp.equity_points.iter().map(|p| typhoon_web_protocol::EquityPoint {
+                                        timestamp_ms: p.timestamp_ms, value: p.value,
+                                    }).collect(),
+                                }
+                            });
+                            let portfolio_risk = update.portfolio_risk.as_ref().map(|pr| {
+                                typhoon_web_protocol::PortfolioRisk {
+                                    current_var: pr.current_var, max_drawdown_pct: pr.max_drawdown_pct,
+                                    diversification_benefit_pct: pr.diversification_benefit_pct,
+                                    var_history: pr.var_history.iter().map(|p| typhoon_web_protocol::VaRPoint {
+                                        timestamp_ms: p.timestamp_ms, var_pct: p.var_pct,
+                                    }).collect(),
+                                }
+                            });
+                            let allocations: Vec<typhoon_web_protocol::DarwinAllocation> = update.allocations.iter()
+                                .map(|a| typhoon_web_protocol::DarwinAllocation {
+                                    ticker: a.ticker.clone(), weight_pct: a.weight_pct,
+                                    invested: a.invested, pnl: a.pnl,
+                                }).collect();
                             if let Some(ref tx) = self.web_msg_tx {
                                 let _ = tx.send(typhoon_web_protocol::WebMsg::DarwinWebUpdate {
                                     snapshots, correlations, correlation_alerts: alerts,
+                                    monthly_returns, equity_curves, var_histories,
+                                    dscore_histories, investor_flows,
+                                    portfolio_performance, portfolio_risk, allocations,
                                 });
                             }
                         }
