@@ -9214,7 +9214,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "LOAD_TEMPLATE", desc: "Load a saved indicator template (LOAD_TEMPLATE <name>)" },
     Command { name: "TEMPLATES",     desc: "List all available chart templates" },
     Command { name: "CRYPTO_FEAR_GREED", desc: "Crypto Fear & Greed Index (alternative.me)" },
-    Command { name: "AI",            desc: "AI assistant chat (Claude/GPT)" },
+    Command { name: "AI",            desc: "AI assistant chat (Claude API / OpenAI API)" },
+    Command { name: "CLAUDE",        desc: "Claude Code CLI — uses local claude binary (no API key needed)" },
     Command { name: "CHAT",          desc: "TyphooN Terminal community chat" },
     Command { name: "WSB",           desc: "Reddit WallStreetBets hot posts" },
     Command { name: "BARDATA",       desc: "Download bar data for all known symbols from all brokers" },
@@ -9927,6 +9928,11 @@ pub struct TyphooNApp {
     anthropic_key: String,
     openai_key: String,
     show_ai_chat: bool,
+    /// Claude Code CLI chat window.
+    show_claude_code: bool,
+    claude_code_input: String,
+    claude_code_history: Vec<(bool, String)>, // (is_user, message)
+    claude_code_rx: Option<std::sync::mpsc::Receiver<String>>,
     ai_chat_history: Vec<(bool, String)>, // (is_user, message)
     ai_chat_input: String,
     ai_provider: usize, // 0=Claude, 1=GPT
@@ -12915,6 +12921,10 @@ impl TyphooNApp {
             anthropic_key: String::new(),
             openai_key: String::new(),
             show_ai_chat: false,
+            show_claude_code: false,
+            claude_code_input: String::new(),
+            claude_code_history: Vec::new(),
+            claude_code_rx: None,
             ai_chat_history: Vec::new(),
             ai_chat_input: String::new(),
             ai_provider: 0,
@@ -15709,6 +15719,18 @@ impl TyphooNApp {
                 }
             }
             "AI" | "AI_CHAT" => self.show_ai_chat = true,
+            "CLAUDE" | "CLAUDE_CODE" | "CLAUDE-CODE" => {
+                // Check if claude binary exists
+                match std::process::Command::new("which").arg("claude").output() {
+                    Ok(out) if out.status.success() => {
+                        self.show_claude_code = true;
+                        self.log.push_back(LogEntry::info("Claude Code CLI detected — opening chat"));
+                    }
+                    _ => {
+                        self.log.push_back(LogEntry::err("Claude Code CLI not found in PATH. Install: npm install -g @anthropic-ai/claude-code"));
+                    }
+                }
+            }
             "CHAT" | "MATRIX" => {
                 self.show_matrix_chat = true;
                 // Auto-login if credentials available but not yet authenticated
@@ -16996,6 +17018,7 @@ impl TyphooNApp {
         self.show_risk_calc = false;
         self.show_compound_calc = false;
         self.show_ai_chat = false;
+        self.show_claude_code = false;
         self.show_matrix_chat = false;
         self.show_reddit = false;
         self.show_bardata = false;
@@ -20266,6 +20289,89 @@ impl TyphooNApp {
                                 });
                             }
                             self.ai_chat_input.clear();
+                        }
+                    });
+                });
+        }
+
+        // ── Claude Code CLI chat ──
+        // Drain responses from background thread
+        if let Some(ref rx) = self.claude_code_rx {
+            if let Ok(response) = rx.try_recv() {
+                self.claude_code_history.push((false, response));
+                self.claude_code_rx = None;
+            }
+        }
+        if self.show_claude_code {
+            egui::Window::new("Claude Code")
+                .open(&mut self.show_claude_code)
+                .resizable(true).default_size([550.0, 450.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("Claude Code CLI — uses your local subscription").small().color(AXIS_TEXT));
+                    ui.separator();
+                    egui::ScrollArea::vertical().auto_shrink(false).max_height(340.0).stick_to_bottom(true).show(ui, |ui| {
+                        if self.claude_code_history.is_empty() {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(40.0);
+                                ui.label(egui::RichText::new("Ask Claude anything — uses your local claude CLI").color(AXIS_TEXT));
+                            });
+                        }
+                        for (is_user, msg) in &self.claude_code_history {
+                            let (align, color, prefix) = if *is_user {
+                                (egui::Align::RIGHT, egui::Color32::from_rgb(80, 140, 255), "You")
+                            } else {
+                                (egui::Align::LEFT, egui::Color32::from_rgb(220, 180, 100), "Claude")
+                            };
+                            ui.with_layout(egui::Layout::top_down(align), |ui| {
+                                ui.label(egui::RichText::new(prefix).strong().small().color(color));
+                                ui.label(egui::RichText::new(msg).small());
+                            });
+                            ui.add_space(4.0);
+                        }
+                        if self.claude_code_rx.is_some() {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(egui::RichText::new("Thinking...").small().color(AXIS_TEXT));
+                            });
+                        }
+                    });
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        let resp = ui.add(egui::TextEdit::singleline(&mut self.claude_code_input)
+                            .desired_width(ui.available_width() - 60.0)
+                            .hint_text("Ask Claude..."));
+                        let send = ui.button("Send").clicked()
+                            || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                        if send && !self.claude_code_input.trim().is_empty() && self.claude_code_rx.is_none() {
+                            let msg = self.claude_code_input.trim().to_string();
+                            self.claude_code_input.clear();
+                            self.claude_code_history.push((true, msg.clone()));
+                            // Spawn claude CLI on background thread
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            self.claude_code_rx = Some(rx);
+                            std::thread::spawn(move || {
+                                match std::process::Command::new("claude")
+                                    .arg("--print")
+                                    .arg(&msg)
+                                    .output()
+                                {
+                                    Ok(output) => {
+                                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                                        let response = if !stdout.trim().is_empty() {
+                                            stdout.trim().to_string()
+                                        } else if !stderr.trim().is_empty() {
+                                            format!("Error: {}", stderr.trim())
+                                        } else {
+                                            "(empty response)".to_string()
+                                        };
+                                        let _ = tx.send(response);
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(format!("Failed to run claude CLI: {e}"));
+                                    }
+                                }
+                            });
                         }
                     });
                 });
