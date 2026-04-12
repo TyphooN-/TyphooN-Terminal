@@ -6720,9 +6720,13 @@ fn draw_chart(
             );
         }
     }
-    // Trade arrows (buy = green up-arrow, sell = red down-arrow)
-    for tm in &trade_overlay.markers {
-        if tm.bar_idx >= start_idx && tm.bar_idx < end_idx {
+    // Trade arrows (buy = green up-arrow, sell = red down-arrow).
+    // PERF: markers are sorted by bar_idx (see build_trade_overlay). Binary-search
+    // for the first in-range marker so we skip off-screen history in O(log N) instead
+    // of scanning the full Vec every frame.
+    let marker_start = trade_overlay.markers.partition_point(|m| m.bar_idx < start_idx);
+    for tm in trade_overlay.markers[marker_start..].iter().take_while(|m| m.bar_idx < end_idx) {
+        {
             let rel = tm.bar_idx - start_idx;
             let x = chart_rect.left() + (rel as f32 + 0.5) * bar_w;
             let y = price_to_y(tm.price);
@@ -23997,7 +24001,8 @@ impl TyphooNApp {
                                 let (_, uv_action) = symbol_label_with_menu(ui, sym,
                                     egui::RichText::new(sym).small().strong());
                                 if !matches!(uv_action, SymbolAction::None) { uv_pending_action = uv_action; }
-                                if let Some(closes) = uv_sparklines.get(&sym.to_uppercase()) {
+                                // sym is normalized to uppercase at creation (see ScanUnusualVolume handler)
+                                if let Some(closes) = uv_sparklines.get(sym.as_str()) {
                                     draw_inline_sparkline(ui, closes, 50.0, 12.0);
                                 } else { ui.label(egui::RichText::new("—").color(AXIS_TEXT).small()); }
                                 let fmt_vol = |v: f64| -> String {
@@ -24834,8 +24839,8 @@ impl TyphooNApp {
                     let found = self.bg.all_fundamentals.iter().find(|f| f.symbol == *ticker).cloned();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("Fundamentals: {}", ticker)).strong());
-                        // UX7: Inline sparkline next to ticker name
-                        if let Some(closes) = fw_sparklines.get(&ticker.to_uppercase()) {
+                        // UX7: ticker is already uppercase (from cached_active_symbols).
+                        if let Some(closes) = fw_sparklines.get(ticker.as_str()) {
                             draw_inline_sparkline(ui, closes, 80.0, 18.0);
                         }
                         if ui.add(egui::Button::new("Scrape / Refresh").fill(BTN_BLUE)).clicked() && !ticker.is_empty() {
@@ -25035,8 +25040,8 @@ impl TyphooNApp {
                                 let (_, ev_action) = symbol_label_with_menu(ui, &f.symbol,
                                     egui::RichText::new(&f.symbol).small().strong().monospace());
                                 if !matches!(ev_action, SymbolAction::None) { ev_pending_action = ev_action; }
-                                // UX7: Sparkline column
-                                if let Some(closes) = sparklines.get(&f.symbol.to_uppercase()) {
+                                // UX7: Sparkline column — f.symbol is uppercase via parse_yahoo_data.
+                                if let Some(closes) = sparklines.get(f.symbol.as_str()) {
                                     draw_inline_sparkline(ui, closes, 60.0, 14.0);
                                 } else {
                                     ui.label(egui::RichText::new("—").color(AXIS_TEXT).small());
