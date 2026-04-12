@@ -9219,9 +9219,9 @@ const COMMANDS: &[Command] = &[
     Command { name: "WORKSPACE_LOAD", desc: "Restore a named workspace layout (WORKSPACE_LOAD <name>)" },
     Command { name: "WORKSPACES",    desc: "List all saved workspace presets" },
     Command { name: "CRYPTO_FEAR_GREED", desc: "Crypto Fear & Greed Index (alternative.me)" },
-    Command { name: "AI",            desc: "AI assistant (Claude/GPT/Gemini/Grok/Mistral/Perplexity API)" },
-    Command { name: "CLAUDE",        desc: "Claude Code CLI — local claude binary (no API key)" },
-    Command { name: "GEMINI",        desc: "Gemini CLI — local gemini binary (no API key)" },
+    Command { name: "ASKAI",         desc: "Ask AI with full TyphooN data packet — ASKAI SYM[,SYM] [question] (uses current AI provider)" },
+    Command { name: "ASKCLAUDE",     desc: "Ask Claude Code CLI with full TyphooN data packet — ASKCLAUDE SYM[,SYM] [question]" },
+    Command { name: "ASKGEMINI",     desc: "Ask Gemini CLI with full TyphooN data packet — ASKGEMINI SYM[,SYM] [question]" },
     Command { name: "CHAT",          desc: "TyphooN Terminal community chat" },
     Command { name: "WSB",           desc: "Reddit WallStreetBets hot posts" },
     Command { name: "BARDATA",       desc: "Download bar data for all known symbols from all brokers" },
@@ -14362,6 +14362,323 @@ impl TyphooNApp {
         }
     }
 
+    /// Assemble a structured Markdown research packet for one or more symbols,
+    /// using every local data source we have: fundamentals row, last 4 quarterly
+    /// financials, recent SEC filings, insider trade summary, price stats
+    /// (close, 20/60/252d returns, ATR%, VaR95/Ask), top institutional holders,
+    /// and sector peer comparison. The output is a self-contained prompt that
+    /// can be piped to any AI backend (Claude CLI, Gemini CLI, or the HTTP API).
+    fn investigate_symbols(&self, syms: &[String], user_question: &str) -> String {
+        use std::fmt::Write as _;
+        let mut p = String::new();
+        let _ = writeln!(p, "# TyphooN Terminal Research Packet");
+        let _ = writeln!(p, "Scope: {} | Generated: {}", self.broker_scope_label(),
+            chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ"));
+        let _ = writeln!(p, "Symbols: {}", syms.join(", "));
+        let _ = writeln!(p);
+
+        // Per-symbol section
+        for sym_raw in syms {
+            let sym_upper = sym_raw.to_uppercase();
+            let _ = writeln!(p, "---");
+            let _ = writeln!(p, "## {sym_upper}");
+
+            // Fundamentals row
+            let fund = self.bg.all_fundamentals.iter()
+                .find(|f| f.symbol.eq_ignore_ascii_case(&sym_upper));
+            if let Some(f) = fund {
+                let _ = writeln!(p, "**{}** — {} / {}",
+                    if f.company_name.is_empty() { "(unnamed)" } else { f.company_name.as_str() },
+                    if f.sector.is_empty() { "Unknown" } else { f.sector.as_str() },
+                    if f.industry.is_empty() { "Unknown" } else { f.industry.as_str() });
+                if !f.description.is_empty() {
+                    // Trim long descriptions to keep the prompt bounded
+                    let d = if f.description.len() > 800 { &f.description[..800] } else { f.description.as_str() };
+                    let _ = writeln!(p, "{d}");
+                }
+                let _ = writeln!(p);
+                let _ = writeln!(p, "### Valuation & Risk");
+                let fmt_money = typhoon_engine::core::fundamentals::format_large_number;
+                let fmt_opt = |v: Option<f64>| v.map(|x| format!("{:.2}", x)).unwrap_or_else(|| "—".to_string());
+                let fmt_money_opt = |v: Option<f64>| v.map(fmt_money).unwrap_or_else(|| "—".to_string());
+                let _ = writeln!(p, "| Metric | Value |");
+                let _ = writeln!(p, "|---|---|");
+                let _ = writeln!(p, "| Market Cap | {} |", fmt_money_opt(f.market_cap));
+                let _ = writeln!(p, "| Enterprise Value | {} |", fmt_money_opt(f.enterprise_value));
+                let _ = writeln!(p, "| MCap/EV % | {} |", fmt_opt(f.mcap_ev_ratio));
+                let _ = writeln!(p, "| Total Debt | {} |", fmt_money_opt(f.total_debt));
+                let _ = writeln!(p, "| Cash & Equivalents | {} |", fmt_money_opt(f.cash_and_equivalents));
+                let _ = writeln!(p, "| Stock Price | {} |", fmt_opt(f.stock_price));
+                let _ = writeln!(p, "| P/E (trailing) | {} |", fmt_opt(f.pe_ratio));
+                let _ = writeln!(p, "| Forward P/E | {} |", fmt_opt(f.forward_pe));
+                let _ = writeln!(p, "| PEG | {} |", fmt_opt(f.peg_ratio));
+                let _ = writeln!(p, "| P/B | {} |", fmt_opt(f.price_to_book));
+                let _ = writeln!(p, "| P/S | {} |", fmt_opt(f.price_to_sales));
+                let _ = writeln!(p, "| EV/EBITDA | {} |", fmt_opt(f.ev_to_ebitda));
+                let _ = writeln!(p, "| Profit Margin | {} |", fmt_opt(f.profit_margin));
+                let _ = writeln!(p, "| Operating Margin | {} |", fmt_opt(f.operating_margin));
+                let _ = writeln!(p, "| ROE | {} |", fmt_opt(f.roe));
+                let _ = writeln!(p, "| ROA | {} |", fmt_opt(f.roa));
+                let _ = writeln!(p, "| Beta | {} |", fmt_opt(f.beta));
+                let _ = writeln!(p, "| Short Ratio | {} |", fmt_opt(f.short_ratio));
+                let _ = writeln!(p, "| Short % of Float | {} |", fmt_opt(f.short_percent_of_float));
+                let _ = writeln!(p, "| Dividend Yield | {} |", fmt_opt(f.dividend_yield));
+                let _ = writeln!(p, "| Next Earnings | {} |", f.next_earnings_date.clone().unwrap_or_else(|| "—".into()));
+                let _ = writeln!(p);
+            } else {
+                let _ = writeln!(p, "_No fundamentals on file for this symbol. Run EVSCRAPE to populate._");
+                let _ = writeln!(p);
+            }
+
+            // Quarterly financials (from DB if available)
+            if let Some(ref cache) = self.cache {
+                if let Some(conn) = cache.try_connection() {
+                    if let Ok(quarters) = typhoon_engine::core::fundamentals::get_quarterly_financials(&conn, &sym_upper) {
+                        if !quarters.is_empty() {
+                            let _ = writeln!(p, "### Last {} Quarterly Financials", quarters.len().min(4));
+                            let _ = writeln!(p, "| Period | Revenue | Net Income | FCF | Gross Profit | Op Income | EPS |");
+                            let _ = writeln!(p, "|---|---|---|---|---|---|---|");
+                            let fmt_money = typhoon_engine::core::fundamentals::format_large_number;
+                            let fmt_mopt = |v: Option<f64>| v.map(fmt_money).unwrap_or_else(|| "—".to_string());
+                            let fmt_opt2 = |v: Option<f64>| v.map(|x| format!("{:.2}", x)).unwrap_or_else(|| "—".to_string());
+                            for q in quarters.iter().take(4) {
+                                let _ = writeln!(p, "| {} | {} | {} | {} | {} | {} | {} |",
+                                    q.period_end, fmt_mopt(q.total_revenue), fmt_mopt(q.net_income),
+                                    fmt_mopt(q.free_cash_flow), fmt_mopt(q.gross_profit),
+                                    fmt_mopt(q.operating_income), fmt_opt2(q.eps));
+                            }
+                            let _ = writeln!(p);
+                        }
+                    }
+                    // Top institutional holders
+                    if let Ok(holders) = typhoon_engine::core::fundamentals::get_institutional_holders(&conn, &sym_upper) {
+                        if !holders.is_empty() {
+                            let _ = writeln!(p, "### Top {} Institutional Holders", holders.len().min(5));
+                            let _ = writeln!(p, "| Holder | Shares | % Held | Value |");
+                            let _ = writeln!(p, "|---|---|---|---|");
+                            let fmt_money = typhoon_engine::core::fundamentals::format_large_number;
+                            for h in holders.iter().take(5) {
+                                let _ = writeln!(p, "| {} | {} | {:.2}% | {} |",
+                                    h.holder_name, fmt_money(h.shares as f64), h.pct_held * 100.0, fmt_money(h.value));
+                            }
+                            let _ = writeln!(p);
+                        }
+                    }
+                }
+            }
+
+            // Recent SEC filings
+            let recent_filings: Vec<_> = self.bg.sec_filings.iter()
+                .filter(|fl| fl.ticker.eq_ignore_ascii_case(&sym_upper))
+                .take(10)
+                .collect();
+            if !recent_filings.is_empty() {
+                let _ = writeln!(p, "### Recent SEC Filings ({})", recent_filings.len());
+                let _ = writeln!(p, "| Date | Form | Category | Summary |");
+                let _ = writeln!(p, "|---|---|---|---|");
+                for fl in &recent_filings {
+                    let summary = if fl.summary.len() > 120 { &fl.summary[..120] } else { fl.summary.as_str() };
+                    let _ = writeln!(p, "| {} | {} | {} | {} |", fl.filing_date, fl.form_type, fl.category, summary);
+                }
+                let _ = writeln!(p);
+            }
+
+            // Insider trade summary (aggregates from bg cache)
+            if let Some(trades) = self.bg.insider_trades.get(&sym_upper) {
+                if !trades.is_empty() {
+                    let n_buys = trades.iter().filter(|t| t.transaction_type.eq_ignore_ascii_case("P") || t.transaction_type.to_lowercase().contains("buy")).count();
+                    let n_sells = trades.iter().filter(|t| t.transaction_type.eq_ignore_ascii_case("S") || t.transaction_type.to_lowercase().contains("sell")).count();
+                    let buy_value: f64 = trades.iter().filter(|t| t.transaction_type.eq_ignore_ascii_case("P")).map(|t| t.aggregate_value).sum();
+                    let sell_value: f64 = trades.iter().filter(|t| t.transaction_type.eq_ignore_ascii_case("S")).map(|t| t.aggregate_value).sum();
+                    let net = buy_value - sell_value;
+                    let _ = writeln!(p, "### Insider Activity");
+                    let fmt_money = typhoon_engine::core::fundamentals::format_large_number;
+                    let _ = writeln!(p, "- {} transactions on file ({} buys, {} sells)", trades.len(), n_buys, n_sells);
+                    let _ = writeln!(p, "- Buy aggregate: {} | Sell aggregate: {} | Net: {}",
+                        fmt_money(buy_value), fmt_money(sell_value), fmt_money(net));
+                    // Show last 5 trades
+                    let _ = writeln!(p, "| Date | Insider | Title | Type | Shares | Value |");
+                    let _ = writeln!(p, "|---|---|---|---|---|---|");
+                    for t in trades.iter().take(5) {
+                        let _ = writeln!(p, "| {} | {} | {} | {} | {} | {} |",
+                            t.transaction_date, t.insider_name, t.insider_title,
+                            t.transaction_type, fmt_money(t.shares), fmt_money(t.aggregate_value));
+                    }
+                    let _ = writeln!(p);
+                }
+            }
+
+            // Price stats from bar cache
+            if let Some(ref cache) = self.cache {
+                let keys = [
+                    format!("mt5:CC:{}:1Day", sym_upper),
+                    format!("mt5:{}:1Day", sym_upper),
+                    format!("alpaca:{}:1Day", sym_upper),
+                ];
+                let mut closes: Vec<f64> = Vec::new();
+                let mut ohlc: Vec<(f64, f64, f64, f64)> = Vec::new();
+                for key in &keys {
+                    if let Ok(Some(bars)) = cache.get_bars_raw(key) {
+                        if bars.len() >= 20 {
+                            closes = bars.iter().map(|(_, _, _, _, c, _)| *c).collect();
+                            ohlc = bars.iter().map(|(_, o, h, l, c, _)| (*o, *h, *l, *c)).collect();
+                            break;
+                        }
+                    }
+                }
+                if closes.len() >= 20 {
+                    let last = *closes.last().unwrap();
+                    let n = closes.len();
+                    let ret_pct = |n_back: usize| -> Option<f64> {
+                        if n > n_back { let prev = closes[n - 1 - n_back]; if prev > 0.0 { Some((last / prev - 1.0) * 100.0) } else { None } } else { None }
+                    };
+                    let r20 = ret_pct(20);
+                    let r60 = ret_pct(60);
+                    let r252 = ret_pct(252);
+                    // ATR(14)
+                    let period = 14usize;
+                    let mut atr = 0.0_f64;
+                    if ohlc.len() > period {
+                        for i in 1..=period {
+                            let tr = (ohlc[i].1 - ohlc[i].2)
+                                .max((ohlc[i].1 - ohlc[i-1].3).abs())
+                                .max((ohlc[i].2 - ohlc[i-1].3).abs());
+                            atr += tr;
+                        }
+                        atr /= period as f64;
+                        for i in (period + 1)..ohlc.len() {
+                            let tr = (ohlc[i].1 - ohlc[i].2)
+                                .max((ohlc[i].1 - ohlc[i-1].3).abs())
+                                .max((ohlc[i].2 - ohlc[i-1].3).abs());
+                            atr = (atr * (period as f64 - 1.0) + tr) / period as f64;
+                        }
+                    }
+                    let atr_pct = if last > 0.0 { atr / last * 100.0 } else { 0.0 };
+                    // VaR 95% from closes
+                    let var95 = typhoon_engine::core::var::compute_var_from_closes(&closes, 0.95)
+                        .map(|(dollars, ratio)| format!("${:.2} ({:.2}% of ask)", dollars, ratio))
+                        .unwrap_or_else(|| "—".to_string());
+                    let _ = writeln!(p, "### Price & Volatility (D1 bars, n={n})");
+                    let _ = writeln!(p, "- Last close: **{:.4}**", last);
+                    let _ = writeln!(p, "- 20d return: {}", r20.map(|x| format!("{:+.2}%", x)).unwrap_or_else(|| "—".into()));
+                    let _ = writeln!(p, "- 60d return: {}", r60.map(|x| format!("{:+.2}%", x)).unwrap_or_else(|| "—".into()));
+                    let _ = writeln!(p, "- 252d return: {}", r252.map(|x| format!("{:+.2}%", x)).unwrap_or_else(|| "—".into()));
+                    let _ = writeln!(p, "- ATR(14): {:.4} ({:.2}% of price)", atr, atr_pct);
+                    let _ = writeln!(p, "- VaR 95% (1 lot): {}", var95);
+                    let _ = writeln!(p);
+                } else {
+                    let _ = writeln!(p, "_No D1 bar data in cache — price/volatility stats unavailable. Run MT5SYNC or BARDATA to populate._");
+                    let _ = writeln!(p);
+                }
+            }
+
+            // Sector peer comparison (median of sector peers for the same fields)
+            if let Some(f) = fund {
+                if !f.sector.is_empty() {
+                    let peers: Vec<_> = self.bg.all_fundamentals.iter()
+                        .filter(|o| o.sector.eq_ignore_ascii_case(&f.sector) && !o.symbol.eq_ignore_ascii_case(&sym_upper))
+                        .collect();
+                    if peers.len() >= 3 {
+                        let median = |mut v: Vec<f64>| -> Option<f64> {
+                            if v.is_empty() { return None; }
+                            v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                            Some(v[v.len() / 2])
+                        };
+                        let collect = |getter: fn(&typhoon_engine::core::fundamentals::Fundamentals) -> Option<f64>| -> Vec<f64> {
+                            peers.iter().filter_map(|p| getter(p)).collect()
+                        };
+                        let fmt_o = |v: Option<f64>| v.map(|x| format!("{:.2}", x)).unwrap_or_else(|| "—".into());
+                        let _ = writeln!(p, "### Sector Peer Comparison ({} — {} peers)", f.sector, peers.len());
+                        let _ = writeln!(p, "| Metric | This Symbol | Sector Median |");
+                        let _ = writeln!(p, "|---|---|---|");
+                        let _ = writeln!(p, "| P/E | {} | {} |", fmt_o(f.pe_ratio), fmt_o(median(collect(|x| x.pe_ratio))));
+                        let _ = writeln!(p, "| Forward P/E | {} | {} |", fmt_o(f.forward_pe), fmt_o(median(collect(|x| x.forward_pe))));
+                        let _ = writeln!(p, "| P/B | {} | {} |", fmt_o(f.price_to_book), fmt_o(median(collect(|x| x.price_to_book))));
+                        let _ = writeln!(p, "| P/S | {} | {} |", fmt_o(f.price_to_sales), fmt_o(median(collect(|x| x.price_to_sales))));
+                        let _ = writeln!(p, "| EV/EBITDA | {} | {} |", fmt_o(f.ev_to_ebitda), fmt_o(median(collect(|x| x.ev_to_ebitda))));
+                        let _ = writeln!(p, "| Profit Margin | {} | {} |", fmt_o(f.profit_margin), fmt_o(median(collect(|x| x.profit_margin))));
+                        let _ = writeln!(p, "| ROE | {} | {} |", fmt_o(f.roe), fmt_o(median(collect(|x| x.roe))));
+                        let _ = writeln!(p, "| Beta | {} | {} |", fmt_o(f.beta), fmt_o(median(collect(|x| x.beta))));
+                        let _ = writeln!(p, "| Short % Float | {} | {} |", fmt_o(f.short_percent_of_float), fmt_o(median(collect(|x| x.short_percent_of_float))));
+                        let _ = writeln!(p, "| Div Yield | {} | {} |", fmt_o(f.dividend_yield), fmt_o(median(collect(|x| x.dividend_yield))));
+                        let _ = writeln!(p);
+                    }
+                }
+            }
+        }
+
+        // Closing question
+        let _ = writeln!(p, "---");
+        let _ = writeln!(p, "## Question");
+        if user_question.trim().is_empty() {
+            let _ = writeln!(p, "Using only the data above, write a concise investment research note on \
+                each symbol covering: (1) valuation vs sector peers, (2) financial trajectory from the \
+                quarterly data, (3) balance-sheet / solvency notes, (4) SEC filing activity and insider \
+                sentiment, (5) volatility regime and risk profile, and (6) a neutral-to-directional \
+                takeaway. Flag any data gaps you'd want filled in to refine the view.");
+        } else {
+            let _ = writeln!(p, "{}", user_question.trim());
+        }
+        p
+    }
+
+    /// Parse the argument portion of an ASKAI/ASKCLAUDE/ASKGEMINI command.
+    /// Accepted forms:
+    ///   ASKAI CC,NCLH                          → syms = [CC, NCLH], question = ""
+    ///   ASKAI CC NCLH                          → syms = [CC, NCLH], question = ""
+    ///   ASKAI CC,NCLH what's their debt load?  → syms = [CC, NCLH], question = "what's their debt load?"
+    /// The symbol list terminates at the first token that isn't ALPHANUM / -+._ or the first
+    /// lowercase non-ticker-looking word.
+    fn parse_ask_args(args: &str) -> (Vec<String>, String) {
+        let trimmed = args.trim();
+        if trimmed.is_empty() { return (Vec::new(), String::new()); }
+
+        // Split first token group by whitespace; the first token may itself be comma-separated.
+        let mut parts = trimmed.splitn(2, char::is_whitespace);
+        let first = parts.next().unwrap_or("");
+        let rest = parts.next().unwrap_or("").trim();
+
+        let is_tickerish = |s: &str| -> bool {
+            !s.is_empty() && s.len() <= 15 && s.chars().all(|c|
+                c.is_ascii_uppercase() || c.is_ascii_digit() || matches!(c, '-' | '.' | '_' | '+' | '/'))
+        };
+
+        // Collect tickers from the comma-separated first token.
+        let mut syms: Vec<String> = first.split(',')
+            .map(|s| s.trim().to_uppercase())
+            .filter(|s| !s.is_empty() && is_tickerish(s))
+            .collect();
+
+        // If `rest` starts with additional tickerish tokens (space-separated), absorb them.
+        // Stop at the first non-ticker token — that's where the question starts.
+        let mut question_start = 0usize;
+        let rest_bytes = rest.as_bytes();
+        let mut idx = 0usize;
+        while idx < rest_bytes.len() {
+            // Skip leading whitespace
+            while idx < rest_bytes.len() && (rest_bytes[idx] as char).is_whitespace() { idx += 1; }
+            if idx >= rest_bytes.len() { break; }
+            let start = idx;
+            while idx < rest_bytes.len() && !(rest_bytes[idx] as char).is_whitespace() { idx += 1; }
+            let token = &rest[start..idx];
+            // Strip trailing comma for "CC, NCLH something" style
+            let clean = token.trim_end_matches(',').to_uppercase();
+            if is_tickerish(&clean) {
+                syms.push(clean);
+                question_start = idx;
+            } else {
+                question_start = start;
+                break;
+            }
+        }
+        // Dedupe while preserving order
+        let mut seen = std::collections::HashSet::new();
+        syms.retain(|s| seen.insert(s.clone()));
+
+        let question = rest[question_start..].trim().to_string();
+        (syms, question)
+    }
+
     /// Format a Unix timestamp as a relative staleness label for UI display.
     /// Returns (label, color) so the caller can render with appropriate urgency.
     /// `ts=0` means "never fetched".
@@ -16227,8 +16544,11 @@ impl TyphooNApp {
                     let _ = self.broker_tx.send(BrokerCmd::FetchFearGreed);
                 }
             }
-            "AI" | "AI_CHAT" => self.show_ai_chat = true,
-            "GEMINI" | "GEMINI_CLI" | "GEMINI-CLI" => {
+            // Bare window-openers — kept as aliases so existing recent-commands history still works,
+            // but removed from the palette in favour of the ASKAI / ASKCLAUDE / ASKGEMINI variants
+            // which can also pre-load a research packet on the selected symbols.
+            "AI" | "AI_CHAT" | "ASKAI" | "ASK_AI" | "INVESTIGATE" => self.show_ai_chat = true,
+            "GEMINI" | "GEMINI_CLI" | "GEMINI-CLI" | "ASKGEMINI" | "ASK_GEMINI" => {
                 match std::process::Command::new("which").arg("gemini").output() {
                     Ok(out) if out.status.success() => {
                         self.show_gemini_cli = true;
@@ -16239,7 +16559,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            "CLAUDE" | "CLAUDE_CODE" | "CLAUDE-CODE" => {
+            "CLAUDE" | "CLAUDE_CODE" | "CLAUDE-CODE" | "ASKCLAUDE" | "ASK_CLAUDE" => {
                 // Check if claude binary exists
                 match std::process::Command::new("which").arg("claude").output() {
                     Ok(out) if out.status.success() => {
@@ -16248,6 +16568,133 @@ impl TyphooNApp {
                     }
                     _ => {
                         self.log.push_back(LogEntry::err("Claude Code CLI not found in PATH. Install: npm install -g @anthropic-ai/claude-code"));
+                    }
+                }
+            }
+            // Investigation variants — open the window AND pre-load a research packet for the given symbols.
+            cmd if cmd.starts_with("ASKAI ") || cmd.starts_with("ASK_AI ") || cmd.starts_with("INVESTIGATE ") => {
+                let args = cmd.splitn(2, char::is_whitespace).nth(1).unwrap_or("").trim();
+                let (syms, question) = Self::parse_ask_args(args);
+                if syms.is_empty() {
+                    self.show_ai_chat = true;
+                    self.log.push_back(LogEntry::warn("Usage: ASKAI SYM1[,SYM2] [optional question]"));
+                } else {
+                    let prompt = self.investigate_symbols(&syms, &question);
+                    self.show_ai_chat = true;
+                    self.ai_chat_history.push((true, format!("[Research packet: {}]", syms.join(", "))));
+                    let (provider, key) = match self.ai_provider {
+                        0 => ("claude", self.anthropic_key.clone()),
+                        1 => ("openai", self.openai_key.clone()),
+                        2 => ("gemini", self.gemini_key.clone()),
+                        3 => ("grok", self.xai_key.clone()),
+                        4 => ("mistral", self.mistral_key.clone()),
+                        5 => ("perplexity", self.perplexity_key.clone()),
+                        6 => ("local", "http://localhost:11434".to_string()),
+                        _ => ("openai", self.openai_key.clone()),
+                    };
+                    if key.is_empty() && self.ai_provider != 6 {
+                        self.ai_chat_history.push((false, "Set API key in Settings first.".into()));
+                    } else {
+                        let _ = self.broker_tx.send(BrokerCmd::AiChat {
+                            provider: provider.into(),
+                            api_key: key,
+                            message: prompt,
+                            history: self.ai_chat_history.clone(),
+                        });
+                        self.log.push_back(LogEntry::info(format!(
+                            "AI investigation dispatched: {} ({} symbols, {} backend)",
+                            syms.join(", "), syms.len(), provider
+                        )));
+                    }
+                }
+            }
+            cmd if cmd.starts_with("ASKCLAUDE ") || cmd.starts_with("ASK_CLAUDE ") => {
+                let args = cmd.splitn(2, char::is_whitespace).nth(1).unwrap_or("").trim();
+                let (syms, question) = Self::parse_ask_args(args);
+                if syms.is_empty() {
+                    self.show_claude_code = true;
+                    self.log.push_back(LogEntry::warn("Usage: ASKCLAUDE SYM1[,SYM2] [optional question]"));
+                    return;
+                }
+                match std::process::Command::new("which").arg("claude").output() {
+                    Ok(out) if out.status.success() => {
+                        let prompt = self.investigate_symbols(&syms, &question);
+                        self.show_claude_code = true;
+                        self.claude_code_history.push((true, format!("[Research packet: {}]", syms.join(", "))));
+                        if self.claude_code_rx.is_none() {
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            self.claude_code_rx = Some(rx);
+                            let prompt_clone = prompt;
+                            std::thread::spawn(move || {
+                                match std::process::Command::new("claude")
+                                    .arg("--print")
+                                    .arg(&prompt_clone)
+                                    .output()
+                                {
+                                    Ok(output) => {
+                                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                                        let response = if !stdout.trim().is_empty() {
+                                            stdout.trim().to_string()
+                                        } else if !stderr.trim().is_empty() {
+                                            format!("Error: {}", stderr.trim())
+                                        } else {
+                                            "(empty response)".to_string()
+                                        };
+                                        let _ = tx.send(response);
+                                    }
+                                    Err(e) => { let _ = tx.send(format!("Failed to run claude CLI: {e}")); }
+                                }
+                            });
+                            self.log.push_back(LogEntry::info(format!(
+                                "Claude Code investigation dispatched: {} ({} symbols)",
+                                syms.join(", "), syms.len()
+                            )));
+                        }
+                    }
+                    _ => {
+                        self.log.push_back(LogEntry::err("Claude Code CLI not found in PATH."));
+                    }
+                }
+            }
+            cmd if cmd.starts_with("ASKGEMINI ") || cmd.starts_with("ASK_GEMINI ") => {
+                let args = cmd.splitn(2, char::is_whitespace).nth(1).unwrap_or("").trim();
+                let (syms, question) = Self::parse_ask_args(args);
+                if syms.is_empty() {
+                    self.show_gemini_cli = true;
+                    self.log.push_back(LogEntry::warn("Usage: ASKGEMINI SYM1[,SYM2] [optional question]"));
+                    return;
+                }
+                match std::process::Command::new("which").arg("gemini").output() {
+                    Ok(out) if out.status.success() => {
+                        let prompt = self.investigate_symbols(&syms, &question);
+                        self.show_gemini_cli = true;
+                        self.gemini_cli_history.push((true, format!("[Research packet: {}]", syms.join(", "))));
+                        if self.gemini_cli_rx.is_none() {
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            self.gemini_cli_rx = Some(rx);
+                            let prompt_clone = prompt;
+                            std::thread::spawn(move || {
+                                match std::process::Command::new("gemini").arg(&prompt_clone).output() {
+                                    Ok(output) => {
+                                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                                        let response = if !stdout.trim().is_empty() { stdout.trim().to_string() }
+                                            else if !stderr.trim().is_empty() { format!("Error: {}", stderr.trim()) }
+                                            else { "(empty response)".to_string() };
+                                        let _ = tx.send(response);
+                                    }
+                                    Err(e) => { let _ = tx.send(format!("Failed to run gemini CLI: {e}")); }
+                                }
+                            });
+                            self.log.push_back(LogEntry::info(format!(
+                                "Gemini CLI investigation dispatched: {} ({} symbols)",
+                                syms.join(", "), syms.len()
+                            )));
+                        }
+                    }
+                    _ => {
+                        self.log.push_back(LogEntry::err("Gemini CLI not found in PATH."));
                     }
                 }
             }
@@ -21076,6 +21523,72 @@ impl TyphooNApp {
                             let msg = self.claude_code_input.trim().to_string();
                             self.claude_code_input.clear();
                             self.claude_code_history.push((true, msg.clone()));
+
+                            // Intercept Claude Code built-in slash commands that only work
+                            // in interactive mode (`claude --print "/status"` would return
+                            // "Unknown skill: status" because --print treats /foo as a skill
+                            // invocation). Real user-invocable skills still pass through.
+                            let lower = msg.to_lowercase();
+                            let builtin_reply: Option<String> = match lower.as_str() {
+                                "/clear" => {
+                                    // Drop both the user message we just pushed and all prior history.
+                                    // Leave a single info line so the user sees the clear took effect.
+                                    self.claude_code_history.clear();
+                                    self.claude_code_history.push((false, "(chat history cleared)".to_string()));
+                                    None // handled entirely — skip subprocess
+                                }
+                                "/help" => Some(
+                                    "Local chat help:\n\
+                                     • Type any prompt and press Enter to ask Claude.\n\
+                                     • /clear — clear the chat history\n\
+                                     • /status — show local chat status\n\
+                                     • /help — this message\n\
+                                     \n\
+                                     Note: Claude Code's interactive slash commands (/model, /cost, \
+                                     /config, /login, etc.) only work in an interactive terminal — \
+                                     they can't be invoked through this embedded `claude --print` chat. \
+                                     User-invocable skills like /commit do pass through.".to_string()
+                                ),
+                                "/status" => {
+                                    let count = self.claude_code_history.iter().filter(|(u, _)| *u).count();
+                                    Some(format!(
+                                        "Local chat status:\n\
+                                         • Backend: `claude --print` subprocess (local CLI, your subscription)\n\
+                                         • Messages sent this session: {count}\n\
+                                         • Interactive slash commands (/model, /cost, /config) are unavailable \
+                                         in --print mode. Run `claude` in a terminal for those."
+                                    ))
+                                }
+                                _ => {
+                                    // Warn early for other known interactive-only commands so
+                                    // users don't wait on a subprocess that'll just error out.
+                                    const INTERACTIVE_ONLY: &[&str] = &[
+                                        "/model", "/cost", "/config", "/login", "/logout",
+                                        "/permissions", "/theme", "/mcp", "/ide", "/exit",
+                                        "/compact", "/resume", "/bug", "/release-notes",
+                                    ];
+                                    if INTERACTIVE_ONLY.iter().any(|c| lower == *c) {
+                                        Some(format!(
+                                            "`{msg}` is a Claude Code interactive command and \
+                                             cannot be invoked through `claude --print`. Run it in \
+                                             a real terminal instead."
+                                        ))
+                                    } else {
+                                        None // fall through to subprocess
+                                    }
+                                }
+                            };
+
+                            if let Some(reply) = builtin_reply {
+                                self.claude_code_history.push((false, reply));
+                                // Do not set claude_code_rx — no subprocess was spawned.
+                                return;
+                            }
+                            // /clear handled above with no reply; still skip subprocess.
+                            if lower == "/clear" {
+                                return;
+                            }
+
                             // Spawn claude CLI on background thread
                             let (tx, rx) = std::sync::mpsc::channel();
                             self.claude_code_rx = Some(rx);
