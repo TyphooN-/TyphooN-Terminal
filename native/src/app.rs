@@ -10217,6 +10217,10 @@ pub struct TyphooNApp {
     /// PERF: Per-frame cached active symbols list. Recomputed at start of update().
     cached_active_symbols: Vec<String>,
     cached_active_symbols_frame: u64,
+    /// PERF: Per-frame cached scoped fundamentals (filtered by broker_scope).
+    /// Used by Sector Heatmap, Dividend Yield Screener, Outlier Scanner — was cloning Vec<Fundamentals> per render.
+    cached_scoped_fundamentals: Vec<typhoon_engine::core::fundamentals::Fundamentals>,
+    cached_scoped_fundamentals_frame: u64,
     show_event_calendar: bool,
     event_calendar_rows: Vec<EventRow>,
     event_filter_source: EventSource,
@@ -13243,6 +13247,8 @@ impl TyphooNApp {
             deferred_symbol_action: SymbolAction::None,
             cached_active_symbols: Vec::new(),
             cached_active_symbols_frame: 0,
+            cached_scoped_fundamentals: Vec::new(),
+            cached_scoped_fundamentals_frame: 0,
             show_event_calendar: false,
             event_calendar_rows: Vec::new(),
             event_filter_source: EventSource::All,
@@ -21382,10 +21388,9 @@ impl TyphooNApp {
                             }
                             _ => return,
                         };
-                        match syms {
-                            None => self.bg.all_fundamentals.len(),
-                            Some(set) => self.bg.all_fundamentals.iter().filter(|f| set.contains(&f.symbol.to_uppercase())).count(),
-                        }
+                        // PERF: scope already applied in cached_scoped_fundamentals — use len() directly
+                        let _ = syms;
+                        self.cached_scoped_fundamentals.len()
                     };
                     let lbl = match self.broker_scope {
                         EventSource::All => "ALL", EventSource::Alpaca => "ALPACA",
@@ -24359,16 +24364,11 @@ impl TyphooNApp {
         // EV Scanner
         if self.show_ev_scanner {
             let ev_active = if self.ev_active_only { self.cached_active_symbols.clone() } else { Vec::new() };
-            // PERF2: read from per-frame cache
-            let scope_syms = self.cached_scope_syms.clone();
+            // PERF2: read from per-frame caches — scope filter applied once already
             let scope_label = self.broker_scope_label();
             let mut ev_pending_action = SymbolAction::None;
-            // UX7: Pre-fetch sparklines for visible symbols (avoids &mut self conflict in closure)
-            let visible_syms: Vec<String> = self.bg.all_fundamentals.iter()
-                .filter(|f| match &scope_syms {
-                    None => true,
-                    Some(set) => set.contains(&f.symbol.to_uppercase()),
-                })
+            // UX7: Pre-fetch sparklines for visible symbols (use cached scoped — no per-row .to_uppercase())
+            let visible_syms: Vec<String> = self.cached_scoped_fundamentals.iter()
                 .take(200)
                 .map(|f| f.symbol.clone())
                 .collect();
@@ -24391,12 +24391,9 @@ impl TyphooNApp {
                         ui.checkbox(&mut self.ev_active_only, egui::RichText::new("Active Only").small());
                     });
                     ui.separator();
-                    let mut fund_sorted: Vec<&_> = self.bg.all_fundamentals.iter()
+                    // PERF: cached_scoped_fundamentals already applied scope filter — only need active filter
+                    let mut fund_sorted: Vec<&_> = self.cached_scoped_fundamentals.iter()
                         .filter(|f| ev_active.is_empty() || ev_active.iter().any(|s| s.eq_ignore_ascii_case(&f.symbol)))
-                        .filter(|f| match &scope_syms {
-                            None => true,
-                            Some(set) => set.contains(&f.symbol.to_uppercase()),
-                        })
                         .collect();
                     match self.ev_sort.column {
                         0 => fund_sorted.sort_by(|a, b| a.symbol.cmp(&b.symbol)),
@@ -25189,7 +25186,8 @@ impl TyphooNApp {
         // ── Sector Heatmap ────────────────────────────────────────────
         if self.show_sector_heatmap {
             let scope_label = self.broker_scope_label();
-            let scoped = self.scoped_fundamentals_owned();
+            // PERF: read from per-frame cache
+            let scoped = self.cached_scoped_fundamentals.clone();
             egui::Window::new("Sector Heatmap")
                 .open(&mut self.show_sector_heatmap)
                 .resizable(true).default_size([500.0, 400.0])
@@ -25216,7 +25214,8 @@ impl TyphooNApp {
         // ── Dividend Yield Screener ───────────────────────────────────
         if self.show_dividends {
             let scope_label = self.broker_scope_label();
-            let scoped = self.scoped_fundamentals_owned();
+            // PERF: read from per-frame cache
+            let scoped = self.cached_scoped_fundamentals.clone();
             let mut div_pending_action = SymbolAction::None;
             // UX7: Pre-fetch sparklines for dividend stocks
             let divs_for_sl = typhoon_engine::core::screener::screen_dividend_stocks(&scoped);
@@ -25392,6 +25391,7 @@ impl TyphooNApp {
 
         // ── Stat Arb Pairs ────────────────────────────────────────────
         if self.show_stat_arb {
+            let mut sa_pending_action = SymbolAction::None;
             egui::Window::new("Statistical Arbitrage Pairs")
                 .open(&mut self.show_stat_arb)
                 .resizable(true).default_size([600.0, 400.0])
@@ -25415,7 +25415,15 @@ impl TyphooNApp {
                                 ui.strong("Pair"); ui.strong("Corr"); ui.strong("Z-Score"); ui.strong("Half-Life"); ui.strong("Signal");
                                 ui.end_row();
                                 for p in pairs.iter().take(20) {
-                                    ui.label(format!("{} / {}", p.symbol_a, p.symbol_b));
+                                    ui.horizontal(|ui| {
+                                        let (_, sa_act_a) = symbol_label_with_menu(ui, &p.symbol_a,
+                                            egui::RichText::new(&p.symbol_a).strong());
+                                        if !matches!(sa_act_a, SymbolAction::None) { sa_pending_action = sa_act_a; }
+                                        ui.label("/");
+                                        let (_, sa_act_b) = symbol_label_with_menu(ui, &p.symbol_b,
+                                            egui::RichText::new(&p.symbol_b).strong());
+                                        if !matches!(sa_act_b, SymbolAction::None) { sa_pending_action = sa_act_b; }
+                                    });
                                     ui.label(format!("{:.3}", p.correlation));
                                     let zc = if p.current_zscore.abs() > 2.0 { DOWN } else if p.current_zscore.abs() > 1.5 { SMA200_COL } else { AXIS_TEXT };
                                     ui.label(egui::RichText::new(format!("{:+.2}", p.current_zscore)).color(zc));
@@ -25432,6 +25440,7 @@ impl TyphooNApp {
                         });
                     }
                 });
+            self.apply_symbol_action(sa_pending_action);
         }
 
         // ── Risk Budget ───────────────────────────────────────────────
@@ -26308,7 +26317,8 @@ impl TyphooNApp {
         // Multi-Dimensional Outlier Scanner
         if self.show_darwinex_outliers {
             let outlier_scope_label = self.broker_scope_label().to_string();
-            let outlier_scoped_fund = self.scoped_fundamentals_owned();
+            // PERF: read from per-frame cache
+            let outlier_scoped_fund = self.cached_scoped_fundamentals.clone();
             let mut pending_action = SymbolAction::None;
             // UX7: pre-fetch sparklines for top outlier symbols
             let mut outlier_syms: Vec<String> = self.darwinex_outliers.iter().take(200).map(|o| o.symbol.clone()).collect();
@@ -28336,6 +28346,11 @@ impl eframe::App for TyphooNApp {
         if self.cached_active_symbols_frame != self.frame_count {
             self.cached_active_symbols = self.active_symbols();
             self.cached_active_symbols_frame = self.frame_count;
+        }
+        // PERF: Cache scoped_fundamentals_owned() once per frame (used by 3 windows + outlier scanner)
+        if self.cached_scoped_fundamentals_frame != self.frame_count {
+            self.cached_scoped_fundamentals = self.scoped_fundamentals_owned();
+            self.cached_scoped_fundamentals_frame = self.frame_count;
         }
         ctx.set_visuals(Self::dark_visuals());
         // Bound log size to prevent unbounded memory growth.
