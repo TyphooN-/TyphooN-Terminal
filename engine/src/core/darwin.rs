@@ -667,7 +667,8 @@ pub fn get_darwin_positions(
 
 /// Get equity curve from deals (balance over time).
 pub fn get_darwin_equity_curve(conn: &Connection, darwin_ticker: &str) -> Result<Vec<(String, f64)>, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called once per DARWIN account by the BG thread.
+    let mut stmt = conn.prepare_cached(
         "SELECT time, balance FROM darwin_deals WHERE account = ?1 AND balance > 0 ORDER BY time, id"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
@@ -684,7 +685,8 @@ pub fn get_darwin_equity_curve(conn: &Connection, darwin_ticker: &str) -> Result
 
 /// Get P/L by symbol for a DARWIN account.
 pub fn get_darwin_pnl_by_symbol(conn: &Connection, darwin_ticker: &str) -> Result<Vec<(String, f64, f64, f64, i64)>, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called once per DARWIN account by the BG thread.
+    let mut stmt = conn.prepare_cached(
         "SELECT symbol, SUM(profit), SUM(commission), SUM(swap), COUNT(*) FROM darwin_positions WHERE account = ?1 GROUP BY symbol ORDER BY SUM(profit) DESC"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
@@ -949,7 +951,8 @@ pub fn get_portfolio_exposure(conn: &Connection) -> Result<Vec<PortfolioSymbolEx
 /// Get combined equity curve across all DARWINs (daily aggregate).
 /// Single SQL query instead of N per-account queries.
 pub fn get_portfolio_equity_curve(conn: &Connection) -> Result<Vec<(String, f64)>, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called every BG cycle (portfolio-level refresh).
+    let mut stmt = conn.prepare_cached(
         "SELECT SUBSTR(d.time, 1, 10) as date, SUM(d.balance) as total_balance
          FROM darwin_deals d
          INNER JOIN (
@@ -1249,32 +1252,41 @@ pub fn get_darwin_correlations(conn: &Connection) -> Result<Vec<CorrelationEntry
             let (ref name_a, ref map_a) = stats[i];
             let (ref name_b, ref map_b) = stats[j];
 
-            // Pearson correlation over common dates only
-            // Must compute mean/var/cov over the SAME date set to guarantee result in [-1, 1]
+            // Pearson correlation over common dates only.
+            // PERF: single-pass running-sums formula — was allocating a
+            // `Vec<(f64, f64)>` and then making three passes over it
+            // (mean_a, mean_b, then cov/var_a/var_b). Here we accumulate the
+            // sums in one pass with zero intermediate allocation, then derive
+            // cov and variance from the sums at the end.
             let corr = if i == j {
                 1.0
             } else {
-                // Collect paired returns for common dates
-                let mut pairs: Vec<(f64, f64)> = Vec::new();
-                for (date, &ret_a) in map_a {
-                    if let Some(&ret_b) = map_b.get(date) {
-                        pairs.push((ret_a, ret_b));
+                let mut sum_a = 0.0f64;
+                let mut sum_b = 0.0f64;
+                let mut sum_aa = 0.0f64;
+                let mut sum_bb = 0.0f64;
+                let mut sum_ab = 0.0f64;
+                let mut n = 0i32;
+                // Iterate the smaller map for cheaper lookups.
+                let (iter_map, other_map) = if map_a.len() <= map_b.len() {
+                    (map_a, map_b)
+                } else {
+                    (map_b, map_a)
+                };
+                for (date, &va) in iter_map {
+                    if let Some(&vb) = other_map.get(date) {
+                        sum_a += va; sum_b += vb;
+                        sum_aa += va * va;
+                        sum_bb += vb * vb;
+                        sum_ab += va * vb;
+                        n += 1;
                     }
                 }
-                if pairs.len() > 2 {
-                    let n = pairs.len() as f64;
-                    let mean_a = pairs.iter().map(|(a, _)| a).sum::<f64>() / n;
-                    let mean_b = pairs.iter().map(|(_, b)| b).sum::<f64>() / n;
-                    let mut cov = 0.0;
-                    let mut var_a = 0.0;
-                    let mut var_b = 0.0;
-                    for &(a, b) in &pairs {
-                        let da = a - mean_a;
-                        let db = b - mean_b;
-                        cov += da * db;
-                        var_a += da * da;
-                        var_b += db * db;
-                    }
+                if n > 2 {
+                    let nf = n as f64;
+                    let cov = sum_ab - sum_a * sum_b / nf;
+                    let var_a = sum_aa - sum_a * sum_a / nf;
+                    let var_b = sum_bb - sum_b * sum_b / nf;
                     if var_a > 0.0 && var_b > 0.0 {
                         (cov / (var_a.sqrt() * var_b.sqrt())).clamp(-1.0, 1.0)
                     } else { 0.0 }
@@ -1336,7 +1348,8 @@ pub struct StreakAnalysis {
 /// Analyze win/loss streaks from closed positions ordered by open_time.
 /// A "win" is profit + commission + swap > 0.
 pub fn get_streak_analysis(conn: &Connection, darwin_ticker: &str) -> Result<StreakAnalysis, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called once per DARWIN account on streak refresh.
+    let mut stmt = conn.prepare_cached(
         "SELECT profit, commission, swap FROM darwin_positions WHERE account = ?1 ORDER BY open_time, id"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
@@ -1413,7 +1426,9 @@ pub struct HourlyPnL {
 
 /// Get P/L broken down by hour of day (from open_time).
 pub fn get_hourly_pnl(conn: &Connection, darwin_ticker: &str) -> Result<Vec<HourlyPnL>, String> {
-    let mut stmt = conn.prepare(
+    use chrono::Timelike;
+    // prepare_cached: called per DARWIN account each analytics refresh.
+    let mut stmt = conn.prepare_cached(
         "SELECT open_time, profit, commission, swap FROM darwin_positions WHERE account = ?1"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
@@ -1427,7 +1442,9 @@ pub fn get_hourly_pnl(conn: &Connection, darwin_ticker: &str) -> Result<Vec<Hour
     for row in rows {
         if let Ok((open_time, profit, commission, swap)) = row {
             if let Some(dt) = parse_mt5_datetime(&open_time) {
-                let h = dt.format("%H").to_string().parse::<usize>().unwrap_or(0);
+                // Direct accessor — was `dt.format("%H").to_string().parse::<usize>()`
+                // which allocated a String on every row just to read one integer.
+                let h = dt.hour() as usize;
                 if h < 24 {
                     let net = profit + commission + swap;
                     buckets[h].0 += net;
@@ -1466,7 +1483,8 @@ pub struct DayOfWeekPnL {
 pub fn get_day_of_week_pnl(conn: &Connection, darwin_ticker: &str) -> Result<Vec<DayOfWeekPnL>, String> {
     use chrono::Datelike;
 
-    let mut stmt = conn.prepare(
+    // prepare_cached: called per DARWIN account each analytics refresh.
+    let mut stmt = conn.prepare_cached(
         "SELECT open_time, profit, commission, swap FROM darwin_positions WHERE account = ?1"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
@@ -1518,7 +1536,8 @@ pub struct HoldTimeStats {
 
 /// Compute hold time distribution from open_time to close_time.
 pub fn get_hold_time_stats(conn: &Connection, darwin_ticker: &str) -> Result<HoldTimeStats, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called per DARWIN account each analytics refresh.
+    let mut stmt = conn.prepare_cached(
         "SELECT open_time, close_time, profit, commission, swap FROM darwin_positions WHERE account = ?1 AND close_time != ''"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
@@ -1608,7 +1627,8 @@ pub struct SymbolActivity {
 
 /// Get symbol rotation timeline showing when each symbol was first/last traded.
 pub fn get_symbol_rotation(conn: &Connection, darwin_ticker: &str) -> Result<Vec<SymbolActivity>, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called per DARWIN account each analytics refresh.
+    let mut stmt = conn.prepare_cached(
         "SELECT symbol, MIN(open_time) as first_trade, MAX(open_time) as last_trade, COUNT(*) as trade_count, SUM(profit + commission + swap) as total_pnl FROM darwin_positions WHERE account = ?1 GROUP BY symbol ORDER BY MIN(open_time)"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
@@ -1654,7 +1674,8 @@ pub struct SizingEfficiency {
 
 /// Split trades into quartiles by volume and compute stats per quartile.
 pub fn get_sizing_efficiency(conn: &Connection, darwin_ticker: &str) -> Result<Vec<SizingEfficiency>, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called per DARWIN account each analytics refresh.
+    let mut stmt = conn.prepare_cached(
         "SELECT volume, profit, commission, swap FROM darwin_positions WHERE account = ?1 ORDER BY volume"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
@@ -1747,8 +1768,8 @@ pub fn get_cost_analysis(conn: &Connection, darwin_ticker: &str) -> Result<CostA
         total_commission / trade_count as f64
     } else { 0.0 };
 
-    // Commission per symbol
-    let mut stmt = conn.prepare(
+    // Commission per symbol (prepare_cached: per-account call).
+    let mut stmt = conn.prepare_cached(
         "SELECT symbol, SUM(commission), COUNT(*) FROM darwin_positions WHERE account = ?1 GROUP BY symbol ORDER BY SUM(commission)"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
@@ -1761,8 +1782,8 @@ pub fn get_cost_analysis(conn: &Connection, darwin_ticker: &str) -> Result<CostA
         if let Ok(r) = row { commission_per_symbol.push(r); }
     }
 
-    // Cumulative costs over time (by date from positions ordered by open_time)
-    let mut stmt2 = conn.prepare(
+    // Cumulative costs over time (by date from positions ordered by open_time).
+    let mut stmt2 = conn.prepare_cached(
         "SELECT open_time, commission, swap FROM darwin_positions WHERE account = ?1 ORDER BY open_time, id"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
@@ -4290,7 +4311,8 @@ pub struct SlippageStats {
 pub fn analyze_slippage(conn: &Connection, darwin_ticker: &str) -> Result<SlippageStats, String> {
     // Join positions with their entry deals: match on account + symbol + deal direction='in'
     // Position open_price is the intended price; deal price is the execution price.
-    let mut stmt = conn.prepare(
+    // prepare_cached: per-account call.
+    let mut stmt = conn.prepare_cached(
         "SELECT p.symbol, p.open_price, d.price, d.volume, d.time
          FROM darwin_positions p
          JOIN darwin_deals d ON d.account = p.account AND d.symbol = p.symbol
@@ -4949,7 +4971,8 @@ pub fn get_timing_divergences(conn: &Connection) -> Result<Vec<TimingDivergence>
         std::collections::HashMap::new();
 
     for account in &accounts {
-        let mut stmt = conn.prepare(
+        // prepare_cached: called once per DARWIN account inside this loop.
+        let mut stmt = conn.prepare_cached(
             "SELECT symbol, deal_type, time, price FROM darwin_deals \
              WHERE account = ?1 AND direction = 'in' AND symbol != '' \
              ORDER BY time"
@@ -5136,8 +5159,9 @@ pub struct TaxSummary {
 /// FIFO matching of closed positions. Parse open_time and close_time,
 /// compute holding period, classify as short/long term.
 pub fn compute_tax_lots(conn: &Connection, darwin_ticker: &str, year: i32) -> Result<TaxSummary, String> {
-    // Get all closed positions for this DARWIN, ordered by close_time
-    let mut stmt = conn.prepare(
+    // Get all closed positions for this DARWIN, ordered by close_time.
+    // prepare_cached: called per DARWIN account per tax-refresh.
+    let mut stmt = conn.prepare_cached(
         "SELECT symbol, open_time, close_time, volume, open_price, close_price, pos_type, profit, commission, swap \
          FROM darwin_positions WHERE account = ?1 AND close_time != '' \
          ORDER BY symbol, open_time"
@@ -5541,7 +5565,8 @@ pub fn record_equity_snapshot(
 
 /// Get equity snapshot history for a DARWIN (last N days).
 pub fn get_equity_history(conn: &Connection, darwin_ticker: &str, limit: usize) -> Result<Vec<FloatingEquitySnapshot>, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: per DARWIN call, hot on floating-equity ticker refresh.
+    let mut stmt = conn.prepare_cached(
         "SELECT timestamp, darwin_ticker, closed_balance, unrealized_pnl, floating_equity, open_position_count FROM darwin_equity_snapshots WHERE darwin_ticker = ?1 ORDER BY timestamp DESC LIMIT ?2"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 

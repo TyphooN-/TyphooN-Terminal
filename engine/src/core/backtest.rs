@@ -69,18 +69,30 @@ impl TradeReport {
             };
         }
 
-        let wins: Vec<f64> = trades.iter().filter(|t| t.pnl > 0.0).map(|t| t.pnl).collect();
-        let losses: Vec<f64> = trades.iter().filter(|t| t.pnl <= 0.0).map(|t| t.pnl).collect();
-
-        let gross_profit: f64 = wins.iter().sum();
-        let gross_loss: f64 = losses.iter().map(|l| l.abs()).sum();
-        let total_pnl: f64 = trades.iter().map(|t| t.pnl).sum();
+        // Single-pass accumulation: was allocating two intermediate `Vec<f64>`
+        // (wins, losses) and making three separate passes for gross_profit,
+        // gross_loss, and total_pnl.
+        let mut gross_profit = 0.0f64;
+        let mut gross_loss = 0.0f64;
+        let mut total_pnl = 0.0f64;
+        let mut n_wins = 0usize;
+        let mut n_losses = 0usize;
+        for t in trades.iter() {
+            total_pnl += t.pnl;
+            if t.pnl > 0.0 {
+                gross_profit += t.pnl;
+                n_wins += 1;
+            } else {
+                gross_loss += t.pnl.abs();
+                n_losses += 1;
+            }
+        }
 
         let n_trades = trades.len() as f64;
-        let win_rate = if n_trades > 0.0 { wins.len() as f64 / n_trades * 100.0 } else { 0.0 };
+        let win_rate = if n_trades > 0.0 { n_wins as f64 / n_trades * 100.0 } else { 0.0 };
         let profit_factor = if gross_loss > 0.0 { (gross_profit / gross_loss).min(999.0) } else { 999.0 };
-        let avg_win = if wins.is_empty() { 0.0 } else { gross_profit / wins.len() as f64 };
-        let avg_loss = if losses.is_empty() { 0.0 } else { gross_loss / losses.len() as f64 };
+        let avg_win = if n_wins == 0 { 0.0 } else { gross_profit / n_wins as f64 };
+        let avg_loss = if n_losses == 0 { 0.0 } else { gross_loss / n_losses as f64 };
         let avg_trade = if n_trades > 0.0 { total_pnl / n_trades } else { 0.0 };
 
         // Max consecutive wins/losses

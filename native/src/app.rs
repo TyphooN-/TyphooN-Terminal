@@ -29742,12 +29742,17 @@ impl eframe::App for TyphooNApp {
                 BrokerMsg::Mt5LiveQuotes(quotes) => {
                     // Update forming bar (last bar) on all charts from MT5 live bid/ask.
                     // O(1) per quote: pre-build symbol→chart-indices map to avoid O(quotes×charts).
-                    let mut sym_to_charts: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+                    // rsplit instead of split+Vec to avoid the intermediate Vec<&str> per chart.
+                    let mut sym_to_charts: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::with_capacity(self.charts.len());
                     for (ci, chart) in self.charts.iter().enumerate() {
-                        let s = chart.symbol.replace('/', "").to_uppercase();
-                        let parts: Vec<&str> = s.split(':').collect();
-                        let is_tf = matches!(parts.last().map(|p| p.as_ref()), Some("1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH"));
-                        let bare = if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { s };
+                        let mut s = chart.symbol.replace('/', "");
+                        s.make_ascii_uppercase();
+                        let bare = {
+                            let mut it = s.rsplit(':');
+                            let last = it.next().unwrap_or("");
+                            let is_tf = matches!(last, "1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH");
+                            if is_tf { it.next().unwrap_or(last).to_string() } else { s.clone() }
+                        };
                         sym_to_charts.entry(bare).or_default().push(ci);
                     }
                     for (sym, bid, ask) in &quotes {
@@ -29869,13 +29874,18 @@ impl eframe::App for TyphooNApp {
                     if let Ok(j) = serde_json::to_string(&rows) { self.put_kv_dedup("broker:watchlist", &j); }
                     // Update forming bars on all charts from watchlist prices.
                     // O(1) per row: pre-build symbol→chart-indices map to avoid O(rows×charts).
-                    let mut wl_sym_to_charts: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+                    // rsplit instead of split+Vec to avoid intermediate Vec<&str> per chart.
+                    let mut wl_sym_to_charts: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::with_capacity(self.charts.len());
                     let mut wl_chart_bares: Vec<String> = Vec::with_capacity(self.charts.len());
                     for (ci, chart) in self.charts.iter().enumerate() {
-                        let s = chart.symbol.replace('/', "").to_uppercase();
-                        let parts: Vec<&str> = s.split(':').collect();
-                        let is_tf = matches!(parts.last().map(|p| p.as_ref()), Some("1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH"));
-                        let bare = if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { s };
+                        let mut s = chart.symbol.replace('/', "");
+                        s.make_ascii_uppercase();
+                        let bare = {
+                            let mut it = s.rsplit(':');
+                            let last = it.next().unwrap_or("");
+                            let is_tf = matches!(last, "1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH");
+                            if is_tf { it.next().unwrap_or(last).to_string() } else { s.clone() }
+                        };
                         wl_sym_to_charts.entry(bare.clone()).or_default().push(ci);
                         wl_chart_bares.push(bare);
                     }
@@ -31382,9 +31392,10 @@ impl eframe::App for TyphooNApp {
                         self.symbol_ac_selected = 0;
                         // Build suggestions from cache keys + fundamentals
                         let mut suggestions = Vec::new();
-                        // From fundamentals (has company name + sector)
+                        // From fundamentals (has company name + sector).
+                        // f.symbol is guaranteed uppercase (parse_yahoo_data), so skip the alloc.
                         for f in &self.bg.all_fundamentals {
-                            if f.symbol.to_uppercase().contains(&query) || f.company_name.to_uppercase().contains(&query) {
+                            if f.symbol.contains(&query) || f.company_name.to_uppercase().contains(&query) {
                                 suggestions.push((f.symbol.clone(), f.company_name.clone(), f.sector.clone()));
                             }
                         }
@@ -31513,9 +31524,11 @@ impl eframe::App for TyphooNApp {
                     ui.separator();
                     for (i, chart) in self.charts.iter().enumerate() {
                         if i >= self.mtf_visible.len() { break; }
+                        // Second-to-last `:`-separated segment, without allocating a Vec.
                         let sym_short = {
-                            let parts: Vec<&str> = chart.symbol.split(':').collect();
-                            let s = parts[parts.len().saturating_sub(2).max(0)];
+                            let mut it = chart.symbol.rsplit(':');
+                            let _last = it.next();
+                            let s = it.next().unwrap_or(chart.symbol.as_str());
                             if s.len() > 8 { &s[..8] } else { s }
                         };
                         let label = format!("{} {}", sym_short, chart.timeframe.label());
@@ -32316,11 +32329,14 @@ impl eframe::App for TyphooNApp {
                             { let positions = &self.bg.open_positions;
                                 if !positions.is_empty() && self.show_darwin_positions {
                                     has_positions = true;
-                                    let active_sym = self.charts.get(self.active_tab)
+                                    // PERF: rsplit avoids allocating Vec<&str> via split().collect().
+                                    let active_sym: String = self.charts.get(self.active_tab)
                                         .map(|c| {
-                                            let parts: Vec<&str> = c.symbol.split(':').collect();
-                                            let is_tf = matches!(parts.last().copied(), Some("1Min"|"5Min"|"15Min"|"30Min"|"1Hour"|"4Hour"|"1Day"|"1Week"|"1Month"));
-                                            if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { parts.last().unwrap_or(&"").to_string() }
+                                            let s = c.symbol.as_str();
+                                            let mut it = s.rsplit(':');
+                                            let last = it.next().unwrap_or("");
+                                            let is_tf = matches!(last, "1Min"|"5Min"|"15Min"|"30Min"|"1Hour"|"4Hour"|"1Day"|"1Week"|"1Month");
+                                            if is_tf { it.next().unwrap_or(last).to_string() } else { last.to_string() }
                                         }).unwrap_or_default();
                                     // Current symbol positions first
                                     for pos in positions.iter() {
@@ -35698,13 +35714,17 @@ impl eframe::App for TyphooNApp {
                     let src_path = std::path::PathBuf::from(last_src);
                     if let Ok(src) = typhoon_engine::core::cache::SqliteCache::open_readonly(&src_path) {
                         if let Ok(quotes) = src.read_bid_ask() {
-                            // PERF: precompute `chart_bare` once per chart instead of
-                            // recomputing it for every quote × chart pair.
+                            // PERF: precompute `chart_bare` once per chart, rsplit-based.
                             let chart_bares: Vec<String> = self.charts.iter().map(|chart| {
-                                let s = chart.symbol.replace('/', "").to_uppercase();
-                                let parts: Vec<&str> = s.split(':').collect();
-                                let is_tf = matches!(parts.last().map(|p| p.as_ref()), Some("1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH"));
-                                if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { s }
+                                let mut s = chart.symbol.replace('/', "");
+                                s.make_ascii_uppercase();
+                                let bare_opt = {
+                                    let mut it = s.rsplit(':');
+                                    let last = it.next().unwrap_or("");
+                                    let is_tf = matches!(last, "1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH");
+                                    if is_tf { Some(it.next().unwrap_or(last).to_string()) } else { None }
+                                };
+                                bare_opt.unwrap_or(s)
                             }).collect();
                             for (sym, bid, ask, _spread) in &quotes {
                                 let mid = (bid + ask) / 2.0;

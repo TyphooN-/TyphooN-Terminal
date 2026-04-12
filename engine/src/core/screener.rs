@@ -622,29 +622,48 @@ pub fn find_stat_arb_pairs(
             let len = closes_a.len().min(closes_b.len());
             if len < lookback + 1 { continue; }
 
-            // Compute spread = log(A) - log(B) for last `lookback` bars
+            // Compute spread = log(A) - log(B) for last `lookback` bars, fusing
+            // the mean + variance accumulators into the build pass so we only
+            // iterate the spread once. Was: build Vec → iter for mean → iter for
+            // variance → iter for half-life (4 passes). Now: 1 build pass + 1
+            // AR(1) pass that needs the lagged pair.
             let start = len - lookback;
-            let spreads: Vec<f64> = (start..len).map(|k| {
+            let mut spreads: Vec<f64> = Vec::with_capacity(lookback);
+            let mut sum = 0.0f64;
+            let mut sum_sq = 0.0f64;
+            for k in start..len {
                 let a = closes_a[closes_a.len() - len + k];
                 let b = closes_b[closes_b.len() - len + k];
-                if a > 0.0 && b > 0.0 { a.ln() - b.ln() } else { 0.0 }
-            }).collect();
-
-            let mean = spreads.iter().sum::<f64>() / spreads.len() as f64;
-            let std = (spreads.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / (spreads.len() as f64 - 1.0)).sqrt();
+                let v = if a > 0.0 && b > 0.0 { a.ln() - b.ln() } else { 0.0 };
+                sum += v;
+                sum_sq += v * v;
+                spreads.push(v);
+            }
+            let nf = spreads.len() as f64;
+            let mean = sum / nf;
+            // Variance via sum_sq − sum²/n (one-pass formula), clamped to ≥0.
+            let variance = ((sum_sq - sum * sum / nf) / (nf - 1.0)).max(0.0);
+            let std = variance.sqrt();
             let current = spreads.last().copied().unwrap_or(0.0);
             let zscore = if std > 1e-10 { (current - mean) / std } else { 0.0 };
 
-            // Estimate half-life via AR(1) regression: spread_t = α + β * spread_{t-1} + ε
-            // half_life = -ln(2) / ln(β)
+            // Half-life via AR(1): single fused pass over the lagged window.
             let half_life = if spreads.len() > 2 {
                 let n = spreads.len() - 1;
-                let sum_xy: f64 = (1..=n).map(|i| spreads[i] * spreads[i - 1]).sum();
-                let sum_x: f64 = spreads[..n].iter().sum();
-                let sum_y: f64 = spreads[1..].iter().sum();
-                let sum_xx: f64 = spreads[..n].iter().map(|x| x * x).sum();
-                let nf = n as f64;
-                let beta = (nf * sum_xy - sum_x * sum_y) / (nf * sum_xx - sum_x * sum_x);
+                let n_hl = n as f64;
+                let mut sum_xy = 0.0f64;
+                let mut sum_x = 0.0f64;
+                let mut sum_y = 0.0f64;
+                let mut sum_xx = 0.0f64;
+                for i in 1..=n {
+                    let prev = spreads[i - 1];
+                    let cur = spreads[i];
+                    sum_xy += cur * prev;
+                    sum_x += prev;
+                    sum_y += cur;
+                    sum_xx += prev * prev;
+                }
+                let beta = (n_hl * sum_xy - sum_x * sum_y) / (n_hl * sum_xx - sum_x * sum_x);
                 if beta > 0.0 && beta < 1.0 { -(2.0_f64).ln() / beta.ln() } else { f64::MAX }
             } else { f64::MAX };
 
