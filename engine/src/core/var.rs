@@ -14,11 +14,18 @@ pub struct VaRResult {
 }
 
 /// Compute VaR per lot for a symbol from daily close prices.
-/// Formula: VaR_1_Lot = z_score(confidence) × stdDev(daily_returns) × closePrice
-/// Returns (var_1_lot, var_to_price_ratio) or None if insufficient data.
+/// Matches DWEX Portfolio Risk Man formula:
+///   VaR_1_Lot = z(confidence) × σ(daily_returns) × nominalValue
+///   nominalValue = (tickValue / tickSize) × closePrice
+/// If tick_value_per_tick_size is 0 or not available, uses 1.0 (pure price VaR).
+/// Returns (var_1_lot, var_to_price_ratio_pct) or None if insufficient data.
 pub fn compute_var_from_closes(closes: &[f64], confidence: f64) -> Option<(f64, f64)> {
+    compute_var_from_closes_with_tick(closes, confidence, 1.0)
+}
+
+/// Full VaR calculation with tick value scaling (tickValue / tickSize).
+pub fn compute_var_from_closes_with_tick(closes: &[f64], confidence: f64, tick_value_per_tick_size: f64) -> Option<(f64, f64)> {
     if closes.len() < 10 { return None; }
-    // Daily returns
     let returns: Vec<f64> = closes.windows(2)
         .filter(|w| w[0] > 0.0 && w[1] > 0.0)
         .map(|w| w[1] / w[0] - 1.0)
@@ -29,9 +36,10 @@ pub fn compute_var_from_closes(closes: &[f64], confidence: f64) -> Option<(f64, 
     let z = inverse_cumulative_normal(confidence);
     let last_price = closes.last().copied().unwrap_or(0.0);
     if last_price <= 0.0 { return None; }
-    let var_1_lot = z * sd * last_price;
-    let ratio = var_1_lot / last_price; // = z * sd (dimensionless ratio)
-    Some((var_1_lot, ratio * 100.0)) // ratio as percentage
+    let nominal = tick_value_per_tick_size.max(1.0) * last_price;
+    let var_1_lot = z * sd * nominal;
+    let ratio = var_1_lot / last_price; // VaR/Ask ratio (as used by MarketWizardry.org)
+    Some((var_1_lot, ratio * 100.0))
 }
 
 /// Population standard deviation (matches MQL5 MathStandardDeviation).

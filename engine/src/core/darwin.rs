@@ -6753,6 +6753,28 @@ pub fn load_all_specs_parsed(cache_conn: &Connection) -> Result<Vec<(String, Str
     Ok(result)
 }
 
+/// Get tick_value / tick_size ratio for VaR calculation from __SPECS__ CSV.
+/// Returns HashMap<symbol_upper, tick_value_per_tick_size>.
+/// CSV columns: Symbol(0),...,TickSize(11),TickValue(12),...
+pub fn load_tick_specs(cache_conn: &Connection) -> Result<std::collections::HashMap<String, f64>, String> {
+    let specs = load_all_specs(cache_conn)?;
+    let mut map = std::collections::HashMap::new();
+    for line in specs.lines() {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() < 13 { continue; }
+        let symbol = fields[0].trim().to_uppercase();
+        if symbol.is_empty() { continue; }
+        let tick_size: f64 = fields.get(11).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
+        let tick_value: f64 = fields.get(12).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
+        if tick_size > 0.0 && tick_value > 0.0 {
+            map.insert(symbol, tick_value / tick_size);
+        }
+    }
+    Ok(map)
+}
+
 /// Scan MT5 symbol specs from cache and return all symbols with positive swap,
 /// sorted by best swap value descending. Reads the __SPECS__ CSV written by BarCacheWriter.
 pub fn swap_harvest(cache_conn: &Connection, min_swap: f64) -> Result<SwapHarvestResult, String> {

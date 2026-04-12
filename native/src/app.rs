@@ -15616,15 +15616,17 @@ impl TyphooNApp {
                         "Need 10+ symbols with fundamentals data (have {}). Run EVSCRAPE first.", fund_owned.len()
                     )));
                 } else if let Some(ref cache) = self.cache {
-                    // Compute VaR/Ask ratio from bar cache for each symbol
-                    let mut var_data: Vec<(String, String, f64)> = Vec::new(); // (sym, sector, ratio%)
-                    let mut industry_data: Vec<(String, String, f64)> = Vec::new(); // (sym, industry, ratio%)
+                    // Compute VaR/Ask ratio from bar cache + tick specs (DWEX Portfolio Risk Man formula)
+                    let tick_specs = if let Some(conn) = cache.try_connection() {
+                        darwin::load_tick_specs(&conn).unwrap_or_default()
+                    } else { std::collections::HashMap::new() };
+                    let mut var_data: Vec<(String, String, f64)> = Vec::new();
+                    let mut industry_data: Vec<(String, String, f64)> = Vec::new();
                     let mut no_bars = 0usize;
 
                     for f in &fund_owned {
                         let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
                         let industry = if f.industry.is_empty() { sector.clone() } else { f.industry.clone() };
-                        // Try to load D1 closes from bar cache
                         let keys = [
                             format!("mt5:CC:{}:1Day", f.symbol),
                             format!("mt5:{}:1Day", f.symbol),
@@ -15640,7 +15642,8 @@ impl TyphooNApp {
                             }
                         }
                         if closes.len() < 30 { no_bars += 1; continue; }
-                        if let Some((_, ratio)) = var::compute_var_from_closes(&closes, 0.95) {
+                        let tick_scale = tick_specs.get(&f.symbol.to_uppercase()).copied().unwrap_or(1.0);
+                        if let Some((_, ratio)) = var::compute_var_from_closes_with_tick(&closes, 0.95, tick_scale) {
                             var_data.push((f.symbol.clone(), sector, ratio));
                             industry_data.push((f.symbol.clone(), industry, ratio));
                         }
