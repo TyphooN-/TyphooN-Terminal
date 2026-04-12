@@ -437,7 +437,8 @@ pub fn import_darwin_xlsx(
 
 /// List all imported DARWIN accounts.
 pub fn list_darwin_accounts(conn: &Connection) -> Result<Vec<DarwinAccount>, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called at the top of nearly every BG phase entry point.
+    let mut stmt = conn.prepare_cached(
         "SELECT darwin_ticker, name, mt5_account, initial_balance, created_at, deal_count, position_count FROM darwin_accounts ORDER BY name"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
@@ -477,8 +478,9 @@ pub fn get_darwin_summary(conn: &Connection, darwin_ticker: &str) -> Result<Darw
         })
     ).map_err(|e| format!("Account not found: {e}"))?;
 
-    // Compute stats from positions (closed trades with P/L)
-    let mut stmt = conn.prepare(
+    // Compute stats from positions (closed trades with P/L).
+    // prepare_cached: called once per DARWIN account by get_portfolio_summary.
+    let mut stmt = conn.prepare_cached(
         "SELECT profit, commission, swap, symbol FROM darwin_positions WHERE account = ?1"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
@@ -525,8 +527,9 @@ pub fn get_darwin_summary(conn: &Connection, darwin_ticker: &str) -> Result<Darw
         |row| row.get(0),
     ).unwrap_or(account.initial_balance);
 
-    // Max drawdown from deal balance series
-    let mut dd_stmt = conn.prepare(
+    // Max drawdown from deal balance series.
+    // prepare_cached: called once per DARWIN account per summary refresh.
+    let mut dd_stmt = conn.prepare_cached(
         "SELECT balance FROM darwin_deals WHERE account = ?1 AND balance > 0 ORDER BY time, id"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
@@ -716,8 +719,10 @@ pub fn get_darwin_open_positions(conn: &Connection, darwin_ticker: &str) -> Resu
     // Aggregate in/out volumes and notional per symbol+side directly in SQL
     // "in" deals add volume, "out" deals subtract volume
     // deal_type for "in" = the side (buy/sell), for "out" = the opposite side
-    // So we group by symbol + deal_type on "in" deals only for side detection
-    let mut stmt = conn.prepare(
+    // So we group by symbol + deal_type on "in" deals only for side detection.
+    // prepare_cached: called once per DARWIN account by the BG thread, so the
+    // parsed statement is reused across all N accounts per cycle.
+    let mut stmt = conn.prepare_cached(
         "SELECT symbol, deal_type, direction, volume, price, time FROM darwin_deals WHERE account = ?1 AND direction IN ('in', 'out') AND symbol != '' ORDER BY time, id"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
@@ -1037,8 +1042,11 @@ pub struct CorrelationEntry {
 /// Get daily returns from deal balance changes for a DARWIN.
 /// Uses SQL GROUP BY to deduplicate at the DB level instead of loading all 62K deals.
 pub fn get_daily_returns(conn: &Connection, darwin_ticker: &str) -> Result<Vec<DailyReturn>, String> {
-    // SQL-level dedup: get last balance per day using MAX(id) subquery
-    let mut stmt = conn.prepare(
+    // SQL-level dedup: get last balance per day using MAX(id) subquery.
+    // prepare_cached: this function is called N times per BG cycle (once per
+    // account inside get_darwin_correlations / get_portfolio_daily_returns).
+    // Caching the prepared statement reuses the parse across all N calls.
+    let mut stmt = conn.prepare_cached(
         "SELECT SUBSTR(d.time, 1, 10) as date, d.balance
          FROM darwin_deals d
          INNER JOIN (
