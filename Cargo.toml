@@ -13,6 +13,9 @@ exclude = [
 ]
 
 [profile.release]
-opt-level = 2
-lto = "thin"
+opt-level = 3        # max optimizations (was 2)
+lto = "fat"          # full-program LTO (was thin) — better inlining
+codegen-units = 1    # single codegen unit for max optimization
 strip = true
+panic = "abort"      # smaller binary, no unwind tables
+debug = false

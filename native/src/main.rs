@@ -5,6 +5,11 @@
 //! Direct memory access from SQLite cache to GPU vertex buffers.
 //! Async broker integration via tokio runtime + mpsc channels.
 
+// PERF: mimalloc is 5-15% faster than the system allocator on small-allocation
+// heavy workloads (per-frame Strings, Vecs, HashMaps in the render loop).
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod app;
 mod gpu_compute;
 mod metrics;
