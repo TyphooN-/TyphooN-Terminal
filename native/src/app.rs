@@ -10212,6 +10212,8 @@ pub struct TyphooNApp {
     /// PERF5: String interner for sector/industry names — dedups ~50 unique strings
     /// across thousands of fundamentals references during hot operations.
     sector_interner: std::collections::HashMap<String, std::sync::Arc<str>>,
+    /// UX3: Deferred symbol action from right-panel context menus (applied at end of update()).
+    deferred_symbol_action: SymbolAction,
     show_event_calendar: bool,
     event_calendar_rows: Vec<EventRow>,
     event_filter_source: EventSource,
@@ -13235,6 +13237,7 @@ impl TyphooNApp {
             workspaces: std::collections::HashMap::new(),
             sparkline_cache: std::collections::HashMap::new(),
             sector_interner: std::collections::HashMap::new(),
+            deferred_symbol_action: SymbolAction::None,
             show_event_calendar: false,
             event_calendar_rows: Vec::new(),
             event_filter_source: EventSource::All,
@@ -16647,21 +16650,23 @@ impl TyphooNApp {
                     }
                 } else if other.starts_with("WORKSPACE_LOAD ") {
                     let name = other.splitn(2, ' ').nth(1).unwrap_or("").trim().to_string();
+                    // Check user-saved first, then builtin presets
                     if let Some(json) = self.workspaces.get(&name).cloned() {
                         if let Ok(snap) = serde_json::from_str::<serde_json::Value>(&json) {
                             self.apply_workspace_snapshot(&snap);
                             self.log.push_back(LogEntry::info(format!("Workspace '{}' loaded", name)));
                         }
+                    } else if let Some(snap) = Self::builtin_workspace(&name) {
+                        self.apply_workspace_snapshot(&snap);
+                        self.log.push_back(LogEntry::info(format!("Built-in workspace '{}' loaded", name.to_uppercase())));
                     } else {
-                        self.log.push_back(LogEntry::warn(format!("Workspace '{}' not found", name)));
+                        self.log.push_back(LogEntry::warn(format!("Workspace '{}' not found (try TRADING/RESEARCH/DARWIN/COMPACT)", name)));
                     }
                 } else if other == "WORKSPACES" {
-                    if self.workspaces.is_empty() {
-                        self.log.push_back(LogEntry::info("No saved workspaces. Use WORKSPACE_SAVE <name>"));
-                    } else {
-                        let names: Vec<&String> = self.workspaces.keys().collect();
-                        self.log.push_back(LogEntry::info(format!("Workspaces: {}", names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))));
-                    }
+                    let mut all: Vec<String> = self.workspaces.keys().cloned().collect();
+                    all.extend(["TRADING (built-in)".into(), "RESEARCH (built-in)".into(),
+                                "DARWIN (built-in)".into(), "COMPACT (built-in)".into()]);
+                    self.log.push_back(LogEntry::info(format!("Workspaces: {}", all.join(", "))));
                 } else {
                     self.log.push_back(LogEntry::warn(format!("Unknown command: {}", other)));
                 }
@@ -16686,10 +16691,16 @@ impl TyphooNApp {
 
     /// UX7: Lazily fetch 30 daily closes for a symbol from bar cache.
     /// Returns slice of cached values if available, empty slice otherwise.
+    /// MEM: Soft-capped at 2000 entries (≈2000 × 30 × 8 bytes = ~480KB).
     fn get_sparkline(&mut self, symbol: &str) -> Vec<f64> {
         let key = symbol.to_uppercase();
         if let Some(closes) = self.sparkline_cache.get(&key) {
             return closes.clone();
+        }
+        // Soft cap: drop random 25% if exceeded (no LRU bookkeeping cost)
+        if self.sparkline_cache.len() > 2000 {
+            let to_drop: Vec<String> = self.sparkline_cache.keys().take(500).cloned().collect();
+            for k in to_drop { self.sparkline_cache.remove(&k); }
         }
         // Lazy load
         if let Some(ref cache) = self.cache {
@@ -16712,6 +16723,47 @@ impl TyphooNApp {
         // Cache empty result to avoid retrying every frame
         self.sparkline_cache.insert(key, Vec::new());
         Vec::new()
+    }
+
+    /// UX4: Built-in workspace presets — return JSON for known workspace names.
+    /// User-saved workspaces in self.workspaces take precedence.
+    fn builtin_workspace(name: &str) -> Option<serde_json::Value> {
+        let json = match name.to_uppercase().as_str() {
+            "TRADING" => serde_json::json!({
+                "sec": false, "insider": false, "fundamentals": false, "ev": false,
+                "earnings": false, "dividends": false, "darwinex_outliers": false,
+                "darwinex_radar": false, "swap_harvest": false, "darwin_browser": false,
+                "stress_test": false, "volume_profile": true, "hv_cone": false,
+                "sector_heatmap": false, "dividends_screen": false, "event_calendar": false,
+                "lan_sync": false, "alerts": true, "journal": false, "compact_mode": false,
+            }),
+            "RESEARCH" => serde_json::json!({
+                "sec": true, "insider": true, "fundamentals": true, "ev": true,
+                "earnings": true, "dividends": true, "darwinex_outliers": true,
+                "darwinex_radar": false, "swap_harvest": false, "darwin_browser": false,
+                "stress_test": false, "volume_profile": false, "hv_cone": false,
+                "sector_heatmap": true, "dividends_screen": true, "event_calendar": true,
+                "lan_sync": false, "alerts": false, "journal": false, "compact_mode": false,
+            }),
+            "DARWIN" => serde_json::json!({
+                "sec": false, "insider": false, "fundamentals": false, "ev": false,
+                "earnings": false, "dividends": false, "darwinex_outliers": true,
+                "darwinex_radar": true, "swap_harvest": true, "darwin_browser": true,
+                "stress_test": true, "volume_profile": false, "hv_cone": false,
+                "sector_heatmap": false, "dividends_screen": false, "event_calendar": false,
+                "lan_sync": false, "alerts": false, "journal": true, "compact_mode": false,
+            }),
+            "COMPACT" => serde_json::json!({
+                "sec": false, "insider": false, "fundamentals": false, "ev": false,
+                "earnings": false, "dividends": false, "darwinex_outliers": false,
+                "darwinex_radar": false, "swap_harvest": false, "darwin_browser": false,
+                "stress_test": false, "volume_profile": false, "hv_cone": false,
+                "sector_heatmap": false, "dividends_screen": false, "event_calendar": false,
+                "lan_sync": false, "alerts": false, "journal": false, "compact_mode": true,
+            }),
+            _ => return None,
+        };
+        Some(json)
     }
 
     /// UX4: Capture current window layout (all show_* flags) as JSON for workspace presets.
@@ -23280,6 +23332,12 @@ impl TyphooNApp {
         if self.show_unusual_volume {
             let vol_active = if self.volume_active_only { self.active_symbols() } else { Vec::new() };
             let mut uv_pending_action = SymbolAction::None;
+            // UX7: Pre-fetch sparklines for unusual volume symbols
+            let mut uv_sparklines: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+            for (sym, _, _, _) in self.unusual_volume_results.clone().iter().take(100) {
+                let closes = self.get_sparkline(sym);
+                if !closes.is_empty() { uv_sparklines.insert(sym.to_uppercase(), closes); }
+            }
             egui::Window::new("Unusual Volume Scanner")
                 .open(&mut self.show_unusual_volume)
                 .resizable(true).default_size([500.0, 400.0])
@@ -23290,8 +23348,9 @@ impl TyphooNApp {
                     });
                     ui.separator();
                     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                        egui::Grid::new("unusual_vol_grid").striped(true).num_columns(4).show(ui, |ui| {
+                        egui::Grid::new("unusual_vol_grid").striped(true).num_columns(5).show(ui, |ui| {
                             ui.label(egui::RichText::new("Symbol").color(AXIS_TEXT).small().strong());
+                            ui.label(egui::RichText::new("30d").color(AXIS_TEXT).small().strong());
                             ui.label(egui::RichText::new("Today Vol").color(AXIS_TEXT).small().strong());
                             ui.label(egui::RichText::new("Avg Vol").color(AXIS_TEXT).small().strong());
                             ui.label(egui::RichText::new("Ratio").color(AXIS_TEXT).small().strong());
@@ -23304,6 +23363,9 @@ impl TyphooNApp {
                                 let (_, uv_action) = symbol_label_with_menu(ui, sym,
                                     egui::RichText::new(sym).small().strong());
                                 if !matches!(uv_action, SymbolAction::None) { uv_pending_action = uv_action; }
+                                if let Some(closes) = uv_sparklines.get(&sym.to_uppercase()) {
+                                    draw_inline_sparkline(ui, closes, 50.0, 12.0);
+                                } else { ui.label(egui::RichText::new("—").color(AXIS_TEXT).small()); }
                                 let fmt_vol = |v: f64| -> String {
                                     if v >= 1_000_000.0 { format!("{:.1}M", v / 1_000_000.0) }
                                     else if v >= 1_000.0 { format!("{:.1}K", v / 1_000.0) }
@@ -25110,21 +25172,31 @@ impl TyphooNApp {
             let scope_label = self.broker_scope_label();
             let scoped = self.scoped_fundamentals_owned();
             let mut div_pending_action = SymbolAction::None;
+            // UX7: Pre-fetch sparklines for dividend stocks
+            let divs_for_sl = typhoon_engine::core::screener::screen_dividend_stocks(&scoped);
+            let mut div_sparklines: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+            for d in divs_for_sl.iter().take(100) {
+                let closes = self.get_sparkline(&d.symbol);
+                if !closes.is_empty() { div_sparklines.insert(d.symbol.to_uppercase(), closes); }
+            }
             egui::Window::new("Dividend Yield Screener")
                 .open(&mut self.show_dividends)
-                .resizable(true).default_size([600.0, 400.0])
+                .resizable(true).default_size([700.0, 400.0])
                 .show(ctx, |ui| {
                     let divs = typhoon_engine::core::screener::screen_dividend_stocks(&scoped);
                     ui.label(egui::RichText::new(format!("{} dividend stocks • scope: {}", divs.len(), scope_label)).strong());
                     ui.separator();
                     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                        egui::Grid::new("div_screen_grid").striped(true).num_columns(5).show(ui, |ui| {
-                            ui.strong("Symbol"); ui.strong("Company"); ui.strong("Yield%"); ui.strong("Ex-Div"); ui.strong("P/E");
+                        egui::Grid::new("div_screen_grid").striped(true).num_columns(6).show(ui, |ui| {
+                            ui.strong("Symbol"); ui.strong("30d"); ui.strong("Company"); ui.strong("Yield%"); ui.strong("Ex-Div"); ui.strong("P/E");
                             ui.end_row();
                             for d in divs.iter().take(100) {
                                 let (_, dv_action) = symbol_label_with_menu(ui, &d.symbol,
                                     egui::RichText::new(&d.symbol).strong());
                                 if !matches!(dv_action, SymbolAction::None) { div_pending_action = dv_action; }
+                                if let Some(closes) = div_sparklines.get(&d.symbol.to_uppercase()) {
+                                    draw_inline_sparkline(ui, closes, 50.0, 12.0);
+                                } else { ui.label(egui::RichText::new("—").color(AXIS_TEXT).small()); }
                                 ui.label(egui::RichText::new(&d.company).small());
                                 let yc = if d.dividend_yield > 4.0 { UP } else { AXIS_TEXT };
                                 ui.label(egui::RichText::new(format!("{:.2}%", d.dividend_yield)).color(yc));
@@ -31510,11 +31582,14 @@ impl eframe::App for TyphooNApp {
                             if has_live && !self.live_positions.is_empty() {
                                 has_positions = true;
                                 let mut close_sym: Option<String> = None;
+                                let mut lp_action = SymbolAction::None;
                                 for pos in &self.live_positions {
                                     let side_c = if pos.side == "long" { UP } else { DOWN };
                                     let side_label = if pos.side == "long" { "L" } else { "S" };
                                     ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new(&pos.symbol).small().strong());
+                                        let (_, act) = symbol_label_with_menu(ui, &pos.symbol,
+                                            egui::RichText::new(&pos.symbol).small().strong());
+                                        if !matches!(act, SymbolAction::None) { lp_action = act; }
                                         ui.label(egui::RichText::new(side_label).color(side_c).small());
                                         ui.label(egui::RichText::new(format!("{:.2}", pos.qty)).small());
                                         let pl_c = if pos.unrealized_pl >= 0.0 { UP } else { DOWN };
@@ -31532,16 +31607,20 @@ impl eframe::App for TyphooNApp {
                                 if let Some(sym) = close_sym {
                                     let _ = self.broker_tx.send(BrokerCmd::ClosePosition { symbol: sym });
                                 }
+                                if !matches!(lp_action, SymbolAction::None) { self.deferred_symbol_action = lp_action; }
                             }
                             // tastytrade positions
                             if self.show_tt_positions && !self.tt_positions.is_empty() {
                                 has_positions = true;
                                 let mut close_sym: Option<String> = None;
+                                let mut tt_action = SymbolAction::None;
                                 for pos in &self.tt_positions {
                                     let side_c = if pos.side == "long" { UP } else { DOWN };
                                     let side_label = if pos.side == "long" { "L" } else { "S" };
                                     ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new(&pos.symbol).small().strong());
+                                        let (_, act) = symbol_label_with_menu(ui, &pos.symbol,
+                                            egui::RichText::new(&pos.symbol).small().strong());
+                                        if !matches!(act, SymbolAction::None) { tt_action = act; }
                                         ui.label(egui::RichText::new(format!("[Tasty] {}", side_label)).color(side_c).small());
                                         ui.label(egui::RichText::new(format!("{:.2}", pos.qty)).small());
                                         let pl_c = if pos.unrealized_pl >= 0.0 { UP } else { DOWN };
@@ -31558,6 +31637,7 @@ impl eframe::App for TyphooNApp {
                                     let _ = self.broker_tx.send(BrokerCmd::TastytradeClosePosition { symbol: sym.clone() });
                                     self.log.push_back(LogEntry::info(format!("Tastytrade: closing {sym} at market")));
                                 }
+                                if !matches!(tt_action, SymbolAction::None) { self.deferred_symbol_action = tt_action; }
                             }
                             if !has_positions {
                                 ui.label(egui::RichText::new("No open positions.").color(AXIS_TEXT).small());
@@ -34888,6 +34968,12 @@ impl eframe::App for TyphooNApp {
         let startup_loading = self.bg.portfolio.is_none() && self.cache.is_some();
         let idle_ms = if startup_loading || !self.cache_loaded { 100 } else { 250 };
         ctx.request_repaint_after(std::time::Duration::from_millis(idle_ms));
+
+        // UX3: Apply any deferred symbol context-menu action from right-panel renders
+        if !matches!(self.deferred_symbol_action, SymbolAction::None) {
+            let action = std::mem::replace(&mut self.deferred_symbol_action, SymbolAction::None);
+            self.apply_symbol_action(action);
+        }
     }
 }
 
