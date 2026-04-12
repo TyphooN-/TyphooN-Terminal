@@ -39,6 +39,9 @@ pub struct GpuCompute {
     vol_buffer: Option<wgpu::Buffer>,
     /// Number of bars currently in GPU buffer.
     bar_count: u32,
+    /// PERF4: Bar count of current pooled buffers — skips reallocation if upload_bars is called
+    /// with the same size (common: re-uploading after a forming bar update).
+    pooled_bar_count: u32,
     /// SMA output buffer (one f32 per bar).
     sma_buffer: Option<wgpu::Buffer>,
     /// EMA output buffer.
@@ -287,6 +290,7 @@ impl GpuCompute {
             mid_buffer: None,
             vol_buffer: None,
             bar_count: 0,
+            pooled_bar_count: 0,
             sma_buffer: None,
             ema_buffer: None,
             sma_pipeline,
@@ -343,17 +347,23 @@ impl GpuCompute {
     }
 
     /// Upload full OHLCV data to VRAM.
+    /// PERF4: Buffer pool — if bar_count matches the pooled size, reuse existing buffers
+    /// and only update their contents (write_buffer). Saves O(N) buffer allocations per frame
+    /// when re-uploading the same chart (e.g., forming bar updates).
     pub fn upload_bars_full(&mut self, closes: &[f32], highs: &[f32], lows: &[f32], volumes: &[f32]) {
         let bar_count = closes.len() as u32;
         self.bar_count = bar_count;
+        let same_size = bar_count == self.pooled_bar_count && self.bar_buffer.is_some();
 
         // Close prices buffer (used by most indicators)
-        self.bar_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bar_data"),
-            size: (bar_count as u64) * 4,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }));
+        if !same_size {
+            self.bar_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("bar_data"),
+                size: (bar_count as u64) * 4,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
         if let Some(ref buf) = self.bar_buffer {
             self.queue.write_buffer(buf, 0, bytemuck_cast_slice(closes));
         }
@@ -366,24 +376,28 @@ impl GpuCompute {
                 ohlc.push(lows[i]);
                 ohlc.push(closes[i]);
             }
-            self.ohlc_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("ohlc_data"),
-                size: (bar_count as u64) * 12, // 3 × f32 per bar
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }));
+            if !same_size || self.ohlc_buffer.is_none() {
+                self.ohlc_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("ohlc_data"),
+                    size: (bar_count as u64) * 12,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
             if let Some(ref buf) = self.ohlc_buffer {
                 self.queue.write_buffer(buf, 0, bytemuck_cast_slice(&ohlc));
             }
 
             // Midpoints (high+low)/2 for Fisher Transform
             let mids: Vec<f32> = (0..bar_count as usize).map(|i| (highs[i] + lows[i]) / 2.0).collect();
-            self.mid_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("mid_data"),
-                size: (bar_count as u64) * 4,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }));
+            if !same_size || self.mid_buffer.is_none() {
+                self.mid_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("mid_data"),
+                    size: (bar_count as u64) * 4,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
             if let Some(ref buf) = self.mid_buffer {
                 self.queue.write_buffer(buf, 0, bytemuck_cast_slice(&mids));
             }
@@ -391,45 +405,48 @@ impl GpuCompute {
 
         // Volume buffer for OBV
         if volumes.len() == closes.len() {
-            self.vol_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("vol_data"),
-                size: (bar_count as u64) * 4,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }));
+            if !same_size || self.vol_buffer.is_none() {
+                self.vol_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("vol_data"),
+                    size: (bar_count as u64) * 4,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
             if let Some(ref buf) = self.vol_buffer {
                 self.queue.write_buffer(buf, 0, bytemuck_cast_slice(volumes));
             }
         }
 
-        // Output buffers (reusable — allocate max size needed)
-        let out_size = (bar_count as u64) * 4;
-        let out_size_4x = (bar_count as u64) * 16; // for Ichimoku (4 outputs per bar), also covers 3-output indicators
-        self.sma_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("sma_output"), size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
-        }));
-        self.ema_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ema_output"), size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
-        }));
-
-        // Readback staging buffer (large enough for 4x output — Ichimoku uses 4 outputs/bar)
-        self.readback_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"), size: out_size_4x,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        }));
-        // Shared dispatch_indicator output buffer (sized to 1x bars).
-        // Previously a fresh buffer was created per call — hot path for 31 indicators × 60fps.
-        self.ind_out_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ind_out_shared"), size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
-        }));
-        // Shared params uniform (fixed 8-byte size — [period, bar_count]).
-        self.ind_params_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ind_params_shared"), size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        }));
+        // Output buffers (reusable — allocate max size needed). PERF4: only realloc on size change.
+        if !same_size {
+            let out_size = (bar_count as u64) * 4;
+            let out_size_4x = (bar_count as u64) * 16;
+            self.sma_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("sma_output"), size: out_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            }));
+            self.ema_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("ema_output"), size: out_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            }));
+            self.readback_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("readback"), size: out_size_4x,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            }));
+            self.ind_out_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("ind_out_shared"), size: out_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            }));
+            // params buffer is fixed 8-byte, only allocate once
+            if self.ind_params_buffer.is_none() {
+                self.ind_params_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("ind_params_shared"), size: 8,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+                }));
+            }
+            self.pooled_bar_count = bar_count;
+        }
     }
 
     /// Generic dispatch: run a compute pipeline with close prices as input, return f32 per bar.

@@ -9215,6 +9215,9 @@ const COMMANDS: &[Command] = &[
     Command { name: "SAVE_TEMPLATE", desc: "Save current indicators as named template (SAVE_TEMPLATE <name>)" },
     Command { name: "LOAD_TEMPLATE", desc: "Load a saved indicator template (LOAD_TEMPLATE <name>)" },
     Command { name: "TEMPLATES",     desc: "List all available chart templates" },
+    Command { name: "WORKSPACE_SAVE", desc: "Save current window layout as named workspace (WORKSPACE_SAVE <name>)" },
+    Command { name: "WORKSPACE_LOAD", desc: "Restore a named workspace layout (WORKSPACE_LOAD <name>)" },
+    Command { name: "WORKSPACES",    desc: "List all saved workspace presets" },
     Command { name: "CRYPTO_FEAR_GREED", desc: "Crypto Fear & Greed Index (alternative.me)" },
     Command { name: "AI",            desc: "AI assistant (Claude/GPT/Gemini/Grok/Mistral/Perplexity API)" },
     Command { name: "CLAUDE",        desc: "Claude Code CLI — local claude binary (no API key)" },
@@ -9234,6 +9237,72 @@ const COMMANDS: &[Command] = &[
 #[cfg(test)]
 fn fuzzy_match(query: &str, target: &str) -> bool {
     fuzzy_score(query, target).is_some()
+}
+
+/// UX3: Deferred action from a symbol right-click context menu.
+#[derive(Debug, Clone)]
+enum SymbolAction {
+    None,
+    OpenChart(String),
+    AddWatchlist(String),
+    ShowFundamentals,
+    ShowSec(String),
+    ShowInsider,
+}
+
+/// UX7: Draw an inline sparkline from a series of closes.
+/// Width × height pixels, color based on first→last delta (green up, red down).
+fn draw_inline_sparkline(ui: &mut egui::Ui, closes: &[f64], width: f32, height: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    if closes.len() < 2 { return resp; }
+    let min = closes.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = closes.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let range = (max - min).max(1e-9);
+    let n = closes.len();
+    let color = if closes[n-1] >= closes[0] {
+        egui::Color32::from_rgb(46, 204, 113)
+    } else {
+        egui::Color32::from_rgb(231, 76, 60)
+    };
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(n);
+    for (i, &c) in closes.iter().enumerate() {
+        let x = rect.left() + (i as f32 / (n - 1) as f32) * width;
+        let y = rect.bottom() - ((c - min) / range) as f32 * height;
+        points.push(egui::pos2(x, y));
+    }
+    ui.painter().add(egui::Shape::line(points, egui::Stroke::new(1.0, color)));
+    resp
+}
+
+/// UX3: Render a label with right-click context menu, returns deferred action.
+/// Free function — no &mut self conflict with egui::Window borrows.
+fn symbol_label_with_menu(ui: &mut egui::Ui, symbol: &str, label: egui::RichText) -> (egui::Response, SymbolAction) {
+    let resp = ui.label(label);
+    let mut action = SymbolAction::None;
+    let sym = symbol.to_string();
+    resp.clone().context_menu(|ui| {
+        if ui.button("Open chart").clicked() {
+            action = SymbolAction::OpenChart(sym.clone());
+            ui.close();
+        }
+        if ui.button("Add to watchlist").clicked() {
+            action = SymbolAction::AddWatchlist(sym.clone());
+            ui.close();
+        }
+        if ui.button("View fundamentals").clicked() {
+            action = SymbolAction::ShowFundamentals;
+            ui.close();
+        }
+        if ui.button("View SEC filings").clicked() {
+            action = SymbolAction::ShowSec(sym.clone());
+            ui.close();
+        }
+        if ui.button("View insider trades").clicked() {
+            action = SymbolAction::ShowInsider;
+            ui.close();
+        }
+    });
+    (resp, action)
 }
 
 /// Fuzzy subsequence match with score (lower = better, None = no match).
@@ -10130,6 +10199,19 @@ pub struct TyphooNApp {
     /// (OUTLIERS, EVOUTLIERS, DARWINVAR, DIVSCREEN, SECTOR_HEATMAP, HV_CONE, EV viewer, etc.).
     /// All = no filter. Use `SCOPE [ALL|ALPACA|DARWINEX|TASTY]` command to change.
     broker_scope: EventSource,
+    /// Per-frame cached broker scope HashSet — invalidated each frame in update().
+    /// O(1) reads for the 5+ windows that need scope filtering.
+    cached_scope_syms: Option<std::collections::HashSet<String>>,
+    cached_scope_frame: u64,
+    /// UX6: One-shot flag to auto-scroll outlier table to first EXTREME tier on next render.
+    outlier_scroll_pending: bool,
+    /// UX4: Named workspace presets — maps name → JSON snapshot of show_* flags.
+    workspaces: std::collections::HashMap<String, String>,
+    /// UX7: Sparkline cache — last 30 daily closes per symbol, lazy-fetched on first render.
+    sparkline_cache: std::collections::HashMap<String, Vec<f64>>,
+    /// PERF5: String interner for sector/industry names — dedups ~50 unique strings
+    /// across thousands of fundamentals references during hot operations.
+    sector_interner: std::collections::HashMap<String, std::sync::Arc<str>>,
     show_event_calendar: bool,
     event_calendar_rows: Vec<EventRow>,
     event_filter_source: EventSource,
@@ -13147,6 +13229,12 @@ impl TyphooNApp {
             show_sector_heatmap: false,
             show_dividends: false,
             broker_scope: EventSource::Darwinex, // matches fund_source defaults (mt5=true, alpaca=false, tasty=false)
+            cached_scope_syms: None,
+            cached_scope_frame: 0,
+            outlier_scroll_pending: false,
+            workspaces: std::collections::HashMap::new(),
+            sparkline_cache: std::collections::HashMap::new(),
+            sector_interner: std::collections::HashMap::new(),
             show_event_calendar: false,
             event_calendar_rows: Vec::new(),
             event_filter_source: EventSource::All,
@@ -14112,10 +14200,9 @@ impl TyphooNApp {
     }
 
     /// Fundamentals filtered by the current `broker_scope`. Returns a Vec of refs
-    /// (cheap — just pointers). Use `scoped_fundamentals_owned` when the callee
-    /// requires `&[Fundamentals]` (slice of values).
+    /// (cheap — just pointers). Uses per-frame cached scope HashSet.
     fn scoped_fundamentals(&self) -> Vec<&typhoon_engine::core::fundamentals::Fundamentals> {
-        match self.broker_scope_symbols() {
+        match &self.cached_scope_syms {
             None => self.bg.all_fundamentals.iter().collect(),
             Some(set) => self.bg.all_fundamentals.iter()
                 .filter(|f| set.contains(&f.symbol.to_uppercase()))
@@ -14125,9 +14212,9 @@ impl TyphooNApp {
 
     /// Owned-Vec variant for APIs that require `&[Fundamentals]`.
     /// When scope=All, returns a clone of the full list (no filter work).
-    /// Acceptable cost — all_fundamentals is typically a few hundred structs.
+    /// Uses per-frame cached scope HashSet.
     fn scoped_fundamentals_owned(&self) -> Vec<typhoon_engine::core::fundamentals::Fundamentals> {
-        match self.broker_scope_symbols() {
+        match &self.cached_scope_syms {
             None => self.bg.all_fundamentals.clone(),
             Some(set) => self.bg.all_fundamentals.iter()
                 .filter(|f| set.contains(&f.symbol.to_uppercase()))
@@ -14139,6 +14226,37 @@ impl TyphooNApp {
     /// Short label for the current broker scope — used in window headers.
     /// Build an iCalendar (RFC 5545) payload for the current Event Calendar filter.
     /// Events are emitted as all-day VEVENTs — we only store date strings, not precise times.
+    /// UX3: Apply a deferred symbol action from a context menu.
+    /// Applied after the render closure exits to avoid borrow conflicts.
+    fn apply_symbol_action(&mut self, action: SymbolAction) {
+        match action {
+            SymbolAction::None => {}
+            SymbolAction::OpenChart(sym) => {
+                let target = sym.to_uppercase();
+                if let Some(idx) = self.charts.iter().position(|c| c.symbol.to_uppercase().contains(&target)) {
+                    self.active_tab = idx;
+                } else {
+                    let chart = ChartState::new(format!("mt5:{}", sym), Timeframe::D1);
+                    self.charts.push(chart);
+                    self.active_tab = self.charts.len() - 1;
+                    self.deferred_chart_loads.push_back(self.active_tab);
+                }
+            }
+            SymbolAction::AddWatchlist(sym) => {
+                if !self.user_watchlist.iter().any(|s| s.eq_ignore_ascii_case(&sym)) {
+                    self.user_watchlist.push(sym.clone());
+                    self.log.push_back(LogEntry::info(format!("Added {} to watchlist", sym)));
+                }
+            }
+            SymbolAction::ShowFundamentals => self.show_fundamentals = true,
+            SymbolAction::ShowSec(sym) => {
+                self.show_sec = true;
+                self.sec_search_query = sym;
+            }
+            SymbolAction::ShowInsider => self.show_insider = true,
+        }
+    }
+
     /// Compatible with Google Calendar, Apple Calendar, Outlook, Thunderbird.
     fn build_events_ics(
         rows: &[EventRow],
@@ -15512,6 +15630,7 @@ impl TyphooNApp {
                             self.darwinex_sector_stats = stats;
                             self.darwinex_multi_outliers = multi.clone();
                             self.show_darwinex_outliers = true;
+                    self.outlier_scroll_pending = true;
 
                             // ADR-094: Table result card for top outliers
                             if !multi.is_empty() {
@@ -15576,6 +15695,7 @@ impl TyphooNApp {
                     self.darwinex_sector_stats = stats;
                     self.darwinex_multi_outliers = Vec::new();
                     self.show_darwinex_outliers = true;
+                    self.outlier_scroll_pending = true;
 
                     // ADR-094: Show VaR corridor gauge as result card
                     let avg_var = data.iter().map(|(_, _, v)| v).sum::<f64>() / data.len().max(1) as f64;
@@ -15634,6 +15754,7 @@ impl TyphooNApp {
                     self.darwinex_sector_stats = stats;
                     self.darwinex_multi_outliers = Vec::new();
                     self.show_darwinex_outliers = true;
+                    self.outlier_scroll_pending = true;
                 }
             }
             "VAROUTLIER" | "VAR_OUTLIER" | "VAR_OUTLIERS" => {
@@ -15714,6 +15835,7 @@ impl TyphooNApp {
                         self.darwinex_sector_stats = sector_stats;
                         self.darwinex_multi_outliers = Vec::new();
                         self.show_darwinex_outliers = true;
+                    self.outlier_scroll_pending = true;
                     }
                 }
             }
@@ -15787,6 +15909,7 @@ impl TyphooNApp {
                         self.darwinex_sector_stats = stats;
                         self.darwinex_multi_outliers = Vec::new();
                         self.show_darwinex_outliers = true;
+                    self.outlier_scroll_pending = true;
                     }
                 }
             }
@@ -16510,6 +16633,35 @@ impl TyphooNApp {
                     } else {
                         self.log.push_back(LogEntry::warn(format!("Template '{}' not found", name)));
                     }
+                } else if other.starts_with("WORKSPACE_SAVE ") {
+                    let name = other.splitn(2, ' ').nth(1).unwrap_or("").trim().to_string();
+                    if name.is_empty() {
+                        self.log.push_back(LogEntry::warn("Usage: WORKSPACE_SAVE <name>"));
+                    } else {
+                        let snap = self.capture_workspace_snapshot();
+                        if let Ok(json) = serde_json::to_string(&snap) {
+                            self.workspaces.insert(name.clone(), json);
+                            self.save_session();
+                            self.log.push_back(LogEntry::info(format!("Workspace '{}' saved", name)));
+                        }
+                    }
+                } else if other.starts_with("WORKSPACE_LOAD ") {
+                    let name = other.splitn(2, ' ').nth(1).unwrap_or("").trim().to_string();
+                    if let Some(json) = self.workspaces.get(&name).cloned() {
+                        if let Ok(snap) = serde_json::from_str::<serde_json::Value>(&json) {
+                            self.apply_workspace_snapshot(&snap);
+                            self.log.push_back(LogEntry::info(format!("Workspace '{}' loaded", name)));
+                        }
+                    } else {
+                        self.log.push_back(LogEntry::warn(format!("Workspace '{}' not found", name)));
+                    }
+                } else if other == "WORKSPACES" {
+                    if self.workspaces.is_empty() {
+                        self.log.push_back(LogEntry::info("No saved workspaces. Use WORKSPACE_SAVE <name>"));
+                    } else {
+                        let names: Vec<&String> = self.workspaces.keys().collect();
+                        self.log.push_back(LogEntry::info(format!("Workspaces: {}", names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))));
+                    }
                 } else {
                     self.log.push_back(LogEntry::warn(format!("Unknown command: {}", other)));
                 }
@@ -16518,6 +16670,107 @@ impl TyphooNApp {
     }
 
     // ── Chart template helpers ────────────────────────────────────────────────
+
+    /// PERF5: Intern a sector/industry string into Arc<str>.
+    /// Reduces String allocations across thousands of fundamentals references.
+    /// Cache holds ~50 unique sectors typically.
+    #[allow(dead_code)]
+    fn intern_sector(&mut self, s: &str) -> std::sync::Arc<str> {
+        if let Some(interned) = self.sector_interner.get(s) {
+            return interned.clone();
+        }
+        let arc: std::sync::Arc<str> = std::sync::Arc::from(s);
+        self.sector_interner.insert(s.to_string(), arc.clone());
+        arc
+    }
+
+    /// UX7: Lazily fetch 30 daily closes for a symbol from bar cache.
+    /// Returns slice of cached values if available, empty slice otherwise.
+    fn get_sparkline(&mut self, symbol: &str) -> Vec<f64> {
+        let key = symbol.to_uppercase();
+        if let Some(closes) = self.sparkline_cache.get(&key) {
+            return closes.clone();
+        }
+        // Lazy load
+        if let Some(ref cache) = self.cache {
+            let candidates = [
+                format!("mt5:CC:{}:1Day", symbol),
+                format!("mt5:{}:1Day", symbol),
+                format!("alpaca:{}:1Day", symbol),
+            ];
+            for k in &candidates {
+                if let Ok(Some(bars)) = cache.get_bars_raw(k) {
+                    if bars.len() >= 5 {
+                        let take = bars.len().min(30);
+                        let closes: Vec<f64> = bars.iter().rev().take(take).rev().map(|(_, _, _, _, c, _)| *c).collect();
+                        self.sparkline_cache.insert(key.clone(), closes.clone());
+                        return closes;
+                    }
+                }
+            }
+        }
+        // Cache empty result to avoid retrying every frame
+        self.sparkline_cache.insert(key, Vec::new());
+        Vec::new()
+    }
+
+    /// UX4: Capture current window layout (all show_* flags) as JSON for workspace presets.
+    fn capture_workspace_snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "sec": self.show_sec,
+            "insider": self.show_insider,
+            "fundamentals": self.show_fundamentals,
+            "ev": self.show_ev_scanner,
+            "earnings": self.show_earnings_calendar,
+            "dividends": self.show_dividend_calendar,
+            "darwinex_outliers": self.show_darwinex_outliers,
+            "darwinex_radar": self.show_darwinex_radar,
+            "swap_harvest": self.show_swap_harvest,
+            "darwin_browser": self.show_darwin_browser,
+            "stress_test": self.show_stress_test,
+            "volume_profile": self.show_volume_profile,
+            "hv_cone": self.show_hv_cone,
+            "sector_heatmap": self.show_sector_heatmap,
+            "dividends_screen": self.show_dividends,
+            "event_calendar": self.show_event_calendar,
+            "lan_sync": self.show_lan_sync,
+            "alerts": self.show_alert_builder,
+            "journal": self.show_journal,
+            "compact_mode": self.compact_mode,
+            "broker_scope": self.broker_scope_label(),
+        })
+    }
+
+    /// UX4: Apply a workspace snapshot — toggle window visibility from JSON.
+    fn apply_workspace_snapshot(&mut self, snap: &serde_json::Value) {
+        macro_rules! set_bool {
+            ($key:expr, $field:ident) => {
+                if let Some(b) = snap.get($key).and_then(|v| v.as_bool()) {
+                    self.$field = b;
+                }
+            };
+        }
+        set_bool!("sec", show_sec);
+        set_bool!("insider", show_insider);
+        set_bool!("fundamentals", show_fundamentals);
+        set_bool!("ev", show_ev_scanner);
+        set_bool!("earnings", show_earnings_calendar);
+        set_bool!("dividends", show_dividend_calendar);
+        set_bool!("darwinex_outliers", show_darwinex_outliers);
+        set_bool!("darwinex_radar", show_darwinex_radar);
+        set_bool!("swap_harvest", show_swap_harvest);
+        set_bool!("darwin_browser", show_darwin_browser);
+        set_bool!("stress_test", show_stress_test);
+        set_bool!("volume_profile", show_volume_profile);
+        set_bool!("hv_cone", show_hv_cone);
+        set_bool!("sector_heatmap", show_sector_heatmap);
+        set_bool!("dividends_screen", show_dividends);
+        set_bool!("event_calendar", show_event_calendar);
+        set_bool!("lan_sync", show_lan_sync);
+        set_bool!("alerts", show_alert_builder);
+        set_bool!("journal", show_journal);
+        set_bool!("compact_mode", compact_mode);
+    }
 
     /// Capture current indicator show_* flags as a JSON value (same schema as session "indicators").
     fn capture_indicator_snapshot(&self) -> serde_json::Value {
@@ -22431,7 +22684,8 @@ impl TyphooNApp {
 
         // SEC Filing Scanner — tabbed: Filings | Alerts | Detail
         if self.show_sec {
-            let sec_scope_syms = self.broker_scope_symbols();
+            // PERF2: read from per-frame cache
+            let sec_scope_syms = self.cached_scope_syms.clone();
             let sec_scope_label = self.broker_scope_label();
             egui::Window::new("SEC Filing Scanner")
                 .open(&mut self.show_sec)
@@ -23984,8 +24238,23 @@ impl TyphooNApp {
         // EV Scanner
         if self.show_ev_scanner {
             let ev_active = if self.ev_active_only { self.active_symbols() } else { Vec::new() };
-            let scope_syms = self.broker_scope_symbols();
+            // PERF2: read from per-frame cache
+            let scope_syms = self.cached_scope_syms.clone();
             let scope_label = self.broker_scope_label();
+            // UX7: Pre-fetch sparklines for visible symbols (avoids &mut self conflict in closure)
+            let visible_syms: Vec<String> = self.bg.all_fundamentals.iter()
+                .filter(|f| match &scope_syms {
+                    None => true,
+                    Some(set) => set.contains(&f.symbol.to_uppercase()),
+                })
+                .take(200)
+                .map(|f| f.symbol.clone())
+                .collect();
+            let mut sparklines: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+            for sym in &visible_syms {
+                let closes = self.get_sparkline(sym);
+                if !closes.is_empty() { sparklines.insert(sym.to_uppercase(), closes); }
+            }
             egui::Window::new("Enterprise Value Scanner")
                 .open(&mut self.show_ev_scanner)
                 .resizable(true).default_size([900.0, 500.0])
@@ -24021,8 +24290,9 @@ impl TyphooNApp {
                     }
                     if !self.ev_sort.ascending { fund_sorted.reverse(); }
                     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                        egui::Grid::new("ev_scanner_grid").striped(true).num_columns(9).show(ui, |ui| {
+                        egui::Grid::new("ev_scanner_grid").striped(true).num_columns(10).show(ui, |ui| {
                             if SortState::header(ui, "Symbol", 0, &self.ev_sort) { self.ev_sort.toggle(0); }
+                            ui.label(egui::RichText::new("30d").color(AXIS_TEXT).small());
                             if SortState::header(ui, "Company", 1, &self.ev_sort) { self.ev_sort.toggle(1); }
                             if SortState::header(ui, "EV", 2, &self.ev_sort) { self.ev_sort.toggle(2); }
                             if SortState::header(ui, "MCap", 3, &self.ev_sort) { self.ev_sort.toggle(3); }
@@ -24034,6 +24304,12 @@ impl TyphooNApp {
                             ui.end_row();
                             for f in &fund_sorted {
                                 ui.label(egui::RichText::new(&f.symbol).small().strong().monospace());
+                                // UX7: Sparkline column
+                                if let Some(closes) = sparklines.get(&f.symbol.to_uppercase()) {
+                                    draw_inline_sparkline(ui, closes, 60.0, 14.0);
+                                } else {
+                                    ui.label(egui::RichText::new("—").color(AXIS_TEXT).small());
+                                }
                                 ui.label(egui::RichText::new(if f.company_name.is_empty() { "—" } else { &f.company_name }).small());
                                 ui.label(egui::RichText::new(f.enterprise_value.map(|v| fundamentals::format_large_number(v)).unwrap_or_else(|| "—".into())).small());
                                 ui.label(egui::RichText::new(f.market_cap.map(|v| fundamentals::format_large_number(v)).unwrap_or_else(|| "—".into())).small());
@@ -25882,6 +26158,7 @@ impl TyphooNApp {
         if self.show_darwinex_outliers {
             let outlier_scope_label = self.broker_scope_label().to_string();
             let outlier_scoped_fund = self.scoped_fundamentals_owned();
+            let mut pending_action = SymbolAction::None;
             egui::Window::new("Outlier Scanner")
                 .open(&mut self.show_darwinex_outliers)
                 .resizable(true).default_size([800.0, 550.0])
@@ -26027,8 +26304,18 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new("Tier").color(ol_dim).small());
                                 ui.label(egui::RichText::new("Dir").color(ol_dim).small());
                                 ui.end_row();
+                                let mut scrolled = false;
                                 for o in &self.darwinex_outliers {
-                                    ui.label(egui::RichText::new(&o.symbol).strong().color(ol_cyan));
+                                    let (sym_resp, action) = symbol_label_with_menu(ui, &o.symbol,
+                                        egui::RichText::new(&o.symbol).strong().color(ol_cyan));
+                                    if !matches!(action, SymbolAction::None) {
+                                        pending_action = action;
+                                    }
+                                    // UX6: Auto-scroll to first EXTREME tier outlier on pending flag
+                                    if self.outlier_scroll_pending && !scrolled && o.tier == "EXTREME" {
+                                        sym_resp.scroll_to_me(Some(egui::Align::Center));
+                                        scrolled = true;
+                                    }
                                     ui.label(egui::RichText::new(&o.sector).small());
                                     ui.label(typhoon_engine::core::fundamentals::format_large_number(o.metric));
                                     ui.label(typhoon_engine::core::fundamentals::format_large_number(o.sector_median));
@@ -26040,12 +26327,17 @@ impl TyphooNApp {
                                     ui.label(egui::RichText::new(&o.direction).color(dc).small());
                                     ui.end_row();
                                 }
+                                if scrolled || self.outlier_scroll_pending {
+                                    self.outlier_scroll_pending = false;
+                                }
                             });
                         } else {
                             ui.label(egui::RichText::new("No outliers detected. Run EVSCRAPE first, then OUTLIERS.").color(ol_dim));
                         }
                     });
                 });
+            // Apply deferred symbol context menu action (after window borrow released)
+            self.apply_symbol_action(pending_action);
         }
 
         // Trade Journal
@@ -27859,6 +28151,12 @@ impl eframe::App for TyphooNApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_count += 1;
+        // PERF2: Recompute scope HashSet once per frame (5+ windows read it).
+        // Invalidates each frame to pick up live changes (positions, radar data).
+        if self.cached_scope_frame != self.frame_count {
+            self.cached_scope_syms = self.broker_scope_symbols();
+            self.cached_scope_frame = self.frame_count;
+        }
         ctx.set_visuals(Self::dark_visuals());
         // Bound log size to prevent unbounded memory growth.
         // 200 is a steady-state cap — small enough that pop_front is amortized O(1)
@@ -31547,30 +31845,30 @@ impl eframe::App for TyphooNApp {
                                     row_resp.context_menu(|ui| {
                                         if ui.button(format!("Chart {}", wl.symbol)).clicked() {
                                             load_key = Some(wl.cache_key.clone());
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                         if ui.button(format!("Move Up  {}", wl.symbol)).clicked() {
                                             move_up_sym = Some(wl.symbol.clone());
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                         if ui.button(format!("Move Down  {}", wl.symbol)).clicked() {
                                             move_down_sym = Some(wl.symbol.clone());
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                         if ui.button(format!("Move to Top  {}", wl.symbol)).clicked() {
                                             move_top_sym = Some(wl.symbol.clone());
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                         if ui.button(format!("Remove {}", wl.symbol)).clicked() {
                                             remove_sym = Some(wl.symbol.clone());
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                         ui.separator();
                                         if ui.button("Command Palette…").clicked() {
                                             self.palette_context = PaletteContext::Watchlist;
                                             self.command_open = true;
                                             self.command_input.clear();
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                     });
                                 }
