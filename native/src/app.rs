@@ -2714,12 +2714,12 @@ impl ChartState {
         };
 
         let prefixes = ["mt5:", "default:", "kraken:", "alpaca:", "cryptocompare:", "paper_TyphooN:", "alpaca_paper_TyphooN:", ""];
-        let current_minutes = self.timeframe.minutes();
 
-        for &(label, tf_suffix, period, tf_min) in mtf_lines {
-            // Only show timeframes HIGHER than current (matching MT5 MTF_MA behavior)
-            if tf_min <= current_minutes { continue; }
-
+        for &(label, tf_suffix, period, _tf_min) in mtf_lines {
+            // 1:1 MT5 parity: MTF_MA.mqh declares all 6 plotted buffers as INDICATOR_DATA
+            // (see MTF_MA.mqh lines 72-77) with no chart-period guard, so every line is
+            // drawn on every host timeframe. We match that exactly — lower-TF lines
+            // projected onto higher-TF bars are informationally thin but MT5-accurate.
             let mut htf_bars: Option<Vec<Bar>> = None;
             // Try with bare symbol under each prefix, plus the original base_sym
             for prefix in &prefixes {
@@ -2810,12 +2810,12 @@ impl ChartState {
         };
 
         let prefixes = ["mt5:", "default:", "kraken:", "alpaca:", "cryptocompare:", "paper_TyphooN:", "alpaca_paper_TyphooN:", ""];
-        let current_minutes = self.timeframe.minutes();
 
-        for &(tf_label, tf_suffix, tf_min) in higher_tfs {
-            // Only show timeframes HIGHER than current (matching MT5 MultiKAMA behavior)
-            if tf_min <= current_minutes { continue; }
-
+        for &(tf_label, tf_suffix, _tf_min) in higher_tfs {
+            // 1:1 MT5 parity: MultiKAMA.mqh declares all 5 plotted buffers
+            // (ExtAMABuffer_H1/H4/D1/W1/MN1) as INDICATOR_DATA with no chart-period
+            // guard (see MultiKAMA.mqh lines 47-58), so every KAMA line is drawn on
+            // every host timeframe. We match that exactly.
             let mut htf_bars: Option<Vec<Bar>> = None;
             // Try bare symbol with each prefix
             for prefix in &prefixes {
