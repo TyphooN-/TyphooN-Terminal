@@ -15586,18 +15586,20 @@ impl TyphooNApp {
 
                             for f in fund {
                                 let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
-                                symbols.push((f.symbol.clone(), sector));
+                                // PERF: Clone symbol ONCE per row (was 4x — outliers, ev_map, var_map, atr_map)
+                                let sym = f.symbol.clone();
+                                symbols.push((sym.clone(), sector));
                                 // EV: MCap/EV ratio (valuation anomaly)
                                 if let (Some(mc), Some(ev)) = (f.market_cap, f.enterprise_value) {
-                                    if ev > 0.0 { ev_map.insert(f.symbol.clone(), mc / ev * 100.0); }
+                                    if ev > 0.0 { ev_map.insert(sym.clone(), mc / ev * 100.0); }
                                 }
                                 // P/E as proxy for VaR (extreme P/E = risk)
                                 if let Some(pe) = f.pe_ratio {
-                                    if pe.abs() > 0.0 { var_map.insert(f.symbol.clone(), pe.abs()); }
+                                    if pe.abs() > 0.0 { var_map.insert(sym.clone(), pe.abs()); }
                                 }
                                 // Short ratio as ATR proxy (high short = volatility risk)
                                 if let Some(sr) = f.short_ratio {
-                                    if sr > 0.0 { atr_map.insert(f.symbol.clone(), sr); }
+                                    if sr > 0.0 { atr_map.insert(sym, sr); }
                                 }
                             }
                             // SEC filings per symbol — initialize ALL symbols to 0 first
@@ -15799,10 +15801,13 @@ impl TyphooNApp {
                             }
                         }
                         if closes.len() < 30 { no_bars += 1; continue; }
-                        let tick_scale = tick_specs.get(&f.symbol.to_uppercase()).copied().unwrap_or(1.0);
+                        let sym_upper = f.symbol.to_uppercase();
+                        let tick_scale = tick_specs.get(&sym_upper).copied().unwrap_or(1.0);
                         if let Some((_, ratio)) = var::compute_var_from_closes_with_tick(&closes, 0.95, tick_scale) {
-                            var_data.push((f.symbol.clone(), sector, ratio));
-                            industry_data.push((f.symbol.clone(), industry, ratio));
+                            // PERF: Clone symbol once, reuse for both vecs
+                            let sym = f.symbol.clone();
+                            var_data.push((sym.clone(), sector, ratio));
+                            industry_data.push((sym, industry, ratio));
                         }
                     }
 
@@ -23618,6 +23623,7 @@ impl TyphooNApp {
         // Congressional Trades (House Stock Watcher)
         if self.show_congress {
             let cong_active = if self.congress_active_only { self.active_symbols() } else { Vec::new() };
+            let mut cong_pending_action = SymbolAction::None;
             egui::Window::new("Congressional Trades")
                 .open(&mut self.show_congress)
                 .resizable(true).default_size([750.0, 450.0])
@@ -23646,7 +23652,9 @@ impl TyphooNApp {
                                     if !cong_active.is_empty() && !cong_active.iter().any(|s| s.eq_ignore_ascii_case(ticker)) { continue; }
                                     ui.label(egui::RichText::new(date).small().monospace());
                                     ui.label(egui::RichText::new(rep).small());
-                                    ui.label(egui::RichText::new(ticker).small().strong().color(egui::Color32::WHITE));
+                                    let (_, ct_action) = symbol_label_with_menu(ui, ticker,
+                                        egui::RichText::new(ticker).small().strong().color(egui::Color32::WHITE));
+                                    if !matches!(ct_action, SymbolAction::None) { cong_pending_action = ct_action; }
                                     let type_c = if tx_type.to_lowercase().contains("purchase") { UP } else { DOWN };
                                     ui.label(egui::RichText::new(tx_type).color(type_c).small());
                                     ui.label(egui::RichText::new(amount).small());
@@ -23662,6 +23670,7 @@ impl TyphooNApp {
                         });
                     }
                 });
+            self.apply_symbol_action(cong_pending_action);
         }
 
         // Crypto Backfill (CryptoCompare deep history)
@@ -24159,6 +24168,12 @@ impl TyphooNApp {
         // Fundamentals Viewer
         if self.show_fundamentals {
             let fund_tickers = self.active_symbols();
+            // UX7: Pre-fetch sparklines for all tickers in fundamentals window
+            let mut fw_sparklines: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+            for t in &fund_tickers {
+                let closes = self.get_sparkline(t);
+                if !closes.is_empty() { fw_sparklines.insert(t.to_uppercase(), closes); }
+            }
             egui::Window::new("Fundamentals")
                 .open(&mut self.show_fundamentals)
                 .resizable(true).default_size([600.0, 550.0])
@@ -24186,6 +24201,10 @@ impl TyphooNApp {
                     let found = self.bg.all_fundamentals.iter().find(|f| f.symbol == *ticker).cloned();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("Fundamentals: {}", ticker)).strong());
+                        // UX7: Inline sparkline next to ticker name
+                        if let Some(closes) = fw_sparklines.get(&ticker.to_uppercase()) {
+                            draw_inline_sparkline(ui, closes, 80.0, 18.0);
+                        }
                         if ui.add(egui::Button::new("Scrape / Refresh").fill(BTN_BLUE)).clicked() && !ticker.is_empty() {
                             let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                             let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrapeOne { ticker: ticker.clone(), db_path });
@@ -31677,9 +31696,12 @@ impl eframe::App for TyphooNApp {
                             ui.add_space(4.0);
                             if (self.broker_connected || self.lan_sync_mode == "client") && self.show_alpaca_positions && !self.live_orders.is_empty() {
                                 let mut cancel_id: Option<String> = None;
+                                let mut lo_action = SymbolAction::None;
                                 for order in &self.live_orders {
                                     ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new(&order.symbol).small().strong());
+                                        let (_, act) = symbol_label_with_menu(ui, &order.symbol,
+                                            egui::RichText::new(&order.symbol).small().strong());
+                                        if !matches!(act, SymbolAction::None) { lo_action = act; }
                                         let side_c = if order.side == "buy" { UP } else { DOWN };
                                         ui.label(egui::RichText::new(&order.side).color(side_c).small());
                                         ui.label(egui::RichText::new(&order.order_type).color(AXIS_TEXT).small());
@@ -31695,6 +31717,7 @@ impl eframe::App for TyphooNApp {
                                 if let Some(oid) = cancel_id {
                                     let _ = self.broker_tx.send(BrokerCmd::AlpacaCancelOrder { order_id: oid });
                                 }
+                                if !matches!(lo_action, SymbolAction::None) { self.deferred_symbol_action = lo_action; }
                             } else {
                                 let msg = if self.broker_connected || self.lan_sync_mode == "client" { "No open orders." } else { "Connect broker for live orders." };
                                 ui.label(egui::RichText::new(msg).color(AXIS_TEXT).small());
