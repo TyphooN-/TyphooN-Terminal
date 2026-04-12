@@ -8966,6 +8966,16 @@ struct Command {
     desc: &'static str,
 }
 
+/// Lowercased (name, desc) per COMMANDS index — built once, reused every frame
+/// by the palette's fuzzy scorer so we don't allocate two Strings per command
+/// per keystroke × 60 fps.
+static COMMANDS_LOWER: std::sync::LazyLock<Vec<(String, String)>> =
+    std::sync::LazyLock::new(|| {
+        COMMANDS.iter()
+            .map(|c| (c.name.to_lowercase(), c.desc.to_lowercase()))
+            .collect()
+    });
+
 const COMMANDS: &[Command] = &[
     // Core
     Command { name: "CONNECT",       desc: "Connect to broker (Alpaca / MT5)" },
@@ -9236,7 +9246,7 @@ const COMMANDS: &[Command] = &[
 
 #[cfg(test)]
 fn fuzzy_match(query: &str, target: &str) -> bool {
-    fuzzy_score(query, target).is_some()
+    fuzzy_score(&query.to_lowercase(), &target.to_lowercase()).is_some()
 }
 
 /// UX3: Deferred action from a symbol right-click context menu.
@@ -9307,15 +9317,12 @@ fn symbol_label_with_menu(ui: &mut egui::Ui, symbol: &str, label: egui::RichText
 
 /// Fuzzy subsequence match with score (lower = better, None = no match).
 /// "voutl" matches "VAROUTLIER" (subsequence), "SEC" matches "SEC Filings" (prefix bonus).
-fn fuzzy_score(query: &str, target: &str) -> Option<i32> {
-    let q = query.to_lowercase();
-    let t = target.to_lowercase();
+/// Expects both `q` and `t` to be **already lowercased** — caller pays the allocation once.
+fn fuzzy_score(q: &str, t: &str) -> Option<i32> {
     if q.is_empty() { return Some(1000); }
-    // Substring match gets best score
-    if let Some(pos) = t.find(&q) {
-        return Some(pos as i32); // earlier position = better
+    if let Some(pos) = t.find(q) {
+        return Some(pos as i32);
     }
-    // Subsequence match
     let mut score: i32 = 1000;
     let mut q_iter = q.chars().peekable();
     let mut last_match: i32 = -1;
@@ -10199,16 +10206,22 @@ pub struct TyphooNApp {
     /// (OUTLIERS, EVOUTLIERS, DARWINVAR, DIVSCREEN, SECTOR_HEATMAP, HV_CONE, EV viewer, etc.).
     /// All = no filter. Use `SCOPE [ALL|ALPACA|DARWINEX|TASTY]` command to change.
     broker_scope: EventSource,
-    /// Per-frame cached broker scope HashSet — invalidated each frame in update().
+    /// Cached broker scope HashSet. Invalidated by `(bg_rev, broker_scope)` pair —
+    /// only recomputed when fundamentals/specs load (bg_rev bumped) or scope changes.
     /// O(1) reads for the 5+ windows that need scope filtering.
     cached_scope_syms: Option<std::collections::HashSet<String>>,
-    cached_scope_frame: u64,
+    cached_scope_key: Option<(u64, EventSource)>,
+    /// Monotonic counter bumped each time `self.bg` is replaced from the BG thread.
+    /// Used as a dirty-flag for any cache derived from `bg.*` state.
+    bg_rev: u64,
     /// UX6: One-shot flag to auto-scroll outlier table to first EXTREME tier on next render.
     outlier_scroll_pending: bool,
     /// UX4: Named workspace presets — maps name → JSON snapshot of show_* flags.
     workspaces: std::collections::HashMap<String, String>,
     /// UX7: Sparkline cache — last 30 daily closes per symbol, lazy-fetched on first render.
-    sparkline_cache: std::collections::HashMap<String, Vec<f64>>,
+    /// PERF: values wrapped in Arc so `get_sparkline` returns O(1) clones instead of copying
+    /// the whole Vec<f64> on every cache hit (called for every visible window row per frame).
+    sparkline_cache: std::collections::HashMap<String, std::sync::Arc<Vec<f64>>>,
     /// PERF5: String interner for sector/industry names — dedups ~50 unique strings
     /// across thousands of fundamentals references during hot operations.
     sector_interner: std::collections::HashMap<String, std::sync::Arc<str>>,
@@ -10219,10 +10232,15 @@ pub struct TyphooNApp {
     cached_active_symbols_frame: u64,
     /// PERF: Per-frame HashSet of cached_active_symbols for O(1) lookup.
     cached_active_symbols_set: std::collections::HashSet<String>,
-    /// PERF: Per-frame cached scoped fundamentals (filtered by broker_scope).
-    /// Used by Sector Heatmap, Dividend Yield Screener, Outlier Scanner — was cloning Vec<Fundamentals> per render.
+    /// Cached scoped fundamentals (filtered by broker_scope). Rebuilt only when
+    /// `(bg_rev, broker_scope)` changes — not per frame. Used by Sector Heatmap,
+    /// Dividend Yield Screener, Outlier Scanner.
     cached_scoped_fundamentals: Vec<typhoon_engine::core::fundamentals::Fundamentals>,
-    cached_scoped_fundamentals_frame: u64,
+    cached_scoped_fundamentals_key: Option<(u64, EventSource)>,
+    /// MT5-tradable symbol set (uppercased, parsed from detailed_stats keys).
+    /// Rebuilt only when `bg_rev` changes — used by Outlier Scanner tradability column.
+    cached_mt5_symbols: std::collections::HashSet<String>,
+    cached_mt5_symbols_rev: Option<u64>,
     show_event_calendar: bool,
     event_calendar_rows: Vec<EventRow>,
     event_filter_source: EventSource,
@@ -12106,7 +12124,8 @@ impl TyphooNApp {
                                             if ratio > 1.5 {
                                                 let parts: Vec<&str> = key.split(':').collect();
                                                 let sym = if parts.len() >= 3 { parts[parts.len()-2] } else { key.as_str() };
-                                                results.push((sym.to_string(), today_vol, avg_vol, ratio));
+                                                // Upper-case once at creation so the per-frame filter below skips the alloc.
+                                                results.push((sym.to_uppercase(), today_vol, avg_vol, ratio));
                                             }
                                         }
                                     }
@@ -13300,7 +13319,8 @@ impl TyphooNApp {
             show_dividends: false,
             broker_scope: EventSource::Darwinex, // matches fund_source defaults (mt5=true, alpaca=false, tasty=false)
             cached_scope_syms: None,
-            cached_scope_frame: 0,
+            cached_scope_key: None,
+            bg_rev: 0,
             outlier_scroll_pending: false,
             workspaces: std::collections::HashMap::new(),
             sparkline_cache: std::collections::HashMap::with_capacity(256),
@@ -13310,7 +13330,9 @@ impl TyphooNApp {
             cached_active_symbols_frame: 0,
             cached_active_symbols_set: std::collections::HashSet::with_capacity(64),
             cached_scoped_fundamentals: Vec::new(),
-            cached_scoped_fundamentals_frame: 0,
+            cached_scoped_fundamentals_key: None,
+            cached_mt5_symbols: std::collections::HashSet::new(),
+            cached_mt5_symbols_rev: None,
             show_event_calendar: false,
             event_calendar_rows: Vec::new(),
             event_filter_source: EventSource::All,
@@ -13773,6 +13795,11 @@ impl TyphooNApp {
                         data.upcoming_dividends = fundamentals::get_upcoming_dividends(conn, 50).unwrap_or_default();
                         // Darwinex specs for broker_scope filtering (loaded from __SPECS__ CSV in bar_cache)
                         data.darwinex_specs = darwin::load_all_specs_parsed(conn).unwrap_or_default();
+                        // PERF: normalize SEC filing tickers to uppercase once so per-frame
+                        // scope filters can use O(1) `contains(ticker.as_str())` without allocating.
+                        for f in &mut data.sec_filings {
+                            f.ticker.make_ascii_uppercase();
+                        }
                         tracing::trace!("BG: Phase 1c done in {}ms", phase_start.elapsed().as_millis());
                         let _ = bg_tx.send(data.clone());
 
@@ -14135,7 +14162,10 @@ impl TyphooNApp {
                                 let all_trades = sec_filing::get_all_insider_trades(conn).unwrap_or_default();
                                 let mut insider_map: std::collections::HashMap<String, Vec<sec_filing::InsiderTrade>> = std::collections::HashMap::new();
                                 for trade in all_trades {
-                                    insider_map.entry(trade.ticker.clone()).or_default().push(trade);
+                                    // PERF: uppercase key so per-frame filters can skip the alloc.
+                                    let mut key = trade.ticker.clone();
+                                    key.make_ascii_uppercase();
+                                    insider_map.entry(key).or_default().push(trade);
                                 }
                                 data.insider_trades = insider_map;
                             }
@@ -14280,23 +14310,24 @@ impl TyphooNApp {
 
     /// Fundamentals filtered by the current `broker_scope`. Returns a Vec of refs
     /// (cheap — just pointers). Uses per-frame cached scope HashSet.
+    /// PERF: f.symbol is already uppercase (guaranteed by parse_yahoo_data), so we
+    /// skip the redundant to_uppercase allocation per record.
     fn scoped_fundamentals(&self) -> Vec<&typhoon_engine::core::fundamentals::Fundamentals> {
         match &self.cached_scope_syms {
             None => self.bg.all_fundamentals.iter().collect(),
             Some(set) => self.bg.all_fundamentals.iter()
-                .filter(|f| set.contains(&f.symbol.to_uppercase()))
+                .filter(|f| set.contains(f.symbol.as_str()))
                 .collect(),
         }
     }
 
     /// Owned-Vec variant for APIs that require `&[Fundamentals]`.
     /// When scope=All, returns a clone of the full list (no filter work).
-    /// Uses per-frame cached scope HashSet.
     fn scoped_fundamentals_owned(&self) -> Vec<typhoon_engine::core::fundamentals::Fundamentals> {
         match &self.cached_scope_syms {
             None => self.bg.all_fundamentals.clone(),
             Some(set) => self.bg.all_fundamentals.iter()
-                .filter(|f| set.contains(&f.symbol.to_uppercase()))
+                .filter(|f| set.contains(f.symbol.as_str()))
                 .cloned()
                 .collect(),
         }
@@ -17211,12 +17242,12 @@ impl TyphooNApp {
     }
 
     /// UX7: Lazily fetch 30 daily closes for a symbol from bar cache.
-    /// Returns slice of cached values if available, empty slice otherwise.
+    /// Returns Arc for O(1) clones — called per-row per-frame in open scanners.
     /// MEM: Soft-capped at 2000 entries (≈2000 × 30 × 8 bytes = ~480KB).
-    fn get_sparkline(&mut self, symbol: &str) -> Vec<f64> {
+    fn get_sparkline(&mut self, symbol: &str) -> std::sync::Arc<Vec<f64>> {
         let key = symbol.to_uppercase();
         if let Some(closes) = self.sparkline_cache.get(&key) {
-            return closes.clone();
+            return std::sync::Arc::clone(closes);
         }
         // Soft cap: drop random 25% if exceeded (no LRU bookkeeping cost)
         if self.sparkline_cache.len() > 2000 {
@@ -17235,15 +17266,17 @@ impl TyphooNApp {
                     if bars.len() >= 5 {
                         let take = bars.len().min(30);
                         let closes: Vec<f64> = bars.iter().rev().take(take).rev().map(|(_, _, _, _, c, _)| *c).collect();
-                        self.sparkline_cache.insert(key.clone(), closes.clone());
-                        return closes;
+                        let arc = std::sync::Arc::new(closes);
+                        self.sparkline_cache.insert(key.clone(), std::sync::Arc::clone(&arc));
+                        return arc;
                     }
                 }
             }
         }
         // Cache empty result to avoid retrying every frame
-        self.sparkline_cache.insert(key, Vec::new());
-        Vec::new()
+        let empty = std::sync::Arc::new(Vec::new());
+        self.sparkline_cache.insert(key, std::sync::Arc::clone(&empty));
+        empty
     }
 
     /// UX4: Built-in workspace presets — return JSON for known workspace names.
@@ -20314,7 +20347,7 @@ impl TyphooNApp {
                                                             ui.label(egui::RichText::new(&pos.side).color(side_c));
                                                             ui.label(format!("{:.2}", pos.total_volume));
                                                             ui.label(format_price(pos.avg_price));
-                                                            let darwins: Vec<String> = pos.darwin_breakdown.iter().map(|(d, _, _)| d.clone()).collect();
+                                                            let darwins: Vec<&str> = pos.darwin_breakdown.iter().map(|(d, _, _)| d.as_str()).collect();
                                                             ui.label(darwins.join(", "));
                                                             ui.end_row();
                                                         }
@@ -23343,7 +23376,7 @@ impl TyphooNApp {
                     ui.horizontal(|ui| {
                         let scoped_count = match &sec_scope_syms {
                             None => self.bg.sec_filings.len(),
-                            Some(set) => self.bg.sec_filings.iter().filter(|f| set.contains(&f.ticker.to_uppercase())).count(),
+                            Some(set) => self.bg.sec_filings.iter().filter(|f| set.contains(f.ticker.as_str())).count(),
                         };
                         let alert_count = self.bg.sec_alerts.len();
                         let insider_count: usize = self.bg.insider_trades.values().map(|v| v.len()).sum();
@@ -23403,9 +23436,9 @@ impl TyphooNApp {
                                     }
                                 });
                                 if !pass { continue; }
-                                // Broker scope filter
+                                // Broker scope filter (ticker normalized to uppercase at load).
                                 if let Some(ref set) = sec_scope_syms {
-                                    if !set.contains(&f.ticker.to_uppercase()) { continue; }
+                                    if !set.contains(f.ticker.as_str()) { continue; }
                                 }
                                 // Text search filter (client-side — instant)
                                 if !search_lower.is_empty() {
@@ -23682,8 +23715,9 @@ impl TyphooNApp {
                         let search_lower = self.sec_search_query.trim().to_lowercase();
                         let mut all_insider_trades: Vec<(&str, &sec_filing::InsiderTrade)> = Vec::new();
                         for (ticker, trades) in &self.bg.insider_trades {
+                            // insider_trades keys are normalized to uppercase at load.
                             if let Some(ref set) = sec_scope_syms {
-                                if !set.contains(&ticker.to_uppercase()) { continue; }
+                                if !set.contains(ticker.as_str()) { continue; }
                             }
                             for trade in trades {
                                 if !search_lower.is_empty() {
@@ -23771,7 +23805,7 @@ impl TyphooNApp {
                         let mut by_month: std::collections::BTreeMap<String, Vec<&sec_filing::SecFiling>> = std::collections::BTreeMap::new();
                         for f in &self.bg.sec_filings {
                             if let Some(ref set) = sec_scope_syms {
-                                if !set.contains(&f.ticker.to_uppercase()) { continue; }
+                                if !set.contains(f.ticker.as_str()) { continue; }
                             }
                             let month = if f.filing_date.len() >= 7 { &f.filing_date[..7] } else { &f.filing_date };
                             by_month.entry(month.to_string()).or_default().push(f);
@@ -23931,7 +23965,7 @@ impl TyphooNApp {
             let vol_active = if self.volume_active_only { self.cached_active_symbols.clone() } else { Vec::new() };
             let mut uv_pending_action = SymbolAction::None;
             // UX7: Pre-fetch sparklines for unusual volume symbols
-            let mut uv_sparklines: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+            let mut uv_sparklines: std::collections::HashMap<String, std::sync::Arc<Vec<f64>>> = std::collections::HashMap::new();
             for (sym, _, _, _) in self.unusual_volume_results.clone().iter().take(100) {
                 let closes = self.get_sparkline(sym);
                 if !closes.is_empty() { uv_sparklines.insert(sym.to_uppercase(), closes); }
@@ -23954,8 +23988,8 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Ratio").color(AXIS_TEXT).small().strong());
                             ui.end_row();
                             for (sym, today, avg, ratio) in &self.unusual_volume_results {
-                                // PERF: O(1) HashSet lookup instead of O(n) iter().any()
-                                if !vol_active.is_empty() && !self.cached_active_symbols_set.contains(&sym.to_uppercase()) { continue; }
+                                // PERF: sym is already uppercase (set at creation) — skip redundant alloc.
+                                if !vol_active.is_empty() && !self.cached_active_symbols_set.contains(sym.as_str()) { continue; }
                                 let ratio_c = if *ratio > 3.0 { egui::Color32::from_rgb(231, 76, 60) }
                                     else if *ratio > 2.0 { egui::Color32::from_rgb(241, 196, 15) }
                                     else { egui::Color32::from_rgb(46, 204, 113) };
@@ -24243,7 +24277,7 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new("Party").color(AXIS_TEXT).small().strong());
                                 ui.end_row();
                                 for (date, rep, ticker, tx_type, amount, party) in &self.congress_trades {
-                                    if !cong_active.is_empty() && !self.cached_active_symbols_set.contains(&ticker.to_uppercase()) { continue; }
+                                    if !cong_active.is_empty() && !self.cached_active_symbols_set.contains(ticker.as_str()) { continue; }
                                     ui.label(egui::RichText::new(date).small().monospace());
                                     ui.label(egui::RichText::new(rep).small());
                                     let (_, ct_action) = symbol_label_with_menu(ui, ticker,
@@ -24767,7 +24801,7 @@ impl TyphooNApp {
         if self.show_fundamentals {
             let fund_tickers = self.cached_active_symbols.clone();
             // UX7: Pre-fetch sparklines for all tickers in fundamentals window
-            let mut fw_sparklines: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+            let mut fw_sparklines: std::collections::HashMap<String, std::sync::Arc<Vec<f64>>> = std::collections::HashMap::new();
             for t in &fund_tickers {
                 let closes = self.get_sparkline(t);
                 if !closes.is_empty() { fw_sparklines.insert(t.to_uppercase(), closes); }
@@ -24946,7 +24980,7 @@ impl TyphooNApp {
                 .take(200)
                 .map(|f| f.symbol.clone())
                 .collect();
-            let mut sparklines: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+            let mut sparklines: std::collections::HashMap<String, std::sync::Arc<Vec<f64>>> = std::collections::HashMap::new();
             for sym in &visible_syms {
                 let closes = self.get_sparkline(sym);
                 if !closes.is_empty() { sparklines.insert(sym.to_uppercase(), closes); }
@@ -24968,7 +25002,7 @@ impl TyphooNApp {
                     // PERF: cached_scoped_fundamentals already applied scope filter — only need active filter
                     // O(1) HashSet lookup instead of O(n) iter().any()
                     let mut fund_sorted: Vec<&_> = self.cached_scoped_fundamentals.iter()
-                        .filter(|f| ev_active.is_empty() || self.cached_active_symbols_set.contains(&f.symbol.to_uppercase()))
+                        .filter(|f| ev_active.is_empty() || self.cached_active_symbols_set.contains(f.symbol.as_str()))
                         .collect();
                     match self.ev_sort.column {
                         0 => fund_sorted.sort_by(|a, b| a.symbol.cmp(&b.symbol)),
@@ -25051,7 +25085,8 @@ impl TyphooNApp {
                             ui.end_row();
                             let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
                             for (sym, company, date) in &self.bg.upcoming_earnings {
-                                if !earn_active.is_empty() && !self.cached_active_symbols_set.contains(&sym.to_uppercase()) { continue; }
+                                // PERF: fundamentals.symbol is always uppercase (parse_yahoo_data).
+                                if !earn_active.is_empty() && !self.cached_active_symbols_set.contains(sym.as_str()) { continue; }
                                 let days_away = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok().and_then(|d| {
                                     chrono::NaiveDate::parse_from_str(&today, "%Y-%m-%d").ok().map(|t| (d - t).num_days())
                                 });
@@ -25091,7 +25126,8 @@ impl TyphooNApp {
                             ui.strong("Ex-Div Date"); ui.strong("Symbol"); ui.strong("Company"); ui.strong("Yield%");
                             ui.end_row();
                             for (sym, company, date, yld) in &self.bg.upcoming_dividends {
-                                if !div_active.is_empty() && !self.cached_active_symbols_set.contains(&sym.to_uppercase()) { continue; }
+                                // PERF: fundamentals.symbol is always uppercase.
+                                if !div_active.is_empty() && !self.cached_active_symbols_set.contains(sym.as_str()) { continue; }
                                 ui.label(egui::RichText::new(date).color(AXIS_TEXT).small());
                                 let (_, dc_action) = symbol_label_with_menu(ui, sym,
                                     egui::RichText::new(sym).small().strong().monospace());
@@ -25794,7 +25830,7 @@ impl TyphooNApp {
             let mut div_pending_action = SymbolAction::None;
             // UX7: Pre-fetch sparklines for dividend stocks
             let divs_for_sl = typhoon_engine::core::screener::screen_dividend_stocks(&scoped);
-            let mut div_sparklines: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+            let mut div_sparklines: std::collections::HashMap<String, std::sync::Arc<Vec<f64>>> = std::collections::HashMap::new();
             for d in divs_for_sl.iter().take(100) {
                 let closes = self.get_sparkline(&d.symbol);
                 if !closes.is_empty() { div_sparklines.insert(d.symbol.to_uppercase(), closes); }
@@ -26898,7 +26934,7 @@ impl TyphooNApp {
             // UX7: pre-fetch sparklines for top outlier symbols
             let mut outlier_syms: Vec<String> = self.darwinex_outliers.iter().take(200).map(|o| o.symbol.clone()).collect();
             outlier_syms.extend(self.darwinex_multi_outliers.iter().take(200).map(|o| o.symbol.clone()));
-            let mut outlier_sparklines: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+            let mut outlier_sparklines: std::collections::HashMap<String, std::sync::Arc<Vec<f64>>> = std::collections::HashMap::new();
             for sym in &outlier_syms {
                 let closes = self.get_sparkline(sym);
                 if !closes.is_empty() { outlier_sparklines.insert(sym.to_uppercase(), closes); }
@@ -26977,15 +27013,9 @@ impl TyphooNApp {
                                 if SortState::header(ui, "Short z", 8, &self.outlier_sort) { self.outlier_sort.toggle(8); }
                                 if SortState::header(ui, "SEC z", 9, &self.outlier_sort) { self.outlier_sort.toggle(9); }
                                 ui.end_row();
-                                // Build tradability set from MT5 cache keys
-                                let mt5_symbols: std::collections::HashSet<String> = self.bg.detailed_stats.iter()
-                                    .filter(|(k, _, _)| k.starts_with("mt5:"))
-                                    .map(|(k, _, _)| {
-                                        let parts: Vec<&str> = k.split(':').collect();
-                                        if parts.len() >= 3 { parts[parts.len()-2].to_uppercase() } else { String::new() }
-                                    })
-                                    .filter(|s| !s.is_empty())
-                                    .collect();
+                                // PERF: tradability set is cached on self.cached_mt5_symbols —
+                                // rebuilt only on bg_rev change, not per frame.
+                                let mt5_symbols = &self.cached_mt5_symbols;
 
                                 for o in sorted_outliers.iter().take(200) {
                                     let tier_c = match o.tier.as_str() {
@@ -26994,15 +27024,16 @@ impl TyphooNApp {
                                     let z_color = |z: f64| -> egui::Color32 {
                                         if z.abs() > 2.0 { ol_high } else if z.abs() > 1.5 { ol_med } else { ol_dim }
                                     };
-                                    // Tradability: green dot = in MT5 (tradable), dim = close-only
-                                    let tradable = mt5_symbols.contains(&o.symbol.to_uppercase());
+                                    // Tradability: green dot = in MT5 (tradable), dim = close-only.
+                                    // o.symbol is guaranteed uppercase (built from Fundamentals).
+                                    let tradable = mt5_symbols.contains(o.symbol.as_str());
                                     let sym_color = if tradable { egui::Color32::WHITE } else { egui::Color32::from_rgb(80, 80, 90) };
                                     let trade_icon = if tradable { "\u{25CF} " } else { "\u{25CB} " };
                                     let (_, action) = symbol_label_with_menu(ui, &o.symbol,
                                         egui::RichText::new(format!("{}{}", trade_icon, o.symbol)).small().strong().color(sym_color));
                                     if !matches!(action, SymbolAction::None) { pending_action = action; }
-                                    // UX7: Sparkline column
-                                    if let Some(closes) = outlier_sparklines.get(&o.symbol.to_uppercase()) {
+                                    // UX7: Sparkline column (o.symbol is already uppercase).
+                                    if let Some(closes) = outlier_sparklines.get(o.symbol.as_str()) {
                                         draw_inline_sparkline(ui, closes, 50.0, 12.0);
                                     } else {
                                         ui.label(egui::RichText::new("—").color(ol_dim).small());
@@ -27095,8 +27126,8 @@ impl TyphooNApp {
                                         sym_resp.scroll_to_me(Some(egui::Align::Center));
                                         scrolled = true;
                                     }
-                                    // UX7: Sparkline column
-                                    if let Some(closes) = outlier_sparklines.get(&o.symbol.to_uppercase()) {
+                                    // UX7: Sparkline column (o.symbol is already uppercase).
+                                    if let Some(closes) = outlier_sparklines.get(o.symbol.as_str()) {
                                         draw_inline_sparkline(ui, closes, 50.0, 12.0);
                                     } else {
                                         ui.label(egui::RichText::new("—").color(ol_dim).small());
@@ -28937,22 +28968,40 @@ impl eframe::App for TyphooNApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_count += 1;
-        // PERF2: Recompute scope HashSet once per frame (5+ windows read it).
-        // Invalidates each frame to pick up live changes (positions, radar data).
-        if self.cached_scope_frame != self.frame_count {
+        // PERF: rebuild scope HashSet only when bg data loaded or scope changed,
+        // not every frame. Steady state = zero work.
+        let scope_key = (self.bg_rev, self.broker_scope);
+        if self.cached_scope_key != Some(scope_key) {
             self.cached_scope_syms = self.broker_scope_symbols();
-            self.cached_scope_frame = self.frame_count;
+            self.cached_scope_key = Some(scope_key);
         }
         // PERF: Cache active_symbols() + HashSet once per frame (used by 5+ windows for "Active Only" filters)
+        // TODO: could also switch to rev-based but positions change independently of bg_rev.
         if self.cached_active_symbols_frame != self.frame_count {
             self.cached_active_symbols = self.active_symbols();
             self.cached_active_symbols_set = self.cached_active_symbols.iter().cloned().collect();
             self.cached_active_symbols_frame = self.frame_count;
         }
-        // PERF: Cache scoped_fundamentals_owned() once per frame (used by 3 windows + outlier scanner)
-        if self.cached_scoped_fundamentals_frame != self.frame_count {
+        // PERF: Cache scoped_fundamentals_owned() only when bg/scope changes — not per frame.
+        // Was cloning ~500 Fundamentals structs (≈1 MB) every frame for no reason.
+        if self.cached_scoped_fundamentals_key != Some(scope_key) {
             self.cached_scoped_fundamentals = self.scoped_fundamentals_owned();
-            self.cached_scoped_fundamentals_frame = self.frame_count;
+            self.cached_scoped_fundamentals_key = Some(scope_key);
+        }
+        // PERF: Cache MT5-tradable symbol set (used by outlier scanner tradability column).
+        // Was rebuilding per frame by scanning detailed_stats cache keys.
+        if self.cached_mt5_symbols_rev != Some(self.bg_rev) {
+            self.cached_mt5_symbols = self.bg.detailed_stats.iter()
+                .filter(|(k, _, _)| k.starts_with("mt5:"))
+                .filter_map(|(k, _, _)| {
+                    // Avoid `split(':').collect::<Vec<_>>()`: use rsplit to read only what we need.
+                    let mut parts = k.rsplit(':');
+                    let _tf = parts.next()?;
+                    let sym = parts.next()?;
+                    if sym.is_empty() { None } else { Some(sym.to_uppercase()) }
+                })
+                .collect();
+            self.cached_mt5_symbols_rev = Some(self.bg_rev);
         }
         ctx.set_visuals(Self::dark_visuals());
         // Bound log size to prevent unbounded memory growth.
@@ -29346,6 +29395,7 @@ impl eframe::App for TyphooNApp {
                 self.darwinex_radar_data = data.darwinex_specs.clone();
             }
             self.bg = data;
+            self.bg_rev = self.bg_rev.wrapping_add(1);
         }
 
         // ── LAN client: load server's broker positions/account from KV cache ──
@@ -29888,6 +29938,11 @@ impl eframe::App for TyphooNApp {
                 }
                 BrokerMsg::CongressData(trades) => {
                     self.congress_trades = trades;
+                    // PERF: normalize ticker to uppercase once so per-frame scope filter
+                    // skips the alloc on every render.
+                    for row in &mut self.congress_trades {
+                        row.2.make_ascii_uppercase();
+                    }
                     self.log.push_back(LogEntry::info(format!("Congressional trades: {} loaded", self.congress_trades.len())));
                 }
                 BrokerMsg::UnusualVolumeResults(results) => {
@@ -32226,7 +32281,8 @@ impl eframe::App for TyphooNApp {
                                             let pl_c = if pos.notional >= 0.0 { UP } else { DOWN };
                                             ui.label(egui::RichText::new(format!("${:.0}", pos.notional)).color(pl_c).small());
                                         });
-                                        let darwins: Vec<String> = pos.darwin_breakdown.iter().map(|(d, _, _)| d.clone()).collect();
+                                        // PERF: &str join skips N String::clone() allocations per frame per position.
+                                        let darwins: Vec<&str> = pos.darwin_breakdown.iter().map(|(d, _, _)| d.as_str()).collect();
                                         ui.label(egui::RichText::new(darwins.join(", ")).color(AXIS_TEXT).small());
                                         ui.separator();
                                     }
@@ -32243,7 +32299,7 @@ impl eframe::App for TyphooNApp {
                                             ui.label(egui::RichText::new(format!("{:.2}", pos.total_volume)).small().color(dim));
                                             ui.label(egui::RichText::new(format!("${:.0}", pos.notional)).color(dim).small());
                                         });
-                                        let darwins: Vec<String> = pos.darwin_breakdown.iter().map(|(d, _, _)| d.clone()).collect();
+                                        let darwins: Vec<&str> = pos.darwin_breakdown.iter().map(|(d, _, _)| d.as_str()).collect();
                                         ui.label(egui::RichText::new(darwins.join(", ")).color(egui::Color32::from_rgb(60, 60, 70)).small());
                                         ui.separator();
                                     }
@@ -35186,13 +35242,17 @@ impl eframe::App for TyphooNApp {
                 }
                 cmds
             } else {
+                // PERF: lowercase the query ONCE, read pre-lowercased name/desc from COMMANDS_LOWER.
+                let query_lower = self.command_input.to_lowercase();
                 let mut scored: Vec<(i32, &Command)> = COMMANDS
                     .iter()
-                    .filter_map(|c| {
+                    .enumerate()
+                    .filter_map(|(idx, c)| {
                         let ctx_match = context_filter.map_or(true, |allowed| allowed.contains(&c.name));
                         if !ctx_match { return None; }
-                        let name_score = fuzzy_score(&self.command_input, c.name);
-                        let desc_score = fuzzy_score(&self.command_input, c.desc).map(|s| s + 500);
+                        let (ref name_lc, ref desc_lc) = COMMANDS_LOWER[idx];
+                        let name_score = fuzzy_score(&query_lower, name_lc);
+                        let desc_score = fuzzy_score(&query_lower, desc_lc).map(|s| s + 500);
                         match (name_score, desc_score) {
                             (Some(n), Some(d)) => Some((n.min(d), c)),
                             (Some(n), None) => Some((n, c)),

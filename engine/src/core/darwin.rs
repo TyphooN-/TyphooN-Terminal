@@ -2624,9 +2624,12 @@ pub fn get_sector_exposure(conn: &Connection) -> Result<Vec<SectorExposure>, Str
         return Ok(vec![]);
     }
 
-    // Compute total notional for percentage calculation
-    let mut sector_map: std::collections::HashMap<String, (Vec<String>, f64, f64)> =
-        std::collections::HashMap::new();
+    // Compute total notional for percentage calculation.
+    // HashSet<String> for symbols → O(1) dedup vs O(N) Vec::contains in the inner loop.
+    let mut sector_map: std::collections::HashMap<
+        String,
+        (std::collections::HashSet<String>, f64, f64),
+    > = std::collections::HashMap::new();
 
     let mut total_notional = 0.0f64;
 
@@ -2637,10 +2640,8 @@ pub fn get_sector_exposure(conn: &Connection) -> Result<Vec<SectorExposure>, Str
 
         let entry = sector_map
             .entry(sector)
-            .or_insert_with(|| (Vec::new(), 0.0, 0.0));
-        if !entry.0.contains(&pos.symbol) {
-            entry.0.push(pos.symbol.clone());
-        }
+            .or_insert_with(|| (std::collections::HashSet::new(), 0.0, 0.0));
+        entry.0.insert(pos.symbol.clone());
         if pos.side == "buy" {
             entry.1 += notional;
         } else {
@@ -2657,9 +2658,11 @@ pub fn get_sector_exposure(conn: &Connection) -> Result<Vec<SectorExposure>, Str
             } else {
                 0.0
             };
+            let mut syms: Vec<String> = symbols.into_iter().collect();
+            syms.sort();
             SectorExposure {
                 sector,
-                symbols,
+                symbols: syms,
                 long_notional: long_n,
                 short_notional: short_n,
                 net_notional: net,

@@ -1352,14 +1352,26 @@ impl SqliteCache {
             .filter_map(|r| r.ok())
             .collect();
         drop(stmt);
-        let mut freed: i64 = 0;
-        let mut evicted: usize = 0;
+        // Collect keys to delete up to target_free, then issue a single bulk DELETE.
+        // Single-statement bulk DELETE is ~100× faster than per-row roundtrips when
+        // the eviction batch is large.
         let target_free = total - max_bytes;
+        let mut freed: i64 = 0;
+        let mut keys_to_delete: Vec<String> = Vec::new();
         for (key, size) in rows {
             if freed >= target_free { break; }
-            if conn.execute("DELETE FROM bar_cache WHERE key = ?1", [&key]).is_ok() {
-                freed += size;
-                evicted += 1;
+            keys_to_delete.push(key);
+            freed += size;
+        }
+        let evicted = keys_to_delete.len();
+        if !keys_to_delete.is_empty() {
+            // Chunked to stay within SQLITE_MAX_VARIABLE_NUMBER (32766 in modern sqlite)
+            const CHUNK: usize = 512;
+            for chunk in keys_to_delete.chunks(CHUNK) {
+                let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(",");
+                let sql = format!("DELETE FROM bar_cache WHERE key IN ({placeholders})");
+                let params_refs: Vec<&dyn rusqlite::types::ToSql> = chunk.iter().map(|k| k as &dyn rusqlite::types::ToSql).collect();
+                conn.execute(&sql, params_refs.as_slice()).map_err(|e| format!("Bulk evict delete failed: {e}"))?;
             }
         }
         Ok((evicted, freed))

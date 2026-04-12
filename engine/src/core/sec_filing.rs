@@ -769,22 +769,29 @@ pub async fn scrape_all_portfolio_symbols(db_path: PathBuf) -> Result<ScrapeStat
         errors: Vec::new(),
     };
 
-    for sym in &symbols {
-        // Check if already scraped today (blocking)
+    // PERF: single batch load of last_scrape_date for ALL tickers — was N
+    // connection opens + N queries inside the per-symbol loop.
+    let scrape_dates: std::collections::HashMap<String, String> = {
         let db = db_path.clone();
-        let s = sym.clone();
-        let today2 = today.clone();
-        let skip = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || -> Result<_, String> {
             let conn = open_conn(&db)?;
-            let last: Option<String> = conn.query_row(
-                "SELECT last_scrape_date FROM sec_scrape_index WHERE ticker = ?1",
-                params![s],
-                |row| row.get(0),
-            ).ok().flatten();
-            Ok::<_, String>(last.as_deref() == Some(today2.as_str()))
-        }).await.map_err(|e| format!("spawn_blocking: {e}"))??;
+            let mut stmt = conn.prepare(
+                "SELECT ticker, last_scrape_date FROM sec_scrape_index WHERE last_scrape_date IS NOT NULL"
+            ).map_err(|e| format!("prepare scrape_index: {e}"))?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            }).map_err(|e| format!("query scrape_index: {e}"))?;
+            let mut map = std::collections::HashMap::with_capacity(256);
+            for r in rows.flatten() { map.insert(r.0, r.1); }
+            Ok(map)
+        }).await.map_err(|e| format!("spawn_blocking: {e}"))??
+    };
 
-        if skip { continue; }
+    for sym in &symbols {
+        // O(1) HashMap lookup replaces the N+1 per-symbol SELECT.
+        if scrape_dates.get(sym).map(|d| d.as_str()) == Some(today.as_str()) {
+            continue;
+        }
 
         // Look up CIK
         let cik = match get_cik(&db_path, &client, sym).await {
