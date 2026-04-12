@@ -270,7 +270,9 @@ pub async fn fetch_ev_from_sec(
 // ── Yahoo Finance API ───────────────────────────────────────────────
 
 /// Yahoo Finance quoteSummary modules we need.
-const YAHOO_MODULES: &str = "financialData,defaultKeyStatistics,calendarEvents,summaryProfile,summaryDetail,earningsHistory,institutionOwnership,incomeStatementHistoryQuarterly,cashflowStatementHistoryQuarterly,price";
+/// `summaryProfile` covers equities (sector/industry); `fundProfile` + `quoteType`
+/// cover ETFs (categoryName, legalType) since ETFs return an empty summaryProfile.
+const YAHOO_MODULES: &str = "financialData,defaultKeyStatistics,calendarEvents,summaryProfile,summaryDetail,earningsHistory,institutionOwnership,incomeStatementHistoryQuarterly,cashflowStatementHistoryQuarterly,price,fundProfile,quoteType";
 
 /// Yahoo Finance session with crumb authentication.
 /// Yahoo requires a crumb token (CSRF) obtained from a cookie-authenticated session.
@@ -384,11 +386,62 @@ pub fn parse_yahoo_data(ticker: &str, yahoo: &serde_json::Value) -> Fundamentals
         ..Default::default()
     };
 
-    // summaryProfile
+    // summaryProfile (equities) — may be empty for ETFs/mutual funds
     if let Some(p) = yahoo.get("summaryProfile") {
         f.sector = p.get("sector").and_then(|v| v.as_str()).unwrap_or("").to_string();
         f.industry = p.get("industry").and_then(|v| v.as_str()).unwrap_or("").to_string();
         f.description = p.get("longBusinessSummary").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    }
+
+    // ETF/fund fallback: when summaryProfile is empty, pull from fundProfile + quoteType.
+    // Yahoo returns sector/industry only for operating companies — ETFs and mutual
+    // funds use fundProfile.categoryName ("Large Blend", "Emerging Markets", etc.)
+    // and quoteType.quoteType ("ETF", "MUTUALFUND") for classification.
+    if f.sector.is_empty() && f.industry.is_empty() {
+        let qt = yahoo.get("quoteType")
+            .and_then(|q| q.get("quoteType"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if let Some(fp) = yahoo.get("fundProfile") {
+            let category = fp.get("categoryName").and_then(|v| v.as_str()).unwrap_or("");
+            let family = fp.get("family").and_then(|v| v.as_str()).unwrap_or("");
+            let legal_type = fp.get("legalType").and_then(|v| v.as_str()).unwrap_or("");
+            if !category.is_empty() || !family.is_empty() || !legal_type.is_empty() {
+                // Sector bucket: "ETF" / "MUTUALFUND" / fallback to legalType
+                f.sector = match qt {
+                    "ETF" => "ETF".to_string(),
+                    "MUTUALFUND" => "Mutual Fund".to_string(),
+                    _ if !legal_type.is_empty() => legal_type.to_string(),
+                    _ => "Fund".to_string(),
+                };
+                // Industry: fund category (asset class + style), e.g. "Large Blend"
+                f.industry = if !category.is_empty() {
+                    category.to_string()
+                } else {
+                    legal_type.to_string()
+                };
+                // Description: family + category as a quick label
+                if f.description.is_empty() {
+                    f.description = if !family.is_empty() {
+                        format!("{family} — {category}")
+                    } else {
+                        category.to_string()
+                    };
+                }
+            }
+        }
+        // Last resort: use quoteType alone if even fundProfile is missing
+        if f.sector.is_empty() && !qt.is_empty() && qt != "EQUITY" {
+            f.sector = match qt {
+                "ETF" => "ETF".to_string(),
+                "MUTUALFUND" => "Mutual Fund".to_string(),
+                "CRYPTOCURRENCY" => "Crypto".to_string(),
+                "CURRENCY" => "FX".to_string(),
+                "INDEX" => "Index".to_string(),
+                "FUTURE" => "Futures".to_string(),
+                other => other.to_string(),
+            };
+        }
     }
 
     // price module
@@ -1308,6 +1361,76 @@ mod tests {
         // mcap_ev_ratio = 100k / 125k * 100 = 80.0
         let ratio = f.mcap_ev_ratio.unwrap();
         assert!((ratio - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_yahoo_data_etf_fallback() {
+        // ETFs return an empty summaryProfile — sector/industry must fall back to
+        // fundProfile.categoryName + quoteType.quoteType = "ETF".
+        let yahoo = serde_json::json!({
+            "quoteType": { "quoteType": "ETF" },
+            "fundProfile": {
+                "family": "iShares",
+                "categoryName": "Large Blend",
+                "legalType": "Exchange Traded Fund"
+            },
+            "price": {
+                "shortName": "iShares Core S&P 500 ETF",
+                "marketCap": { "raw": 500_000_000_000.0 },
+                "regularMarketPrice": { "raw": 500.0 }
+            }
+        });
+
+        let f = parse_yahoo_data("IVV", &yahoo);
+        assert_eq!(f.symbol, "IVV");
+        assert_eq!(f.sector, "ETF");
+        assert_eq!(f.industry, "Large Blend");
+        assert!(f.description.contains("iShares"));
+        assert!(f.description.contains("Large Blend"));
+    }
+
+    #[test]
+    fn parse_yahoo_data_mutual_fund_fallback() {
+        // Mutual funds use the same fundProfile path but with a different sector bucket.
+        let yahoo = serde_json::json!({
+            "quoteType": { "quoteType": "MUTUALFUND" },
+            "fundProfile": {
+                "family": "Vanguard",
+                "categoryName": "Emerging Markets",
+                "legalType": "Open End Fund"
+            }
+        });
+        let f = parse_yahoo_data("VEMAX", &yahoo);
+        assert_eq!(f.sector, "Mutual Fund");
+        assert_eq!(f.industry, "Emerging Markets");
+    }
+
+    #[test]
+    fn parse_yahoo_data_quotetype_last_resort() {
+        // When fundProfile is absent but quoteType identifies a non-equity instrument,
+        // sector should still get a meaningful bucket.
+        let yahoo = serde_json::json!({
+            "quoteType": { "quoteType": "CRYPTOCURRENCY" }
+        });
+        let f = parse_yahoo_data("BTC-USD", &yahoo);
+        assert_eq!(f.sector, "Crypto");
+    }
+
+    #[test]
+    fn parse_yahoo_data_equity_unchanged_by_fallback() {
+        // A regular equity with a populated summaryProfile must NOT get overwritten
+        // by the ETF fallback branch.
+        let yahoo = serde_json::json!({
+            "summaryProfile": {
+                "sector": "Technology",
+                "industry": "Semiconductors"
+            },
+            "quoteType": { "quoteType": "EQUITY" },
+            "fundProfile": { "categoryName": "SHOULD NOT BE USED" }
+        });
+        let f = parse_yahoo_data("NVDA", &yahoo);
+        assert_eq!(f.sector, "Technology");
+        assert_eq!(f.industry, "Semiconductors");
     }
 
     #[test]
