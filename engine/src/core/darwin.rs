@@ -2926,8 +2926,9 @@ pub fn compute_trade_autocorrelation(
     conn: &Connection,
     darwin_ticker: &str,
 ) -> Result<AutocorrelationResult, String> {
+    // prepare_cached: called once per DARWIN account.
     let mut stmt = conn
-        .prepare(
+        .prepare_cached(
             "SELECT profit FROM darwin_positions WHERE account = ?1 ORDER BY open_time, id",
         )
         .map_err(|e| format!("Prepare failed: {e}"))?;
@@ -2942,9 +2943,17 @@ pub fn compute_trade_autocorrelation(
         return Err("Insufficient trades for autocorrelation analysis (need >= 10)".into());
     }
 
+    // Single-pass mean + population variance.
     let n = profits.len();
-    let mean = profits.iter().sum::<f64>() / n as f64;
-    let variance: f64 = profits.iter().map(|p| (p - mean).powi(2)).sum::<f64>() / n as f64;
+    let mut sum = 0.0f64;
+    let mut sum_sq = 0.0f64;
+    for &p in &profits {
+        sum += p;
+        sum_sq += p * p;
+    }
+    let n_f = n as f64;
+    let mean = sum / n_f;
+    let variance: f64 = ((sum_sq / n_f) - mean * mean).max(0.0);
 
     let autocorrelation = |lag: usize| -> f64 {
         if lag >= n || variance.abs() < 1e-15 {

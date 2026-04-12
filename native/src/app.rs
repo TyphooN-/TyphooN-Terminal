@@ -10356,9 +10356,9 @@ pub struct TyphooNApp {
     // Web server (phone access over LAN)
     web_server_running: bool,
     /// Hash-based dedup for broker KV writes — skip put_kv if content unchanged
-    kv_write_hashes: std::collections::HashMap<String, u64>,
+    kv_write_hashes: std::collections::HashMap<&'static str, u64>,
     /// Throttle: last write time per KV key (max once per 30s even if content changes)
-    kv_write_times: std::collections::HashMap<String, std::time::Instant>,
+    kv_write_times: std::collections::HashMap<&'static str, std::time::Instant>,
     web_cmd_rx: Option<tokio::sync::mpsc::UnboundedReceiver<typhoon_web_protocol::WebCmd>>,
     web_msg_tx: Option<tokio::sync::broadcast::Sender<typhoon_web_protocol::WebMsg>>,
     // DARWIN FTP browser
@@ -14259,7 +14259,8 @@ impl TyphooNApp {
 
     /// Write to KV cache only if content changed AND at least 30s since last write.
     /// Reduces KV timestamp churn → less LAN sync traffic.
-    fn put_kv_dedup(&mut self, key: &str, json: &str) {
+    /// Key is `&'static str` so hashmap inserts don't allocate a new String per call.
+    fn put_kv_dedup(&mut self, key: &'static str, json: &str) {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         json.hash(&mut h);
@@ -14275,8 +14276,8 @@ impl TyphooNApp {
         if let Some(ref cache) = self.cache {
             let _ = cache.put_kv(key, json);
         }
-        self.kv_write_hashes.insert(key.to_string(), hash);
-        self.kv_write_times.insert(key.to_string(), now);
+        self.kv_write_hashes.insert(key, hash);
+        self.kv_write_times.insert(key, now);
     }
 
     /// Get all "active" symbols: chart tabs + open positions from ticked brokers + watchlist.
