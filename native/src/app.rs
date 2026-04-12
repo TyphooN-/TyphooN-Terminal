@@ -12345,26 +12345,70 @@ impl TyphooNApp {
                                     } else { None }
                                 }).unwrap_or_else(|| symbol.clone())
                             };
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                                format!("Fetching {} {} bars from Alpaca...", api_symbol, timeframe)
-                            ));
-                            match b.get_bars(&api_symbol, tf_alpaca, 1000).await {
-                                Ok(bars) => {
-                                    let count = bars.len();
-                                    if count > 0 {
-                                        // Store in cache as alpaca: prefix
-                                        if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                                            let json = serde_json::to_string(&bars).unwrap_or_default();
-                                            let key = format!("alpaca:{}:{}", symbol, timeframe);
-                                            let _ = cache.put_bars(&key, &json);
+                            // Incremental fetch: look up the second-to-last cached bar timestamp
+                            // and pass it to the API so we only pull the delta since the last sync
+                            // instead of re-fetching the full lookback window every call.
+                            let cache_key = format!("alpaca:{}:{}", symbol, timeframe);
+                            let after_ts: Option<String> = shared_cache_broker.read().ok()
+                                .and_then(|g| g.clone())
+                                .and_then(|c| c.get_incremental_start(&cache_key).ok().flatten())
+                                .map(|(ts, _)| ts);
+                            if let Some(ref ts) = after_ts {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
+                                    format!("Fetching {} {} delta since {} from Alpaca...",
+                                        api_symbol, timeframe, &ts[..19.min(ts.len())])
+                                ));
+                            } else {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
+                                    format!("Fetching {} {} bars from Alpaca (full lookback)...",
+                                        api_symbol, timeframe)
+                                ));
+                            }
+                            match b.get_bars_after(&api_symbol, tf_alpaca, 1000, after_ts.as_deref()).await {
+                                Ok(new_bars) => {
+                                    if new_bars.is_empty() && after_ts.is_some() {
+                                        // Nothing new since last sync — cache stays as-is.
+                                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
+                                            format!("{} {} already up to date", symbol, timeframe)
+                                        ));
+                                    } else if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                        // Merge new bars with existing cached bars, dedupe by timestamp,
+                                        // then write the combined series back to the cache.
+                                        let merged: Vec<_> = if after_ts.is_some() {
+                                            // Read existing bars, merge, dedupe.
+                                            match cache.get_bars_raw(&cache_key) {
+                                                Ok(Some(existing_raw)) => {
+                                                    let mut combined: Vec<typhoon_engine::broker::alpaca::Bar> = existing_raw.into_iter()
+                                                        .map(|(ts_ms, o, h, l, c, v)| {
+                                                            let dt = chrono::DateTime::from_timestamp_millis(ts_ms).unwrap_or_default();
+                                                            typhoon_engine::broker::alpaca::Bar {
+                                                                timestamp: dt.to_rfc3339(),
+                                                                open: o, high: h, low: l, close: c, volume: v,
+                                                            }
+                                                        })
+                                                        .collect();
+                                                    combined.extend(new_bars);
+                                                    combined.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+                                                    combined.dedup_by(|a, b| a.timestamp == b.timestamp);
+                                                    combined
+                                                }
+                                                _ => new_bars,
+                                            }
+                                        } else {
+                                            new_bars
+                                        };
+                                        let count = merged.len();
+                                        if count > 0 {
+                                            let json = serde_json::to_string(&merged).unwrap_or_default();
+                                            let _ = cache.put_bars(&cache_key, &json);
                                             let _ = broker_msg_tx_clone.send(BrokerMsg::BarsFetched {
                                                 symbol: symbol.clone(), timeframe: timeframe.clone(), count,
                                             });
+                                        } else {
+                                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
+                                                format!("No bars returned for {} {}", symbol, timeframe)
+                                            ));
                                         }
-                                    } else {
-                                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                                            format!("No bars returned for {} {}", symbol, timeframe)
-                                        ));
                                     }
                                 }
                                 Err(e) => {
