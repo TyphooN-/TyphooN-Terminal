@@ -353,14 +353,21 @@ pub struct SectorStats {
 
 /// Detect outliers using IQR method, grouped by sector.
 /// Returns (outliers, sector_stats).
+/// PERF5: Uses Arc<str> internally for sector deduplication — each unique sector
+/// string is allocated once, then Arc::clone()'d (cheap refcount bump) per outlier.
 pub fn detect_outliers(
     data: &[(String, String, f64)], // (symbol, sector, metric_value)
     iqr_multiplier: f64, // typically 1.5 for standard, 3.0 for extreme
 ) -> (Vec<OutlierResult>, Vec<SectorStats>) {
-    // Group by sector
-    let mut by_sector: std::collections::HashMap<String, Vec<(String, f64)>> = std::collections::HashMap::new();
+    use std::sync::Arc;
+    // Intern sector names — one allocation per unique sector
+    let mut sector_intern: std::collections::HashMap<&str, Arc<str>> = std::collections::HashMap::new();
+    let mut by_sector: std::collections::HashMap<Arc<str>, Vec<(&str, f64)>> = std::collections::HashMap::new();
     for (sym, sector, val) in data {
-        by_sector.entry(sector.clone()).or_default().push((sym.clone(), *val));
+        let arc = sector_intern.entry(sector.as_str())
+            .or_insert_with(|| Arc::from(sector.as_str()))
+            .clone();
+        by_sector.entry(arc).or_default().push((sym.as_str(), *val));
     }
 
     let mut outliers = Vec::new();
@@ -383,33 +390,36 @@ pub fn detect_outliers(
         let sector_sd = std_dev(&values.iter().map(|v| v.1).collect::<Vec<_>>());
 
         let mut sector_outliers = 0;
+        // Pre-resolve sector String once per group instead of cloning per row
+        let sector_str: String = (*sector).to_string();
         for (sym, val) in &values {
             let is_high = *val > upper_bound;
             let is_low = *val < lower_bound;
             if !is_high && !is_low { continue; }
 
             let z = if sector_sd > 0.0 { (*val - mean) / sector_sd } else { 0.0 };
-            let tier = if z.abs() > 3.0 { "EXTREME" }
+            // PERF5: tier as &'static str literal — no allocation
+            let tier: &'static str = if z.abs() > 3.0 { "EXTREME" }
                 else if z.abs() > 2.0 { "HIGH" }
                 else if z.abs() > 1.0 { "ELEVATED" }
                 else { "MODERATE" };
 
             outliers.push(OutlierResult {
-                symbol: sym.clone(),
-                sector: sector.clone(),
+                symbol: (*sym).to_string(),
+                sector: sector_str.clone(),
                 metric: *val,
                 sector_median: median,
                 sector_q1: q1,
                 sector_q3: q3,
                 z_score: z,
                 tier: tier.to_string(),
-                direction: if is_high { "high" } else { "low" }.to_string(),
+                direction: if is_high { "high".to_string() } else { "low".to_string() },
             });
             sector_outliers += 1;
         }
 
         stats.push(SectorStats {
-            sector,
+            sector: sector_str,
             count: n,
             median,
             q1,

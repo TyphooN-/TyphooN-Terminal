@@ -22687,6 +22687,7 @@ impl TyphooNApp {
             // PERF2: read from per-frame cache
             let sec_scope_syms = self.cached_scope_syms.clone();
             let sec_scope_label = self.broker_scope_label();
+            let mut sec_pending_action = SymbolAction::None;
             egui::Window::new("SEC Filing Scanner")
                 .open(&mut self.show_sec)
                 .resizable(true).default_size([900.0, 650.0]).min_size([600.0, 200.0]).constrain(false)
@@ -22906,7 +22907,11 @@ impl TyphooNApp {
                                         let sel = self.sec_selected_filing == Some(global_idx);
                                         let rc = if sel { egui::Color32::WHITE } else { egui::Color32::from_rgb(180, 180, 190) };
                                         if ui.add(egui::Label::new(egui::RichText::new(&f.filing_date).small().color(rc)).sense(egui::Sense::click())).clicked() { self.sec_selected_filing = if sel { None } else { Some(global_idx) }; }
-                                        if ui.add(egui::Label::new(egui::RichText::new(&f.ticker).small().strong().color(if sel { egui::Color32::WHITE } else { sec_cyan })).sense(egui::Sense::click())).clicked() { self.sec_selected_filing = if sel { None } else { Some(global_idx) }; }
+                                        // UX3: Right-click context menu on symbol cell
+                                        let (sym_resp, action) = symbol_label_with_menu(ui, &f.ticker,
+                                            egui::RichText::new(&f.ticker).small().strong().color(if sel { egui::Color32::WHITE } else { sec_cyan }));
+                                        if !matches!(action, SymbolAction::None) { sec_pending_action = action; }
+                                        if sym_resp.clicked() { self.sec_selected_filing = if sel { None } else { Some(global_idx) }; }
                                         let tc = match f.form_type.as_str() { "4" => sec_med, "10-K"|"10-Q" => sec_blue, "8-K" => sec_orange, _ => sec_purple };
                                         ui.label(egui::RichText::new(&f.form_type).color(tc).small());
                                         let cc = match f.category.as_str() { c if c.contains("INSIDER") => sec_med, c if c.contains("DILUTION") => sec_high, c if c.contains("RESTATE") => sec_orange, _ => sec_low };
@@ -23106,7 +23111,9 @@ impl TyphooNApp {
                                     let is_sell = matches!(trade.transaction_type.chars().next(), Some('S') | Some('D'));
                                     let row_color = if is_sell { sec_high } else { egui::Color32::from_rgb(46, 204, 113) };
                                     ui.label(egui::RichText::new(&trade.transaction_date).color(AXIS_TEXT).small());
-                                    ui.label(egui::RichText::new(&trade.ticker).color(sec_cyan).small());
+                                    let (_, ia_action) = symbol_label_with_menu(ui, &trade.ticker,
+                                        egui::RichText::new(&trade.ticker).color(sec_cyan).small());
+                                    if !matches!(ia_action, SymbolAction::None) { sec_pending_action = ia_action; }
                                     ui.label(egui::RichText::new(&trade.insider_name).color(AXIS_TEXT).small());
                                     ui.label(egui::RichText::new(&trade.insider_title).color(sec_low).small());
                                     ui.label(egui::RichText::new(if is_sell { "SELL" } else { "BUY" }).color(row_color).small());
@@ -23174,6 +23181,8 @@ impl TyphooNApp {
                         });
                     }
                 });
+            // Apply deferred symbol context menu action (after window borrow released)
+            self.apply_symbol_action(sec_pending_action);
         }
 
         // Insider Trades (SEC Form 4) — reads from bg cache
@@ -23270,6 +23279,7 @@ impl TyphooNApp {
         // Unusual Volume Scanner
         if self.show_unusual_volume {
             let vol_active = if self.volume_active_only { self.active_symbols() } else { Vec::new() };
+            let mut uv_pending_action = SymbolAction::None;
             egui::Window::new("Unusual Volume Scanner")
                 .open(&mut self.show_unusual_volume)
                 .resizable(true).default_size([500.0, 400.0])
@@ -23291,7 +23301,9 @@ impl TyphooNApp {
                                 let ratio_c = if *ratio > 3.0 { egui::Color32::from_rgb(231, 76, 60) }
                                     else if *ratio > 2.0 { egui::Color32::from_rgb(241, 196, 15) }
                                     else { egui::Color32::from_rgb(46, 204, 113) };
-                                ui.label(egui::RichText::new(sym).small().strong());
+                                let (_, uv_action) = symbol_label_with_menu(ui, sym,
+                                    egui::RichText::new(sym).small().strong());
+                                if !matches!(uv_action, SymbolAction::None) { uv_pending_action = uv_action; }
                                 let fmt_vol = |v: f64| -> String {
                                     if v >= 1_000_000.0 { format!("{:.1}M", v / 1_000_000.0) }
                                     else if v >= 1_000.0 { format!("{:.1}K", v / 1_000.0) }
@@ -23305,6 +23317,7 @@ impl TyphooNApp {
                         });
                     });
                 });
+            self.apply_symbol_action(uv_pending_action);
         }
 
         // Sector Rotation Dashboard
@@ -23667,6 +23680,7 @@ impl TyphooNApp {
 
         // ── SwapHarvest Window ──
         if self.show_swap_harvest {
+            let mut swap_pending_action = SymbolAction::None;
             egui::Window::new("SwapHarvest — Positive Swap Scanner")
                 .open(&mut self.show_swap_harvest)
                 .resizable(true).default_size([900.0, 600.0])
@@ -23754,7 +23768,9 @@ impl TyphooNApp {
                                         continue;
                                     }
 
-                                    ui.label(egui::RichText::new(&e.symbol).monospace().strong());
+                                    let (_, sw_action) = symbol_label_with_menu(ui, &e.symbol,
+                                        egui::RichText::new(&e.symbol).monospace().strong());
+                                    if !matches!(sw_action, SymbolAction::None) { swap_pending_action = sw_action; }
                                     let dir_color = match e.direction.as_str() {
                                         "LONG" => ACCENT,
                                         "SHORT" => egui::Color32::from_rgb(255, 100, 100),
@@ -23779,10 +23795,12 @@ impl TyphooNApp {
                         ui.label("No data — run SWAPHARVEST first.");
                     }
                 });
+            self.apply_symbol_action(swap_pending_action);
         }
 
         // ── DarwinexRadar Window ──
         if self.show_darwinex_radar {
+            let mut radar_pending_action = SymbolAction::None;
             egui::Window::new("Darwinex Radar — All MT5 Symbols")
                 .open(&mut self.show_darwinex_radar)
                 .resizable(true).default_size([950.0, 600.0])
@@ -23888,7 +23906,9 @@ impl TyphooNApp {
                                     _ => "Partial",
                                 };
                                 let mode_color = if mode >= 4 { ACCENT } else if mode > 0 { egui::Color32::YELLOW } else { egui::Color32::from_rgb(255, 100, 100) };
-                                ui.label(egui::RichText::new(sym).monospace().strong());
+                                let (_, rd_action) = symbol_label_with_menu(ui, sym,
+                                    egui::RichText::new(sym).monospace().strong());
+                                if !matches!(rd_action, SymbolAction::None) { radar_pending_action = rd_action; }
                                 ui.label(egui::RichText::new(sector).color(AXIS_TEXT).small());
                                 ui.label(egui::RichText::new(industry).color(AXIS_TEXT).small());
                                 ui.label(egui::RichText::new(mode_text).color(mode_color).small());
@@ -23904,6 +23924,7 @@ impl TyphooNApp {
                         });
                     });
                 });
+            self.apply_symbol_action(radar_pending_action);
         }
 
         // ── Scrape Status Dashboard ──
@@ -24241,6 +24262,7 @@ impl TyphooNApp {
             // PERF2: read from per-frame cache
             let scope_syms = self.cached_scope_syms.clone();
             let scope_label = self.broker_scope_label();
+            let mut ev_pending_action = SymbolAction::None;
             // UX7: Pre-fetch sparklines for visible symbols (avoids &mut self conflict in closure)
             let visible_syms: Vec<String> = self.bg.all_fundamentals.iter()
                 .filter(|f| match &scope_syms {
@@ -24303,7 +24325,9 @@ impl TyphooNApp {
                             if SortState::header(ui, "Sector", 8, &self.ev_sort) { self.ev_sort.toggle(8); }
                             ui.end_row();
                             for f in &fund_sorted {
-                                ui.label(egui::RichText::new(&f.symbol).small().strong().monospace());
+                                let (_, ev_action) = symbol_label_with_menu(ui, &f.symbol,
+                                    egui::RichText::new(&f.symbol).small().strong().monospace());
+                                if !matches!(ev_action, SymbolAction::None) { ev_pending_action = ev_action; }
                                 // UX7: Sparkline column
                                 if let Some(closes) = sparklines.get(&f.symbol.to_uppercase()) {
                                     draw_inline_sparkline(ui, closes, 60.0, 14.0);
@@ -24333,6 +24357,7 @@ impl TyphooNApp {
                         });
                     });
                 });
+            self.apply_symbol_action(ev_pending_action);
         }
 
         // Earnings Calendar
@@ -25084,6 +25109,7 @@ impl TyphooNApp {
         if self.show_dividends {
             let scope_label = self.broker_scope_label();
             let scoped = self.scoped_fundamentals_owned();
+            let mut div_pending_action = SymbolAction::None;
             egui::Window::new("Dividend Yield Screener")
                 .open(&mut self.show_dividends)
                 .resizable(true).default_size([600.0, 400.0])
@@ -25096,7 +25122,9 @@ impl TyphooNApp {
                             ui.strong("Symbol"); ui.strong("Company"); ui.strong("Yield%"); ui.strong("Ex-Div"); ui.strong("P/E");
                             ui.end_row();
                             for d in divs.iter().take(100) {
-                                ui.label(egui::RichText::new(&d.symbol).strong());
+                                let (_, dv_action) = symbol_label_with_menu(ui, &d.symbol,
+                                    egui::RichText::new(&d.symbol).strong());
+                                if !matches!(dv_action, SymbolAction::None) { div_pending_action = dv_action; }
                                 ui.label(egui::RichText::new(&d.company).small());
                                 let yc = if d.dividend_yield > 4.0 { UP } else { AXIS_TEXT };
                                 ui.label(egui::RichText::new(format!("{:.2}%", d.dividend_yield)).color(yc));
@@ -25107,6 +25135,7 @@ impl TyphooNApp {
                         });
                     });
                 });
+            self.apply_symbol_action(div_pending_action);
         }
 
         // ── Event Calendar (upcoming earnings / ex-div / div-pay) ─────
@@ -26159,6 +26188,14 @@ impl TyphooNApp {
             let outlier_scope_label = self.broker_scope_label().to_string();
             let outlier_scoped_fund = self.scoped_fundamentals_owned();
             let mut pending_action = SymbolAction::None;
+            // UX7: pre-fetch sparklines for top outlier symbols
+            let mut outlier_syms: Vec<String> = self.darwinex_outliers.iter().take(200).map(|o| o.symbol.clone()).collect();
+            outlier_syms.extend(self.darwinex_multi_outliers.iter().take(200).map(|o| o.symbol.clone()));
+            let mut outlier_sparklines: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+            for sym in &outlier_syms {
+                let closes = self.get_sparkline(sym);
+                if !closes.is_empty() { outlier_sparklines.insert(sym.to_uppercase(), closes); }
+            }
             egui::Window::new("Outlier Scanner")
                 .open(&mut self.show_darwinex_outliers)
                 .resizable(true).default_size([800.0, 550.0])
@@ -26216,8 +26253,9 @@ impl TyphooNApp {
                             }
                             if !self.outlier_sort.ascending { sorted_outliers.reverse(); }
 
-                            egui::Grid::new("multi_outlier_grid").striped(true).num_columns(9).min_col_width(50.0).show(ui, |ui| {
+                            egui::Grid::new("multi_outlier_grid").striped(true).num_columns(10).min_col_width(50.0).show(ui, |ui| {
                                 if SortState::header(ui, "Symbol", 0, &self.outlier_sort) { self.outlier_sort.toggle(0); }
+                                ui.label(egui::RichText::new("30d").color(ol_dim).small());
                                 if SortState::header(ui, "Sector", 1, &self.outlier_sort) { self.outlier_sort.toggle(1); }
                                 if SortState::header(ui, "Score", 2, &self.outlier_sort) { self.outlier_sort.toggle(2); }
                                 if SortState::header(ui, "Dims", 3, &self.outlier_sort) { self.outlier_sort.toggle(3); }
@@ -26248,7 +26286,15 @@ impl TyphooNApp {
                                     let tradable = mt5_symbols.contains(&o.symbol.to_uppercase());
                                     let sym_color = if tradable { egui::Color32::WHITE } else { egui::Color32::from_rgb(80, 80, 90) };
                                     let trade_icon = if tradable { "\u{25CF} " } else { "\u{25CB} " };
-                                    ui.label(egui::RichText::new(format!("{}{}", trade_icon, o.symbol)).small().strong().color(sym_color));
+                                    let (_, action) = symbol_label_with_menu(ui, &o.symbol,
+                                        egui::RichText::new(format!("{}{}", trade_icon, o.symbol)).small().strong().color(sym_color));
+                                    if !matches!(action, SymbolAction::None) { pending_action = action; }
+                                    // UX7: Sparkline column
+                                    if let Some(closes) = outlier_sparklines.get(&o.symbol.to_uppercase()) {
+                                        draw_inline_sparkline(ui, closes, 50.0, 12.0);
+                                    } else {
+                                        ui.label(egui::RichText::new("—").color(ol_dim).small());
+                                    }
                                     ui.label(egui::RichText::new(&o.sector).small().color(ol_cyan));
                                     ui.label(egui::RichText::new(format!("{:.1}", o.composite_score)).small().color(tier_c).strong());
                                     ui.label(egui::RichText::new(format!("{}/4", o.dimensions_flagged)).small().color(tier_c));
@@ -26295,8 +26341,9 @@ impl TyphooNApp {
                         // Outlier table
                         if !self.darwinex_outliers.is_empty() {
                             ui.label(egui::RichText::new("Outliers (sorted by |z-score|)").small().strong());
-                            egui::Grid::new("outliers_grid").striped(true).num_columns(7).min_col_width(50.0).show(ui, |ui| {
+                            egui::Grid::new("outliers_grid").striped(true).num_columns(8).min_col_width(50.0).show(ui, |ui| {
                                 ui.label(egui::RichText::new("Symbol").color(ol_dim).small());
+                                ui.label(egui::RichText::new("30d").color(ol_dim).small());
                                 ui.label(egui::RichText::new("Sector").color(ol_dim).small());
                                 ui.label(egui::RichText::new("Value").color(ol_dim).small());
                                 ui.label(egui::RichText::new("Median").color(ol_dim).small());
@@ -26315,6 +26362,12 @@ impl TyphooNApp {
                                     if self.outlier_scroll_pending && !scrolled && o.tier == "EXTREME" {
                                         sym_resp.scroll_to_me(Some(egui::Align::Center));
                                         scrolled = true;
+                                    }
+                                    // UX7: Sparkline column
+                                    if let Some(closes) = outlier_sparklines.get(&o.symbol.to_uppercase()) {
+                                        draw_inline_sparkline(ui, closes, 50.0, 12.0);
+                                    } else {
+                                        ui.label(egui::RichText::new("—").color(ol_dim).small());
                                     }
                                     ui.label(egui::RichText::new(&o.sector).small());
                                     ui.label(typhoon_engine::core::fundamentals::format_large_number(o.metric));
@@ -31847,6 +31900,20 @@ impl eframe::App for TyphooNApp {
                                             load_key = Some(wl.cache_key.clone());
                                             ui.close();
                                         }
+                                        if ui.button("View fundamentals").clicked() {
+                                            self.show_fundamentals = true;
+                                            ui.close();
+                                        }
+                                        if ui.button("View SEC filings").clicked() {
+                                            self.show_sec = true;
+                                            self.sec_search_query = wl.symbol.clone();
+                                            ui.close();
+                                        }
+                                        if ui.button("View insider trades").clicked() {
+                                            self.show_insider = true;
+                                            ui.close();
+                                        }
+                                        ui.separator();
                                         if ui.button(format!("Move Up  {}", wl.symbol)).clicked() {
                                             move_up_sym = Some(wl.symbol.clone());
                                             ui.close();
