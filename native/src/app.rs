@@ -11345,8 +11345,19 @@ impl TyphooNApp {
                         let client = reqwest::Client::new();
                         let msg_tx = broker_msg_tx_clone.clone();
                         tokio::spawn(async move {
-                            let encoded_room = room_id.replace('!', "%21").replace(':', "%3A");
-                            let url = format!("https://matrix.org/_matrix/client/v3/join/{}", encoded_room);
+                            // Encode the room ID/alias path segment. matrix.org requires %21/%23/%3A
+                            // for the URL path portion.
+                            let encoded_room = room_id.replace('!', "%21").replace('#', "%23").replace(':', "%3A");
+                            // server_name hint — derived from the suffix of the room id/alias.
+                            // For room IDs like "!abc:matrix.org" the Matrix spec recommends passing
+                            // ?server_name=matrix.org so your homeserver knows which federation peer
+                            // to ask about the room. Without it, homeservers that haven't yet
+                            // resolved the room return "M_UNKNOWN: No known servers".
+                            let server_name = room_id.rsplit(':').next().unwrap_or("matrix.org").to_string();
+                            let url = format!(
+                                "https://matrix.org/_matrix/client/v3/join/{}?server_name={}",
+                                encoded_room, server_name
+                            );
                             match client.post(&url)
                                 .header("Authorization", format!("Bearer {}", access_token))
                                 .json(&serde_json::json!({}))
@@ -11357,7 +11368,9 @@ impl TyphooNApp {
                                 Ok(resp) => {
                                     let text = resp.text().await.unwrap_or_default();
                                     // M_ALREADY_JOINED is fine
-                                    if !text.contains("already") {
+                                    if text.contains("already") {
+                                        let _ = msg_tx.send(BrokerMsg::JsonResult("MatrixJoined".into(), "already".into()));
+                                    } else {
                                         let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix join: {}", text)));
                                     }
                                 }
