@@ -10214,6 +10214,9 @@ pub struct TyphooNApp {
     sector_interner: std::collections::HashMap<String, std::sync::Arc<str>>,
     /// UX3: Deferred symbol action from right-panel context menus (applied at end of update()).
     deferred_symbol_action: SymbolAction,
+    /// PERF: Per-frame cached active symbols list. Recomputed at start of update().
+    cached_active_symbols: Vec<String>,
+    cached_active_symbols_frame: u64,
     show_event_calendar: bool,
     event_calendar_rows: Vec<EventRow>,
     event_filter_source: EventSource,
@@ -13238,6 +13241,8 @@ impl TyphooNApp {
             sparkline_cache: std::collections::HashMap::new(),
             sector_interner: std::collections::HashMap::new(),
             deferred_symbol_action: SymbolAction::None,
+            cached_active_symbols: Vec::new(),
+            cached_active_symbols_frame: 0,
             show_event_calendar: false,
             event_calendar_rows: Vec::new(),
             event_filter_source: EventSource::All,
@@ -14362,27 +14367,29 @@ impl TyphooNApp {
     }
 
     fn active_symbols(&self) -> Vec<String> {
+        // PERF: O(1) dedup via HashSet (was O(n²) Vec::contains).
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut syms: Vec<String> = Vec::new();
-        let mut add = |s: &str| {
+        let add = |s: &str, syms: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
             let t = s.split(':').rev().nth(1).or_else(|| s.split(':').last()).unwrap_or(s).to_uppercase();
-            if !t.is_empty() && !syms.contains(&t) { syms.push(t); }
+            if !t.is_empty() && seen.insert(t.clone()) { syms.push(t); }
         };
         // Chart symbols
         if self.mtf_enabled {
-            for c in &self.charts { add(&c.symbol); }
+            for c in &self.charts { add(&c.symbol, &mut syms, &mut seen); }
         } else if let Some(c) = self.charts.get(self.active_tab) {
-            add(&c.symbol);
+            add(&c.symbol, &mut syms, &mut seen);
         }
         // Alpaca positions
         if self.show_alpaca_positions {
-            for p in &self.live_positions { add(&p.symbol); }
+            for p in &self.live_positions { add(&p.symbol, &mut syms, &mut seen); }
         }
         // TastyTrade positions
         if self.show_tt_positions {
-            for p in &self.tt_positions { add(&p.symbol); }
+            for p in &self.tt_positions { add(&p.symbol, &mut syms, &mut seen); }
         }
         // Watchlist
-        for s in &self.user_watchlist { add(s); }
+        for s in &self.user_watchlist { add(s, &mut syms, &mut seen); }
         syms
     }
 
@@ -23244,6 +23251,11 @@ impl TyphooNApp {
 
         // Insider Trades (SEC Form 4) — reads from bg cache
         if self.show_insider {
+            // UX7: Pre-fetch sparkline for the active chart symbol
+            let active_sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
+            let active_ticker_only = active_sym.split(':').rev().nth(1).or_else(|| active_sym.split(':').last()).unwrap_or(&active_sym).to_string();
+            let insider_sparkline = self.get_sparkline(&active_ticker_only);
+            let mut insider_pending_action = SymbolAction::None;
             egui::Window::new("Insider Trades (Form 4)")
                 .open(&mut self.show_insider)
                 .resizable(true).default_size([650.0, 400.0])
@@ -23251,7 +23263,13 @@ impl TyphooNApp {
                     let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.label(egui::RichText::new(&sym).strong().monospace());
+                        let (_, ins_action) = symbol_label_with_menu(ui, &active_ticker_only,
+                            egui::RichText::new(&sym).strong().monospace());
+                        if !matches!(ins_action, SymbolAction::None) { insider_pending_action = ins_action; }
+                        // UX7: Inline sparkline next to symbol
+                        if !insider_sparkline.is_empty() {
+                            draw_inline_sparkline(ui, &insider_sparkline, 100.0, 18.0);
+                        }
                     });
                     ui.separator();
                     let ticker = sym.split(':').rev().nth(1).or_else(|| sym.split(':').last()).unwrap_or(&sym);
@@ -23331,11 +23349,12 @@ impl TyphooNApp {
                         ui.label(egui::RichText::new(format!("No insider trades for {} (last 90 days)", ticker)).color(AXIS_TEXT));
                     }
                 });
+            self.apply_symbol_action(insider_pending_action);
         }
 
         // Unusual Volume Scanner
         if self.show_unusual_volume {
-            let vol_active = if self.volume_active_only { self.active_symbols() } else { Vec::new() };
+            let vol_active = if self.volume_active_only { self.cached_active_symbols.clone() } else { Vec::new() };
             let mut uv_pending_action = SymbolAction::None;
             // UX7: Pre-fetch sparklines for unusual volume symbols
             let mut uv_sparklines: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
@@ -23622,7 +23641,7 @@ impl TyphooNApp {
 
         // Congressional Trades (House Stock Watcher)
         if self.show_congress {
-            let cong_active = if self.congress_active_only { self.active_symbols() } else { Vec::new() };
+            let cong_active = if self.congress_active_only { self.cached_active_symbols.clone() } else { Vec::new() };
             let mut cong_pending_action = SymbolAction::None;
             egui::Window::new("Congressional Trades")
                 .open(&mut self.show_congress)
@@ -24167,7 +24186,7 @@ impl TyphooNApp {
 
         // Fundamentals Viewer
         if self.show_fundamentals {
-            let fund_tickers = self.active_symbols();
+            let fund_tickers = self.cached_active_symbols.clone();
             // UX7: Pre-fetch sparklines for all tickers in fundamentals window
             let mut fw_sparklines: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
             for t in &fund_tickers {
@@ -24339,7 +24358,7 @@ impl TyphooNApp {
 
         // EV Scanner
         if self.show_ev_scanner {
-            let ev_active = if self.ev_active_only { self.active_symbols() } else { Vec::new() };
+            let ev_active = if self.ev_active_only { self.cached_active_symbols.clone() } else { Vec::new() };
             // PERF2: read from per-frame cache
             let scope_syms = self.cached_scope_syms.clone();
             let scope_label = self.broker_scope_label();
@@ -24443,7 +24462,8 @@ impl TyphooNApp {
 
         // Earnings Calendar
         if self.show_earnings_calendar {
-            let earn_active = if self.earnings_active_only { self.active_symbols() } else { Vec::new() };
+            let earn_active = if self.earnings_active_only { self.cached_active_symbols.clone() } else { Vec::new() };
+            let mut earn_pending_action = SymbolAction::None;
             egui::Window::new("Earnings Calendar")
                 .open(&mut self.show_earnings_calendar)
                 .resizable(true).default_size([500.0, 400.0])
@@ -24469,18 +24489,22 @@ impl TyphooNApp {
                                     _ => AXIS_TEXT,
                                 };
                                 ui.label(egui::RichText::new(date).color(date_col).small());
-                                ui.label(egui::RichText::new(sym).small().strong().monospace());
+                                let (_, ec_action) = symbol_label_with_menu(ui, sym,
+                                    egui::RichText::new(sym).small().strong().monospace());
+                                if !matches!(ec_action, SymbolAction::None) { earn_pending_action = ec_action; }
                                 ui.label(egui::RichText::new(company).small());
                                 ui.end_row();
                             }
                         });
                     });
                 });
+            self.apply_symbol_action(earn_pending_action);
         }
 
         // Dividend Calendar
         if self.show_dividend_calendar {
-            let div_active = if self.dividends_active_only { self.active_symbols() } else { Vec::new() };
+            let div_active = if self.dividends_active_only { self.cached_active_symbols.clone() } else { Vec::new() };
+            let mut dc_pending_action = SymbolAction::None;
             egui::Window::new("Dividend Calendar")
                 .open(&mut self.show_dividend_calendar)
                 .resizable(true).default_size([500.0, 400.0])
@@ -24497,7 +24521,9 @@ impl TyphooNApp {
                             for (sym, company, date, yld) in &self.bg.upcoming_dividends {
                                 if !div_active.is_empty() && !div_active.iter().any(|s| s.eq_ignore_ascii_case(sym)) { continue; }
                                 ui.label(egui::RichText::new(date).color(AXIS_TEXT).small());
-                                ui.label(egui::RichText::new(sym).small().strong().monospace());
+                                let (_, dc_action) = symbol_label_with_menu(ui, sym,
+                                    egui::RichText::new(sym).small().strong().monospace());
+                                if !matches!(dc_action, SymbolAction::None) { dc_pending_action = dc_action; }
                                 ui.label(egui::RichText::new(company).small());
                                 let y = yld.unwrap_or(0.0);
                                 let y_col = if y > 4.0 { UP } else { AXIS_TEXT };
@@ -24507,6 +24533,7 @@ impl TyphooNApp {
                         });
                     });
                 });
+            self.apply_symbol_action(dc_pending_action);
         }
 
         // Analyst — wired to Finnhub recommendations
@@ -25231,6 +25258,7 @@ impl TyphooNApp {
 
         // ── Event Calendar (upcoming earnings / ex-div / div-pay) ─────
         if self.show_event_calendar {
+            let mut event_pending_action = SymbolAction::None;
             egui::Window::new("Event Calendar — Upcoming Important Dates")
                 .open(&mut self.show_event_calendar)
                 .resizable(true).default_size([780.0, 520.0])
@@ -25303,7 +25331,9 @@ impl TyphooNApp {
                                     EventKind::DividendPayment => egui::Color32::from_rgb(220, 200, 80),
                                 };
                                 ui.label(egui::RichText::new(r.kind.label()).color(kind_col).strong());
-                                ui.label(egui::RichText::new(&r.symbol).strong().monospace());
+                                let (_, ev_action) = symbol_label_with_menu(ui, &r.symbol,
+                                    egui::RichText::new(&r.symbol).strong().monospace());
+                                if !matches!(ev_action, SymbolAction::None) { event_pending_action = ev_action; }
                                 ui.label(egui::RichText::new(&r.company).small());
                                 ui.label(egui::RichText::new(&r.detail).small());
                                 let mut tags = Vec::new();
@@ -25316,6 +25346,7 @@ impl TyphooNApp {
                         });
                     });
                 });
+            self.apply_symbol_action(event_pending_action);
         }
 
         // ── MTF Confluence ────────────────────────────────────────────
@@ -28300,6 +28331,11 @@ impl eframe::App for TyphooNApp {
         if self.cached_scope_frame != self.frame_count {
             self.cached_scope_syms = self.broker_scope_symbols();
             self.cached_scope_frame = self.frame_count;
+        }
+        // PERF: Cache active_symbols() once per frame (used by 5+ windows for "Active Only" filters)
+        if self.cached_active_symbols_frame != self.frame_count {
+            self.cached_active_symbols = self.active_symbols();
+            self.cached_active_symbols_frame = self.frame_count;
         }
         ctx.set_visuals(Self::dark_visuals());
         // Bound log size to prevent unbounded memory growth.
