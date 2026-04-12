@@ -375,10 +375,14 @@ fn import_table_from_json(conn: &rusqlite::Connection, table: &str, json: &str) 
     let tx = conn.unchecked_transaction().map_err(|e| format!("Begin tx for {table}: {e}"))?;
     {
         let mut stmt = tx.prepare(&sql).map_err(|e| format!("Prepare INSERT for {table}: {e}"))?;
+        // PERF: reuse the param buffer across rows — was allocating two Vecs
+        // (values + refs) for every row during multi-thousand-row imports.
+        let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(col_names.len());
         for row in &rows {
             if let Some(obj) = row.as_object() {
-                let params: Vec<rusqlite::types::Value> = col_names.iter().map(|col| {
-                    match obj.get(col) {
+                params.clear();
+                for col in col_names.iter() {
+                    let v = match obj.get(col) {
                         Some(serde_json::Value::Null) | None => rusqlite::types::Value::Null,
                         Some(serde_json::Value::Number(n)) => {
                             if let Some(i) = n.as_i64() {
@@ -392,10 +396,10 @@ fn import_table_from_json(conn: &rusqlite::Connection, table: &str, json: &str) 
                         Some(serde_json::Value::String(s)) => rusqlite::types::Value::Text(s.clone()),
                         Some(serde_json::Value::Bool(b)) => rusqlite::types::Value::Integer(if *b { 1 } else { 0 }),
                         Some(other) => rusqlite::types::Value::Text(other.to_string()),
-                    }
-                }).collect();
-                let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|v| v as &dyn rusqlite::types::ToSql).collect();
-                match stmt.execute(param_refs.as_slice()) {
+                    };
+                    params.push(v);
+                }
+                match stmt.execute(rusqlite::params_from_iter(params.iter())) {
                     Ok(_) => count += 1,
                     Err(e) => tracing::warn!("LAN sync: insert into {table} failed: {e}"),
                 }

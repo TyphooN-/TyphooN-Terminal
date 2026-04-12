@@ -532,12 +532,20 @@ impl SqliteCache {
         }
         drop(stmt);
 
-        // Delete drained keys in a single transaction.
+        // Delete drained keys in a single chunked `DELETE ... WHERE key IN (...)`.
+        // Was executing N per-row DELETEs inside one transaction — still O(N)
+        // roundtrips to the SQLite engine. Bulk form cuts this to ~N/CHUNK calls.
         if !result.is_empty() {
+            const CHUNK: usize = 512;
             let tx = conn.unchecked_transaction()
                 .map_err(|e| format!("Transaction begin failed: {e}"))?;
-            for (k, _) in &result {
-                let _ = tx.execute("DELETE FROM kv_cache WHERE key = ?1", params![k]);
+            for chunk in result.chunks(CHUNK) {
+                let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(",");
+                let sql = format!("DELETE FROM kv_cache WHERE key IN ({placeholders})");
+                let params_refs: Vec<&dyn rusqlite::types::ToSql> = chunk.iter()
+                    .map(|(k, _)| k as &dyn rusqlite::types::ToSql)
+                    .collect();
+                let _ = tx.execute(&sql, params_refs.as_slice());
             }
             tx.commit().map_err(|e| format!("Transaction commit failed: {e}"))?;
         }
@@ -1105,7 +1113,8 @@ impl SqliteCache {
     /// Used by LAN sync server to send only new/updated KV entries.
     pub fn list_kv_entries_since(&self, since_ts: i64) -> Result<Vec<(String, Vec<u8>, i64)>, String> {
         let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let mut stmt = conn.prepare(
+        // prepare_cached avoids reparse on the hot LAN-sync polling loop.
+        let mut stmt = conn.prepare_cached(
             "SELECT key, value, timestamp FROM kv_cache WHERE timestamp > ?1 ORDER BY timestamp ASC"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
         let rows = stmt.query_map(params![since_ts], |row| {

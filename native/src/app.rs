@@ -5096,9 +5096,10 @@ fn draw_chart(
 
     // ── Bollinger Band fill ──────────────────────────────────────────────────
     if flags.bollinger {
-        // Build polygon directly: upper points forward, lower points reversed — no clone needed
-        let mut fill_points_upper: Vec<egui::Pos2> = Vec::new();
-        let mut fill_points_lower: Vec<egui::Pos2> = Vec::new();
+        // Build polygon directly: upper points forward, lower points reversed — no clone needed.
+        // PERF: preallocate to `bars.len()` to avoid the Vec growing via geometric realloc.
+        let mut fill_points_upper: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
+        let mut fill_points_lower: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
         for (rel_idx, _) in bars.iter().enumerate() {
             let abs_idx = start_idx + rel_idx;
             if abs_idx >= chart.bb_upper.len() { continue; }
@@ -5170,7 +5171,7 @@ fn draw_chart(
         let st_bull_col = egui::Color32::from_rgb(0, 200, 100);
         let st_bear_col = egui::Color32::from_rgb(220, 50, 50);
         // Draw as colored segments — bull=green, bear=red
-        let mut points: Vec<egui::Pos2> = Vec::new();
+        let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
         let mut prev_bull = true;
         for (rel_idx, _) in bars.iter().enumerate() {
             let abs_idx = start_idx + rel_idx;
@@ -8647,7 +8648,7 @@ fn draw_macd_pane(
     }
 
     // MACD line
-    let mut points: Vec<egui::Pos2> = Vec::new();
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
     for (rel_idx, _) in bars.iter().enumerate() {
         let abs_idx = start_idx + rel_idx;
         if let Some(Some(v)) = macd_line.get(abs_idx) {
@@ -8657,7 +8658,7 @@ fn draw_macd_pane(
     if points.len() > 1 { painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, MACD_LINE_COL))); }
 
     // Signal line
-    let mut points: Vec<egui::Pos2> = Vec::new();
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
     for (rel_idx, _) in bars.iter().enumerate() {
         let abs_idx = start_idx + rel_idx;
         if let Some(Some(v)) = macd_signal.get(abs_idx) {
@@ -8790,7 +8791,7 @@ fn draw_stoch_pane(
     }
 
     // %K line
-    let mut points: Vec<egui::Pos2> = Vec::new();
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
     for (rel_idx, _) in bars.iter().enumerate() {
         if let Some(Some(v)) = stoch_k.get(start_idx + rel_idx) {
             points.push(egui::pos2(rect.left() + (rel_idx as f32 + 0.5) * bar_w, val_to_y(*v).clamp(rect.top(), rect.bottom())));
@@ -8799,7 +8800,7 @@ fn draw_stoch_pane(
     if points.len() > 1 { painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, STOCH_K_COL))); }
 
     // %D line
-    let mut points: Vec<egui::Pos2> = Vec::new();
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
     for (rel_idx, _) in bars.iter().enumerate() {
         if let Some(Some(v)) = stoch_d.get(start_idx + rel_idx) {
             points.push(egui::pos2(rect.left() + (rel_idx as f32 + 0.5) * bar_w, val_to_y(*v).clamp(rect.top(), rect.bottom())));
@@ -8840,7 +8841,7 @@ fn draw_adx_pane(
         egui::Stroke::new(0.5, egui::Color32::from_rgba_premultiplied(140, 140, 160, 60)));
 
     for (series, color, width) in [(adx, ADX_COL, 1.5_f32), (di_plus, DI_PLUS_COL, 1.0), (di_minus, DI_MINUS_COL, 1.0)] {
-        let mut points: Vec<egui::Pos2> = Vec::new();
+        let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
         for (rel_idx, _) in bars.iter().enumerate() {
             if let Some(Some(v)) = series.get(start_idx + rel_idx) {
                 points.push(egui::pos2(rect.left() + (rel_idx as f32 + 0.5) * bar_w, val_to_y(*v).clamp(rect.top(), rect.bottom())));
@@ -35638,18 +35639,20 @@ impl eframe::App for TyphooNApp {
                     let src_path = std::path::PathBuf::from(last_src);
                     if let Ok(src) = typhoon_engine::core::cache::SqliteCache::open_readonly(&src_path) {
                         if let Ok(quotes) = src.read_bid_ask() {
+                            // PERF: precompute `chart_bare` once per chart instead of
+                            // recomputing it for every quote × chart pair.
+                            let chart_bares: Vec<String> = self.charts.iter().map(|chart| {
+                                let s = chart.symbol.replace('/', "").to_uppercase();
+                                let parts: Vec<&str> = s.split(':').collect();
+                                let is_tf = matches!(parts.last().map(|p| p.as_ref()), Some("1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH"));
+                                if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { s }
+                            }).collect();
                             for (sym, bid, ask, _spread) in &quotes {
                                 let mid = (bid + ask) / 2.0;
                                 if mid <= 0.0 { continue; }
                                 let sym_upper = sym.to_uppercase();
-                                for chart in &mut self.charts {
-                                    let chart_bare = chart.symbol.replace('/', "").to_uppercase();
-                                    let chart_bare = {
-                                        let parts: Vec<&str> = chart_bare.split(':').collect();
-                                        let is_tf = matches!(parts.last().map(|p| p.as_ref()), Some("1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH"));
-                                        if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { chart_bare }
-                                    };
-                                    if chart_bare == sym_upper {
+                                for (ci, chart) in self.charts.iter_mut().enumerate() {
+                                    if chart_bares[ci] == sym_upper {
                                         if let Some(bar) = chart.bars.last_mut() {
                                             bar.close = mid;
                                             if mid > bar.high { bar.high = mid; }
