@@ -329,6 +329,7 @@ pub fn calculate_atr(bars: &[(f64, f64, f64, f64)], period: usize) -> f64 {
 pub struct OutlierResult {
     pub symbol: String,
     pub sector: String,
+    pub industry: String,
     pub metric: f64,
     pub sector_median: f64,
     pub sector_q1: f64,
@@ -353,21 +354,26 @@ pub struct SectorStats {
 
 /// Detect outliers using IQR method, grouped by sector.
 /// Returns (outliers, sector_stats).
+///
+/// Grouping stays by sector (IQR needs ~10+ peers to be statistically meaningful,
+/// and most industries have 2-5 symbols which kills IQR validity). Industry is
+/// carried through as a display/sort field only.
+///
 /// PERF5: Uses Arc<str> internally for sector deduplication — each unique sector
 /// string is allocated once, then Arc::clone()'d (cheap refcount bump) per outlier.
 pub fn detect_outliers(
-    data: &[(String, String, f64)], // (symbol, sector, metric_value)
+    data: &[(String, String, String, f64)], // (symbol, sector, industry, metric_value)
     iqr_multiplier: f64, // typically 1.5 for standard, 3.0 for extreme
 ) -> (Vec<OutlierResult>, Vec<SectorStats>) {
     use std::sync::Arc;
     // Intern sector names — one allocation per unique sector
     let mut sector_intern: std::collections::HashMap<&str, Arc<str>> = std::collections::HashMap::new();
-    let mut by_sector: std::collections::HashMap<Arc<str>, Vec<(&str, f64)>> = std::collections::HashMap::new();
-    for (sym, sector, val) in data {
+    let mut by_sector: std::collections::HashMap<Arc<str>, Vec<(&str, &str, f64)>> = std::collections::HashMap::new();
+    for (sym, sector, industry, val) in data {
         let arc = sector_intern.entry(sector.as_str())
             .or_insert_with(|| Arc::from(sector.as_str()))
             .clone();
-        by_sector.entry(arc).or_default().push((sym.as_str(), *val));
+        by_sector.entry(arc).or_default().push((sym.as_str(), industry.as_str(), *val));
     }
 
     let mut outliers = Vec::new();
@@ -375,24 +381,24 @@ pub fn detect_outliers(
 
     for (sector, mut values) in by_sector {
         if values.len() < 4 { continue; } // need enough data for IQR
-        values.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        values.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
 
         let n = values.len();
-        let q1 = values[n / 4].1;
-        let median = values[n / 2].1;
-        let q3 = values[3 * n / 4].1;
+        let q1 = values[n / 4].2;
+        let median = values[n / 2].2;
+        let q3 = values[3 * n / 4].2;
         let iqr = q3 - q1;
         let lower_bound = q1 - iqr_multiplier * iqr;
         let upper_bound = q3 + iqr_multiplier * iqr;
 
         // Compute sector std_dev for z-scores
-        let mean = values.iter().map(|v| v.1).sum::<f64>() / n as f64;
-        let sector_sd = std_dev(&values.iter().map(|v| v.1).collect::<Vec<_>>());
+        let mean = values.iter().map(|v| v.2).sum::<f64>() / n as f64;
+        let sector_sd = std_dev(&values.iter().map(|v| v.2).collect::<Vec<_>>());
 
         let mut sector_outliers = 0;
         // Pre-resolve sector String once per group instead of cloning per row
         let sector_str: String = (*sector).to_string();
-        for (sym, val) in &values {
+        for (sym, industry, val) in &values {
             let is_high = *val > upper_bound;
             let is_low = *val < lower_bound;
             if !is_high && !is_low { continue; }
@@ -407,6 +413,7 @@ pub fn detect_outliers(
             outliers.push(OutlierResult {
                 symbol: (*sym).to_string(),
                 sector: sector_str.clone(),
+                industry: (*industry).to_string(),
                 metric: *val,
                 sector_median: median,
                 sector_q1: q1,
@@ -444,6 +451,7 @@ pub fn detect_outliers(
 pub struct MultiOutlierResult {
     pub symbol: String,
     pub sector: String,
+    pub industry: String,
     /// Individual z-scores per dimension (0 = not anomalous)
     pub var_z: f64,      // price risk outlier
     pub ev_z: f64,       // valuation outlier
@@ -466,16 +474,20 @@ pub struct MultiOutlierResult {
 /// Each dimension is z-scored within its sector. Symbols flagging on multiple
 /// dimensions get higher composite scores.
 pub fn detect_multi_outliers(
-    symbols: &[(String, String)],  // (symbol, sector)
+    symbols: &[(String, String, String)],  // (symbol, sector, industry)
     var_map: &std::collections::HashMap<String, f64>,   // symbol → VaR 95%
     ev_map: &std::collections::HashMap<String, f64>,    // symbol → MCap/EV ratio
     atr_map: &std::collections::HashMap<String, f64>,   // symbol → ATR as % of price
     sec_map: &std::collections::HashMap<String, i32>,   // symbol → filing count (recent)
     threshold: f64,  // z-score threshold (typically 1.5-2.0)
 ) -> Vec<MultiOutlierResult> {
-    // Group by sector
+    // Industry lookup (symbol → industry) so we can attach industry to results.
+    let industry_by_sym: std::collections::HashMap<&str, &str> = symbols.iter()
+        .map(|(s, _, i)| (s.as_str(), i.as_str()))
+        .collect();
+    // Group by sector (IQR stays meaningful at sector granularity)
     let mut by_sector: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-    for (sym, sector) in symbols {
+    for (sym, sector, _industry) in symbols {
         by_sector.entry(sector.clone()).or_default().push(sym.clone());
     }
 
@@ -526,6 +538,7 @@ pub fn detect_multi_outliers(
             results.push(MultiOutlierResult {
                 symbol: sym.clone(),
                 sector: sector.clone(),
+                industry: industry_by_sym.get(sym.as_str()).copied().unwrap_or("").to_string(),
                 var_z: vz,
                 ev_z: ez,
                 atr_z: az,

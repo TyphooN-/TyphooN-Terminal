@@ -10376,6 +10376,8 @@ pub struct TyphooNApp {
     darwin_browser_sort: SortState,
     insider_sort: SortState,
     outlier_sort: SortState,
+    /// Sort state for the single-metric outlier table (VAROUTLIER/EVOUTLIER/ATROUTLIER).
+    outlier_single_sort: SortState,
     watchlist_sort: SortState,
     /// Whether we've already tried populating watchlist from cache (avoid repeated DB scans).
     watchlist_cache_tried: bool,
@@ -13367,7 +13369,9 @@ impl TyphooNApp {
             sec_filters: [true; 7],
             sec_page: 0,
             ev_sort: SortState::default(),
-            outlier_sort: SortState { column: 2, ascending: false }, // default: sort by Score desc
+            outlier_sort: SortState { column: 3, ascending: false }, // default: sort by Score desc
+            // Default: sort single-metric outliers by |z-score| desc (column 6 below)
+            outlier_single_sort: SortState { column: 6, ascending: false },
             watchlist_sort: SortState::default(),
             watchlist_cache_tried: false,
             sec_sort: SortState::default(),
@@ -15595,7 +15599,7 @@ impl TyphooNApp {
                             self.log.push_back(LogEntry::warn("Need 10+ symbols with fundamentals data. Run EVSCRAPE first."));
                         } else {
                             // Build per-symbol data maps from all available sources
-                            let mut symbols: Vec<(String, String)> = Vec::new();
+                            let mut symbols: Vec<(String, String, String)> = Vec::new();
                             let mut ev_map = std::collections::HashMap::new();
                             let mut var_map = std::collections::HashMap::new();
                             let mut atr_map = std::collections::HashMap::new();
@@ -15603,9 +15607,10 @@ impl TyphooNApp {
 
                             for f in fund {
                                 let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
+                                let industry = if f.industry.is_empty() { sector.clone() } else { f.industry.clone() };
                                 // PERF: Clone symbol ONCE per row (was 4x — outliers, ev_map, var_map, atr_map)
                                 let sym = f.symbol.clone();
-                                symbols.push((sym.clone(), sector));
+                                symbols.push((sym.clone(), sector, industry));
                                 // EV: MCap/EV ratio (valuation anomaly)
                                 if let (Some(mc), Some(ev)) = (f.market_cap, f.enterprise_value) {
                                     if ev > 0.0 { ev_map.insert(sym.clone(), mc / ev * 100.0); }
@@ -15621,7 +15626,7 @@ impl TyphooNApp {
                             }
                             // SEC filings per symbol — initialize ALL symbols to 0 first
                             // so z-score sees full distribution (not just non-zero entries)
-                            for (sym, _) in &symbols {
+                            for (sym, _, _) in &symbols {
                                 sec_map.entry(sym.clone()).or_insert(0);
                             }
                             for filing in &self.bg.sec_filings {
@@ -15635,9 +15640,13 @@ impl TyphooNApp {
                             // Run multi-dimensional outlier detection
                             let multi = var::detect_multi_outliers(&symbols, &var_map, &ev_map, &atr_map, &sec_map, 1.5);
                             // Also run single-dimension (legacy) for sector stats
-                            let data: Vec<(String, String, f64)> = fund.iter()
-                                .filter_map(|f| f.market_cap.map(|mc| (f.symbol.clone(), if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() }, mc)))
-                                .filter(|(_, _, mc)| *mc > 0.0)
+                            let data: Vec<(String, String, String, f64)> = fund.iter()
+                                .filter_map(|f| f.market_cap.map(|mc| {
+                                    let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
+                                    let industry = if f.industry.is_empty() { sector.clone() } else { f.industry.clone() };
+                                    (f.symbol.clone(), sector, industry, mc)
+                                }))
+                                .filter(|(_, _, _, mc)| *mc > 0.0)
                                 .collect();
                             let (outliers, stats) = var::detect_outliers(&data, 1.5);
 
@@ -15683,9 +15692,10 @@ impl TyphooNApp {
                     )));
                 } else {
                     // Flat distribution — all DARWINs in one "sector" since they're all strategies.
-                    let data: Vec<(String, String, f64)> = self.bg.per_darwin_var.iter()
+                    // Industry mirrors sector (no finer classification exists for DARWINs).
+                    let data: Vec<(String, String, String, f64)> = self.bg.per_darwin_var.iter()
                         .filter(|(_, vr)| vr.var_95 > 0.0)
-                        .map(|(ticker, vr)| (ticker.clone(), "DARWIN".to_string(), vr.var_95))
+                        .map(|(ticker, vr)| (ticker.clone(), "DARWIN".to_string(), "DARWIN".to_string(), vr.var_95))
                         .collect();
                     let (outliers, stats) = var::detect_outliers(&data, 1.5);
 
@@ -15694,12 +15704,12 @@ impl TyphooNApp {
                     const CORRIDOR_LOW: f64 = 3.25;
                     const CORRIDOR_HIGH: f64 = 6.50;
                     let below: Vec<&str> = data.iter()
-                        .filter(|(_, _, v)| *v < CORRIDOR_LOW)
-                        .map(|(s, _, _)| s.as_str())
+                        .filter(|(_, _, _, v)| *v < CORRIDOR_LOW)
+                        .map(|(s, _, _, _)| s.as_str())
                         .collect();
                     let above: Vec<&str> = data.iter()
-                        .filter(|(_, _, v)| *v > CORRIDOR_HIGH)
-                        .map(|(s, _, _)| s.as_str())
+                        .filter(|(_, _, _, v)| *v > CORRIDOR_HIGH)
+                        .map(|(s, _, _, _)| s.as_str())
                         .collect();
 
                     self.log.push_back(LogEntry::info(format!(
@@ -15720,7 +15730,7 @@ impl TyphooNApp {
                     self.outlier_scroll_pending = true;
 
                     // ADR-094: Show VaR corridor gauge as result card
-                    let avg_var = data.iter().map(|(_, _, v)| v).sum::<f64>() / data.len().max(1) as f64;
+                    let avg_var = data.iter().map(|(_, _, _, v)| v).sum::<f64>() / data.len().max(1) as f64;
                     self.result_card = Some((ResultCard::Gauge {
                         title: "DARWIN VaR Corridor".to_string(),
                         label: "Avg VaR95".to_string(),
@@ -15751,13 +15761,13 @@ impl TyphooNApp {
                 let fund_owned = self.scoped_fundamentals_owned();
                 let fund = &fund_owned;
                 let scope_label = self.broker_scope_label();
-                let data: Vec<(String, String, f64)> = fund.iter()
-                    .filter_map(|f| f.enterprise_value.map(|ev| (
-                        f.symbol.clone(),
-                        if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() },
-                        ev,
-                    )))
-                    .filter(|(_, _, ev)| *ev > 0.0)
+                let data: Vec<(String, String, String, f64)> = fund.iter()
+                    .filter_map(|f| f.enterprise_value.map(|ev| {
+                        let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
+                        let industry = if f.industry.is_empty() { sector.clone() } else { f.industry.clone() };
+                        (f.symbol.clone(), sector, industry, ev)
+                    }))
+                    .filter(|(_, _, _, ev)| *ev > 0.0)
                     .collect();
                 if data.len() < 10 {
                     self.log.push_back(LogEntry::warn(format!(
@@ -15796,8 +15806,7 @@ impl TyphooNApp {
                     let tick_specs = if let Some(conn) = cache.try_connection() {
                         darwin::load_tick_specs(&conn).unwrap_or_default()
                     } else { std::collections::HashMap::new() };
-                    let mut var_data: Vec<(String, String, f64)> = Vec::new();
-                    let mut industry_data: Vec<(String, String, f64)> = Vec::new();
+                    let mut var_data: Vec<(String, String, String, f64)> = Vec::new();
                     let mut no_bars = 0usize;
 
                     for f in &fund_owned {
@@ -15821,10 +15830,7 @@ impl TyphooNApp {
                         let sym_upper = f.symbol.to_uppercase();
                         let tick_scale = tick_specs.get(&sym_upper).copied().unwrap_or(1.0);
                         if let Some((_, ratio)) = var::compute_var_from_closes_with_tick(&closes, 0.95, tick_scale) {
-                            // PERF: Clone symbol once, reuse for both vecs
-                            let sym = f.symbol.clone();
-                            var_data.push((sym.clone(), sector, ratio));
-                            industry_data.push((sym, industry, ratio));
+                            var_data.push((f.symbol.clone(), sector, industry, ratio));
                         }
                     }
 
@@ -15834,21 +15840,21 @@ impl TyphooNApp {
                             var_data.len(), no_bars
                         )));
                     } else {
-                        // 3-level IQR analysis like MarketWizardry.org
+                        // IQR analysis grouped by sector (industry carried as display column).
+                        // Industry has too few peers per group (~2-5) for IQR to be statistically
+                        // meaningful — sector (~10-30 peers) is the right granularity.
                         let (sector_outliers, sector_stats) = var::detect_outliers(&var_data, 1.5);
-                        let (industry_outliers, industry_stats) = var::detect_outliers(&industry_data, 1.5);
 
                         // Global statistics
-                        let mut vals: Vec<f64> = var_data.iter().map(|(_, _, v)| *v).collect();
+                        let mut vals: Vec<f64> = var_data.iter().map(|(_, _, _, v)| *v).collect();
                         vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                         let q1 = vals[vals.len() / 4];
                         let q3 = vals[3 * vals.len() / 4];
                         let iqr = q3 - q1;
 
                         self.log.push_back(LogEntry::info(format!(
-                            "VaR/Ask outlier scan [{}]: {} symbols | Sector: {} outliers across {} sectors | Industry: {} outliers across {} industries",
-                            scope_label, var_data.len(), sector_outliers.len(), sector_stats.len(),
-                            industry_outliers.len(), industry_stats.len()
+                            "VaR/Ask outlier scan [{}]: {} symbols | {} outliers across {} sectors",
+                            scope_label, var_data.len(), sector_outliers.len(), sector_stats.len()
                         )));
                         self.log.push_back(LogEntry::info(format!(
                             "Global VaR/Ask: Q1={:.2}% Q3={:.2}% IQR={:.2}% Bounds=[{:.2}%, {:.2}%]",
@@ -15876,11 +15882,12 @@ impl TyphooNApp {
                         "Need 10+ symbols with fundamentals data (have {}). Run EVSCRAPE first.", fund_owned.len()
                     )));
                 } else if let Some(ref cache) = self.cache {
-                    let mut atr_data: Vec<(String, String, f64)> = Vec::new();
+                    let mut atr_data: Vec<(String, String, String, f64)> = Vec::new();
                     let mut no_bars = 0usize;
 
                     for f in &fund_owned {
                         let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
+                        let industry = if f.industry.is_empty() { sector.clone() } else { f.industry.clone() };
                         let keys = [
                             format!("mt5:CC:{}:1Day", f.symbol),
                             format!("mt5:{}:1Day", f.symbol),
@@ -15915,7 +15922,7 @@ impl TyphooNApp {
                         }
                         let close = bars.last().map(|b| b.3).unwrap_or(0.0);
                         if close > 0.0 && atr > 0.0 {
-                            atr_data.push((f.symbol.clone(), sector, atr / close * 100.0));
+                            atr_data.push((f.symbol.clone(), sector, industry, atr / close * 100.0));
                         }
                     }
 
@@ -26354,10 +26361,11 @@ impl TyphooNApp {
                             // Re-run with scope filter (respects SCOPE command)
                             if let Some(ref cache) = self.cache {
                                 if let Some(_conn) = cache.try_connection() {
-                                    let mut data: Vec<(String, String, f64)> = Vec::new();
+                                    let mut data: Vec<(String, String, String, f64)> = Vec::new();
                                     for f in &outlier_scoped_fund {
                                         let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
-                                        if let Some(mc) = f.market_cap { if mc > 0.0 { data.push((f.symbol.clone(), sector, mc)); } }
+                                        let industry = if f.industry.is_empty() { sector.clone() } else { f.industry.clone() };
+                                        if let Some(mc) = f.market_cap { if mc > 0.0 { data.push((f.symbol.clone(), sector, industry, mc)); } }
                                     }
                                     if data.len() >= 10 {
                                         let (o, s) = typhoon_engine::core::var::detect_outliers(&data, 1.5);
@@ -26379,33 +26387,37 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Score = sum of |z-scores| across flagged dimensions. Higher = more anomalous.").color(ol_dim).small());
                             ui.label(egui::RichText::new("Dims: P/E (risk) + MCap/EV (valuation) + Short Ratio (volatility) + SEC filings+insider trades (activity)").color(ol_dim).small());
                             ui.add_space(4.0);
-                            // Sort outliers
+                            // Sort outliers. Column indices:
+                            //   0 Symbol, 1 Sector, 2 Industry, 3 Score, 4 Dims, 5 Tier,
+                            //   6 P/E z, 7 EV z, 8 Short z, 9 SEC z
                             let mut sorted_outliers: Vec<&_> = self.darwinex_multi_outliers.iter().collect();
                             match self.outlier_sort.column {
                                 0 => sorted_outliers.sort_by(|a, b| a.symbol.cmp(&b.symbol)),
-                                1 => sorted_outliers.sort_by(|a, b| a.sector.cmp(&b.sector)),
-                                2 => sorted_outliers.sort_by(|a, b| a.composite_score.partial_cmp(&b.composite_score).unwrap_or(std::cmp::Ordering::Equal)),
-                                3 => sorted_outliers.sort_by(|a, b| a.dimensions_flagged.cmp(&b.dimensions_flagged)),
-                                4 => sorted_outliers.sort_by(|a, b| a.tier.cmp(&b.tier)),
-                                5 => sorted_outliers.sort_by(|a, b| a.var_z.abs().partial_cmp(&b.var_z.abs()).unwrap_or(std::cmp::Ordering::Equal)),
-                                6 => sorted_outliers.sort_by(|a, b| a.ev_z.abs().partial_cmp(&b.ev_z.abs()).unwrap_or(std::cmp::Ordering::Equal)),
-                                7 => sorted_outliers.sort_by(|a, b| a.atr_z.abs().partial_cmp(&b.atr_z.abs()).unwrap_or(std::cmp::Ordering::Equal)),
-                                8 => sorted_outliers.sort_by(|a, b| a.sec_z.abs().partial_cmp(&b.sec_z.abs()).unwrap_or(std::cmp::Ordering::Equal)),
+                                1 => sorted_outliers.sort_by(|a, b| a.sector.cmp(&b.sector).then_with(|| a.industry.cmp(&b.industry))),
+                                2 => sorted_outliers.sort_by(|a, b| a.industry.cmp(&b.industry).then_with(|| a.symbol.cmp(&b.symbol))),
+                                3 => sorted_outliers.sort_by(|a, b| a.composite_score.partial_cmp(&b.composite_score).unwrap_or(std::cmp::Ordering::Equal)),
+                                4 => sorted_outliers.sort_by(|a, b| a.dimensions_flagged.cmp(&b.dimensions_flagged)),
+                                5 => sorted_outliers.sort_by(|a, b| a.tier.cmp(&b.tier)),
+                                6 => sorted_outliers.sort_by(|a, b| a.var_z.abs().partial_cmp(&b.var_z.abs()).unwrap_or(std::cmp::Ordering::Equal)),
+                                7 => sorted_outliers.sort_by(|a, b| a.ev_z.abs().partial_cmp(&b.ev_z.abs()).unwrap_or(std::cmp::Ordering::Equal)),
+                                8 => sorted_outliers.sort_by(|a, b| a.atr_z.abs().partial_cmp(&b.atr_z.abs()).unwrap_or(std::cmp::Ordering::Equal)),
+                                9 => sorted_outliers.sort_by(|a, b| a.sec_z.abs().partial_cmp(&b.sec_z.abs()).unwrap_or(std::cmp::Ordering::Equal)),
                                 _ => {}
                             }
                             if !self.outlier_sort.ascending { sorted_outliers.reverse(); }
 
-                            egui::Grid::new("multi_outlier_grid").striped(true).num_columns(10).min_col_width(50.0).show(ui, |ui| {
+                            egui::Grid::new("multi_outlier_grid").striped(true).num_columns(11).min_col_width(50.0).show(ui, |ui| {
                                 if SortState::header(ui, "Symbol", 0, &self.outlier_sort) { self.outlier_sort.toggle(0); }
                                 ui.label(egui::RichText::new("30d").color(ol_dim).small());
                                 if SortState::header(ui, "Sector", 1, &self.outlier_sort) { self.outlier_sort.toggle(1); }
-                                if SortState::header(ui, "Score", 2, &self.outlier_sort) { self.outlier_sort.toggle(2); }
-                                if SortState::header(ui, "Dims", 3, &self.outlier_sort) { self.outlier_sort.toggle(3); }
-                                if SortState::header(ui, "Tier", 4, &self.outlier_sort) { self.outlier_sort.toggle(4); }
-                                if SortState::header(ui, "P/E z", 5, &self.outlier_sort) { self.outlier_sort.toggle(5); }
-                                if SortState::header(ui, "EV z", 6, &self.outlier_sort) { self.outlier_sort.toggle(6); }
-                                if SortState::header(ui, "Short z", 7, &self.outlier_sort) { self.outlier_sort.toggle(7); }
-                                if SortState::header(ui, "SEC z", 8, &self.outlier_sort) { self.outlier_sort.toggle(8); }
+                                if SortState::header(ui, "Industry", 2, &self.outlier_sort) { self.outlier_sort.toggle(2); }
+                                if SortState::header(ui, "Score", 3, &self.outlier_sort) { self.outlier_sort.toggle(3); }
+                                if SortState::header(ui, "Dims", 4, &self.outlier_sort) { self.outlier_sort.toggle(4); }
+                                if SortState::header(ui, "Tier", 5, &self.outlier_sort) { self.outlier_sort.toggle(5); }
+                                if SortState::header(ui, "P/E z", 6, &self.outlier_sort) { self.outlier_sort.toggle(6); }
+                                if SortState::header(ui, "EV z", 7, &self.outlier_sort) { self.outlier_sort.toggle(7); }
+                                if SortState::header(ui, "Short z", 8, &self.outlier_sort) { self.outlier_sort.toggle(8); }
+                                if SortState::header(ui, "SEC z", 9, &self.outlier_sort) { self.outlier_sort.toggle(9); }
                                 ui.end_row();
                                 // Build tradability set from MT5 cache keys
                                 let mt5_symbols: std::collections::HashSet<String> = self.bg.detailed_stats.iter()
@@ -26438,6 +26450,7 @@ impl TyphooNApp {
                                         ui.label(egui::RichText::new("—").color(ol_dim).small());
                                     }
                                     ui.label(egui::RichText::new(&o.sector).small().color(ol_cyan));
+                                    ui.label(egui::RichText::new(&o.industry).small());
                                     ui.label(egui::RichText::new(format!("{:.1}", o.composite_score)).small().color(tier_c).strong());
                                     ui.label(egui::RichText::new(format!("{}/4", o.dimensions_flagged)).small().color(tier_c));
                                     ui.label(egui::RichText::new(&o.tier).small().color(tier_c));
@@ -26480,21 +26493,40 @@ impl TyphooNApp {
                             ui.add_space(8.0);
                         }
 
-                        // Outlier table
+                        // Outlier table (single-metric) — click headers to sort
                         if !self.darwinex_outliers.is_empty() {
-                            ui.label(egui::RichText::new("Outliers (sorted by |z-score|)").small().strong());
-                            egui::Grid::new("outliers_grid").striped(true).num_columns(8).min_col_width(50.0).show(ui, |ui| {
-                                ui.label(egui::RichText::new("Symbol").color(ol_dim).small());
+                            ui.label(egui::RichText::new("Outliers (click headers to sort)").small().strong());
+                            // Sort outliers per header state. Columns:
+                            //   0 Symbol, 1 Sector, 2 Industry, 3 Value, 4 Median,
+                            //   5 Tier, 6 Z-Score (|z|), 7 Direction
+                            // ("30d" sparkline is display-only between Symbol and Sector — no sort.)
+                            let mut sorted_single: Vec<&_> = self.darwinex_outliers.iter().collect();
+                            match self.outlier_single_sort.column {
+                                0 => sorted_single.sort_by(|a, b| a.symbol.cmp(&b.symbol)),
+                                1 => sorted_single.sort_by(|a, b| a.sector.cmp(&b.sector).then_with(|| a.industry.cmp(&b.industry))),
+                                2 => sorted_single.sort_by(|a, b| a.industry.cmp(&b.industry).then_with(|| a.symbol.cmp(&b.symbol))),
+                                3 => sorted_single.sort_by(|a, b| a.metric.partial_cmp(&b.metric).unwrap_or(std::cmp::Ordering::Equal)),
+                                4 => sorted_single.sort_by(|a, b| a.sector_median.partial_cmp(&b.sector_median).unwrap_or(std::cmp::Ordering::Equal)),
+                                5 => sorted_single.sort_by(|a, b| a.tier.cmp(&b.tier)),
+                                6 => sorted_single.sort_by(|a, b| a.z_score.abs().partial_cmp(&b.z_score.abs()).unwrap_or(std::cmp::Ordering::Equal)),
+                                7 => sorted_single.sort_by(|a, b| a.direction.cmp(&b.direction)),
+                                _ => {}
+                            }
+                            if !self.outlier_single_sort.ascending { sorted_single.reverse(); }
+
+                            egui::Grid::new("outliers_grid").striped(true).num_columns(9).min_col_width(50.0).show(ui, |ui| {
+                                if SortState::header(ui, "Symbol", 0, &self.outlier_single_sort) { self.outlier_single_sort.toggle(0); }
                                 ui.label(egui::RichText::new("30d").color(ol_dim).small());
-                                ui.label(egui::RichText::new("Sector").color(ol_dim).small());
-                                ui.label(egui::RichText::new("Value").color(ol_dim).small());
-                                ui.label(egui::RichText::new("Median").color(ol_dim).small());
-                                ui.label(egui::RichText::new("Z-Score").color(ol_dim).small());
-                                ui.label(egui::RichText::new("Tier").color(ol_dim).small());
-                                ui.label(egui::RichText::new("Dir").color(ol_dim).small());
+                                if SortState::header(ui, "Sector", 1, &self.outlier_single_sort) { self.outlier_single_sort.toggle(1); }
+                                if SortState::header(ui, "Industry", 2, &self.outlier_single_sort) { self.outlier_single_sort.toggle(2); }
+                                if SortState::header(ui, "Value", 3, &self.outlier_single_sort) { self.outlier_single_sort.toggle(3); }
+                                if SortState::header(ui, "Median", 4, &self.outlier_single_sort) { self.outlier_single_sort.toggle(4); }
+                                if SortState::header(ui, "Tier", 5, &self.outlier_single_sort) { self.outlier_single_sort.toggle(5); }
+                                if SortState::header(ui, "Z-Score", 6, &self.outlier_single_sort) { self.outlier_single_sort.toggle(6); }
+                                if SortState::header(ui, "Dir", 7, &self.outlier_single_sort) { self.outlier_single_sort.toggle(7); }
                                 ui.end_row();
                                 let mut scrolled = false;
-                                for o in &self.darwinex_outliers {
+                                for o in &sorted_single {
                                     let (sym_resp, action) = symbol_label_with_menu(ui, &o.symbol,
                                         egui::RichText::new(&o.symbol).strong().color(ol_cyan));
                                     if !matches!(action, SymbolAction::None) {
@@ -26511,13 +26543,14 @@ impl TyphooNApp {
                                     } else {
                                         ui.label(egui::RichText::new("—").color(ol_dim).small());
                                     }
-                                    ui.label(egui::RichText::new(&o.sector).small());
+                                    ui.label(egui::RichText::new(&o.sector).small().color(ol_cyan));
+                                    ui.label(egui::RichText::new(&o.industry).small());
                                     ui.label(typhoon_engine::core::fundamentals::format_large_number(o.metric));
                                     ui.label(typhoon_engine::core::fundamentals::format_large_number(o.sector_median));
-                                    let zc = if o.z_score.abs() > 3.0 { ol_high } else if o.z_score.abs() > 2.0 { ol_med } else { ol_dim };
-                                    ui.label(egui::RichText::new(format!("{:.2}", o.z_score)).color(zc));
                                     let tc = match o.tier.as_str() { "EXTREME" => ol_high, "HIGH" => ol_med, _ => ol_dim };
                                     ui.label(egui::RichText::new(&o.tier).color(tc).small());
+                                    let zc = if o.z_score.abs() > 3.0 { ol_high } else if o.z_score.abs() > 2.0 { ol_med } else { ol_dim };
+                                    ui.label(egui::RichText::new(format!("{:.2}", o.z_score)).color(zc));
                                     let dc = if o.direction == "high" { ol_green } else { ol_high };
                                     ui.label(egui::RichText::new(&o.direction).color(dc).small());
                                     ui.end_row();
