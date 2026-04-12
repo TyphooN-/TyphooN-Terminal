@@ -4261,9 +4261,20 @@ pub fn simulate_margin_call(conn: &Connection) -> Result<MarginCallSimulation, S
         });
     }
 
-    let returns: Vec<f64> = daily_returns.iter().map(|r| r.return_pct / 100.0).collect();
-    let mean: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
-    let var: f64 = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64;
+    // Single-pass: build returns buffer AND accumulate mean/variance stats
+    // in one traversal (was two passes after the collect — mean then variance).
+    let mut returns: Vec<f64> = Vec::with_capacity(daily_returns.len());
+    let mut sum = 0.0f64;
+    let mut sum_sq = 0.0f64;
+    for r in daily_returns {
+        let v = r.return_pct / 100.0;
+        returns.push(v);
+        sum += v;
+        sum_sq += v * v;
+    }
+    let n_f = returns.len() as f64;
+    let mean = sum / n_f;
+    let var = ((sum_sq / n_f) - mean * mean).max(0.0);
     let daily_vol = var.sqrt();
 
     // Deterministic days-to-margin-call using daily vol drawdown estimate
@@ -4752,13 +4763,31 @@ pub fn compute_conditional_var(daily_returns: &[DailyReturn]) -> Vec<Conditional
 
     let returns: Vec<f64> = daily_returns.iter().map(|r| r.return_pct).collect();
 
-    // Compute 20-day rolling volatility for each day
+    // Compute 20-day rolling volatility for each day using a sliding
+    // sum + sum_sq window (O(N) total vs the previous O(N·20) double pass).
     let mut rolling_vols: Vec<(usize, f64)> = Vec::new();
-    for i in 19..returns.len() {
-        let window = &returns[i - 19..=i];
-        let mean = window.iter().sum::<f64>() / window.len() as f64;
-        let var = window.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / window.len() as f64;
-        rolling_vols.push((i, var.sqrt()));
+    let window_len = 20usize;
+    if returns.len() >= window_len {
+        let mut sum = 0.0f64;
+        let mut sum_sq = 0.0f64;
+        for &r in &returns[..window_len] {
+            sum += r;
+            sum_sq += r * r;
+        }
+        let w_f = window_len as f64;
+        let push_vol = |sum: f64, sum_sq: f64, i: usize, out: &mut Vec<(usize, f64)>| {
+            let mean = sum / w_f;
+            let var = (sum_sq / w_f) - mean * mean;
+            out.push((i, var.max(0.0).sqrt()));
+        };
+        push_vol(sum, sum_sq, window_len - 1, &mut rolling_vols);
+        for i in window_len..returns.len() {
+            let out_r = returns[i - window_len];
+            let in_r = returns[i];
+            sum += in_r - out_r;
+            sum_sq += in_r * in_r - out_r * out_r;
+            push_vol(sum, sum_sq, i, &mut rolling_vols);
+        }
     }
 
     if rolling_vols.is_empty() {
@@ -4857,13 +4886,30 @@ pub fn detect_market_regime(daily_returns: &[DailyReturn]) -> MarketRegime {
     let returns: Vec<f64> = daily_returns.iter().map(|r| r.return_pct).collect();
     let dates: Vec<&str> = daily_returns.iter().map(|r| r.date.as_str()).collect();
 
-    // Compute 20-day rolling vol for each day starting from index 19
+    // Compute 20-day rolling vol via sliding sum + sum_sq (O(N) vs O(N·20)).
     let mut rolling: Vec<(usize, f64)> = Vec::new();
-    for i in 19..returns.len() {
-        let window = &returns[i - 19..=i];
-        let mean = window.iter().sum::<f64>() / window.len() as f64;
-        let var = window.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / window.len() as f64;
-        rolling.push((i, var.sqrt()));
+    let window_len = 20usize;
+    if returns.len() >= window_len {
+        let mut sum = 0.0f64;
+        let mut sum_sq = 0.0f64;
+        for &r in &returns[..window_len] {
+            sum += r;
+            sum_sq += r * r;
+        }
+        let w_f = window_len as f64;
+        let push_vol = |sum: f64, sum_sq: f64, i: usize, out: &mut Vec<(usize, f64)>| {
+            let mean = sum / w_f;
+            let var = (sum_sq / w_f) - mean * mean;
+            out.push((i, var.max(0.0).sqrt()));
+        };
+        push_vol(sum, sum_sq, window_len - 1, &mut rolling);
+        for i in window_len..returns.len() {
+            let out_r = returns[i - window_len];
+            let in_r = returns[i];
+            sum += in_r - out_r;
+            sum_sq += in_r * in_r - out_r * out_r;
+            push_vol(sum, sum_sq, i, &mut rolling);
+        }
     }
 
     if rolling.is_empty() {
@@ -6314,21 +6360,34 @@ pub fn compute_signal_decay(conn: &Connection, ticker: &str, window: usize) -> R
     let daily = get_daily_returns(conn, ticker)?;
     if daily.len() < window { return Err("Not enough data for decay analysis".into()); }
 
+    // Rolling Sharpe via sliding sum + sum_sq window. Was O(N·window·2) with
+    // an intermediate `Vec<f64>` rebuilt every iteration; now O(N).
     let mut points = Vec::new();
     let mut peak_sharpe = f64::NEG_INFINITY;
-
-    for i in window..=daily.len() {
-        let slice = &daily[i-window..i];
-        let returns: Vec<f64> = slice.iter().map(|d| d.return_pct).collect();
-        let n = returns.len() as f64;
-        let mean = returns.iter().sum::<f64>() / n;
-        let var = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    let sqrt_252 = (252.0_f64).sqrt();
+    let w_f = window as f64;
+    // Initial window sums over daily[0..window]
+    let mut sum = 0.0f64;
+    let mut sum_sq = 0.0f64;
+    for r in &daily[..window] {
+        sum += r.return_pct;
+        sum_sq += r.return_pct * r.return_pct;
+    }
+    let emit = |sum: f64, sum_sq: f64, last_date: String, points: &mut Vec<(String, f64)>, peak: &mut f64| {
+        let mean = sum / w_f;
+        let var = ((sum_sq - w_f * mean * mean) / (w_f - 1.0)).max(0.0);
         let std = var.sqrt();
-        let sharpe = if std > 0.0 { mean / std * (252.0_f64).sqrt() } else { 0.0 };
-
-        let date = slice.last().map(|d| d.date.clone()).unwrap_or_default();
-        points.push((date, sharpe));
-        if sharpe > peak_sharpe { peak_sharpe = sharpe; }
+        let sharpe = if std > 0.0 { mean / std * sqrt_252 } else { 0.0 };
+        points.push((last_date, sharpe));
+        if sharpe > *peak { *peak = sharpe; }
+    };
+    emit(sum, sum_sq, daily[window - 1].date.clone(), &mut points, &mut peak_sharpe);
+    for i in window..daily.len() {
+        let out = daily[i - window].return_pct;
+        let into = daily[i].return_pct;
+        sum += into - out;
+        sum_sq += into * into - out * out;
+        emit(sum, sum_sq, daily[i].date.clone(), &mut points, &mut peak_sharpe);
     }
 
     let current = points.last().map(|p| p.1).unwrap_or(0.0);
