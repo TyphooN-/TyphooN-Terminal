@@ -14623,60 +14623,48 @@ impl TyphooNApp {
     }
 
     /// Parse the argument portion of an ASKAI/ASKCLAUDE/ASKGEMINI command.
-    /// Accepted forms:
-    ///   ASKAI CC,NCLH                          → syms = [CC, NCLH], question = ""
-    ///   ASKAI CC NCLH                          → syms = [CC, NCLH], question = ""
-    ///   ASKAI CC,NCLH what's their debt load?  → syms = [CC, NCLH], question = "what's their debt load?"
-    /// The symbol list terminates at the first token that isn't ALPHANUM / -+._ or the first
-    /// lowercase non-ticker-looking word.
+    ///
+    /// The contract is simple and predictable: the **first whitespace-separated
+    /// token** is the comma-separated symbol list; **everything after the first
+    /// whitespace** is the question, preserved verbatim.
+    ///
+    ///   ASKAI CC,NCLH                            -> syms=[CC, NCLH], q=""
+    ///   ASKAI CC,NCLH what's their debt load?    -> syms=[CC, NCLH], q="what's their debt load?"
+    ///   ASKAI CC what is the outlook?            -> syms=[CC],       q="what is the outlook?"
+    ///
+    /// Note: handle_command() has already uppercased `args` by the time we're
+    /// called, so the question ends up uppercased in the returned string. That
+    /// is fine — we use it as prompt text for an LLM, not for matching.
+    /// Space-separated symbol lists (e.g. "CC NCLH") are NOT supported — use
+    /// commas — because we cannot reliably distinguish a second symbol from
+    /// the first word of an English question once everything is uppercase.
     fn parse_ask_args(args: &str) -> (Vec<String>, String) {
         let trimmed = args.trim();
         if trimmed.is_empty() { return (Vec::new(), String::new()); }
 
-        // Split first token group by whitespace; the first token may itself be comma-separated.
-        let mut parts = trimmed.splitn(2, char::is_whitespace);
-        let first = parts.next().unwrap_or("");
-        let rest = parts.next().unwrap_or("").trim();
+        let mut split = trimmed.splitn(2, char::is_whitespace);
+        let first = split.next().unwrap_or("");
+        let question = split.next().unwrap_or("").trim().to_string();
 
         let is_tickerish = |s: &str| -> bool {
             !s.is_empty() && s.len() <= 15 && s.chars().all(|c|
-                c.is_ascii_uppercase() || c.is_ascii_digit() || matches!(c, '-' | '.' | '_' | '+' | '/'))
+                c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '+' | '/'))
         };
 
-        // Collect tickers from the comma-separated first token.
-        let mut syms: Vec<String> = first.split(',')
+        let mut seen = std::collections::HashSet::new();
+        let syms: Vec<String> = first.split(',')
             .map(|s| s.trim().to_uppercase())
             .filter(|s| !s.is_empty() && is_tickerish(s))
+            .filter(|s| seen.insert(s.clone()))
             .collect();
 
-        // If `rest` starts with additional tickerish tokens (space-separated), absorb them.
-        // Stop at the first non-ticker token — that's where the question starts.
-        let mut question_start = 0usize;
-        let rest_bytes = rest.as_bytes();
-        let mut idx = 0usize;
-        while idx < rest_bytes.len() {
-            // Skip leading whitespace
-            while idx < rest_bytes.len() && (rest_bytes[idx] as char).is_whitespace() { idx += 1; }
-            if idx >= rest_bytes.len() { break; }
-            let start = idx;
-            while idx < rest_bytes.len() && !(rest_bytes[idx] as char).is_whitespace() { idx += 1; }
-            let token = &rest[start..idx];
-            // Strip trailing comma for "CC, NCLH something" style
-            let clean = token.trim_end_matches(',').to_uppercase();
-            if is_tickerish(&clean) {
-                syms.push(clean);
-                question_start = idx;
-            } else {
-                question_start = start;
-                break;
-            }
-        }
-        // Dedupe while preserving order
-        let mut seen = std::collections::HashSet::new();
-        syms.retain(|s| seen.insert(s.clone()));
-
-        let question = rest[question_start..].trim().to_string();
         (syms, question)
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    fn parse_ask_args_test(args: &str) -> (Vec<String>, String) {
+        Self::parse_ask_args(args)
     }
 
     /// Format a Unix timestamp as a relative staleness label for UI display.
@@ -35626,6 +35614,61 @@ impl eframe::App for TyphooNApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── parse_ask_args (ASKAI/ASKCLAUDE/ASKGEMINI argument parser) ───────────
+
+    // Note: handle_command() has already uppercased the input by the time
+    // parse_ask_args is called, so these tests pass uppercase input to match.
+
+    #[test]
+    fn parse_ask_args_single_symbol_only() {
+        let (syms, q) = TyphooNApp::parse_ask_args("CC");
+        assert_eq!(syms, vec!["CC".to_string()]);
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn parse_ask_args_comma_symbols_only() {
+        let (syms, q) = TyphooNApp::parse_ask_args("CC,NCLH");
+        assert_eq!(syms, vec!["CC".to_string(), "NCLH".to_string()]);
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn parse_ask_args_question_is_not_treated_as_tickers() {
+        // Regression: the entire uppercased question used to end up as "tickers"
+        // because handle_command upper-cases input before parse_ask_args sees it.
+        let (syms, q) = TyphooNApp::parse_ask_args("CC,NCLH WHAT IS YOUR OPINION FUNDAMENTALLY OF THESE SYMBOLS WITH ALL AVAILABLE");
+        assert_eq!(syms, vec!["CC".to_string(), "NCLH".to_string()]);
+        assert_eq!(q, "WHAT IS YOUR OPINION FUNDAMENTALLY OF THESE SYMBOLS WITH ALL AVAILABLE");
+    }
+
+    #[test]
+    fn parse_ask_args_single_symbol_with_question() {
+        let (syms, q) = TyphooNApp::parse_ask_args("CC WHAT IS THE OUTLOOK");
+        assert_eq!(syms, vec!["CC".to_string()]);
+        assert_eq!(q, "WHAT IS THE OUTLOOK");
+    }
+
+    #[test]
+    fn parse_ask_args_dedupes_symbols() {
+        let (syms, _) = TyphooNApp::parse_ask_args("CC,NCLH,CC");
+        assert_eq!(syms, vec!["CC".to_string(), "NCLH".to_string()]);
+    }
+
+    #[test]
+    fn parse_ask_args_empty_input() {
+        let (syms, q) = TyphooNApp::parse_ask_args("");
+        assert!(syms.is_empty());
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn parse_ask_args_preserves_special_chars_in_tickers() {
+        // BRK.B, RDS-A, BTC-USD all need to survive the tickerish check.
+        let (syms, _) = TyphooNApp::parse_ask_args("BRK.B,RDS-A,BTC-USD");
+        assert_eq!(syms, vec!["BRK.B".to_string(), "RDS-A".to_string(), "BTC-USD".to_string()]);
+    }
 
     /// Create synthetic test bars (ascending prices).
     fn make_bars(n: usize) -> Vec<Bar> {
