@@ -13244,12 +13244,12 @@ impl TyphooNApp {
             cached_scope_frame: 0,
             outlier_scroll_pending: false,
             workspaces: std::collections::HashMap::new(),
-            sparkline_cache: std::collections::HashMap::new(),
-            sector_interner: std::collections::HashMap::new(),
+            sparkline_cache: std::collections::HashMap::with_capacity(256),
+            sector_interner: std::collections::HashMap::with_capacity(64),
             deferred_symbol_action: SymbolAction::None,
-            cached_active_symbols: Vec::new(),
+            cached_active_symbols: Vec::with_capacity(64),
             cached_active_symbols_frame: 0,
-            cached_active_symbols_set: std::collections::HashSet::new(),
+            cached_active_symbols_set: std::collections::HashSet::with_capacity(64),
             cached_scoped_fundamentals: Vec::new(),
             cached_scoped_fundamentals_frame: 0,
             show_event_calendar: false,
@@ -13566,7 +13566,8 @@ impl TyphooNApp {
                         // Phase 1a: list accounts, filtering out user-deleted DARWINs
                         data.accounts = darwin::list_darwin_accounts(conn).unwrap_or_default();
                         // Blacklist filter: check KV for darwin:deleted:TICKER keys
-                        let blacklist: Vec<String> = data.accounts.iter()
+                        // PERF: HashSet for O(1) retain check
+                        let blacklist: std::collections::HashSet<String> = data.accounts.iter()
                             .filter(|a| cache.get_kv(&format!("darwin:deleted:{}", a.darwin_ticker)).ok().flatten().is_some())
                             .map(|a| a.darwin_ticker.clone())
                             .collect();
