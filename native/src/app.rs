@@ -35224,21 +35224,34 @@ impl eframe::App for TyphooNApp {
                                 ui.add_space(12.0);
                                 ui.label(egui::RichText::new(cmd.desc).color(egui::Color32::from_rgb(136, 136, 136)).size(11.0));
                             });
+                            // Click: execute the selected palette row verbatim (no arguments).
                             if row.response.interact(egui::Sense::click()).clicked() {
                                 execute = Some(cmd.name.to_string());
                             }
                         }
                     });
 
-                    // Enter executes the selected command
+                    // Enter key: if the user typed arguments (whitespace present after the
+                    // command name), pass the raw input through so commands like
+                    // `ASKGEMINI CC,NCLH what's their debt?` keep their arguments. Otherwise
+                    // use the currently-selected palette entry so fuzzy-match still works.
                     if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        execute = palette_commands.get(self.console_selected).map(|c| c.name.to_string());
+                        let raw = self.command_input.trim().to_string();
+                        if raw.contains(char::is_whitespace) {
+                            // User typed command + args — honour them verbatim.
+                            execute = Some(raw);
+                        } else {
+                            execute = palette_commands.get(self.console_selected).map(|c| c.name.to_string());
+                        }
                     }
                     if let Some(cmd_name) = execute {
                         self.command_open = false;
-                        // ADR-092: track recent commands (MRU, max 10)
-                        self.recent_commands.retain(|n| n != &cmd_name);
-                        self.recent_commands.push_front(cmd_name.clone());
+                        // ADR-092: track recent commands (MRU, max 10). For commands with
+                        // arguments we only remember the leading token so the MRU list stays
+                        // clean and repeat-able.
+                        let mru_key = cmd_name.split_whitespace().next().unwrap_or(&cmd_name).to_uppercase();
+                        self.recent_commands.retain(|n| n != &mru_key);
+                        self.recent_commands.push_front(mru_key);
                         self.recent_commands.truncate(10);
                         self.handle_command(&cmd_name, ctx);
                     }
