@@ -1083,9 +1083,20 @@ pub fn strip_html_to_text(html: &str) -> String {
 
 /// Store filing content (zstd-compressed) and index in FTS5.
 /// Filings are typically 80KB plain text → ~8KB compressed (10x reduction).
+/// MEM: Cap at 500KB plain text — extremely large filings (multi-MB 10-Ks) are
+/// truncated to keep DB size bounded. Truncation marker appended.
 pub fn store_filing_content(conn: &Connection, accession: &str, ticker: &str, form_type: &str, company: &str, content: &str) -> Result<(), String> {
     let now = chrono::Utc::now().timestamp();
-    let compressed = zstd::encode_all(content.as_bytes(), 3)
+    const MAX_PLAIN_BYTES: usize = 500_000;
+    let stored: std::borrow::Cow<str> = if content.len() > MAX_PLAIN_BYTES {
+        // Find a UTF-8 char boundary at or before the limit
+        let mut cut = MAX_PLAIN_BYTES;
+        while cut > 0 && !content.is_char_boundary(cut) { cut -= 1; }
+        std::borrow::Cow::Owned(format!("{}\n\n[Truncated at 500KB — original {} bytes]", &content[..cut], content.len()))
+    } else {
+        std::borrow::Cow::Borrowed(content)
+    };
+    let compressed = zstd::encode_all(stored.as_bytes(), 3)
         .map_err(|e| format!("Compress content failed: {e}"))?;
     conn.execute(
         "INSERT OR REPLACE INTO sec_filing_content (accession_number, content_plain, content_size, fetched_at)
@@ -1099,11 +1110,12 @@ pub fn store_filing_content(conn: &Connection, accession: &str, ticker: &str, fo
         params![accession],
     );
 
-    // Populate FTS5 index (uncompressed for tokenization)
+    // Populate FTS5 index (uncompressed for tokenization, also truncated)
+    let fts_content: &str = stored.as_ref();
     let _ = conn.execute(
         "INSERT OR REPLACE INTO sec_fts (accession_number, ticker, form_type, company_name, content)
          VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![accession, ticker, form_type, company, content],
+        params![accession, ticker, form_type, company, fts_content],
     );
 
     Ok(())

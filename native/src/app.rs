@@ -10217,6 +10217,8 @@ pub struct TyphooNApp {
     /// PERF: Per-frame cached active symbols list. Recomputed at start of update().
     cached_active_symbols: Vec<String>,
     cached_active_symbols_frame: u64,
+    /// PERF: Per-frame HashSet of cached_active_symbols for O(1) lookup.
+    cached_active_symbols_set: std::collections::HashSet<String>,
     /// PERF: Per-frame cached scoped fundamentals (filtered by broker_scope).
     /// Used by Sector Heatmap, Dividend Yield Screener, Outlier Scanner — was cloning Vec<Fundamentals> per render.
     cached_scoped_fundamentals: Vec<typhoon_engine::core::fundamentals::Fundamentals>,
@@ -13247,6 +13249,7 @@ impl TyphooNApp {
             deferred_symbol_action: SymbolAction::None,
             cached_active_symbols: Vec::new(),
             cached_active_symbols_frame: 0,
+            cached_active_symbols_set: std::collections::HashSet::new(),
             cached_scoped_fundamentals: Vec::new(),
             cached_scoped_fundamentals_frame: 0,
             show_event_calendar: false,
@@ -23385,7 +23388,8 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Ratio").color(AXIS_TEXT).small().strong());
                             ui.end_row();
                             for (sym, today, avg, ratio) in &self.unusual_volume_results {
-                                if !vol_active.is_empty() && !vol_active.iter().any(|s| s.eq_ignore_ascii_case(sym)) { continue; }
+                                // PERF: O(1) HashSet lookup instead of O(n) iter().any()
+                                if !vol_active.is_empty() && !self.cached_active_symbols_set.contains(&sym.to_uppercase()) { continue; }
                                 let ratio_c = if *ratio > 3.0 { egui::Color32::from_rgb(231, 76, 60) }
                                     else if *ratio > 2.0 { egui::Color32::from_rgb(241, 196, 15) }
                                     else { egui::Color32::from_rgb(46, 204, 113) };
@@ -23673,7 +23677,7 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new("Party").color(AXIS_TEXT).small().strong());
                                 ui.end_row();
                                 for (date, rep, ticker, tx_type, amount, party) in &self.congress_trades {
-                                    if !cong_active.is_empty() && !cong_active.iter().any(|s| s.eq_ignore_ascii_case(ticker)) { continue; }
+                                    if !cong_active.is_empty() && !self.cached_active_symbols_set.contains(&ticker.to_uppercase()) { continue; }
                                     ui.label(egui::RichText::new(date).small().monospace());
                                     ui.label(egui::RichText::new(rep).small());
                                     let (_, ct_action) = symbol_label_with_menu(ui, ticker,
@@ -23699,6 +23703,7 @@ impl TyphooNApp {
 
         // Crypto Backfill (CryptoCompare deep history)
         if self.show_crypto_backfill {
+            let mut bf_pending_action = SymbolAction::None;
             egui::Window::new("Crypto Backfill (CryptoCompare + Kraken)")
                 .open(&mut self.show_crypto_backfill)
                 .resizable(true).default_size([550.0, 400.0])
@@ -23758,7 +23763,9 @@ impl TyphooNApp {
                                                 if ts == 0 { "—".to_string() }
                                                 else { chrono::DateTime::from_timestamp(ts / 1000, 0).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default() }
                                             };
-                                            ui.label(egui::RichText::new(sym_part).small().monospace());
+                                            let (_, bf_act) = symbol_label_with_menu(ui, sym_part,
+                                                egui::RichText::new(sym_part).small().monospace());
+                                            if !matches!(bf_act, SymbolAction::None) { bf_pending_action = bf_act; }
                                             ui.label(egui::RichText::new(tf_part).color(AXIS_TEXT).small());
                                             ui.label(egui::RichText::new(format!("{}", count)).small());
                                             ui.label(egui::RichText::new(fmt_ts(first_ts)).color(AXIS_TEXT).small());
@@ -23771,6 +23778,7 @@ impl TyphooNApp {
                         });
                     });
                 });
+            self.apply_symbol_action(bf_pending_action);
         }
 
         // ── SwapHarvest Window ──
@@ -24392,8 +24400,9 @@ impl TyphooNApp {
                     });
                     ui.separator();
                     // PERF: cached_scoped_fundamentals already applied scope filter — only need active filter
+                    // O(1) HashSet lookup instead of O(n) iter().any()
                     let mut fund_sorted: Vec<&_> = self.cached_scoped_fundamentals.iter()
-                        .filter(|f| ev_active.is_empty() || ev_active.iter().any(|s| s.eq_ignore_ascii_case(&f.symbol)))
+                        .filter(|f| ev_active.is_empty() || self.cached_active_symbols_set.contains(&f.symbol.to_uppercase()))
                         .collect();
                     match self.ev_sort.column {
                         0 => fund_sorted.sort_by(|a, b| a.symbol.cmp(&b.symbol)),
@@ -24476,7 +24485,7 @@ impl TyphooNApp {
                             ui.end_row();
                             let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
                             for (sym, company, date) in &self.bg.upcoming_earnings {
-                                if !earn_active.is_empty() && !earn_active.iter().any(|s| s.eq_ignore_ascii_case(sym)) { continue; }
+                                if !earn_active.is_empty() && !self.cached_active_symbols_set.contains(&sym.to_uppercase()) { continue; }
                                 let days_away = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok().and_then(|d| {
                                     chrono::NaiveDate::parse_from_str(&today, "%Y-%m-%d").ok().map(|t| (d - t).num_days())
                                 });
@@ -24516,7 +24525,7 @@ impl TyphooNApp {
                             ui.strong("Ex-Div Date"); ui.strong("Symbol"); ui.strong("Company"); ui.strong("Yield%");
                             ui.end_row();
                             for (sym, company, date, yld) in &self.bg.upcoming_dividends {
-                                if !div_active.is_empty() && !div_active.iter().any(|s| s.eq_ignore_ascii_case(sym)) { continue; }
+                                if !div_active.is_empty() && !self.cached_active_symbols_set.contains(&sym.to_uppercase()) { continue; }
                                 ui.label(egui::RichText::new(date).color(AXIS_TEXT).small());
                                 let (_, dc_action) = symbol_label_with_menu(ui, sym,
                                     egui::RichText::new(sym).small().strong().monospace());
@@ -28342,9 +28351,10 @@ impl eframe::App for TyphooNApp {
             self.cached_scope_syms = self.broker_scope_symbols();
             self.cached_scope_frame = self.frame_count;
         }
-        // PERF: Cache active_symbols() once per frame (used by 5+ windows for "Active Only" filters)
+        // PERF: Cache active_symbols() + HashSet once per frame (used by 5+ windows for "Active Only" filters)
         if self.cached_active_symbols_frame != self.frame_count {
             self.cached_active_symbols = self.active_symbols();
+            self.cached_active_symbols_set = self.cached_active_symbols.iter().cloned().collect();
             self.cached_active_symbols_frame = self.frame_count;
         }
         // PERF: Cache scoped_fundamentals_owned() once per frame (used by 3 windows + outlier scanner)
