@@ -978,7 +978,8 @@ pub fn get_insider_trades(
 
 /// Get filing alerts (dismissed or undismissed).
 pub fn get_filing_alerts(conn: &Connection, dismissed: bool) -> Result<Vec<FilingAlert>, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called per BG cycle to refresh the alerts panel.
+    let mut stmt = conn.prepare_cached(
         "SELECT id, ticker, alert_type, message, COALESCE(filing_accession, ''), importance, created_at, dismissed, COALESCE(dismissed_reason, '')
          FROM sec_filing_alerts WHERE dismissed = ?1 ORDER BY created_at DESC"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
@@ -1019,7 +1020,8 @@ pub fn dismiss_alert(conn: &Connection, alert_id: i64, reason: &str) -> Result<(
 
 /// Get ALL filings (no limit). For BG thread — builds the growing searchable database.
 pub fn get_all_filings(conn: &Connection) -> Result<Vec<SecFiling>, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called every BG cycle to refresh the filings cache.
+    let mut stmt = conn.prepare_cached(
         "SELECT id, ticker, form_type, accession_number, filing_date, url, company_name, importance_score, category, summary, insider_flag, created_at
          FROM sec_filings ORDER BY filing_date DESC"
     ).map_err(|e| format!("Prepare all filings failed: {e}"))?;
@@ -1051,7 +1053,8 @@ pub fn get_all_insider_trades(conn: &Connection) -> Result<Vec<InsiderTrade>, St
     // Older trades remain in DB and accessible via get_insider_trades(ticker, days).
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(1825))
         .format("%Y-%m-%d").to_string();
-    let mut stmt = conn.prepare(
+    // prepare_cached: called every BG cycle.
+    let mut stmt = conn.prepare_cached(
         "SELECT id, ticker, accession_number, insider_name, insider_title, transaction_date, transaction_type, shares, price, aggregate_value, is_officer, is_director, created_at
          FROM sec_insider_trades WHERE transaction_date >= ?1 ORDER BY transaction_date DESC"
     ).map_err(|e| format!("Prepare all insider trades failed: {e}"))?;
@@ -1250,7 +1253,8 @@ pub fn get_filing_content(conn: &Connection, accession: &str) -> Result<Option<S
 
 /// Get filings that haven't had their content fetched yet.
 pub fn get_unfetched_filings(conn: &Connection, limit: usize) -> Result<Vec<SecFiling>, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called repeatedly by the content backfill worker.
+    let mut stmt = conn.prepare_cached(
         "SELECT id, ticker, form_type, accession_number, filing_date, url, company_name, importance_score, category, summary, insider_flag, created_at
          FROM sec_filings WHERE accession_number NOT IN (SELECT accession_number FROM sec_filing_content)
          ORDER BY filing_date DESC LIMIT ?1"
@@ -1308,12 +1312,20 @@ pub fn get_keywords(conn: &Connection) -> Result<Vec<String>, String> {
 }
 
 /// Check content against keyword watchlist, return matching keywords.
+/// Takes the keyword list as a slice so callers batching many filings don't
+/// re-query the DB once per filing.
+pub fn check_keywords_in(keywords: &[String], content: &str) -> Vec<String> {
+    let content_lower = content.to_lowercase();
+    keywords.iter()
+        .filter(|kw| content_lower.contains(kw.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Convenience wrapper for single-shot callers.
 pub fn check_keywords(conn: &Connection, content: &str) -> Vec<String> {
     let keywords = get_keywords(conn).unwrap_or_default();
-    let content_lower = content.to_lowercase();
-    keywords.into_iter()
-        .filter(|kw| content_lower.contains(kw.as_str()))
-        .collect()
+    check_keywords_in(&keywords, content)
 }
 
 // ── Filing Diff Comparison ───────────────────────────────────────────────────

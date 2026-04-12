@@ -727,7 +727,8 @@ pub fn upsert_holders(conn: &Connection, holders: &[InstitutionalHolder]) -> Res
 
 /// Get fundamentals for a single symbol.
 pub fn get_fundamentals(conn: &Connection, symbol: &str) -> Result<Option<Fundamentals>, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called frequently during research panel refreshes.
+    let mut stmt = conn.prepare_cached(
         "SELECT symbol, cik, company_name, sector, industry, description,
                 market_cap, enterprise_value, total_debt, cash_and_equivalents,
                 shares_outstanding, stock_price, mcap_ev_ratio,
@@ -788,7 +789,8 @@ pub fn get_fundamentals(conn: &Connection, symbol: &str) -> Result<Option<Fundam
 
 /// Get all fundamentals (for EV scanner table).
 pub fn get_all_fundamentals(conn: &Connection) -> Result<Vec<Fundamentals>, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called every BG cycle to refresh the fundamentals cache.
+    let mut stmt = conn.prepare_cached(
         "SELECT symbol, cik, company_name, sector, industry, '',
                 market_cap, enterprise_value, total_debt, cash_and_equivalents,
                 shares_outstanding, stock_price, mcap_ev_ratio,
@@ -847,7 +849,8 @@ pub fn get_all_fundamentals(conn: &Connection) -> Result<Vec<Fundamentals>, Stri
 /// Get upcoming earnings dates sorted by date.
 pub fn get_upcoming_earnings(conn: &Connection, limit: usize) -> Result<Vec<(String, String, String)>, String> {
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let mut stmt = conn.prepare(
+    // prepare_cached: called every BG cycle.
+    let mut stmt = conn.prepare_cached(
         "SELECT symbol, company_name, next_earnings_date FROM fundamentals
          WHERE next_earnings_date IS NOT NULL AND next_earnings_date >= ?1
          ORDER BY next_earnings_date ASC LIMIT ?2"
@@ -864,7 +867,8 @@ pub fn get_upcoming_earnings(conn: &Connection, limit: usize) -> Result<Vec<(Str
 /// Get upcoming ex-dividend dates sorted by date.
 pub fn get_upcoming_dividends(conn: &Connection, limit: usize) -> Result<Vec<(String, String, String, Option<f64>)>, String> {
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let mut stmt = conn.prepare(
+    // prepare_cached: called every BG cycle.
+    let mut stmt = conn.prepare_cached(
         "SELECT symbol, company_name, next_ex_dividend_date, dividend_yield FROM fundamentals
          WHERE next_ex_dividend_date IS NOT NULL AND next_ex_dividend_date >= ?1
          AND is_dividend_stock = 1
@@ -881,7 +885,8 @@ pub fn get_upcoming_dividends(conn: &Connection, limit: usize) -> Result<Vec<(St
 
 /// Get quarterly financials for a symbol.
 pub fn get_quarterly_financials(conn: &Connection, symbol: &str) -> Result<Vec<QuarterlyFinancial>, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called per-symbol by the research panel.
+    let mut stmt = conn.prepare_cached(
         "SELECT symbol, period_end, total_revenue, net_income, free_cash_flow,
                 gross_profit, operating_income, ebitda, eps
          FROM quarterly_financials WHERE symbol = ?1 ORDER BY period_end DESC LIMIT 8"
@@ -907,7 +912,8 @@ pub fn get_quarterly_financials(conn: &Connection, symbol: &str) -> Result<Vec<Q
 
 /// Get institutional holders for a symbol.
 pub fn get_institutional_holders(conn: &Connection, symbol: &str) -> Result<Vec<InstitutionalHolder>, String> {
-    let mut stmt = conn.prepare(
+    // prepare_cached: called per-symbol by the research panel.
+    let mut stmt = conn.prepare_cached(
         "SELECT symbol, holder_name, shares, pct_held, value, date_reported
          FROM institutional_holders WHERE symbol = ?1 ORDER BY shares DESC"
     ).map_err(|e| format!("Prepare holders query failed: {e}"))?;
