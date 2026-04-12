@@ -1001,12 +1001,16 @@ pub fn get_all_filings(conn: &Connection) -> Result<Vec<SecFiling>, String> {
 
 /// Get ALL insider trades (no date cutoff). For BG thread growing database.
 pub fn get_all_insider_trades(conn: &Connection) -> Result<Vec<InsiderTrade>, String> {
+    // Memory optimization: limit to last 5 years (1825 days) to bound BG memory footprint.
+    // Older trades remain in DB and accessible via get_insider_trades(ticker, days).
+    let cutoff = (chrono::Utc::now() - chrono::Duration::days(1825))
+        .format("%Y-%m-%d").to_string();
     let mut stmt = conn.prepare(
         "SELECT id, ticker, accession_number, insider_name, insider_title, transaction_date, transaction_type, shares, price, aggregate_value, is_officer, is_director, created_at
-         FROM sec_insider_trades ORDER BY transaction_date DESC"
+         FROM sec_insider_trades WHERE transaction_date >= ?1 ORDER BY transaction_date DESC"
     ).map_err(|e| format!("Prepare all insider trades failed: {e}"))?;
 
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map(params![cutoff], |row| {
         Ok(InsiderTrade {
             id: row.get(0)?,
             ticker: row.get(1)?,
@@ -1077,13 +1081,16 @@ pub fn strip_html_to_text(html: &str) -> String {
     lines.join("\n")
 }
 
-/// Store filing content and index in FTS5.
+/// Store filing content (zstd-compressed) and index in FTS5.
+/// Filings are typically 80KB plain text → ~8KB compressed (10x reduction).
 pub fn store_filing_content(conn: &Connection, accession: &str, ticker: &str, form_type: &str, company: &str, content: &str) -> Result<(), String> {
     let now = chrono::Utc::now().timestamp();
+    let compressed = zstd::encode_all(content.as_bytes(), 3)
+        .map_err(|e| format!("Compress content failed: {e}"))?;
     conn.execute(
         "INSERT OR REPLACE INTO sec_filing_content (accession_number, content_plain, content_size, fetched_at)
          VALUES (?1, ?2, ?3, ?4)",
-        params![accession, content, content.len() as i64, now],
+        params![accession, compressed, content.len() as i64, now],
     ).map_err(|e| format!("Store content failed: {e}"))?;
 
     // Update content_fetched flag
@@ -1092,7 +1099,7 @@ pub fn store_filing_content(conn: &Connection, accession: &str, ticker: &str, fo
         params![accession],
     );
 
-    // Populate FTS5 index
+    // Populate FTS5 index (uncompressed for tokenization)
     let _ = conn.execute(
         "INSERT OR REPLACE INTO sec_fts (accession_number, ticker, form_type, company_name, content)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -1163,13 +1170,24 @@ pub fn search_filings_fts(
     Ok(results)
 }
 
-/// Get filing content for display / diff.
+/// Get filing content for display / diff (decompresses zstd blob).
 pub fn get_filing_content(conn: &Connection, accession: &str) -> Result<Option<String>, String> {
-    conn.query_row(
+    let blob: Option<Vec<u8>> = conn.query_row(
         "SELECT content_plain FROM sec_filing_content WHERE accession_number = ?1",
         params![accession],
         |row| row.get(0),
-    ).optional().map_err(|e| format!("Get content failed: {e}"))
+    ).optional().map_err(|e| format!("Get content failed: {e}"))?;
+    match blob {
+        Some(bytes) => {
+            // Try zstd decompress; fallback to UTF-8 string for legacy uncompressed entries
+            let decoded = zstd::decode_all(bytes.as_slice())
+                .ok()
+                .and_then(|b| String::from_utf8(b).ok())
+                .or_else(|| String::from_utf8(bytes).ok());
+            Ok(decoded)
+        }
+        None => Ok(None),
+    }
 }
 
 /// Get filings that haven't had their content fetched yet.

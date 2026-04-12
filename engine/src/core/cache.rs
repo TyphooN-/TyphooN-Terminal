@@ -1331,6 +1331,40 @@ impl SqliteCache {
         Ok(count)
     }
 
+    /// LRU eviction: if total bar_cache size exceeds `max_bytes`, delete oldest entries
+    /// (by timestamp ASC) until under the limit. Skips entries newer than 7 days to avoid
+    /// evicting hot data. Returns (evicted_count, bytes_freed).
+    pub fn evict_lru(&self, max_bytes: i64) -> Result<(usize, i64), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let total: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(LENGTH(data)), 0) FROM bar_cache",
+            [],
+            |r| r.get(0),
+        ).unwrap_or(0);
+        if total <= max_bytes { return Ok((0, 0)); }
+        let cutoff_ts = chrono::Utc::now().timestamp() - 7 * 86400; // 7 days
+        // Select oldest entries (excluding hot ones)
+        let mut stmt = conn.prepare(
+            "SELECT key, LENGTH(data) FROM bar_cache WHERE timestamp < ?1 ORDER BY timestamp ASC"
+        ).map_err(|e| format!("Prepare evict failed: {e}"))?;
+        let rows: Vec<(String, i64)> = stmt.query_map([cutoff_ts], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| format!("Query evict failed: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+        let mut freed: i64 = 0;
+        let mut evicted: usize = 0;
+        let target_free = total - max_bytes;
+        for (key, size) in rows {
+            if freed >= target_free { break; }
+            if conn.execute("DELETE FROM bar_cache WHERE key = ?1", [&key]).is_ok() {
+                freed += size;
+                evicted += 1;
+            }
+        }
+        Ok((evicted, freed))
+    }
+
     /// Recompress all bar_cache entries at target zstd level (e.g. 19 for max compression).
     /// Decompression speed is identical regardless of compression level — only storage shrinks.
     /// Returns (entries_processed, bytes_saved).

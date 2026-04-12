@@ -9231,13 +9231,35 @@ const COMMANDS: &[Command] = &[
     Command { name: "RULER",         desc: "Ruler tool — measure price/time distance" },
 ];
 
+#[cfg(test)]
 fn fuzzy_match(query: &str, target: &str) -> bool {
+    fuzzy_score(query, target).is_some()
+}
+
+/// Fuzzy subsequence match with score (lower = better, None = no match).
+/// "voutl" matches "VAROUTLIER" (subsequence), "SEC" matches "SEC Filings" (prefix bonus).
+fn fuzzy_score(query: &str, target: &str) -> Option<i32> {
     let q = query.to_lowercase();
     let t = target.to_lowercase();
-    if q.is_empty() { return true; }
-    // Prefer substring match (contains) over subsequence
-    // This ensures "SEC" matches "SEC Filings" but not "Screener"
-    t.contains(&q)
+    if q.is_empty() { return Some(1000); }
+    // Substring match gets best score
+    if let Some(pos) = t.find(&q) {
+        return Some(pos as i32); // earlier position = better
+    }
+    // Subsequence match
+    let mut score: i32 = 1000;
+    let mut q_iter = q.chars().peekable();
+    let mut last_match: i32 = -1;
+    for (i, tc) in t.chars().enumerate() {
+        if let Some(&qc) = q_iter.peek() {
+            if tc == qc {
+                q_iter.next();
+                if last_match >= 0 { score += (i as i32 - last_match - 1).max(0); }
+                last_match = i as i32;
+            }
+        }
+    }
+    if q_iter.peek().is_none() { Some(score) } else { None }
 }
 
 // ─── application state ───────────────────────────────────────────────────────
@@ -10084,6 +10106,8 @@ pub struct TyphooNApp {
     congress_active_only: bool,  // filter congressional trades to active symbols
     volume_active_only: bool,    // filter unusual volume to active symbols
     sec_filing_content: String,  // cached filing document text
+    sec_filing_content_for: String, // accession number this content belongs to (for sticky display)
+    sec_filing_pinned: bool,     // pin document viewer (don't clear when navigating filings)
     sec_filing_loading: bool,
     show_insider: bool,
     show_fundamentals: bool,
@@ -13102,6 +13126,8 @@ impl TyphooNApp {
             congress_active_only: false,
             volume_active_only: false,
             sec_filing_content: String::new(),
+            sec_filing_content_for: String::new(),
+            sec_filing_pinned: false,
             sec_filing_loading: false,
             show_insider: false,
             show_fundamentals: false,
@@ -13587,6 +13613,13 @@ impl TyphooNApp {
                         // Reclaims freed pages from DELETEs/compaction without full VACUUM.
                         if last_vacuum.elapsed() >= VACUUM_INTERVAL {
                             let _ = cache.incremental_vacuum(500);
+                            // LRU eviction: bar_cache soft limit = 500 MB.
+                            // Skips entries newer than 7 days.
+                            if let Ok((evicted, freed)) = cache.evict_lru(500 * 1024 * 1024) {
+                                if evicted > 0 {
+                                    tracing::info!("BG: LRU evicted {} bar_cache entries ({} MB freed)", evicted, freed / (1024*1024));
+                                }
+                            }
                             last_vacuum = std::time::Instant::now();
                             tracing::info!("BG: incremental_vacuum(500) completed");
                         }
@@ -22535,8 +22568,13 @@ impl TyphooNApp {
                                                 ui.label(egui::RichText::new(&f.url).small().color(sec_blue));
                                                 if ui.small_button("View Document").clicked() {
                                                     self.sec_filing_content.clear();
+                                                    self.sec_filing_content_for = f.accession_number.clone();
                                                     self.sec_filing_loading = true;
                                                     let _ = self.broker_tx.send(BrokerCmd::FetchFilingContent { url: f.url.clone() });
+                                                }
+                                                let pin_label = if self.sec_filing_pinned { "[unpin]" } else { "[pin]" };
+                                                if ui.small_button(pin_label).clicked() {
+                                                    self.sec_filing_pinned = !self.sec_filing_pinned;
                                                 }
                                             }); ui.end_row();
                                         }
@@ -22549,12 +22587,17 @@ impl TyphooNApp {
                                             ui.label(egui::RichText::new("Yes — insider transaction").color(sec_med)); ui.end_row();
                                         }
                                     });
-                                    // In-window document viewer
+                                    // In-window document viewer (sticky if pinned or accession matches selected)
+                                    let show_doc = self.sec_filing_pinned
+                                        || self.sec_filing_content_for == f.accession_number;
                                     if self.sec_filing_loading {
                                         ui.label(egui::RichText::new("Loading filing document...").color(sec_blue));
-                                    } else if !self.sec_filing_content.is_empty() {
+                                    } else if !self.sec_filing_content.is_empty() && show_doc {
                                         ui.separator();
-                                        ui.label(egui::RichText::new("Filing Document").small().strong());
+                                        let header = if self.sec_filing_pinned && self.sec_filing_content_for != f.accession_number {
+                                            format!("Filing Document (pinned: {})", self.sec_filing_content_for)
+                                        } else { "Filing Document".to_string() };
+                                        ui.label(egui::RichText::new(header).small().strong());
                                         let doc_h = ui.available_height().max(150.0);
                                         egui::ScrollArea::vertical().id_salt("sec_doc_viewer").max_height(doc_h).auto_shrink(false).show(ui, |ui| {
                                             ui.label(egui::RichText::new(&self.sec_filing_content).small().monospace().color(egui::Color32::from_rgb(190, 190, 200)));
@@ -27801,6 +27844,12 @@ fn dirs_home() -> PathBuf {
 impl eframe::App for TyphooNApp {
     fn on_exit(&mut self) {
         self.save_session();
+        // Explicit WAL checkpoint on exit — keeps WAL file small for next startup.
+        if let Some(ref cache) = self.cache {
+            if let Ok(conn) = cache.connection() {
+                let _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)", []);
+            }
+        }
     }
 
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -34016,14 +34065,23 @@ impl eframe::App for TyphooNApp {
                 }
                 cmds
             } else {
-                COMMANDS
+                let mut scored: Vec<(i32, &Command)> = COMMANDS
                     .iter()
-                    .filter(|c| {
-                        let text_match = fuzzy_match(&self.command_input, c.name) || fuzzy_match(&self.command_input, c.desc);
+                    .filter_map(|c| {
                         let ctx_match = context_filter.map_or(true, |allowed| allowed.contains(&c.name));
-                        text_match && ctx_match
+                        if !ctx_match { return None; }
+                        let name_score = fuzzy_score(&self.command_input, c.name);
+                        let desc_score = fuzzy_score(&self.command_input, c.desc).map(|s| s + 500);
+                        match (name_score, desc_score) {
+                            (Some(n), Some(d)) => Some((n.min(d), c)),
+                            (Some(n), None) => Some((n, c)),
+                            (None, Some(d)) => Some((d, c)),
+                            (None, None) => None,
+                        }
                     })
-                    .collect()
+                    .collect();
+                scored.sort_by_key(|(s, _)| *s);
+                scored.into_iter().map(|(_, c)| c).collect()
             };
             // Reset context to Global after opening (one-shot filtering)
             if filter_empty && self.palette_context != PaletteContext::Global {
