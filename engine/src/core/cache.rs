@@ -607,7 +607,7 @@ impl SqliteCache {
     pub fn detailed_stats(&self) -> Result<Vec<(String, i64, i64)>, String> {
         let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
         // Use bar_count instead of LENGTH(data) — avoids reading blob headers on 3.9GB DB
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT key, bar_count, timestamp FROM bar_cache ORDER BY key"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
         let rows = stmt.query_map([], |row| {
@@ -980,9 +980,12 @@ impl SqliteCache {
     /// Get first and last bar timestamps for a key using a caller-provided connection.
     /// Used by the BG thread with its own connection to avoid read_conn contention.
     pub fn get_bar_timestamp_range_with_conn(conn: &Connection, key: &str) -> Option<(i64, i64)> {
-        let blob: Vec<u8> = conn.query_row(
-            "SELECT data FROM bar_cache WHERE key = ?1", params![key], |r| r.get(0)
+        // prepare_cached → repeated calls (BG thread iterates all crypto entries every cycle)
+        // reuse the same parsed statement instead of reparsing on every call.
+        let mut stmt = conn.prepare_cached(
+            "SELECT data FROM bar_cache WHERE key = ?1"
         ).ok()?;
+        let blob: Vec<u8> = stmt.query_row(params![key], |r| r.get(0)).ok()?;
         let decompressed = maybe_decompress(blob).ok()?;
         if decompressed.len() < 8 || &decompressed[0..4] != BAR_BINARY_MAGIC { return None; }
         let count = u32::from_le_bytes(decompressed[4..8].try_into().ok()?) as usize;
@@ -1183,7 +1186,7 @@ impl SqliteCache {
     /// List all keys in bar_cache.
     pub fn all_keys(&self) -> Result<Vec<String>, String> {
         let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn.prepare("SELECT key FROM bar_cache")
+        let mut stmt = conn.prepare_cached("SELECT key FROM bar_cache")
             .map_err(|e| format!("Prepare failed: {e}"))?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))
             .map_err(|e| format!("Query failed: {e}"))?;
@@ -1195,7 +1198,7 @@ impl SqliteCache {
     /// Used for zero-copy sync between databases.
     pub fn get_raw_blob(&self, key: &str) -> Result<Option<(Vec<u8>, i64, i64)>, String> {
         let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn.prepare("SELECT data, timestamp, bar_count FROM bar_cache WHERE key = ?1")
+        let mut stmt = conn.prepare_cached("SELECT data, timestamp, bar_count FROM bar_cache WHERE key = ?1")
             .map_err(|e| format!("Prepare failed: {e}"))?;
         let result = stmt.query_row(params![key], |row| {
             // Use get_ref to accept both BLOB and TEXT without UTF-8 validation.
@@ -1235,7 +1238,7 @@ impl SqliteCache {
     /// Returns Vec of (symbol, bid, ask, spread).
     pub fn read_bid_ask(&self) -> Result<Vec<(String, f64, f64, f64)>, String> {
         let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let mut stmt = conn.prepare("SELECT symbol, bid, ask, spread FROM bid_ask WHERE bid > 0 OR ask > 0")
+        let mut stmt = conn.prepare_cached("SELECT symbol, bid, ask, spread FROM bid_ask WHERE bid > 0 OR ask > 0")
             .map_err(|e| format!("Prepare failed (bid_ask table may not exist): {e}"))?;
         let rows = stmt.query_map([], |row| {
             Ok((

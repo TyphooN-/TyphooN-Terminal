@@ -13724,8 +13724,8 @@ impl TyphooNApp {
                         // Phase 1c: heavier queries — all use BG's own connection (zero contention with UI)
                         {
                             let t = std::time::Instant::now();
-                            // detailed_stats via BG's own connection
-                            let mut stmt = conn.prepare("SELECT key, bar_count, timestamp FROM bar_cache ORDER BY key").ok();
+                            // detailed_stats via BG's own connection (prepare_cached: reuse parse across cycles)
+                            let mut stmt = conn.prepare_cached("SELECT key, bar_count, timestamp FROM bar_cache ORDER BY key").ok();
                             if let Some(ref mut s) = stmt {
                                 let rows = s.query_map([], |row| {
                                     Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
