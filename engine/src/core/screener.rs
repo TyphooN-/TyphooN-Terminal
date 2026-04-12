@@ -349,23 +349,29 @@ pub fn compute_symbol_correlation_matrix(
                         let start = if window > 0 && len > window { len - window } else { 0 };
                         let sa = &a[a.len() - len + start..];
                         let sb = &b[b.len() - len + start..];
-                        // Compute returns
-                        let ret_a: Vec<f64> = sa.windows(2).map(|w| if w[0] > 0.0 { w[1] / w[0] - 1.0 } else { 0.0 }).collect();
-                        let ret_b: Vec<f64> = sb.windows(2).map(|w| if w[0] > 0.0 { w[1] / w[0] - 1.0 } else { 0.0 }).collect();
-                        let rn = ret_a.len().min(ret_b.len());
+                        // PERF: single-pass running-sums Pearson. Was allocating
+                        // two intermediate `Vec<f64>` return series and making
+                        // three passes (mean_a, mean_b, cov/var). We walk the
+                        // aligned slices in a single loop computing returns + sums.
+                        let rn = sa.len().saturating_sub(1).min(sb.len().saturating_sub(1));
                         if rn < 3 { 0.0 } else {
-                            let mean_a = ret_a[..rn].iter().sum::<f64>() / rn as f64;
-                            let mean_b = ret_b[..rn].iter().sum::<f64>() / rn as f64;
-                            let mut cov = 0.0;
-                            let mut var_a = 0.0;
-                            let mut var_b = 0.0;
+                            let mut sum_a = 0.0f64;
+                            let mut sum_b = 0.0f64;
+                            let mut sum_aa = 0.0f64;
+                            let mut sum_bb = 0.0f64;
+                            let mut sum_ab = 0.0f64;
                             for k in 0..rn {
-                                let da = ret_a[k] - mean_a;
-                                let db = ret_b[k] - mean_b;
-                                cov += da * db;
-                                var_a += da * da;
-                                var_b += db * db;
+                                let ra = if sa[k] > 0.0 { sa[k + 1] / sa[k] - 1.0 } else { 0.0 };
+                                let rb = if sb[k] > 0.0 { sb[k + 1] / sb[k] - 1.0 } else { 0.0 };
+                                sum_a += ra;  sum_b += rb;
+                                sum_aa += ra * ra;
+                                sum_bb += rb * rb;
+                                sum_ab += ra * rb;
                             }
+                            let nf = rn as f64;
+                            let cov = sum_ab - sum_a * sum_b / nf;
+                            let var_a = sum_aa - sum_a * sum_a / nf;
+                            let var_b = sum_bb - sum_b * sum_b / nf;
                             if var_a > 0.0 && var_b > 0.0 {
                                 (cov / (var_a.sqrt() * var_b.sqrt())).clamp(-1.0, 1.0)
                             } else { 0.0 }
@@ -439,29 +445,49 @@ pub struct HvPoint {
 }
 
 /// Compute HV cone: current annualized volatility at multiple lookbacks with percentile rank.
+///
+/// PERF: builds the log-returns slice ONCE and reuses it across all lookbacks
+/// (was recomputing per lookback). Rolling HV windows use a sliding-sum + sliding
+/// sum-of-squares update so each window advance is O(1) instead of O(lb), making
+/// the whole inner loop O(N+lb) instead of O(N·lb).
 pub fn compute_hv_cone(closes: &[f64], lookbacks: &[usize]) -> Vec<HvPoint> {
+    if closes.len() < 2 { return Vec::new(); }
+    // Single log-return buffer shared across all lookbacks.
+    let returns: Vec<f64> = closes.windows(2).map(|w| (w[1] / w[0]).ln()).collect();
+    let annualize = (252.0_f64).sqrt() * 100.0;
+
     lookbacks.iter().filter_map(|&lb| {
-        if closes.len() < lb + 1 { return None; }
-        // Compute log returns
-        let returns: Vec<f64> = closes.windows(2).map(|w| (w[1] / w[0]).ln()).collect();
         if returns.len() < lb { return None; }
+        let lb_f = lb as f64;
+        let denom = lb_f - 1.0;
+        if denom <= 0.0 { return None; }
 
-        // Current HV (last `lb` returns)
-        let recent = &returns[returns.len() - lb..];
-        let mean = recent.iter().sum::<f64>() / lb as f64;
-        let var = recent.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (lb as f64 - 1.0);
-        let current_hv = var.sqrt() * (252.0_f64).sqrt() * 100.0; // annualized %
-
-        // Rolling HV for percentile
-        let mut all_hvs: Vec<f64> = Vec::new();
-        for start in 0..=(returns.len() - lb) {
-            let window = &returns[start..start + lb];
-            let m = window.iter().sum::<f64>() / lb as f64;
-            let v = window.iter().map(|r| (r - m).powi(2)).sum::<f64>() / (lb as f64 - 1.0);
-            all_hvs.push(v.sqrt() * (252.0_f64).sqrt() * 100.0);
+        // Initial window sum / sum_sq at position 0.
+        let mut sum = 0.0f64;
+        let mut sum_sq = 0.0f64;
+        for &r in &returns[..lb] {
+            sum += r;
+            sum_sq += r * r;
         }
+        let window_hv = |sum: f64, sum_sq: f64| -> f64 {
+            let mean = sum / lb_f;
+            let var = (sum_sq - sum * mean) / denom; // = (Σx² − n·mean²)/(n−1)
+            var.max(0.0).sqrt() * annualize
+        };
+
+        let mut all_hvs: Vec<f64> = Vec::with_capacity(returns.len() - lb + 1);
+        all_hvs.push(window_hv(sum, sum_sq));
+        for start in 1..=(returns.len() - lb) {
+            let out = returns[start - 1];
+            let into = returns[start + lb - 1];
+            sum += into - out;
+            sum_sq += into * into - out * out;
+            all_hvs.push(window_hv(sum, sum_sq));
+        }
+        let current_hv = *all_hvs.last().unwrap_or(&0.0);
+
         all_hvs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let rank = all_hvs.iter().filter(|&&h| h <= current_hv).count();
+        let rank = all_hvs.partition_point(|&h| h <= current_hv);
         let percentile = if all_hvs.is_empty() { 50.0 } else { rank as f64 / all_hvs.len() as f64 * 100.0 };
         let min_hv = all_hvs.first().copied().unwrap_or(0.0);
         let max_hv = all_hvs.last().copied().unwrap_or(0.0);

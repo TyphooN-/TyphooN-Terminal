@@ -391,9 +391,20 @@ pub fn detect_outliers(
         let lower_bound = q1 - iqr_multiplier * iqr;
         let upper_bound = q3 + iqr_multiplier * iqr;
 
-        // Compute sector std_dev for z-scores
-        let mean = values.iter().map(|v| v.2).sum::<f64>() / n as f64;
-        let sector_sd = std_dev(&values.iter().map(|v| v.2).collect::<Vec<_>>());
+        // Compute sector mean + population std_dev in a single pass
+        // (was two passes + an intermediate `Vec<f64>` collect feeding std_dev).
+        let mut sum = 0.0f64;
+        let mut sum_sq = 0.0f64;
+        for (_, _, val) in &values {
+            sum += *val;
+            sum_sq += *val * *val;
+        }
+        let n_f = n as f64;
+        let mean = sum / n_f;
+        let sector_sd = {
+            let var_pop = (sum_sq / n_f) - mean * mean;
+            if var_pop > 0.0 { var_pop.sqrt() } else { 0.0 }
+        };
 
         let mut sector_outliers = 0;
         // Pre-resolve sector String once per group instead of cloning per row
@@ -496,12 +507,22 @@ pub fn detect_multi_outliers(
     for (sector, syms) in &by_sector {
         if syms.len() < 4 { continue; }
 
-        // Compute z-scores per dimension within this sector
+        // Compute z-scores per dimension within this sector.
+        // Single-pass mean + population std via sum + sum_sq. Was two passes
+        // (sum then std_dev) over the same buffer.
         let z_scores = |map: &std::collections::HashMap<String, f64>| -> std::collections::HashMap<String, f64> {
             let vals: Vec<f64> = syms.iter().filter_map(|s| map.get(s).copied()).collect();
             if vals.len() < 4 { return std::collections::HashMap::new(); }
-            let mean = vals.iter().sum::<f64>() / vals.len() as f64;
-            let sd = std_dev(&vals);
+            let mut sum = 0.0f64;
+            let mut sum_sq = 0.0f64;
+            for &v in &vals {
+                sum += v;
+                sum_sq += v * v;
+            }
+            let n_f = vals.len() as f64;
+            let mean = sum / n_f;
+            let var_pop = (sum_sq / n_f) - mean * mean;
+            let sd = if var_pop > 0.0 { var_pop.sqrt() } else { 0.0 };
             if sd <= 0.0 { return std::collections::HashMap::new(); }
             syms.iter().filter_map(|s| {
                 map.get(s).map(|v| (s.clone(), (v - mean) / sd))

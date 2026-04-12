@@ -1108,29 +1108,49 @@ pub fn compute_var_full(daily_returns: &[DailyReturn]) -> VaRResult {
         };
     }
 
-    let pnls: Vec<f64> = daily_returns.iter().map(|r| r.pnl).collect();
-    let returns: Vec<f64> = daily_returns.iter().map(|r| r.return_pct).collect();
-    let n = pnls.len() as f64;
+    // Single fused pass: accumulate pnl sum, return sum, return sum_sq,
+    // downside sum_sq + count, and max drawdown while collecting pnls for sort.
+    // Previously built TWO Vec<f64>, then took 4 additional passes for sums/vars.
+    let n_u = daily_returns.len();
+    let n = n_u as f64;
+    let mut pnls: Vec<f64> = Vec::with_capacity(n_u);
+    let mut sum_pnl = 0.0f64;
+    let mut sum_ret = 0.0f64;
+    let mut sum_ret_sq = 0.0f64;
+    let mut downside_sq = 0.0f64;
+    let mut downside_count = 0usize;
+    let mut max_dd = 0.0f64;
+    for r in daily_returns {
+        pnls.push(r.pnl);
+        sum_pnl += r.pnl;
+        sum_ret += r.return_pct;
+        sum_ret_sq += r.return_pct * r.return_pct;
+        if r.return_pct < 0.0 {
+            downside_sq += r.return_pct * r.return_pct;
+            downside_count += 1;
+        }
+        if r.drawdown_pct > max_dd { max_dd = r.drawdown_pct; }
+    }
+    let avg_pnl = sum_pnl / n;
+    let avg_ret = sum_ret / n;
 
-    let avg_pnl = pnls.iter().sum::<f64>() / n;
-    let avg_ret = returns.iter().sum::<f64>() / n;
-
-    // Daily volatility
-    let variance = returns.iter().map(|r| (r - avg_ret).powi(2)).sum::<f64>() / (n - 1.0);
+    // Sample variance via the raw-moments formula: Σx² − n·mean² / (n−1)
+    let variance = ((sum_ret_sq - n * avg_ret * avg_ret) / (n - 1.0)).max(0.0);
     let daily_vol = variance.sqrt();
     let annualized_vol = daily_vol * (252.0f64).sqrt();
 
     // Downside deviation (for Sortino)
-    let downside_var = returns.iter().filter(|r| **r < 0.0).map(|r| r.powi(2)).sum::<f64>()
-        / returns.iter().filter(|r| **r < 0.0).count().max(1) as f64;
-    let downside_dev = downside_var.sqrt();
+    let downside_dev = {
+        let denom = downside_count.max(1) as f64;
+        (downside_sq / denom).sqrt()
+    };
 
-    // Sort returns for percentile VaR
-    let mut sorted_pnls = pnls.clone();
+    // Sort pnls in place for percentile VaR / CVaR / worst / best.
+    let mut sorted_pnls = pnls;
     sorted_pnls.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-    let idx_95 = ((pnls.len() as f64) * 0.05).floor() as usize;
-    let idx_99 = ((pnls.len() as f64) * 0.01).floor() as usize;
+    let idx_95 = ((n) * 0.05).floor() as usize;
+    let idx_99 = ((n) * 0.01).floor() as usize;
 
     let var_95 = sorted_pnls.get(idx_95).copied().unwrap_or(0.0).abs();
     let var_99 = sorted_pnls.get(idx_99).copied().unwrap_or(0.0).abs();
@@ -1143,7 +1163,6 @@ pub fn compute_var_full(daily_returns: &[DailyReturn]) -> VaRResult {
         sorted_pnls[..idx_99].iter().sum::<f64>() / idx_99 as f64
     } else { sorted_pnls[0] }.abs();
 
-    let max_dd = daily_returns.iter().map(|r| r.drawdown_pct).fold(0.0f64, |a, b| a.max(b));
     let worst = sorted_pnls.first().copied().unwrap_or(0.0);
     let best = sorted_pnls.last().copied().unwrap_or(0.0);
 
@@ -1172,7 +1191,7 @@ pub fn compute_var_full(daily_returns: &[DailyReturn]) -> VaRResult {
         daily_vol, annualized_vol, sharpe, sortino, calmar,
         max_drawdown_pct: max_dd, avg_daily_pnl: avg_pnl,
         worst_day: worst, best_day: best,
-        trading_days: pnls.len() as i64,
+        trading_days: n_u as i64,
     }
 }
 
@@ -1201,10 +1220,15 @@ pub fn get_monthly_returns(daily_returns: &[DailyReturn]) -> Vec<MonthlyReturn> 
 pub fn get_rolling_var(daily_returns: &[DailyReturn], window_days: usize) -> Vec<RollingVaR> {
     if daily_returns.len() < window_days { return Vec::new(); }
 
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(daily_returns.len() - window_days);
+    // PERF: reuse the pnls buffer across windows — was allocating a fresh Vec
+    // per iteration. For ~500 days × 30-day window that's 500 extra allocations.
+    let mut pnls: Vec<f64> = Vec::with_capacity(window_days);
+    let sqrt_252 = (252.0_f64).sqrt();
     for i in window_days..daily_returns.len() {
         let window = &daily_returns[i - window_days..i];
-        let mut pnls: Vec<f64> = window.iter().map(|r| r.pnl).collect();
+        pnls.clear();
+        pnls.extend(window.iter().map(|r| r.pnl));
         pnls.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let idx_95 = ((pnls.len() as f64) * 0.05).floor() as usize;
@@ -1212,10 +1236,18 @@ pub fn get_rolling_var(daily_returns: &[DailyReturn], window_days: usize) -> Vec
         let var_95 = pnls.get(idx_95).copied().unwrap_or(0.0).abs();
         let var_99 = pnls.get(idx_99).copied().unwrap_or(0.0).abs();
 
-        let rets: Vec<f64> = window.iter().map(|r| r.return_pct).collect();
-        let avg = rets.iter().sum::<f64>() / rets.len() as f64;
-        let vol = (rets.iter().map(|r| (r - avg).powi(2)).sum::<f64>() / (rets.len() - 1) as f64).sqrt();
-        let sharpe = if vol > 0.0 { avg / vol * (252.0f64).sqrt() } else { 0.0 };
+        // Single-pass mean + variance over return_pct (avoid a second Vec + 2 passes).
+        let mut sum = 0.0f64;
+        let mut sum_sq = 0.0f64;
+        let n = window.len() as f64;
+        for r in window {
+            sum += r.return_pct;
+            sum_sq += r.return_pct * r.return_pct;
+        }
+        let avg = sum / n;
+        let variance = (sum_sq - sum * avg) / (n - 1.0);
+        let vol = variance.max(0.0).sqrt();
+        let sharpe = if vol > 0.0 { avg / vol * sqrt_252 } else { 0.0 };
 
         result.push(RollingVaR {
             date: daily_returns[i].date.clone(), var_95, var_99, rolling_sharpe: sharpe,
