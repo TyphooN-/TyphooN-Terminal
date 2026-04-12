@@ -245,7 +245,11 @@ enum LogFilter {
 struct LogEntry {
     level: LogLevel,
     msg: String,
-    timestamp: String,  // ADR-094: HH:MM:SS
+    /// PERF: pre-formatted display text `"[HH:MM:SS] <icon> <msg>"` built once
+    /// at construction. The bottom-panel log was calling `format!()` per entry
+    /// per frame (~200 entries × 60fps = 12k allocs/sec) for a string that
+    /// never changes once created. `timestamp` is folded into this buffer.
+    display: String,
 }
 
 /// Indicator-based alert condition.
@@ -282,11 +286,29 @@ impl LogEntry {
     fn now_ts() -> String {
         chrono::Local::now().format("%H:%M:%S").to_string()
     }
-    fn info(msg: impl Into<String>) -> Self { Self { level: LogLevel::Info, msg: msg.into(), timestamp: Self::now_ts() } }
-    fn warn(msg: impl Into<String>) -> Self { Self { level: LogLevel::Warn, msg: msg.into(), timestamp: Self::now_ts() } }
-    fn err(msg: impl Into<String>) -> Self { Self { level: LogLevel::Error, msg: msg.into(), timestamp: Self::now_ts() } }
-    fn trade(msg: impl Into<String>) -> Self { Self { level: LogLevel::Trade, msg: msg.into(), timestamp: Self::now_ts() } }
-    fn alert(msg: impl Into<String>) -> Self { Self { level: LogLevel::Alert, msg: msg.into(), timestamp: Self::now_ts() } }
+    fn new(level: LogLevel, msg: String) -> Self {
+        let timestamp = Self::now_ts();
+        let icon: &'static str = match level {
+            LogLevel::Info  => "\u{2139}",
+            LogLevel::Warn  => "\u{26A0}",
+            LogLevel::Error => "\u{2716}",
+            LogLevel::Trade => "\u{1F4B0}",
+            LogLevel::Alert => "\u{1F514}",
+        };
+        let mut display = String::with_capacity(timestamp.len() + msg.len() + 12);
+        display.push('[');
+        display.push_str(&timestamp);
+        display.push_str("] ");
+        display.push_str(icon);
+        display.push(' ');
+        display.push_str(&msg);
+        Self { level, msg, display }
+    }
+    fn info(msg: impl Into<String>) -> Self { Self::new(LogLevel::Info, msg.into()) }
+    fn warn(msg: impl Into<String>) -> Self { Self::new(LogLevel::Warn, msg.into()) }
+    fn err(msg: impl Into<String>) -> Self { Self::new(LogLevel::Error, msg.into()) }
+    fn trade(msg: impl Into<String>) -> Self { Self::new(LogLevel::Trade, msg.into()) }
+    fn alert(msg: impl Into<String>) -> Self { Self::new(LogLevel::Alert, msg.into()) }
 
     fn color(&self) -> egui::Color32 {
         match self.level {
@@ -297,17 +319,6 @@ impl LogEntry {
             LogLevel::Alert => egui::Color32::from_rgb(255, 165, 0),
         }
     }
-
-    fn icon(&self) -> &'static str {
-        match self.level {
-            LogLevel::Info  => "\u{2139}",  // ℹ
-            LogLevel::Warn  => "\u{26A0}",  // ⚠
-            LogLevel::Error => "\u{2716}",  // ✖
-            LogLevel::Trade => "\u{1F4B0}", // 💰
-            LogLevel::Alert => "\u{1F514}", // 🔔
-        }
-    }
-
 
     fn matches_filter(&self, filter: LogFilter) -> bool {
         match filter {
@@ -2610,10 +2621,11 @@ impl ChartState {
         self.prev_monthly_high = mn1.0; self.prev_monthly_low = mn1.1;
         // Pivot points from previous day
         if let (Some(h), Some(l)) = (d1.0, d1.1) {
+            // Hoist last_day out of the find closure — was recomputed on every
+            // bar iteration during the reverse scan.
+            let last_day = self.bars.last().map(|lb| lb.ts_ms / 86_400_000).unwrap_or(0);
             let prev_close = self.bars.iter().rev().find(|b| {
-                let day = b.ts_ms / 86_400_000;
-                let last_day = self.bars.last().map(|lb| lb.ts_ms / 86_400_000).unwrap_or(0);
-                day < last_day
+                b.ts_ms / 86_400_000 < last_day
             }).map(|b| b.close);
             if let Some(c) = prev_close {
                 let p = (h + l + c) / 3.0;
@@ -15535,7 +15547,7 @@ impl TyphooNApp {
                             .unwrap_or_default()
                     } else { "never".to_string() };
                     let level = if *healthy { LogLevel::Info } else { LogLevel::Warn };
-                    self.log.push_back(LogEntry { level, msg: format!("[{}] {} — {} (last: {})", status, label, id, last), timestamp: LogEntry::now_ts() });
+                    self.log.push_back(LogEntry::new(level, format!("[{}] {} — {} (last: {})", status, label, id, last)));
                 }
                 if !self.data_sources.overrides.is_empty() {
                     self.log.push_back(LogEntry::info(format!("Per-symbol overrides: {}", self.data_sources.overrides.len())));
@@ -22498,12 +22510,30 @@ impl TyphooNApp {
                     let details = &self.bg.detailed_stats;
                     let filter_upper = self.symbols_filter.to_uppercase();
 
-                    fn parse_cache_key(key: &str) -> Option<(&str, String, &str)> {
-                        let parts: Vec<&str> = key.split(':').collect();
-                        match parts.len() {
-                            4 => Some((parts[0], parts[2].to_string(), parts[3])),
-                            3 => Some((parts[0], parts[1].to_string(), parts[2])),
-                            2 => Some(("mt5", parts[0].to_string(), parts[1])),
+                    // PERF: return &str slices instead of a heap-allocated Vec<&str>.
+                    // Called once per detailed_stats entry (~500/frame when explorer open).
+                    fn parse_cache_key(key: &str) -> Option<(&str, &str, &str)> {
+                        let count = key.bytes().filter(|&b| b == b':').count();
+                        let mut parts = key.splitn(4, ':');
+                        match count {
+                            3 => {
+                                let a = parts.next()?;
+                                let _b = parts.next()?;
+                                let c = parts.next()?;
+                                let d = parts.next()?;
+                                Some((a, c, d))
+                            }
+                            2 => {
+                                let a = parts.next()?;
+                                let b = parts.next()?;
+                                let c = parts.next()?;
+                                Some((a, b, c))
+                            }
+                            1 => {
+                                let a = parts.next()?;
+                                let b = parts.next()?;
+                                Some(("mt5", a, b))
+                            }
                             _ => None,
                         }
                     }
@@ -22513,17 +22543,24 @@ impl TyphooNApp {
                     let mut cached_syms_set: std::collections::HashSet<String> = std::collections::HashSet::new();
                     for (key, bars, _ts) in details {
                         if let Some((source, symbol, tf)) = parse_cache_key(key) {
-                            cached_syms_set.insert(symbol.replace('/', "").to_uppercase());
-                            if !filter_upper.is_empty() && !symbol.to_uppercase().contains(&filter_upper) { continue; }
+                            // In-place uppercase instead of replace().to_uppercase() (two allocs → one).
+                            let mut norm = symbol.replace('/', "");
+                            norm.make_ascii_uppercase();
+                            if !cached_syms_set.contains(&norm) {
+                                cached_syms_set.insert(norm.clone());
+                            }
+                            if !filter_upper.is_empty() && !norm.contains(&filter_upper) { continue; }
                             cached.entry(source.to_string()).or_default()
-                                .entry(symbol).or_default()
+                                .entry(symbol.to_string()).or_default()
                                 .push((tf.to_string(), *bars));
                         }
                     }
 
-                    // Build fundamentals lookup (symbol → (sector, industry, name))
-                    let fund_map: std::collections::HashMap<String, (&str, &str, &str)> = self.bg.all_fundamentals.iter()
-                        .map(|f| (f.symbol.to_uppercase(), (f.sector.as_str(), f.industry.as_str(), f.company_name.as_str())))
+                    // Build fundamentals lookup (symbol → (sector, industry, name)).
+                    // f.symbol is already uppercase (parse_yahoo_data), so we key on &str and
+                    // borrow — zero String allocation per record per frame.
+                    let fund_map: std::collections::HashMap<&str, (&str, &str, &str)> = self.bg.all_fundamentals.iter()
+                        .map(|f| (f.symbol.as_str(), (f.sector.as_str(), f.industry.as_str(), f.company_name.as_str())))
                         .collect();
 
                     // Categorize a symbol
@@ -22538,7 +22575,7 @@ impl TyphooNApp {
                             || s.contains("BRENT") || s.contains("NATGAS") || s.contains("COCOA")
                             || s.contains("WHEAT") || s.contains("CORN") || s.contains("SUGAR") || s.contains("COFFEE") { return "Commodities"; }
                         // Use fundamentals sector if available
-                        if let Some((sector, _, _)) = fund_map.get(&s) {
+                        if let Some((sector, _, _)) = fund_map.get(s.as_str()) {
                             if !sector.is_empty() { return match *sector {
                                 s if s.contains("ETF") || s.contains("Fund") => "ETFs",
                                 _ => "Stocks",
@@ -22643,7 +22680,9 @@ impl TyphooNApp {
                                 }
                                 for (sym, tfs) in entries {
                                     let total_bars: i64 = tfs.iter().map(|(_, b)| *b).sum();
-                                    let name = fund_map.get(&sym.to_uppercase()).map(|(_, _, n)| *n).unwrap_or("");
+                                    // sym is a cache-key fragment — upper-case in place so the &str key lookup works.
+                                    let sym_upper = sym.to_uppercase();
+                                    let name = fund_map.get(sym_upper.as_str()).map(|(_, _, n)| *n).unwrap_or("");
                                     let info = if name.is_empty() {
                                         format!("{} TFs  {} bars", tfs.len(), total_bars)
                                     } else {
@@ -29602,7 +29641,12 @@ impl eframe::App for TyphooNApp {
         }
 
         // ── poll async broker messages ───────────────────────────────────
-        while let Ok(msg) = self.broker_rx.try_recv() {
+        // Cap drain per frame so a flood of messages can't stall the render thread.
+        // Anything left over waits for next frame; we repaint immediately in that case.
+        let mut msgs_drained = 0usize;
+        const BROKER_DRAIN_MAX: usize = 128;
+        while msgs_drained < BROKER_DRAIN_MAX && let Ok(msg) = self.broker_rx.try_recv() {
+            msgs_drained += 1;
             match msg {
                 BrokerMsg::Connected(s) => {
                     if s.contains("Kraken") {
@@ -30153,6 +30197,11 @@ impl eframe::App for TyphooNApp {
                     }
                 }
             }
+        }
+        // If we hit the drain cap there are more messages waiting — repaint
+        // immediately to process the next batch rather than waiting on the idle tick.
+        if msgs_drained >= BROKER_DRAIN_MAX {
+            ctx.request_repaint();
         }
 
         // ── drain web client commands ────────────────────────────────────
@@ -31914,9 +31963,8 @@ impl eframe::App for TyphooNApp {
                             .show(ui, |ui| {
                                 for entry in &self.log {
                                     if !entry.matches_filter(self.log_filter) { continue; }
-                                    let text = format!("[{}] {} {}", entry.timestamp, entry.icon(), entry.msg);
                                     let response = ui.add(egui::Label::new(
-                                        egui::RichText::new(&text)
+                                        egui::RichText::new(&entry.display)
                                             .color(entry.color())
                                             .font(egui::FontId::monospace(11.0)),
                                     ).wrap_mode(egui::TextWrapMode::Extend).sense(egui::Sense::click()));
@@ -35315,6 +35363,12 @@ impl eframe::App for TyphooNApp {
                     ui.separator();
 
                     let mut execute: Option<String> = None;
+                    // Build the MRU set once — was running iter().take(10).any() per row × N commands.
+                    let recent_set: std::collections::HashSet<&str> = if filter_empty {
+                        self.recent_commands.iter().take(10).map(|s| s.as_str()).collect()
+                    } else {
+                        std::collections::HashSet::new()
+                    };
                     egui::ScrollArea::vertical().auto_shrink(false).max_height(console_height - 52.0).show(ui, |ui| {
                         for (i, cmd) in palette_commands.iter().enumerate() {
                             let is_selected = i == self.console_selected;
@@ -35328,8 +35382,8 @@ impl eframe::App for TyphooNApp {
                                 ui.painter().rect_filled(row_rect, 0.0, row_bg);
 
                                 ui.label(egui::RichText::new(cmd.name).color(name_col).monospace().strong().size(13.0));
-                                // ADR-092: show RECENT badge for MRU commands
-                                if filter_empty && self.recent_commands.iter().take(10).any(|n| n == cmd.name) {
+                                // ADR-092: show RECENT badge for MRU commands (O(1) HashSet lookup).
+                                if recent_set.contains(cmd.name) {
                                     ui.label(egui::RichText::new("RECENT").color(egui::Color32::from_rgb(76, 175, 80)).size(9.0));
                                 }
                                 ui.add_space(12.0);

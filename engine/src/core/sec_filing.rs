@@ -412,65 +412,104 @@ pub async fn scrape_filings_for_ticker(
         });
     }
 
-    // Step 3: Insert new filings (blocking), get back which ones are actually new
+    // Step 3: Insert new filings (blocking), get back which ones are actually new.
+    // PERF: the previous implementation did an N+1 loop:
+    //   1) per-filing `SELECT COUNT(*) FROM sec_filings WHERE accession = ?`
+    //   2) per-filing `INSERT OR IGNORE`
+    //   3) per-filing `SELECT COUNT(*) FROM sec_filing_alerts WHERE ticker/type/created_at`
+    // That's 3 round-trips per filing, repeated for up to 100 filings per ticker.
+    // Now: one bulk `SELECT accession_number` preload, one bulk `SELECT ticker,alert_type`
+    // preload, and a single INSERT per new filing — all inside one transaction.
     let db = db_path.to_path_buf();
     let pending_clone = pending.clone();
     let new_filings: Vec<PendingFiling> = tokio::task::spawn_blocking(move || {
-        let conn = open_conn(&db)?;
+        let mut conn = open_conn(&db)?;
         let now = chrono::Utc::now().timestamp();
-        let mut inserted = Vec::new();
+        let yesterday = now - 86400;
 
-        for f in pending_clone {
-            let exists: bool = conn.query_row(
-                "SELECT COUNT(*) FROM sec_filings WHERE accession_number = ?1",
-                params![f.accession_number],
-                |row| row.get::<_, i64>(0),
-            ).unwrap_or(0) > 0;
-
-            if exists { continue; }
-
-            conn.execute(
-                "INSERT OR IGNORE INTO sec_filings (ticker, form_type, accession_number, filing_date, url, company_name, importance_score, category, summary, insider_flag, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                params![
-                    f.ticker, f.form_type, f.accession_number, f.filing_date, f.url,
-                    f.company_name, f.importance_score, f.category, "", f.insider_flag, now
-                ],
-            ).map_err(|e| format!("Insert filing failed: {e}"))?;
-
-            // Create alerts for critical filing types
-            let alert_info: Option<(&str, String)> = match f.form_type.as_str() {
-                "NT 10-K" | "NT 10-Q" => Some(("LATE_FILING", format!("{}: Late filing — possible internal issues", f.ticker))),
-                "SC 13D" | "SC 13D/A" => Some(("ACTIVIST", format!("{}: Activist investor took >5% position", f.ticker))),
-                "10-K/A" | "10-Q/A" => Some(("RESTATEMENT", format!("{}: Restated financials — review immediately", f.ticker))),
-                "8-K/A" => Some(("AMENDED_EVENT", format!("{}: Amended material event — updated disclosure", f.ticker))),
-                "S-3" => Some(("DILUTION_RISK", format!("{}: Shelf registration filed — potential dilution", f.ticker))),
-                "424B5" | "424B2" | "424B4" => Some(("ACTIVE_DILUTION", format!("{}: Prospectus filed — offering in progress", f.ticker))),
-                "15-12B" | "15-12G" => Some(("DELISTING_RISK", format!("{}: Deregistration filed — delisting risk", f.ticker))),
-                "SC TO-T" | "SC TO-I" => Some(("TENDER_OFFER", format!("{}: Tender offer filed — acquisition bid", f.ticker))),
-                "CORRESP" => Some(("SEC_INQUIRY", format!("{}: SEC correspondence — regulatory scrutiny", f.ticker))),
-                "PREM14A" => Some(("MERGER_PROXY", format!("{}: Preliminary merger proxy filed", f.ticker))),
-                _ => None,
-            };
-            if let Some((alert_type, message)) = alert_info {
-                // Deduplicate: only one alert per (ticker, alert_type) per day
-                let _today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let existing: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM sec_filing_alerts WHERE ticker = ?1 AND alert_type = ?2 AND created_at > ?3",
-                    params![f.ticker, alert_type, chrono::Utc::now().timestamp() - 86400],
-                    |row| row.get(0),
-                ).unwrap_or(0);
-                if existing == 0 {
-                conn.execute(
-                    "INSERT INTO sec_filing_alerts (ticker, alert_type, message, filing_accession, importance, created_at, dismissed)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, FALSE)",
-                    params![f.ticker, alert_type, message, f.accession_number, f.importance_score, now],
-                ).ok();
+        // Preload existing accession numbers for this batch (scoped to the tickers we're
+        // about to touch so the lookup stays small).
+        let tickers: std::collections::HashSet<String> =
+            pending_clone.iter().map(|f| f.ticker.clone()).collect();
+        let mut existing_accessions: std::collections::HashSet<String> =
+            std::collections::HashSet::with_capacity(pending_clone.len() * 2);
+        if !tickers.is_empty() {
+            let placeholders = std::iter::repeat("?").take(tickers.len()).collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "SELECT accession_number FROM sec_filings WHERE ticker IN ({placeholders})"
+            );
+            let tickers_vec: Vec<&String> = tickers.iter().collect();
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                tickers_vec.iter().map(|s| *s as &dyn rusqlite::types::ToSql).collect();
+            if let Ok(mut stmt) = conn.prepare(&sql) {
+                if let Ok(rows) = stmt.query_map(params_refs.as_slice(), |r| r.get::<_, String>(0)) {
+                    for r in rows.flatten() { existing_accessions.insert(r); }
                 }
             }
-
-            inserted.push(f);
         }
+
+        // Preload today's alerts so we can O(1) dedup without a per-filing COUNT.
+        let mut alerts_today: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        {
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT ticker, alert_type FROM sec_filing_alerts WHERE created_at > ?1"
+            ) {
+                if let Ok(rows) = stmt.query_map(params![yesterday], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                }) {
+                    for r in rows.flatten() { alerts_today.insert(r); }
+                }
+            }
+        }
+
+        let tx = conn.transaction().map_err(|e| format!("begin tx: {e}"))?;
+        let mut inserted = Vec::new();
+        {
+            let mut ins_filing = tx.prepare(
+                "INSERT OR IGNORE INTO sec_filings (ticker, form_type, accession_number, filing_date, url, company_name, importance_score, category, summary, insider_flag, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+            ).map_err(|e| format!("prepare filing insert: {e}"))?;
+            let mut ins_alert = tx.prepare(
+                "INSERT INTO sec_filing_alerts (ticker, alert_type, message, filing_accession, importance, created_at, dismissed)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, FALSE)"
+            ).map_err(|e| format!("prepare alert insert: {e}"))?;
+
+            for f in pending_clone {
+                if existing_accessions.contains(&f.accession_number) { continue; }
+                existing_accessions.insert(f.accession_number.clone());
+
+                ins_filing.execute(params![
+                    f.ticker, f.form_type, f.accession_number, f.filing_date, f.url,
+                    f.company_name, f.importance_score, f.category, "", f.insider_flag, now
+                ]).map_err(|e| format!("Insert filing failed: {e}"))?;
+
+                let alert_info: Option<(&str, String)> = match f.form_type.as_str() {
+                    "NT 10-K" | "NT 10-Q" => Some(("LATE_FILING", format!("{}: Late filing — possible internal issues", f.ticker))),
+                    "SC 13D" | "SC 13D/A" => Some(("ACTIVIST", format!("{}: Activist investor took >5% position", f.ticker))),
+                    "10-K/A" | "10-Q/A" => Some(("RESTATEMENT", format!("{}: Restated financials — review immediately", f.ticker))),
+                    "8-K/A" => Some(("AMENDED_EVENT", format!("{}: Amended material event — updated disclosure", f.ticker))),
+                    "S-3" => Some(("DILUTION_RISK", format!("{}: Shelf registration filed — potential dilution", f.ticker))),
+                    "424B5" | "424B2" | "424B4" => Some(("ACTIVE_DILUTION", format!("{}: Prospectus filed — offering in progress", f.ticker))),
+                    "15-12B" | "15-12G" => Some(("DELISTING_RISK", format!("{}: Deregistration filed — delisting risk", f.ticker))),
+                    "SC TO-T" | "SC TO-I" => Some(("TENDER_OFFER", format!("{}: Tender offer filed — acquisition bid", f.ticker))),
+                    "CORRESP" => Some(("SEC_INQUIRY", format!("{}: SEC correspondence — regulatory scrutiny", f.ticker))),
+                    "PREM14A" => Some(("MERGER_PROXY", format!("{}: Preliminary merger proxy filed", f.ticker))),
+                    _ => None,
+                };
+                if let Some((alert_type, message)) = alert_info {
+                    let key = (f.ticker.clone(), alert_type.to_string());
+                    if alerts_today.insert(key) {
+                        let _ = ins_alert.execute(params![
+                            f.ticker, alert_type, message, f.accession_number, f.importance_score, now
+                        ]);
+                    }
+                }
+
+                inserted.push(f);
+            }
+        }
+        tx.commit().map_err(|e| format!("commit tx: {e}"))?;
         Ok::<_, String>(inserted)
     }).await.map_err(|e| format!("spawn_blocking: {e}"))??;
 

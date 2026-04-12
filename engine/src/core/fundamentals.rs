@@ -10,7 +10,7 @@
 //! All data is stored in SQLite for offline access and cached between scrapes.
 //! The scraper respects SEC rate limits (5 req/sec) and Yahoo rate limits.
 
-use rusqlite::{Connection, params, OptionalExtension};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -991,6 +991,30 @@ pub async fn scrape_batch(
         None
     };
 
+    // PERF: preload the blocklist + last_updated index in two bulk queries instead
+    // of two SELECTs per ticker inside the loop. For a 500-ticker scrape that's
+    // 1000 → 2 DB round-trips. Both tables are small; full scans are fine.
+    let blocklist: std::collections::HashSet<String> = {
+        let mut set = std::collections::HashSet::new();
+        if let Ok(mut stmt) = conn.prepare("SELECT symbol FROM scrape_failures") {
+            if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                for r in rows.flatten() { set.insert(r); }
+            }
+        }
+        set
+    };
+    let last_updated_map: std::collections::HashMap<String, String> = {
+        let mut map = std::collections::HashMap::new();
+        if let Ok(mut stmt) = conn.prepare("SELECT symbol, last_updated FROM fundamentals") {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            }) {
+                for r in rows.flatten() { map.insert(r.0, r.1); }
+            }
+        }
+        map
+    };
+
     let mut results = Vec::new();
 
     for ticker in tickers {
@@ -1001,22 +1025,15 @@ pub async fn scrape_batch(
             continue;
         }
 
-        // Skip permanently failed symbols (404 from Yahoo — won't magically start working)
-        {
-            let check: Result<Option<String>, _> = conn.query_row(
-                "SELECT reason FROM scrape_failures WHERE symbol = ?1",
-                rusqlite::params![&ticker],
-                |row| row.get(0),
-            ).optional();
-            if let Ok(Some(_)) = check {
-                continue; // permanently blocklisted
-            }
+        // Skip permanently failed symbols (404 from Yahoo — won't magically start working).
+        if blocklist.contains(&ticker) {
+            continue;
         }
 
-        // Skip if recently updated
+        // Skip if recently updated (O(1) HashMap lookup instead of a SELECT per ticker)
         if let Some(ref cutoff_str) = cutoff {
-            if let Ok(Some(existing)) = get_fundamentals(conn, &ticker) {
-                if existing.last_updated >= *cutoff_str {
+            if let Some(existing_ts) = last_updated_map.get(&ticker) {
+                if existing_ts.as_str() >= cutoff_str.as_str() {
                     let r = ScrapeResult {
                         symbol: ticker.clone(),
                         success: true,
