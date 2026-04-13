@@ -9677,6 +9677,8 @@ enum BrokerCmd {
     FundamentalsScrape { db_path: PathBuf, use_mt5: bool, use_alpaca: bool, use_tastytrade: bool, force: bool },
     /// Scrape fundamentals for a single ticker.
     FundamentalsScrapeOne { ticker: String, db_path: PathBuf },
+    /// Bulk research scrape — profile/peers/earnings/press/sentiment/transcripts (ADR-107).
+    ResearchScrape { use_mt5: bool, use_alpaca: bool, use_tastytrade: bool, finnhub_key: String, fmp_key: String },
     /// Scan DARWIN FTP universe (non-blocking, heavy I/O).
     DarwinFtpScan { ftp_dir: String, min_days: usize },
     /// Scan DARWIN FTP and compute stats on GPU.
@@ -10628,6 +10630,13 @@ pub struct TyphooNApp {
     commodities_quotes: Vec<typhoon_engine::core::research::CommodityQuote>,
     commodities_last_fetch: Option<std::time::Instant>,
     commodities_loading: bool,
+
+    /// TAS command — live Time & Sales tape for the active chart symbol.
+    /// (symbol, price, size, side, timestamp) — most recent at front.
+    show_tas: bool,
+    tas_symbol: String,
+    tas_rows: VecDeque<(String, f64, f64, String, String)>,
+    tas_paused: bool,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -12578,6 +12587,75 @@ impl TyphooNApp {
                             });
                         });
                     }
+                    BrokerCmd::ResearchScrape { use_mt5, use_alpaca, use_tastytrade, finnhub_key, fmp_key } => {
+                        let mut extra_tickers: Vec<String> = Vec::new();
+                        if use_alpaca {
+                            if let Some(ref b) = broker {
+                                if let Ok(assets) = b.get_all_assets().await {
+                                    extra_tickers.extend(assets.iter().filter(|a| a.asset_class == "us_equity" && a.tradable).map(|a| a.symbol.clone()));
+                                }
+                            }
+                        }
+                        if use_tastytrade {
+                            if let Some(ref tt) = tt_broker {
+                                if let Ok(positions) = tt.get_positions().await {
+                                    extra_tickers.extend(positions.iter().filter(|p| p.instrument_type == "Equity").map(|p| p.symbol.clone()));
+                                }
+                            }
+                        }
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        std::thread::spawn(move || {
+                            let rt = tokio::runtime::Builder::new_current_thread()
+                                .enable_all().build().unwrap_or_else(|e| { eprintln!("FATAL: tokio runtime init failed: {e}"); std::process::exit(1); });
+                            rt.block_on(async {
+                                use typhoon_engine::core::research;
+                                match shared_cache_broker.read().ok().and_then(|g| g.clone()).ok_or("Cache not ready".to_string()) {
+                                    Ok(cache) => {
+                                        let mut all_tickers: std::collections::HashSet<String> = std::collections::HashSet::new();
+                                        all_tickers.extend(extra_tickers);
+                                        if use_mt5 {
+                                            if let Ok(conn) = cache.connection() {
+                                                if let Ok(mt5_tickers) = fundamentals::extract_stock_tickers_from_cache(&conn) {
+                                                    all_tickers.extend(mt5_tickers);
+                                                }
+                                            }
+                                        }
+                                        let mut tickers: Vec<String> = all_tickers.into_iter().collect();
+                                        tickers.sort();
+                                        if let Ok(conn) = cache.connection() {
+                                            let _ = research::create_research_tables(&conn);
+                                        }
+                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Research scrape: {} tickers queued", tickers.len())));
+                                        let client = reqwest::Client::builder()
+                                            .user_agent("TyphooN-Terminal/1.0")
+                                            .timeout(std::time::Duration::from_secs(15))
+                                            .build().unwrap_or_default();
+                                        let total = tickers.len();
+                                        let mut done = 0usize;
+                                        for ticker in &tickers {
+                                            let conn_result = cache.connection();
+                                            if let Ok(conn) = conn_result {
+                                                let tx = msg_tx.clone();
+                                                let _ = research::scrape_and_cache_symbol(
+                                                    &client, &conn, ticker, &finnhub_key, &fmp_key,
+                                                    |note| { let _ = tx.send(BrokerMsg::FundamentalsProgress(note.to_string())); },
+                                                ).await;
+                                            }
+                                            done += 1;
+                                            if done % 10 == 0 || done == total {
+                                                let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Research scrape: {}/{}", done, total)));
+                                            }
+                                        }
+                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Research scrape complete: {} tickers processed", total)));
+                                    }
+                                    Err(e) => {
+                                        let _ = msg_tx.send(BrokerMsg::Error(format!("Research scrape: cache not ready: {}", e)));
+                                    }
+                                }
+                            });
+                        });
+                    }
                     BrokerCmd::CompactStorage { db_path: _, level } => {
                         let msg_tx = broker_msg_tx_clone.clone();
                         let shared_cache_broker = shared_cache_broker.clone();
@@ -14067,6 +14145,10 @@ impl TyphooNApp {
             commodities_quotes: Vec::new(),
             commodities_last_fetch: None,
             commodities_loading: false,
+            show_tas: false,
+            tas_symbol: String::new(),
+            tas_rows: VecDeque::with_capacity(500),
+            tas_paused: false,
             bottom_tab: BottomTab::Log,
             log,
             log_filter: LogFilter::All,
@@ -16023,6 +16105,109 @@ impl TyphooNApp {
                 }
             }
             "NEWS"          => self.show_news = true,
+            // ── Godel parity research windows (ADR-107) ──
+            "DES" | "DESCRIPTION" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.desc_symbol = sym.clone(); }
+                self.show_company_desc = true;
+                if !self.finnhub_key.is_empty() && !self.desc_symbol.is_empty() {
+                    self.desc_loading = true;
+                    let s = self.desc_symbol.to_uppercase();
+                    let k = self.finnhub_key.clone();
+                    let _ = self.broker_tx.send(BrokerCmd::FetchCompanyProfile { symbol: s.clone(), finnhub_key: k.clone() });
+                    let _ = self.broker_tx.send(BrokerCmd::FetchStockPeers { symbol: s.clone(), finnhub_key: k.clone() });
+                    let _ = self.broker_tx.send(BrokerCmd::FetchEarningsHistory { symbol: s.clone(), finnhub_key: k.clone() });
+                    let _ = self.broker_tx.send(BrokerCmd::FetchPressReleases { symbol: s, finnhub_key: k });
+                }
+            }
+            "IPO" => {
+                self.show_ipo_calendar = true;
+                if !self.finnhub_key.is_empty() {
+                    self.ipo_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchIpoCalendar { finnhub_key: self.finnhub_key.clone(), days_ahead: 30, days_back: 30 });
+                }
+            }
+            "ERN" | "EARNINGS_HISTORY" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.earnings_history_symbol = sym; }
+                self.show_earnings_history = true;
+                if !self.finnhub_key.is_empty() && !self.earnings_history_symbol.is_empty() {
+                    self.earnings_history_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchEarningsHistory { symbol: self.earnings_history_symbol.to_uppercase(), finnhub_key: self.finnhub_key.clone() });
+                }
+            }
+            "PEERS" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.peers_symbol = sym; }
+                self.show_peers = true;
+                if !self.finnhub_key.is_empty() && !self.peers_symbol.is_empty() {
+                    self.peers_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchStockPeers { symbol: self.peers_symbol.to_uppercase(), finnhub_key: self.finnhub_key.clone() });
+                }
+            }
+            "PRESS" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.press_symbol = sym; }
+                self.show_press_releases = true;
+                if !self.finnhub_key.is_empty() && !self.press_symbol.is_empty() {
+                    self.press_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchPressReleases { symbol: self.press_symbol.to_uppercase(), finnhub_key: self.finnhub_key.clone() });
+                }
+            }
+            "SENTIMENT" | "SOCIAL" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.sentiment_symbol = sym; }
+                self.show_sentiment = true;
+                if !self.finnhub_key.is_empty() && !self.sentiment_symbol.is_empty() {
+                    self.sentiment_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchSocialSentiment { symbol: self.sentiment_symbol.to_uppercase(), finnhub_key: self.finnhub_key.clone() });
+                }
+            }
+            "TRANSCRIPTS" | "CALLS" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.transcripts_symbol = sym; }
+                self.show_transcripts = true;
+                if !self.fmp_key.is_empty() && !self.transcripts_symbol.is_empty() {
+                    self.transcripts_loading_list = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchTranscriptList { symbol: self.transcripts_symbol.to_uppercase(), fmp_key: self.fmp_key.clone() });
+                }
+            }
+            "GLCO" | "COMMODITIES" => {
+                self.show_commodities = true;
+                self.commodities_loading = true;
+                let _ = self.broker_tx.send(BrokerCmd::FetchCommoditiesQuotes);
+            }
+            "RESEARCH_SCRAPE" | "RSCRAPE" => {
+                let _ = self.broker_tx.send(BrokerCmd::ResearchScrape {
+                    use_mt5: true,
+                    use_alpaca: true,
+                    use_tastytrade: true,
+                    finnhub_key: self.finnhub_key.clone(),
+                    fmp_key: self.fmp_key.clone(),
+                });
+                self.log.push_back(LogEntry::info("Research scrape started across MT5/Alpaca/TastyTrade universe"));
+            }
+            "TAS" | "TIME_SALES" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.tas_symbol = sym; }
+                self.tas_rows.clear();
+                self.tas_paused = false;
+                self.show_tas = true;
+            }
             "CALENDAR" => {
                 self.show_calendar = true;
                 // Also show the econ calendar panel and fetch if empty (absorbed ECON_CALENDAR).
@@ -24295,6 +24480,580 @@ impl TyphooNApp {
             }
         }
 
+        // ── Godel parity research windows (ADR-107) ───────────────────────
+        let chart_sym_research: String = self.charts.get(self.active_tab).map(|c| {
+            c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("AAPL").to_string()
+        }).unwrap_or_else(|| "AAPL".to_string());
+
+        // DES — Company Description (profile + peers + earnings + press)
+        if self.show_company_desc {
+            if self.desc_symbol.is_empty() { self.desc_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_company_desc;
+            let mut open_url: Option<String> = None;
+            egui::Window::new("DES — Company Description")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([780.0, 560.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.desc_symbol).desired_width(90.0));
+                        if ui.button("Use Chart").clicked() { self.desc_symbol = chart_sym_research.clone(); }
+                        ui.separator();
+                        if ui.add_enabled(!self.desc_loading, egui::Button::new("Load Cached").fill(BTN_GREEN)).clicked() {
+                            let sym = self.desc_symbol.trim().to_uppercase();
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    self.desc_profile = typhoon_engine::core::research::get_profile(&conn, &sym).ok().flatten();
+                                    self.desc_peers = typhoon_engine::core::research::get_peers(&conn, &sym).ok().flatten().unwrap_or_default();
+                                    self.desc_earnings = typhoon_engine::core::research::get_earnings_history(&conn, &sym).ok().flatten().unwrap_or_default();
+                                    self.desc_press = typhoon_engine::core::research::get_press_releases(&conn, &sym).ok().flatten().unwrap_or_default();
+                                }
+                            }
+                        }
+                        if ui.add_enabled(!self.desc_loading && !self.finnhub_key.is_empty(), egui::Button::new("Fetch All").fill(BTN_BLUE)).clicked() {
+                            let sym = self.desc_symbol.trim().to_uppercase();
+                            if !sym.is_empty() {
+                                self.desc_loading = true;
+                                let fk = self.finnhub_key.clone();
+                                let _ = self.broker_tx.send(BrokerCmd::FetchCompanyProfile { symbol: sym.clone(), finnhub_key: fk.clone() });
+                                let _ = self.broker_tx.send(BrokerCmd::FetchStockPeers { symbol: sym.clone(), finnhub_key: fk.clone() });
+                                let _ = self.broker_tx.send(BrokerCmd::FetchEarningsHistory { symbol: sym.clone(), finnhub_key: fk.clone() });
+                                let _ = self.broker_tx.send(BrokerCmd::FetchPressReleases { symbol: sym, finnhub_key: fk });
+                            }
+                        }
+                        if self.desc_loading { ui.spinner(); }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        if let Some(p) = self.desc_profile.clone() {
+                            ui.heading(egui::RichText::new(format!("{}  —  {}", p.symbol, p.name)).strong());
+                            ui.label(egui::RichText::new(format!("{}  •  {}  •  {}", p.exchange, p.country, p.currency)).color(AXIS_TEXT));
+                            ui.label(egui::RichText::new(format!("Sector: {}    Industry: {}", p.sector, p.industry)).color(AXIS_TEXT));
+                            ui.label(egui::RichText::new(format!("IPO: {}    Market Cap: ${:.0}M    Shares Out: {:.1}M", p.ipo_date, p.market_cap, p.shares_outstanding)).color(AXIS_TEXT));
+                            if !p.website.is_empty() {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Website:").color(AXIS_TEXT));
+                                    if ui.link(&p.website).clicked() { open_url = Some(p.website.clone()); }
+                                });
+                            }
+                            if !p.phone.is_empty() { ui.label(egui::RichText::new(format!("Phone: {}", p.phone)).color(AXIS_TEXT)); }
+                        } else {
+                            ui.label(egui::RichText::new("No profile cached — click Fetch All (needs Finnhub key).").color(AXIS_TEXT));
+                        }
+                        ui.separator();
+                        ui.collapsing(egui::RichText::new(format!("Peers ({})", self.desc_peers.len())).strong(), |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                for peer in self.desc_peers.iter() {
+                                    ui.label(egui::RichText::new(peer).color(BTN_BLUE_TEXT));
+                                }
+                            });
+                        });
+                        ui.collapsing(egui::RichText::new(format!("Earnings History ({})", self.desc_earnings.len())).strong(), |ui| {
+                            egui::Grid::new("des_earnings_grid").striped(true).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Period").strong());
+                                ui.label(egui::RichText::new("Actual").strong());
+                                ui.label(egui::RichText::new("Estimate").strong());
+                                ui.label(egui::RichText::new("Surprise %").strong());
+                                ui.end_row();
+                                for r in self.desc_earnings.iter().take(12) {
+                                    ui.label(&r.period);
+                                    ui.label(r.actual.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                                    ui.label(r.estimate.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                                    let col = match r.surprise_pct {
+                                        Some(v) if v > 0.0 => BTN_GREEN_TEXT,
+                                        Some(v) if v < 0.0 => BTN_RED_TEXT,
+                                        _ => AXIS_TEXT,
+                                    };
+                                    ui.label(egui::RichText::new(r.surprise_pct.map(|v| format!("{:+.1}%", v)).unwrap_or_default()).color(col));
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                        ui.collapsing(egui::RichText::new(format!("Recent Press ({})", self.desc_press.len())).strong(), |ui| {
+                            for pr in self.desc_press.iter().take(20) {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(&pr.datetime).color(AXIS_TEXT).small());
+                                    if ui.link(&pr.headline).clicked() { open_url = Some(pr.url.clone()); }
+                                });
+                            }
+                        });
+                    });
+                });
+            self.show_company_desc = open;
+            if let Some(u) = open_url { ctx.open_url(egui::OpenUrl::new_tab(u)); }
+        }
+
+        // IPO Calendar
+        if self.show_ipo_calendar {
+            let mut open = self.show_ipo_calendar;
+            egui::Window::new("IPO Calendar")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([760.0, 480.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(!self.ipo_loading && !self.finnhub_key.is_empty(), egui::Button::new("Fetch (±30d)").fill(BTN_BLUE)).clicked() {
+                            self.ipo_loading = true;
+                            let _ = self.broker_tx.send(BrokerCmd::FetchIpoCalendar { finnhub_key: self.finnhub_key.clone(), days_ahead: 30, days_back: 30 });
+                        }
+                        if ui.add_enabled(!self.ipo_loading, egui::Button::new("Load Cached").fill(BTN_GREEN)).clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    self.ipo_events = typhoon_engine::core::research::get_ipo_calendar(&conn).ok().flatten().unwrap_or_default();
+                                }
+                            }
+                        }
+                        if self.ipo_loading { ui.spinner(); }
+                        ui.label(egui::RichText::new(format!("{} events", self.ipo_events.len())).color(AXIS_TEXT));
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        egui::Grid::new("ipo_grid").striped(true).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Date").strong());
+                            ui.label(egui::RichText::new("Symbol").strong());
+                            ui.label(egui::RichText::new("Name").strong());
+                            ui.label(egui::RichText::new("Exchange").strong());
+                            ui.label(egui::RichText::new("Price Range").strong());
+                            ui.label(egui::RichText::new("Shares").strong());
+                            ui.label(egui::RichText::new("Total Value").strong());
+                            ui.label(egui::RichText::new("Status").strong());
+                            ui.end_row();
+                            for e in self.ipo_events.iter() {
+                                ui.label(&e.date);
+                                ui.label(egui::RichText::new(&e.symbol).color(BTN_BLUE_TEXT).strong());
+                                ui.label(&e.name);
+                                ui.label(&e.exchange);
+                                ui.label(&e.price_range);
+                                ui.label(if e.shares > 0 { format!("{}", e.shares) } else { String::new() });
+                                ui.label(if e.total_value > 0.0 { format!("${:.1}M", e.total_value / 1e6) } else { String::new() });
+                                ui.label(&e.status);
+                                ui.end_row();
+                            }
+                        });
+                    });
+                });
+            self.show_ipo_calendar = open;
+        }
+
+        // Earnings History (ERN)
+        if self.show_earnings_history {
+            if self.earnings_history_symbol.is_empty() { self.earnings_history_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_earnings_history;
+            egui::Window::new("ERN — Earnings History")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([700.0, 460.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.earnings_history_symbol).desired_width(90.0));
+                        if ui.button("Use Chart").clicked() { self.earnings_history_symbol = chart_sym_research.clone(); }
+                        if ui.add_enabled(!self.earnings_history_loading, egui::Button::new("Load Cached").fill(BTN_GREEN)).clicked() {
+                            let sym = self.earnings_history_symbol.trim().to_uppercase();
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    self.earnings_history_rows = typhoon_engine::core::research::get_earnings_history(&conn, &sym).ok().flatten().unwrap_or_default();
+                                }
+                            }
+                        }
+                        if ui.add_enabled(!self.earnings_history_loading && !self.finnhub_key.is_empty(), egui::Button::new("Fetch").fill(BTN_BLUE)).clicked() {
+                            let sym = self.earnings_history_symbol.trim().to_uppercase();
+                            if !sym.is_empty() {
+                                self.earnings_history_loading = true;
+                                let _ = self.broker_tx.send(BrokerCmd::FetchEarningsHistory { symbol: sym, finnhub_key: self.finnhub_key.clone() });
+                            }
+                        }
+                        if self.earnings_history_loading { ui.spinner(); }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        egui::Grid::new("ern_grid").striped(true).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Period").strong());
+                            ui.label(egui::RichText::new("Qtr").strong());
+                            ui.label(egui::RichText::new("Year").strong());
+                            ui.label(egui::RichText::new("Actual").strong());
+                            ui.label(egui::RichText::new("Estimate").strong());
+                            ui.label(egui::RichText::new("Surprise").strong());
+                            ui.label(egui::RichText::new("Surprise %").strong());
+                            ui.end_row();
+                            for r in self.earnings_history_rows.iter() {
+                                ui.label(&r.period);
+                                ui.label(r.quarter.map(|v| format!("Q{}", v)).unwrap_or_default());
+                                ui.label(r.year.map(|v| v.to_string()).unwrap_or_default());
+                                ui.label(r.actual.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                                ui.label(r.estimate.map(|v| format!("{:.2}", v)).unwrap_or_default());
+                                ui.label(r.surprise.map(|v| format!("{:+.2}", v)).unwrap_or_default());
+                                let col = match r.surprise_pct {
+                                    Some(v) if v > 0.0 => BTN_GREEN_TEXT,
+                                    Some(v) if v < 0.0 => BTN_RED_TEXT,
+                                    _ => AXIS_TEXT,
+                                };
+                                ui.label(egui::RichText::new(r.surprise_pct.map(|v| format!("{:+.1}%", v)).unwrap_or_default()).color(col));
+                                ui.end_row();
+                            }
+                        });
+                    });
+                });
+            self.show_earnings_history = open;
+        }
+
+        // Stock Peers
+        if self.show_peers {
+            if self.peers_symbol.is_empty() { self.peers_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_peers;
+            let mut jump_to: Option<String> = None;
+            egui::Window::new("PEERS — Stock Peers")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([520.0, 420.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.peers_symbol).desired_width(90.0));
+                        if ui.button("Use Chart").clicked() { self.peers_symbol = chart_sym_research.clone(); }
+                        if ui.add_enabled(!self.peers_loading, egui::Button::new("Load Cached").fill(BTN_GREEN)).clicked() {
+                            let sym = self.peers_symbol.trim().to_uppercase();
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    self.peers_list = typhoon_engine::core::research::get_peers(&conn, &sym).ok().flatten().unwrap_or_default();
+                                }
+                            }
+                        }
+                        if ui.add_enabled(!self.peers_loading && !self.finnhub_key.is_empty(), egui::Button::new("Fetch").fill(BTN_BLUE)).clicked() {
+                            let sym = self.peers_symbol.trim().to_uppercase();
+                            if !sym.is_empty() {
+                                self.peers_loading = true;
+                                let _ = self.broker_tx.send(BrokerCmd::FetchStockPeers { symbol: sym, finnhub_key: self.finnhub_key.clone() });
+                            }
+                        }
+                        if self.peers_loading { ui.spinner(); }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        for peer in self.peers_list.iter() {
+                            if ui.button(egui::RichText::new(peer).color(BTN_BLUE_TEXT).strong()).on_hover_text("Click to load in chart").clicked() {
+                                jump_to = Some(peer.clone());
+                            }
+                        }
+                    });
+                });
+            self.show_peers = open;
+            if let Some(sym) = jump_to {
+                self.symbol_input = sym.clone();
+                if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                    chart.symbol = sym.clone();
+                    if let Some(ref cache_arc) = self.cache {
+                        let mut gpu = self.gpu_indicators.take();
+                        if !chart.try_load(Arc::as_ref(cache_arc), &mut self.log, gpu.as_mut()) {
+                            self.deferred_chart_loads.push_back(self.active_tab);
+                        }
+                        self.gpu_indicators = gpu;
+                    }
+                }
+                self.log.push_back(LogEntry::info(format!("Chart: {}", sym)));
+            }
+        }
+
+        // Press Releases
+        if self.show_press_releases {
+            if self.press_symbol.is_empty() { self.press_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_press_releases;
+            let mut open_url: Option<String> = None;
+            egui::Window::new("PRESS — Press Releases")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([820.0, 520.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.press_symbol).desired_width(90.0));
+                        if ui.button("Use Chart").clicked() { self.press_symbol = chart_sym_research.clone(); }
+                        if ui.add_enabled(!self.press_loading, egui::Button::new("Load Cached").fill(BTN_GREEN)).clicked() {
+                            let sym = self.press_symbol.trim().to_uppercase();
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    self.press_releases_list = typhoon_engine::core::research::get_press_releases(&conn, &sym).ok().flatten().unwrap_or_default();
+                                }
+                            }
+                        }
+                        if ui.add_enabled(!self.press_loading && !self.finnhub_key.is_empty(), egui::Button::new("Fetch").fill(BTN_BLUE)).clicked() {
+                            let sym = self.press_symbol.trim().to_uppercase();
+                            if !sym.is_empty() {
+                                self.press_loading = true;
+                                let _ = self.broker_tx.send(BrokerCmd::FetchPressReleases { symbol: sym, finnhub_key: self.finnhub_key.clone() });
+                            }
+                        }
+                        if self.press_loading { ui.spinner(); }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        for pr in self.press_releases_list.iter() {
+                            ui.group(|ui| {
+                                ui.label(egui::RichText::new(&pr.datetime).color(AXIS_TEXT).small());
+                                if ui.link(egui::RichText::new(&pr.headline).strong()).clicked() { open_url = Some(pr.url.clone()); }
+                                if !pr.description.is_empty() {
+                                    ui.label(egui::RichText::new(&pr.description).color(AXIS_TEXT));
+                                }
+                            });
+                        }
+                    });
+                });
+            self.show_press_releases = open;
+            if let Some(u) = open_url { ctx.open_url(egui::OpenUrl::new_tab(u)); }
+        }
+
+        // Social Sentiment
+        if self.show_sentiment {
+            if self.sentiment_symbol.is_empty() { self.sentiment_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_sentiment;
+            egui::Window::new("SENTIMENT — Social Sentiment")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([720.0, 460.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.sentiment_symbol).desired_width(90.0));
+                        if ui.button("Use Chart").clicked() { self.sentiment_symbol = chart_sym_research.clone(); }
+                        if ui.add_enabled(!self.sentiment_loading, egui::Button::new("Load Cached").fill(BTN_GREEN)).clicked() {
+                            let sym = self.sentiment_symbol.trim().to_uppercase();
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    self.sentiment_rows = typhoon_engine::core::research::get_sentiment(&conn, &sym).ok().flatten().unwrap_or_default();
+                                }
+                            }
+                        }
+                        if ui.add_enabled(!self.sentiment_loading && !self.finnhub_key.is_empty(), egui::Button::new("Fetch").fill(BTN_BLUE)).clicked() {
+                            let sym = self.sentiment_symbol.trim().to_uppercase();
+                            if !sym.is_empty() {
+                                self.sentiment_loading = true;
+                                let _ = self.broker_tx.send(BrokerCmd::FetchSocialSentiment { symbol: sym, finnhub_key: self.finnhub_key.clone() });
+                            }
+                        }
+                        if self.sentiment_loading { ui.spinner(); }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        egui::Grid::new("sentiment_grid").striped(true).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Source").strong());
+                            ui.label(egui::RichText::new("Time").strong());
+                            ui.label(egui::RichText::new("Mentions").strong());
+                            ui.label(egui::RichText::new("Pos").strong());
+                            ui.label(egui::RichText::new("Neg").strong());
+                            ui.label(egui::RichText::new("Score").strong());
+                            ui.end_row();
+                            for r in self.sentiment_rows.iter() {
+                                ui.label(&r.source);
+                                ui.label(&r.at_time);
+                                ui.label(format!("{}", r.mention));
+                                ui.label(egui::RichText::new(format!("{}", r.positive_mention)).color(BTN_GREEN_TEXT));
+                                ui.label(egui::RichText::new(format!("{}", r.negative_mention)).color(BTN_RED_TEXT));
+                                let col = if r.score > 0.0 { BTN_GREEN_TEXT }
+                                    else if r.score < 0.0 { BTN_RED_TEXT } else { AXIS_TEXT };
+                                ui.label(egui::RichText::new(format!("{:+.2}", r.score)).color(col));
+                                ui.end_row();
+                            }
+                        });
+                    });
+                });
+            self.show_sentiment = open;
+        }
+
+        // Transcripts — two-pane list → body
+        if self.show_transcripts {
+            if self.transcripts_symbol.is_empty() { self.transcripts_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_transcripts;
+            egui::Window::new("TRANSCRIPTS — Earnings Calls")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([960.0, 620.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.transcripts_symbol).desired_width(90.0));
+                        if ui.button("Use Chart").clicked() { self.transcripts_symbol = chart_sym_research.clone(); }
+                        if ui.add_enabled(!self.transcripts_loading_list, egui::Button::new("Load Cached").fill(BTN_GREEN)).clicked() {
+                            let sym = self.transcripts_symbol.trim().to_uppercase();
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    self.transcripts_list = typhoon_engine::core::research::get_transcript_list(&conn, &sym).ok().flatten().unwrap_or_default();
+                                }
+                            }
+                        }
+                        if ui.add_enabled(!self.transcripts_loading_list && !self.fmp_key.is_empty(), egui::Button::new("Fetch List").fill(BTN_BLUE)).clicked() {
+                            let sym = self.transcripts_symbol.trim().to_uppercase();
+                            if !sym.is_empty() {
+                                self.transcripts_loading_list = true;
+                                let _ = self.broker_tx.send(BrokerCmd::FetchTranscriptList { symbol: sym, fmp_key: self.fmp_key.clone() });
+                            }
+                        }
+                        if self.transcripts_loading_list || self.transcripts_loading_body { ui.spinner(); }
+                    });
+                    ui.separator();
+                    let avail_h = ui.available_height();
+                    ui.horizontal(|ui| {
+                        // Left: transcript list
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(260.0, avail_h),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                egui::ScrollArea::vertical().id_salt("tx_list").auto_shrink([false, false]).show(ui, |ui| {
+                                    for (idx, m) in self.transcripts_list.iter().enumerate() {
+                                        let selected = self.transcripts_selected == Some(idx);
+                                        let label = format!("Q{} {}  —  {}", m.quarter, m.year, m.date);
+                                        let resp = ui.selectable_label(selected, egui::RichText::new(label).color(if selected { BTN_BLUE_TEXT } else { AXIS_TEXT }));
+                                        if resp.clicked() {
+                                            self.transcripts_selected = Some(idx);
+                                            // Load cached body first, fetch if missing.
+                                            let sym = m.symbol.clone();
+                                            let q = m.quarter;
+                                            let y = m.year;
+                                            let mut cached: Option<typhoon_engine::core::research::Transcript> = None;
+                                            if let Some(ref cache) = self.cache {
+                                                if let Ok(conn) = cache.connection() {
+                                                    cached = typhoon_engine::core::research::get_transcript(&conn, &sym, q, y).ok().flatten();
+                                                }
+                                            }
+                                            if let Some(t) = cached {
+                                                self.transcripts_body = Some(t);
+                                            } else if !self.fmp_key.is_empty() {
+                                                self.transcripts_loading_body = true;
+                                                let _ = self.broker_tx.send(BrokerCmd::FetchTranscriptBody { symbol: sym, quarter: q, year: y, fmp_key: self.fmp_key.clone() });
+                                            }
+                                        }
+                                    }
+                                });
+                            },
+                        );
+                        ui.separator();
+                        // Right: body
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), avail_h),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                egui::ScrollArea::vertical().id_salt("tx_body").auto_shrink([false, false]).show(ui, |ui| {
+                                    if let Some(t) = self.transcripts_body.clone() {
+                                        ui.heading(format!("{}  —  Q{} {}", t.symbol, t.quarter, t.year));
+                                        ui.label(egui::RichText::new(&t.date).color(AXIS_TEXT));
+                                        ui.separator();
+                                        ui.label(egui::RichText::new(&t.content).size(13.0));
+                                    } else {
+                                        ui.label(egui::RichText::new("Select a call from the list.").color(AXIS_TEXT));
+                                    }
+                                });
+                            },
+                        );
+                    });
+                });
+            self.show_transcripts = open;
+        }
+
+        // Commodities (GLCO) — global commodities futures dashboard
+        if self.show_commodities {
+            let mut open = self.show_commodities;
+            egui::Window::new("GLCO — Global Commodities")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([680.0, 560.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(!self.commodities_loading, egui::Button::new("Refresh").fill(BTN_BLUE)).clicked() {
+                            self.commodities_loading = true;
+                            let _ = self.broker_tx.send(BrokerCmd::FetchCommoditiesQuotes);
+                        }
+                        if self.commodities_loading { ui.spinner(); }
+                        if let Some(t) = self.commodities_last_fetch {
+                            let secs = t.elapsed().as_secs();
+                            ui.label(egui::RichText::new(format!("Updated {}s ago", secs)).color(AXIS_TEXT));
+                        }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        let groups = [("Metals", "Metals"), ("Energy", "Energy"), ("Grains", "Grains"), ("Softs", "Softs"), ("Livestock", "Livestock")];
+                        for (label, _) in groups.iter() {
+                            ui.collapsing(egui::RichText::new(*label).strong(), |ui| {
+                                egui::Grid::new(format!("glco_{}", label)).striped(true).show(ui, |ui| {
+                                    ui.label(egui::RichText::new("Symbol").strong());
+                                    ui.label(egui::RichText::new("Name").strong());
+                                    ui.label(egui::RichText::new("Price").strong());
+                                    ui.label(egui::RichText::new("Change").strong());
+                                    ui.label(egui::RichText::new("%").strong());
+                                    ui.end_row();
+                                    for (idx, q) in self.commodities_quotes.iter().enumerate() {
+                                        let group = typhoon_engine::core::research::COMMODITIES_UNIVERSE
+                                            .get(idx).map(|(_, _, g)| *g).unwrap_or("");
+                                        if group != *label { continue; }
+                                        ui.label(egui::RichText::new(&q.symbol).color(BTN_BLUE_TEXT));
+                                        ui.label(&q.display);
+                                        ui.label(format!("{:.2}", q.price));
+                                        let col = if q.change > 0.0 { BTN_GREEN_TEXT }
+                                            else if q.change < 0.0 { BTN_RED_TEXT } else { AXIS_TEXT };
+                                        ui.label(egui::RichText::new(format!("{:+.2}", q.change)).color(col));
+                                        ui.label(egui::RichText::new(format!("{:+.2}%", q.change_pct)).color(col));
+                                        ui.end_row();
+                                    }
+                                });
+                            });
+                        }
+                    });
+                });
+            self.show_commodities = open;
+        }
+
+        // TAS — Time & Sales tape
+        if self.show_tas {
+            if self.tas_symbol.is_empty() { self.tas_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_tas;
+            egui::Window::new("TAS — Time & Sales")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([520.0, 620.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.tas_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() {
+                            self.tas_symbol = chart_sym_research.clone();
+                            self.tas_rows.clear();
+                        }
+                        let pause_label = if self.tas_paused { "Resume" } else { "Pause" };
+                        let pause_fill = if self.tas_paused { BTN_GREEN } else { BTN_MG };
+                        if ui.add(egui::Button::new(pause_label).fill(pause_fill)).clicked() {
+                            self.tas_paused = !self.tas_paused;
+                        }
+                        if ui.add(egui::Button::new("Clear").fill(BTN_RED)).clicked() { self.tas_rows.clear(); }
+                        ui.label(egui::RichText::new(format!("{} prints", self.tas_rows.len())).color(AXIS_TEXT));
+                    });
+                    ui.separator();
+                    ui.label(egui::RichText::new("Live trades appear here as the WebSocket stream delivers them. Load the same symbol in the chart to start streaming.").color(AXIS_TEXT).small());
+                    ui.separator();
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        egui::Grid::new("tas_grid").striped(true).num_columns(4).spacing([16.0, 2.0]).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Time").strong());
+                            ui.label(egui::RichText::new("Price").strong());
+                            ui.label(egui::RichText::new("Size").strong());
+                            ui.label(egui::RichText::new("Side").strong());
+                            ui.end_row();
+                            for (_sym, price, size, side, ts) in self.tas_rows.iter().take(500) {
+                                let ts_short = ts.split('T').nth(1).map(|t| t.split('.').next().unwrap_or(t)).unwrap_or(ts.as_str());
+                                ui.label(egui::RichText::new(ts_short).color(AXIS_TEXT).monospace());
+                                let col = match side.as_str() {
+                                    "buy" => BTN_GREEN_TEXT,
+                                    "sell" => BTN_RED_TEXT,
+                                    _ => AXIS_TEXT,
+                                };
+                                ui.label(egui::RichText::new(format!("{:.4}", price)).color(col).monospace());
+                                ui.label(egui::RichText::new(format!("{:.0}", size)).monospace());
+                                ui.label(egui::RichText::new(side.to_uppercase()).color(col).monospace().small());
+                                ui.end_row();
+                            }
+                        });
+                    });
+                });
+            self.show_tas = open;
+        }
+
         // Economic Calendar
         if self.show_calendar {
             egui::Window::new("Economic Calendar")
@@ -31060,6 +31819,19 @@ impl eframe::App for TyphooNApp {
                     self.log.push_back(LogEntry::info(msg));
                 }
                 BrokerMsg::StreamTick { symbol, price, size, timestamp } => {
+                    // TAS tape — keep up to 500 most-recent trades for the current TAS subscription.
+                    if self.show_tas && !self.tas_paused && !self.tas_symbol.is_empty()
+                        && (symbol.eq_ignore_ascii_case(&self.tas_symbol)
+                            || self.tas_symbol.contains(&symbol)
+                            || symbol.contains(&self.tas_symbol))
+                    {
+                        // Infer side from previous-tick comparison on the same symbol.
+                        let side = if let Some((_, prev_px, _, _, _)) = self.tas_rows.front() {
+                            if price > *prev_px { "buy" } else if price < *prev_px { "sell" } else { "flat" }
+                        } else { "flat" };
+                        self.tas_rows.push_front((symbol.clone(), price, size, side.to_string(), timestamp.clone()));
+                        while self.tas_rows.len() > 500 { self.tas_rows.pop_back(); }
+                    }
                     // Feed into BarBuilder for real-time bar construction
                     if let Ok(mut bb) = self.bar_builder.lock() {
                         bb.ingest_trade(&symbol, price, size, &timestamp);
