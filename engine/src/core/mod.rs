@@ -20,3 +20,5 @@ pub mod options;
 pub mod data_source;
 pub mod darwin_web;
 pub mod econ_calendar;
+pub mod research;
+pub mod news;

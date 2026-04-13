@@ -9767,6 +9767,47 @@ enum BrokerCmd {
     FetchCryptoTop50,
     /// Fetch full CryptoCompare coin list (8000+ coins).
     FetchCryptoSymbols,
+    // ── Godel parity: research commands (ADR-107) ──
+    /// Fetch Finnhub company profile (name, exchange, industry, logo, website, IPO, shares, mcap).
+    FetchCompanyProfile { symbol: String, finnhub_key: String },
+    /// Fetch Finnhub /stock/peers — related tickers.
+    FetchStockPeers { symbol: String, finnhub_key: String },
+    /// Fetch Finnhub /stock/earnings — actual vs estimate EPS per quarter.
+    FetchEarningsHistory { symbol: String, finnhub_key: String },
+    /// Fetch Finnhub /calendar/ipo — upcoming IPOs for given date window.
+    FetchIpoCalendar { finnhub_key: String, days_ahead: i64, days_back: i64 },
+    /// Fetch Finnhub /press-releases for a symbol.
+    FetchPressReleases { symbol: String, finnhub_key: String },
+    /// Fetch Finnhub /stock/social-sentiment (Reddit + Twitter).
+    FetchSocialSentiment { symbol: String, finnhub_key: String },
+    /// Fetch FMP transcript list for a symbol.
+    FetchTranscriptList { symbol: String, fmp_key: String },
+    /// Fetch FMP full transcript by quarter/year.
+    FetchTranscriptBody { symbol: String, quarter: i32, year: i32, fmp_key: String },
+    /// Fetch Yahoo quote batch for the GLCO commodities dashboard.
+    FetchCommoditiesQuotes,
+    /// Fetch multi-source news for a symbol (GDELT + Yahoo RSS + SEC + Marketaux + AV + FMP),
+    /// cache results in SQLite, and return the cached set.
+    FetchNewsMulti {
+        symbol: String,
+        marketaux_key: String,
+        alpha_vantage_key: String,
+        fmp_key: String,
+    },
+    /// Read cached news for a symbol from SQLite without fetching.
+    LoadCachedNews { symbol: String, limit: usize },
+    /// Full-text search cached news across all symbols.
+    SearchNews { query: String, limit: usize },
+    /// Scrape news across all MT5/Alpaca/TastyTrade universe symbols.
+    /// Long-running: hits 3-6 APIs per symbol with rate-limiting sleeps.
+    NewsScrapeAll {
+        use_mt5: bool,
+        use_alpaca: bool,
+        use_tastytrade: bool,
+        marketaux_key: String,
+        alpha_vantage_key: String,
+        fmp_key: String,
+    },
     /// Connect to Kraken crypto exchange.
     KrakenConnect { api_key: String, api_secret: String },
     /// Get Kraken account balance.
@@ -9840,6 +9881,30 @@ enum BrokerMsg {
     KrakenBalances(Vec<(String, f64)>),
     /// Kraken tradeable pairs (pair_name, display_name).
     KrakenPairs(Vec<(String, String)>),
+    // ── Godel parity: research results (ADR-107) ──
+    /// Finnhub company profile (symbol + profile).
+    CompanyProfile(typhoon_engine::core::research::CompanyProfile),
+    /// Finnhub peer list for a symbol.
+    StockPeers(String, Vec<String>),
+    /// Finnhub earnings history rows (symbol, rows).
+    EarningsHistory(String, Vec<typhoon_engine::core::research::EarningRow>),
+    /// Finnhub IPO calendar rows.
+    IpoCalendar(Vec<typhoon_engine::core::research::IpoEvent>),
+    /// Finnhub press releases for a symbol.
+    PressReleases(String, Vec<typhoon_engine::core::research::PressRelease>),
+    /// Finnhub social sentiment rows for a symbol.
+    SocialSentiment(String, Vec<typhoon_engine::core::research::SocialSentimentRow>),
+    /// FMP transcript metadata list.
+    TranscriptList(String, Vec<typhoon_engine::core::research::TranscriptMeta>),
+    /// FMP full transcript body.
+    TranscriptBody(typhoon_engine::core::research::Transcript),
+    /// Commodities quote batch.
+    CommoditiesQuotes(Vec<typhoon_engine::core::research::CommodityQuote>),
+    /// Multi-source news articles loaded (from cache + fresh fetch) for a symbol.
+    NewsArticlesLoaded {
+        symbol: String,
+        articles: Vec<typhoon_engine::core::news::NewsArticle>,
+    },
 }
 
 /// Reusable sort state for clickable column headers.
@@ -10088,8 +10153,25 @@ pub struct TyphooNApp {
     /// Real-time bar construction from WebSocket trade stream.
     bar_builder: std::sync::Arc<std::sync::Mutex<typhoon_engine::core::bar_builder::BarBuilder>>,
     stream_active: bool,
-    /// Cached news articles (headline, source, datetime).
+    /// Legacy cached Finnhub news tuples (headline, source, datetime) — used by the
+    /// compact "News" side-pane and the WASM web mirror. Retained for backward compat.
     news_articles: Vec<(String, String, String)>,
+    /// Rich multi-source news for the two-pane NEWS reader.
+    news_full_articles: Vec<typhoon_engine::core::news::NewsArticle>,
+    /// Index into `news_full_articles` currently open in the right pane.
+    news_selected: Option<usize>,
+    /// Symbol currently loaded into the news window (drives refresh button).
+    news_symbol_filter: String,
+    /// Full-text search query for the news reader.
+    news_search_query: String,
+    /// UI state flag while a fetch/cached-load is in flight.
+    news_loading: bool,
+    /// User-entered Marketaux API key (free tier 100/day).
+    marketaux_key: String,
+    /// User-entered Alpha Vantage API key (free tier 25/day).
+    alpha_vantage_key: String,
+    /// User-entered FMP API key (free tier 250/day, also used for transcripts).
+    fmp_key: String,
 
     /// SL/TP planning lines (visual, pre-broker).
     sl_price: Option<f64>,
@@ -10490,6 +10572,62 @@ pub struct TyphooNApp {
     // ── Forex Major Pairs ───────────────────────────────────────────────
     show_forex_matrix: bool,
     forex_pairs_data: Vec<WatchlistRow>,
+
+    // ── Godel parity research windows (ADR-107) ─────────────────────────
+    /// DES command — comprehensive company overview.
+    show_company_desc: bool,
+    desc_symbol: String,
+    desc_profile: Option<typhoon_engine::core::research::CompanyProfile>,
+    desc_peers: Vec<String>,
+    desc_earnings: Vec<typhoon_engine::core::research::EarningRow>,
+    desc_press: Vec<typhoon_engine::core::research::PressRelease>,
+    desc_loading: bool,
+
+    /// IPO command — upcoming IPO calendar.
+    show_ipo_calendar: bool,
+    ipo_events: Vec<typhoon_engine::core::research::IpoEvent>,
+    ipo_loading: bool,
+
+    /// EARNINGS command — historical actuals vs estimates.
+    show_earnings_history: bool,
+    earnings_history_symbol: String,
+    earnings_history_rows: Vec<typhoon_engine::core::research::EarningRow>,
+    earnings_history_loading: bool,
+
+    /// PEERS command — related tickers.
+    show_peers: bool,
+    peers_symbol: String,
+    peers_list: Vec<String>,
+    peers_loading: bool,
+
+    /// PRESS command — company press releases.
+    show_press_releases: bool,
+    press_symbol: String,
+    press_releases_list: Vec<typhoon_engine::core::research::PressRelease>,
+    press_loading: bool,
+
+    /// SENTIMENT command — Reddit + Twitter social sentiment.
+    show_sentiment: bool,
+    sentiment_symbol: String,
+    sentiment_rows: Vec<typhoon_engine::core::research::SocialSentimentRow>,
+    sentiment_loading: bool,
+
+    /// TRANSCRIPTS command — earnings call transcripts.
+    show_transcripts: bool,
+    transcripts_symbol: String,
+    transcripts_list: Vec<typhoon_engine::core::research::TranscriptMeta>,
+    transcripts_selected: Option<usize>,
+    transcripts_body: Option<typhoon_engine::core::research::Transcript>,
+    transcripts_loading_list: bool,
+    transcripts_loading_body: bool,
+    transcripts_summary: Option<typhoon_engine::core::sec_filing::FilingSummary>,
+    transcripts_summary_for: (String, i32, i32),
+
+    /// GLCO command — global commodities futures dashboard.
+    show_commodities: bool,
+    commodities_quotes: Vec<typhoon_engine::core::research::CommodityQuote>,
+    commodities_last_fetch: Option<std::time::Instant>,
+    commodities_loading: bool,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -11681,6 +11819,345 @@ impl TyphooNApp {
                                 }
                                 Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("CoinGecko: {}", e))); }
                             }
+                        });
+                    }
+                    // ── Godel parity research handlers (ADR-107) ──
+                    BrokerCmd::FetchCompanyProfile { symbol, finnhub_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_finnhub_profile(&client, &symbol, &finnhub_key).await {
+                                Ok(p) => { let _ = msg_tx.send(BrokerMsg::CompanyProfile(p)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("DES profile: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchStockPeers { symbol, finnhub_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_finnhub_peers(&client, &symbol, &finnhub_key).await {
+                                Ok(peers) => { let _ = msg_tx.send(BrokerMsg::StockPeers(symbol, peers)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("PEERS: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchEarningsHistory { symbol, finnhub_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_finnhub_earnings(&client, &symbol, &finnhub_key).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::EarningsHistory(symbol, rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("EARNINGS: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchIpoCalendar { finnhub_key, days_ahead, days_back } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            let today = chrono::Utc::now();
+                            let from = (today - chrono::Duration::days(days_back.max(0))).format("%Y-%m-%d").to_string();
+                            let to = (today + chrono::Duration::days(days_ahead.max(0))).format("%Y-%m-%d").to_string();
+                            match research::fetch_finnhub_ipo_calendar(&client, &finnhub_key, &from, &to).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::IpoCalendar(rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("IPO: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchPressReleases { symbol, finnhub_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_finnhub_press(&client, &symbol, &finnhub_key).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::PressReleases(symbol, rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("PRESS: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchSocialSentiment { symbol, finnhub_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_finnhub_social(&client, &symbol, &finnhub_key).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::SocialSentiment(symbol, rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("SENTIMENT: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchTranscriptList { symbol, fmp_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_fmp_transcript_list(&client, &symbol, &fmp_key).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::TranscriptList(symbol, rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("TRANSCRIPTS list: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchTranscriptBody { symbol, quarter, year, fmp_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(30))
+                                .build().unwrap_or_default();
+                            match research::fetch_fmp_transcript(&client, &symbol, quarter, year, &fmp_key).await {
+                                Ok(t) => { let _ = msg_tx.send(BrokerMsg::TranscriptBody(t)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("TRANSCRIPTS body: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchCommoditiesQuotes => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1")
+                                .timeout(std::time::Duration::from_secs(20))
+                                .build().unwrap_or_default();
+                            let symbols: Vec<&str> = research::COMMODITIES_UNIVERSE.iter().map(|(s, _, _)| *s).collect();
+                            match research::fetch_yahoo_quotes(&client, &symbols).await {
+                                Ok(quotes) => {
+                                    let out: Vec<research::CommodityQuote> = research::COMMODITIES_UNIVERSE.iter().map(|(sym, display, _)| {
+                                        if let Some(q) = quotes.iter().find(|qq| qq.0 == *sym) {
+                                            research::CommodityQuote {
+                                                symbol: sym.to_string(),
+                                                display: display.to_string(),
+                                                price: q.1,
+                                                change: q.2,
+                                                change_pct: q.3,
+                                            }
+                                        } else {
+                                            research::CommodityQuote { symbol: sym.to_string(), display: display.to_string(), ..Default::default() }
+                                        }
+                                    }).collect();
+                                    let _ = msg_tx.send(BrokerMsg::CommoditiesQuotes(out));
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("GLCO: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchNewsMulti { symbol, marketaux_key, alpha_vantage_key, fmp_key } => {
+                        use typhoon_engine::core::news;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let client = match reqwest::Client::builder()
+                                .user_agent("Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1")
+                                .timeout(std::time::Duration::from_secs(25))
+                                .build() {
+                                Ok(c) => c,
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("News client: {e}"))); return; }
+                            };
+                            let tx_log = msg_tx.clone();
+                            let cb = move |s: &str| {
+                                let _ = tx_log.send(BrokerMsg::FundamentalsProgress(s.to_string()));
+                            };
+                            let articles = match news::fetch_all_sources_for_symbol(
+                                &client, &symbol,
+                                &marketaux_key, &alpha_vantage_key, &fmp_key,
+                                cb,
+                            ).await {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    let _ = msg_tx.send(BrokerMsg::Error(format!("News fetch {}: {e}", symbol)));
+                                    return;
+                                }
+                            };
+                            // DB work must run off the tokio worker to avoid holding &Connection across await.
+                            let sym_for_db = symbol.clone();
+                            let msg_tx_db = msg_tx.clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) else {
+                                    let _ = msg_tx_db.send(BrokerMsg::Error("News: cache not ready".into()));
+                                    return;
+                                };
+                                let Ok(conn) = cache.connection() else {
+                                    let _ = msg_tx_db.send(BrokerMsg::Error("News: conn failed".into()));
+                                    return;
+                                };
+                                match news::upsert_news_batch(&conn, &articles) {
+                                    Ok(n) => {
+                                        let _ = msg_tx_db.send(BrokerMsg::FundamentalsProgress(
+                                            format!("news/{}: {} cached", sym_for_db, n)));
+                                    }
+                                    Err(e) => {
+                                        let _ = msg_tx_db.send(BrokerMsg::Error(format!("News upsert: {e}")));
+                                        return;
+                                    }
+                                }
+                                match news::get_news_by_symbol(&conn, &sym_for_db, 200) {
+                                    Ok(list) => { let _ = msg_tx_db.send(BrokerMsg::NewsArticlesLoaded { symbol: sym_for_db, articles: list }); }
+                                    Err(e) => { let _ = msg_tx_db.send(BrokerMsg::Error(format!("News read: {e}"))); }
+                                }
+                            }).await;
+                        });
+                    }
+                    BrokerCmd::LoadCachedNews { symbol, limit } => {
+                        use typhoon_engine::core::news;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        std::thread::spawn(move || {
+                            let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) else {
+                                let _ = msg_tx.send(BrokerMsg::Error("News cache: not ready".into()));
+                                return;
+                            };
+                            let Ok(conn) = cache.connection() else {
+                                let _ = msg_tx.send(BrokerMsg::Error("News cache: connection failed".into()));
+                                return;
+                            };
+                            match news::get_news_by_symbol(&conn, &symbol, limit) {
+                                Ok(list) => { let _ = msg_tx.send(BrokerMsg::NewsArticlesLoaded { symbol, articles: list }); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Cached news read: {e}"))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::SearchNews { query, limit } => {
+                        use typhoon_engine::core::news;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        std::thread::spawn(move || {
+                            let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) else {
+                                let _ = msg_tx.send(BrokerMsg::Error("News cache: not ready".into()));
+                                return;
+                            };
+                            let Ok(conn) = cache.connection() else {
+                                let _ = msg_tx.send(BrokerMsg::Error("News cache: connection failed".into()));
+                                return;
+                            };
+                            match news::search_news(&conn, &query, limit) {
+                                Ok(list) => { let _ = msg_tx.send(BrokerMsg::NewsArticlesLoaded { symbol: String::new(), articles: list }); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("News search: {e}"))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::NewsScrapeAll {
+                        use_mt5, use_alpaca, use_tastytrade,
+                        marketaux_key, alpha_vantage_key, fmp_key,
+                    } => {
+                        // Gather broker-side tickers before spawning thread.
+                        let mut extra_tickers: Vec<String> = Vec::new();
+                        if use_alpaca {
+                            if let Some(ref b) = broker {
+                                if let Ok(assets) = b.get_all_assets().await {
+                                    extra_tickers.extend(assets.iter()
+                                        .filter(|a| a.asset_class == "us_equity" && a.tradable)
+                                        .map(|a| a.symbol.clone()));
+                                }
+                            }
+                        }
+                        if use_tastytrade {
+                            if let Some(ref tt) = tt_broker {
+                                if let Ok(positions) = tt.get_positions().await {
+                                    extra_tickers.extend(positions.iter()
+                                        .filter(|p| p.instrument_type == "Equity")
+                                        .map(|p| p.symbol.clone()));
+                                }
+                            }
+                        }
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        std::thread::spawn(move || {
+                            use typhoon_engine::core::news;
+                            let rt = tokio::runtime::Builder::new_current_thread()
+                                .enable_all().build().unwrap_or_else(|e| { eprintln!("FATAL: tokio runtime init failed: {e}"); std::process::exit(1); });
+                            rt.block_on(async {
+                                let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) else {
+                                    let _ = msg_tx.send(BrokerMsg::Error("NewsScrapeAll: cache not ready".into()));
+                                    return;
+                                };
+                                // Gather MT5 tickers from cache.
+                                let mut all_tickers: std::collections::HashSet<String> = std::collections::HashSet::new();
+                                all_tickers.extend(extra_tickers);
+                                if use_mt5 {
+                                    if let Ok(conn) = cache.connection() {
+                                        if let Ok(mt5_tickers) = fundamentals::extract_stock_tickers_from_cache(&conn) {
+                                            let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
+                                                format!("News scrape: {} MT5 tickers", mt5_tickers.len())));
+                                            all_tickers.extend(mt5_tickers);
+                                        }
+                                    }
+                                }
+                                let mut tickers: Vec<String> = all_tickers.into_iter().collect();
+                                tickers.sort();
+                                let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
+                                    format!("News scrape: starting for {} symbols", tickers.len())));
+                                let client = match reqwest::Client::builder()
+                                    .user_agent("Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1")
+                                    .timeout(std::time::Duration::from_secs(25))
+                                    .build() {
+                                    Ok(c) => c,
+                                    Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("News client: {e}"))); return; }
+                                };
+                                let mut ok = 0usize;
+                                let mut fail = 0usize;
+                                for (i, ticker) in tickers.iter().enumerate() {
+                                    let log_tx = msg_tx.clone();
+                                    let cb = move |s: &str| {
+                                        let _ = log_tx.send(BrokerMsg::FundamentalsProgress(s.to_string()));
+                                    };
+                                    match news::fetch_all_sources_for_symbol(
+                                        &client, ticker,
+                                        &marketaux_key, &alpha_vantage_key, &fmp_key,
+                                        cb,
+                                    ).await {
+                                        Ok(articles) => {
+                                            if let Ok(conn) = cache.connection() {
+                                                match news::upsert_news_batch(&conn, &articles) {
+                                                    Ok(n) => {
+                                                        ok += 1;
+                                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
+                                                            format!("News {}: {} cached ({}/{})", ticker, n, i + 1, tickers.len())));
+                                                    }
+                                                    Err(e) => {
+                                                        fail += 1;
+                                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
+                                                            format!("News {} upsert failed: {e}", ticker)));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            fail += 1;
+                                            let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
+                                                format!("News {} failed: {e}", ticker)));
+                                        }
+                                    }
+                                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                }
+                                let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
+                                    format!("News scrape complete: {} OK, {} failed of {}", ok, fail, tickers.len())));
+                            });
                         });
                     }
                     BrokerCmd::KrakenConnect { api_key, api_secret } => {
@@ -13252,6 +13729,14 @@ impl TyphooNApp {
             bar_builder: std::sync::Arc::new(std::sync::Mutex::new(typhoon_engine::core::bar_builder::BarBuilder::new())),
             stream_active: false,
             news_articles: Vec::new(),
+            news_full_articles: Vec::new(),
+            news_selected: None,
+            news_symbol_filter: String::new(),
+            news_search_query: String::new(),
+            news_loading: false,
+            marketaux_key: String::new(),
+            alpha_vantage_key: String::new(),
+            fmp_key: String::new(),
             sl_price: None,
             tp_price: None,
             dragging_sl: false,
@@ -13542,6 +14027,46 @@ impl TyphooNApp {
             crypto_top50: Vec::new(),
             show_forex_matrix: false,
             forex_pairs_data: Vec::new(),
+            // ── ADR-107 Godel parity ───────────────────────────────
+            show_company_desc: false,
+            desc_symbol: String::new(),
+            desc_profile: None,
+            desc_peers: Vec::new(),
+            desc_earnings: Vec::new(),
+            desc_press: Vec::new(),
+            desc_loading: false,
+            show_ipo_calendar: false,
+            ipo_events: Vec::new(),
+            ipo_loading: false,
+            show_earnings_history: false,
+            earnings_history_symbol: String::new(),
+            earnings_history_rows: Vec::new(),
+            earnings_history_loading: false,
+            show_peers: false,
+            peers_symbol: String::new(),
+            peers_list: Vec::new(),
+            peers_loading: false,
+            show_press_releases: false,
+            press_symbol: String::new(),
+            press_releases_list: Vec::new(),
+            press_loading: false,
+            show_sentiment: false,
+            sentiment_symbol: String::new(),
+            sentiment_rows: Vec::new(),
+            sentiment_loading: false,
+            show_transcripts: false,
+            transcripts_symbol: String::new(),
+            transcripts_list: Vec::new(),
+            transcripts_selected: None,
+            transcripts_body: None,
+            transcripts_loading_list: false,
+            transcripts_loading_body: false,
+            transcripts_summary: None,
+            transcripts_summary_for: (String::new(), 0, 0),
+            show_commodities: false,
+            commodities_quotes: Vec::new(),
+            commodities_last_fetch: None,
+            commodities_loading: false,
             bottom_tab: BottomTab::Log,
             log,
             log_filter: LogFilter::All,
@@ -23539,51 +24064,235 @@ impl TyphooNApp {
 
         // News
         if self.show_news {
-            egui::Window::new("News & Events")
-                .open(&mut self.show_news)
-                .resizable(true).default_size([550.0, 400.0])
+            // Resolve chart symbol once up front (avoid borrow conflicts inside the window closure).
+            let chart_symbol = self.charts.get(self.active_tab).map(|c| {
+                c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("AAPL").to_string()
+            }).unwrap_or_else(|| "AAPL".to_string());
+            if self.news_symbol_filter.is_empty() {
+                self.news_symbol_filter = chart_symbol.clone();
+            }
+
+            let mut open = self.show_news;
+            let mut open_url: Option<String> = None;
+            egui::Window::new("News & Research")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([920.0, 520.0])
                 .show(ctx, |ui| {
+                    // ── Top bar: symbol filter + search + fetch controls ─────────
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Finnhub Key:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.finnhub_key).desired_width(160.0).password(true));
-                        let sym = self.charts.get(self.active_tab).map(|c| {
-                            c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("AAPL").to_string()
-                        }).unwrap_or_else(|| "AAPL".to_string());
-                        if ui.add(egui::Button::new("Fetch News").fill(BTN_BLUE)).clicked() {
-                            if self.finnhub_key.is_empty() {
-                                self.log.push_back(LogEntry::warn("Enter Finnhub API key"));
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.news_symbol_filter).desired_width(90.0));
+                        if ui.button("Use Chart").on_hover_text("Copy active chart symbol").clicked() {
+                            self.news_symbol_filter = chart_symbol.clone();
+                        }
+                        ui.separator();
+                        if ui.add_enabled(!self.news_loading, egui::Button::new("Load Cached").fill(BTN_GREEN))
+                            .on_hover_text("Read cached articles from SQLite without fetching").clicked() {
+                            let sym = self.news_symbol_filter.trim().to_uppercase();
+                            self.news_loading = true;
+                            let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews { symbol: sym, limit: 200 });
+                        }
+                        if ui.add_enabled(!self.news_loading, egui::Button::new("Fetch All Sources").fill(BTN_BLUE))
+                            .on_hover_text("GDELT + Yahoo RSS + SEC EDGAR + Marketaux + Alpha Vantage + FMP").clicked() {
+                            let sym = self.news_symbol_filter.trim().to_uppercase();
+                            if sym.is_empty() {
+                                self.log.push_back(LogEntry::warn("News: enter a symbol"));
                             } else {
-                                let _ = self.broker_tx.send(BrokerCmd::FinnhubNews {
+                                self.news_loading = true;
+                                let _ = self.broker_tx.send(BrokerCmd::FetchNewsMulti {
                                     symbol: sym.clone(),
-                                    api_key: self.finnhub_key.clone(),
+                                    marketaux_key: self.marketaux_key.clone(),
+                                    alpha_vantage_key: self.alpha_vantage_key.clone(),
+                                    fmp_key: self.fmp_key.clone(),
                                 });
-                                self.log.push_back(LogEntry::info(format!("Fetching Finnhub news for {}...", sym)));
+                                self.log.push_back(LogEntry::info(format!("News: fetching multi-source for {}...", sym)));
                             }
                         }
+                        if ui.add(egui::Button::new("Scrape All (MT5+Alpaca+TT)").fill(BTN_MG))
+                            .on_hover_text("Bulk news scrape across the entire configured universe — long running").clicked() {
+                            let _ = self.broker_tx.send(BrokerCmd::NewsScrapeAll {
+                                use_mt5: true,
+                                use_alpaca: true,
+                                use_tastytrade: true,
+                                marketaux_key: self.marketaux_key.clone(),
+                                alpha_vantage_key: self.alpha_vantage_key.clone(),
+                                fmp_key: self.fmp_key.clone(),
+                            });
+                            self.log.push_back(LogEntry::info("News: bulk scrape across all MT5/Alpaca/TastyTrade symbols started"));
+                        }
+                        if self.news_loading {
+                            ui.spinner();
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Search:").color(AXIS_TEXT));
+                        let resp = ui.add(egui::TextEdit::singleline(&mut self.news_search_query).desired_width(260.0).hint_text("keyword… (FTS5)"));
+                        let do_search = (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                            || ui.button("Search").clicked();
+                        if do_search {
+                            let q = self.news_search_query.trim().to_string();
+                            if !q.is_empty() {
+                                self.news_loading = true;
+                                let _ = self.broker_tx.send(BrokerCmd::SearchNews { query: q, limit: 200 });
+                            }
+                        }
+                        ui.separator();
+                        ui.label(egui::RichText::new(format!("{} cached", self.news_full_articles.len())).color(AXIS_TEXT).small());
+                    });
+                    ui.collapsing("API Keys (free tier)", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Marketaux:");
+                            ui.add(egui::TextEdit::singleline(&mut self.marketaux_key).desired_width(180.0).password(true));
+                            ui.label(egui::RichText::new("100/day").color(AXIS_TEXT).small());
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Alpha Vantage:");
+                            ui.add(egui::TextEdit::singleline(&mut self.alpha_vantage_key).desired_width(180.0).password(true));
+                            ui.label(egui::RichText::new("25/day").color(AXIS_TEXT).small());
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("FMP:");
+                            ui.add(egui::TextEdit::singleline(&mut self.fmp_key).desired_width(180.0).password(true));
+                            ui.label(egui::RichText::new("250/day — shared w/ transcripts").color(AXIS_TEXT).small());
+                        });
+                        ui.label(egui::RichText::new("GDELT, Yahoo RSS, SEC EDGAR require no key.").color(AXIS_TEXT).small());
                     });
                     ui.separator();
-                    if self.news_articles.is_empty() {
-                        ui.label(egui::RichText::new("No news loaded. Enter Finnhub API key and click Fetch News.").color(AXIS_TEXT));
+
+                    // ── Two-pane reader: list (left) + body (right) ──────────────
+                    if self.news_full_articles.is_empty() {
+                        ui.label(egui::RichText::new("No cached news. Click Load Cached or Fetch All Sources.").color(AXIS_TEXT));
                     } else {
-                        egui::ScrollArea::vertical().auto_shrink(false).max_height(320.0).show(ui, |ui| {
-                            for (headline, source, dt) in &self.news_articles {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(dt).color(egui::Color32::from_rgb(102, 102, 102)).small());
-                                    ui.label(egui::RichText::new(source).color(egui::Color32::from_rgb(85, 85, 85)).small());
-                                });
-                                // Sentiment coloring based on keywords
-                                let hl = headline.to_lowercase();
-                                let bullish = ["surge", "rally", "beat", "up ", "soar", "gain", "rise", "jump", "bull", "record high"];
-                                let bearish = ["crash", "fall", "miss", "down ", "plunge", "drop", "sink", "bear", "sell-off", "selloff", "decline"];
-                                let is_bull = bullish.iter().any(|w| hl.contains(w));
-                                let is_bear = bearish.iter().any(|w| hl.contains(w));
-                                let hl_color = if is_bull { UP } else if is_bear { DOWN } else { egui::Color32::from_rgb(204, 204, 204) };
-                                ui.label(egui::RichText::new(headline).color(hl_color));
-                                ui.separator();
-                            }
+                        let total = self.news_full_articles.len();
+                        let avail = ui.available_size();
+                        let list_w = (avail.x * 0.38).clamp(240.0, 420.0);
+                        ui.horizontal(|ui| {
+                            // ── Left: article list ──
+                            ui.allocate_ui_with_layout(egui::vec2(list_w, avail.y), egui::Layout::top_down(egui::Align::Min), |ui| {
+                                egui::ScrollArea::vertical()
+                                    .id_salt("news_list_scroll")
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        for i in 0..total {
+                                            let a = &self.news_full_articles[i];
+                                            let selected = self.news_selected == Some(i);
+                                            let ts = if a.published_at > 0 {
+                                                chrono::DateTime::from_timestamp(a.published_at, 0)
+                                                    .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                                                    .unwrap_or_default()
+                                            } else { String::new() };
+                                            let sent_color = match a.sentiment.as_str() {
+                                                "bullish" => UP,
+                                                "bearish" => DOWN,
+                                                _ => egui::Color32::from_rgb(160, 160, 160),
+                                            };
+                                            let row = ui.group(|ui| {
+                                                ui.set_width(list_w - 20.0);
+                                                ui.vertical(|ui| {
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(egui::RichText::new(&a.source).color(egui::Color32::from_rgb(130, 170, 220)).small());
+                                                        if !a.provider.is_empty() {
+                                                            ui.label(egui::RichText::new(format!("· {}", &a.provider)).color(AXIS_TEXT).small());
+                                                        }
+                                                        if !a.sentiment.is_empty() {
+                                                            ui.label(egui::RichText::new(format!("· {}", &a.sentiment)).color(sent_color).small());
+                                                        }
+                                                    });
+                                                    let color = if selected {
+                                                        egui::Color32::from_rgb(255, 255, 255)
+                                                    } else {
+                                                        egui::Color32::from_rgb(220, 220, 220)
+                                                    };
+                                                    ui.label(egui::RichText::new(&a.headline).color(color).strong());
+                                                    if !ts.is_empty() {
+                                                        ui.label(egui::RichText::new(ts).color(AXIS_TEXT).small());
+                                                    }
+                                                });
+                                            });
+                                            if row.response.interact(egui::Sense::click()).clicked() {
+                                                self.news_selected = Some(i);
+                                            }
+                                        }
+                                    });
+                            });
+                            ui.separator();
+                            // ── Right: article body ──
+                            ui.vertical(|ui| {
+                                if let Some(idx) = self.news_selected {
+                                    if let Some(a) = self.news_full_articles.get(idx) {
+                                        ui.label(egui::RichText::new(&a.headline).strong().size(16.0));
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new(&a.source).color(egui::Color32::from_rgb(130, 170, 220)));
+                                            if !a.provider.is_empty() {
+                                                ui.label(egui::RichText::new(format!("· {}", &a.provider)).color(AXIS_TEXT));
+                                            }
+                                            if a.published_at > 0 {
+                                                let ts = chrono::DateTime::from_timestamp(a.published_at, 0)
+                                                    .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+                                                    .unwrap_or_default();
+                                                ui.label(egui::RichText::new(format!("· {}", ts)).color(AXIS_TEXT));
+                                            }
+                                        });
+                                        if !a.sentiment.is_empty() {
+                                            let sent_color = match a.sentiment.as_str() {
+                                                "bullish" => UP,
+                                                "bearish" => DOWN,
+                                                _ => egui::Color32::from_rgb(160, 160, 160),
+                                            };
+                                            let score_text = if a.sentiment_score != 0.0 {
+                                                format!("Sentiment: {} ({:+.2})", a.sentiment, a.sentiment_score)
+                                            } else {
+                                                format!("Sentiment: {}", a.sentiment)
+                                            };
+                                            ui.label(egui::RichText::new(score_text).color(sent_color));
+                                        }
+                                        if !a.tickers.is_empty() {
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.label(egui::RichText::new("Tickers:").color(AXIS_TEXT).small());
+                                                for t in &a.tickers {
+                                                    ui.label(egui::RichText::new(t).color(egui::Color32::from_rgb(180, 200, 140)).small());
+                                                }
+                                            });
+                                        }
+                                        if !a.categories.is_empty() {
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.label(egui::RichText::new("Topics:").color(AXIS_TEXT).small());
+                                                for c in &a.categories {
+                                                    ui.label(egui::RichText::new(c).color(AXIS_TEXT).small());
+                                                }
+                                            });
+                                        }
+                                        ui.separator();
+                                        egui::ScrollArea::vertical()
+                                            .id_salt("news_body_scroll")
+                                            .auto_shrink([false, false])
+                                            .show(ui, |ui| {
+                                                if a.summary.is_empty() {
+                                                    ui.label(egui::RichText::new("(No summary — click Open Source for the full article.)")
+                                                        .color(AXIS_TEXT).italics());
+                                                } else {
+                                                    ui.label(egui::RichText::new(&a.summary));
+                                                }
+                                            });
+                                        ui.horizontal(|ui| {
+                                            if ui.button("Open Source").clicked() {
+                                                open_url = Some(a.url.clone());
+                                            }
+                                            ui.label(egui::RichText::new(&a.url).color(AXIS_TEXT).small());
+                                        });
+                                    }
+                                } else {
+                                    ui.label(egui::RichText::new("Select an article from the list.").color(AXIS_TEXT));
+                                }
+                            });
                         });
                     }
                 });
+            self.show_news = open;
+            if let Some(url) = open_url {
+                ctx.open_url(egui::OpenUrl::new_tab(url));
+            }
         }
 
         // Economic Calendar
@@ -30220,6 +30929,128 @@ impl eframe::App for TyphooNApp {
                         row.2.make_ascii_uppercase();
                     }
                     self.log.push_back(LogEntry::info(format!("Congressional trades: {} loaded", self.congress_trades.len())));
+                }
+                // ── Godel parity results (ADR-107) ──
+                BrokerMsg::CompanyProfile(profile) => {
+                    self.desc_loading = false;
+                    let sym_u = profile.symbol.to_uppercase();
+                    if self.desc_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.desc_profile = Some(profile.clone());
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_profile(&conn, &profile);
+                        }
+                    }
+                }
+                BrokerMsg::StockPeers(sym, peers) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.peers_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.peers_list = peers.clone();
+                        self.peers_loading = false;
+                    }
+                    if self.desc_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.desc_peers = peers.clone();
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_peers(&conn, &sym_u, &peers);
+                        }
+                    }
+                }
+                BrokerMsg::EarningsHistory(sym, rows) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.earnings_history_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.earnings_history_rows = rows.clone();
+                        self.earnings_history_loading = false;
+                    }
+                    if self.desc_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.desc_earnings = rows.clone();
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_earnings_history(&conn, &sym_u, &rows);
+                        }
+                    }
+                }
+                BrokerMsg::IpoCalendar(rows) => {
+                    self.ipo_events = rows.clone();
+                    self.ipo_loading = false;
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_ipo_calendar(&conn, &rows);
+                        }
+                    }
+                    self.log.push_back(LogEntry::info(format!("IPO calendar: {} events", self.ipo_events.len())));
+                }
+                BrokerMsg::PressReleases(sym, rows) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.press_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.press_releases_list = rows.clone();
+                        self.press_loading = false;
+                    }
+                    if self.desc_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.desc_press = rows.clone();
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_press_releases(&conn, &sym_u, &rows);
+                        }
+                    }
+                }
+                BrokerMsg::SocialSentiment(sym, rows) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.sentiment_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.sentiment_rows = rows.clone();
+                        self.sentiment_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_sentiment(&conn, &sym_u, &rows);
+                        }
+                    }
+                }
+                BrokerMsg::TranscriptList(sym, rows) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.transcripts_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.transcripts_list = rows.clone();
+                        self.transcripts_loading_list = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_transcript_list(&conn, &sym_u, &rows);
+                        }
+                    }
+                }
+                BrokerMsg::TranscriptBody(t) => {
+                    if self.transcripts_symbol.eq_ignore_ascii_case(&t.symbol) {
+                        self.transcripts_body = Some(t.clone());
+                        self.transcripts_loading_body = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_transcript(&conn, &t);
+                        }
+                    }
+                }
+                BrokerMsg::CommoditiesQuotes(quotes) => {
+                    self.commodities_quotes = quotes;
+                    self.commodities_loading = false;
+                    self.commodities_last_fetch = Some(std::time::Instant::now());
+                }
+                BrokerMsg::NewsArticlesLoaded { symbol, articles } => {
+                    self.news_loading = false;
+                    let count = articles.len();
+                    self.news_full_articles = articles;
+                    // Clear selection if the selected index is now out of range.
+                    if let Some(idx) = self.news_selected {
+                        if idx >= self.news_full_articles.len() { self.news_selected = None; }
+                    }
+                    if self.news_selected.is_none() && !self.news_full_articles.is_empty() {
+                        self.news_selected = Some(0);
+                    }
+                    let label = if symbol.is_empty() { "all".to_string() } else { symbol };
+                    self.log.push_back(LogEntry::info(format!("News {}: {} articles loaded", label, count)));
                 }
                 BrokerMsg::UnusualVolumeResults(results) => {
                     self.log.push_back(LogEntry::info(format!("Unusual volume: {} symbols flagged", results.len())));

@@ -130,6 +130,7 @@ const SYNCABLE_TABLES: &[&str] = &[
     "fundamentals",
     "quarterly_financials",
     "institutional_holders",
+    "research_news",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -275,6 +276,24 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 PRIMARY KEY (symbol, holder_name)
             )"
         ),
+        "research_news" => Some(
+            "CREATE TABLE IF NOT EXISTS research_news (
+                url_hash TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                provider TEXT NOT NULL DEFAULT '',
+                headline TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '',
+                url TEXT NOT NULL DEFAULT '',
+                published_at INTEGER NOT NULL DEFAULT 0,
+                image_url TEXT NOT NULL DEFAULT '',
+                sentiment TEXT NOT NULL DEFAULT '',
+                sentiment_score REAL NOT NULL DEFAULT 0.0,
+                tickers_json TEXT NOT NULL DEFAULT '[]',
+                categories_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -292,6 +311,7 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "quarterly_financials" => Some("updated_at"),
         "institutional_holders" => Some("updated_at"),
         "sec_scrape_index" => Some("updated_at"),
+        "research_news" => Some("updated_at"),
         _ => None,
     }
 }

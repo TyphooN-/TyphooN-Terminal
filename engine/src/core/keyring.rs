@@ -63,6 +63,10 @@ pub mod keys {
     pub const PERPLEXITY_KEY: &str = "perplexity_api_key";
     pub const MATRIX_ACCESS_TOKEN: &str = "matrix_access_token";
     pub const MATRIX_USER_ID: &str = "matrix_user_id";
+    // News & research APIs (free tier)
+    pub const FMP_KEY: &str = "fmp_api_key";
+    pub const MARKETAUX_KEY: &str = "marketaux_api_key";
+    pub const ALPHA_VANTAGE_KEY: &str = "alpha_vantage_api_key";
 }
 
 #[cfg(test)]
