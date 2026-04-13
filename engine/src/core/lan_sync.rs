@@ -126,6 +126,7 @@ const SYNCABLE_TABLES: &[&str] = &[
     "sec_insider_trades",
     "sec_filing_alerts",
     "sec_scrape_index",
+    "sec_filing_content",
     "fundamentals",
     "quarterly_financials",
     "institutional_holders",
@@ -198,6 +199,14 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 filing_count INTEGER DEFAULT 0,
                 cik TEXT,
                 updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "sec_filing_content" => Some(
+            "CREATE TABLE IF NOT EXISTS sec_filing_content (
+                accession_number TEXT PRIMARY KEY,
+                content_plain TEXT NOT NULL,
+                content_size INTEGER DEFAULT 0,
+                fetched_at INTEGER NOT NULL
             )"
         ),
         "fundamentals" => Some(
@@ -277,6 +286,7 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "sec_filings" => Some("created_at"),
         "sec_insider_trades" => Some("created_at"),
         "sec_filing_alerts" => Some("created_at"),
+        "sec_filing_content" => Some("fetched_at"),
         "darwin_equity_snapshots" => Some("timestamp"),
         "fundamentals" => Some("updated_at"),
         "quarterly_financials" => Some("updated_at"),

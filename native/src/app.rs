@@ -10202,6 +10202,8 @@ pub struct TyphooNApp {
     sec_filing_content_for: String, // accession number this content belongs to (for sticky display)
     sec_filing_pinned: bool,     // pin document viewer (don't clear when navigating filings)
     sec_filing_loading: bool,
+    sec_filing_summary: Option<sec_filing::FilingSummary>,
+    sec_filing_summary_for: String,
     show_insider: bool,
     show_fundamentals: bool,
     show_analyst: bool,
@@ -13333,6 +13335,8 @@ impl TyphooNApp {
             sec_filing_content_for: String::new(),
             sec_filing_pinned: false,
             sec_filing_loading: false,
+            sec_filing_summary: None,
+            sec_filing_summary_for: String::new(),
             show_insider: false,
             show_fundamentals: false,
             show_analyst: false,
@@ -14581,10 +14585,15 @@ impl TyphooNApp {
                 if let Some(idx) = self.charts.iter().position(|c| c.symbol.to_uppercase().contains(&target)) {
                     self.active_tab = idx;
                 } else {
-                    let chart = ChartState::new(format!("mt5:{}", sym), Timeframe::D1);
+                    let tf = self.charts.get(self.active_tab).map(|c| c.timeframe).unwrap_or(Timeframe::D1);
+                    let mut chart = ChartState::new(&sym, tf);
+                    if let Some(ref cache) = self.cache.clone() {
+                        let mut gpu = self.gpu_indicators.take();
+                        chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut());
+                        self.gpu_indicators = gpu;
+                    }
                     self.charts.push(chart);
                     self.active_tab = self.charts.len() - 1;
-                    self.deferred_chart_loads.push_back(self.active_tab);
                 }
             }
             SymbolAction::AddWatchlist(sym) => {
@@ -21944,10 +21953,15 @@ impl TyphooNApp {
             egui::Window::new("Gemini CLI")
                 .open(&mut self.show_gemini_cli)
                 .resizable(true).default_size([550.0, 450.0])
+                .min_width(360.0).min_height(240.0)
+                .constrain(true)
                 .show(ctx, |ui| {
                     ui.label(egui::RichText::new("Gemini CLI — uses your local gemini binary").small().color(AXIS_TEXT));
                     ui.separator();
-                    egui::ScrollArea::vertical().auto_shrink(false).max_height(340.0).stick_to_bottom(true).show(ui, |ui| {
+                    // Reserve ~60px for the input row + separator at the bottom so the scroll
+                    // area fills whatever vertical space remains in the window.
+                    let scroll_h = (ui.available_height() - 60.0).max(120.0);
+                    egui::ScrollArea::vertical().auto_shrink(false).max_height(scroll_h).stick_to_bottom(true).show(ui, |ui| {
                         if self.gemini_cli_history.is_empty() {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(40.0);
@@ -23708,8 +23722,23 @@ impl TyphooNApp {
                                                 if ui.small_button("View Document").clicked() {
                                                     self.sec_filing_content.clear();
                                                     self.sec_filing_content_for = f.accession_number.clone();
-                                                    self.sec_filing_loading = true;
-                                                    let _ = self.broker_tx.send(BrokerCmd::FetchFilingContent { url: f.url.clone() });
+                                                    self.sec_filing_summary = None;
+                                                    self.sec_filing_summary_for.clear();
+                                                    // Try DB cache first — avoid re-hitting EDGAR if already stored.
+                                                    let mut served_from_cache = false;
+                                                    if let Some(ref cache) = self.cache {
+                                                        if let Ok(conn) = cache.connection() {
+                                                            if let Ok(Some(text)) = sec_filing::get_filing_content(&conn, &f.accession_number) {
+                                                                self.sec_filing_content = text;
+                                                                self.sec_filing_loading = false;
+                                                                served_from_cache = true;
+                                                            }
+                                                        }
+                                                    }
+                                                    if !served_from_cache {
+                                                        self.sec_filing_loading = true;
+                                                        let _ = self.broker_tx.send(BrokerCmd::FetchFilingContent { url: f.url.clone() });
+                                                    }
                                                 }
                                                 let pin_label = if self.sec_filing_pinned { "[unpin]" } else { "[pin]" };
                                                 if ui.small_button(pin_label).clicked() {
@@ -23733,6 +23762,40 @@ impl TyphooNApp {
                                         ui.label(egui::RichText::new("Loading filing document...").color(sec_blue));
                                     } else if !self.sec_filing_content.is_empty() && show_doc {
                                         ui.separator();
+                                        // Lazy-compute heuristic summary, keyed by accession so navigating refreshes it.
+                                        if self.sec_filing_summary_for != self.sec_filing_content_for {
+                                            self.sec_filing_summary = Some(sec_filing::summarize_filing(
+                                                &f.form_type,
+                                                &self.sec_filing_content,
+                                            ));
+                                            self.sec_filing_summary_for = self.sec_filing_content_for.clone();
+                                        }
+                                        if let Some(summary) = self.sec_filing_summary.clone() {
+                                            ui.label(egui::RichText::new(&summary.headline).color(sec_med).strong());
+                                            if !summary.bullets.is_empty() {
+                                                egui::CollapsingHeader::new(egui::RichText::new("Summary bullets").small().strong())
+                                                    .id_salt("sec_summary_bullets")
+                                                    .default_open(true)
+                                                    .show(ui, |ui| {
+                                                        for b in &summary.bullets {
+                                                            ui.label(egui::RichText::new(format!("\u{2022} {}", b)).small().color(egui::Color32::from_rgb(210, 210, 220)));
+                                                        }
+                                                    });
+                                            }
+                                            if !summary.sections.is_empty() {
+                                                egui::CollapsingHeader::new(egui::RichText::new("Extracted sections").small().strong())
+                                                    .id_salt("sec_summary_sections")
+                                                    .default_open(false)
+                                                    .show(ui, |ui| {
+                                                        for section in &summary.sections {
+                                                            ui.label(egui::RichText::new(&section.title).color(sec_blue).strong().small());
+                                                            ui.label(egui::RichText::new(&section.body).small().color(egui::Color32::from_rgb(200, 200, 210)));
+                                                            ui.add_space(4.0);
+                                                        }
+                                                    });
+                                            }
+                                            ui.separator();
+                                        }
                                         let header = if self.sec_filing_pinned && self.sec_filing_content_for != f.accession_number {
                                             format!("Filing Document (pinned: {})", self.sec_filing_content_for)
                                         } else { "Filing Document".to_string() };
@@ -29990,6 +30053,9 @@ impl eframe::App for TyphooNApp {
                 BrokerMsg::FilingContent(text) => {
                     self.sec_filing_content = text;
                     self.sec_filing_loading = false;
+                    // Invalidate cached summary so it re-computes for the new content.
+                    self.sec_filing_summary = None;
+                    self.sec_filing_summary_for.clear();
                     self.log.push_back(LogEntry::info("SEC filing document loaded"));
                 }
                 BrokerMsg::FinnhubNewsResult(articles) => {
