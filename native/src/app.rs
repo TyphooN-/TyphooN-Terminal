@@ -9379,7 +9379,7 @@ struct WatchlistRow {
 }
 
 /// Upcoming event source filter for the Event Calendar window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum EventSource { All, Alpaca, Darwinex, Tasty, Positions }
 
 /// Upcoming event type.
@@ -10258,6 +10258,22 @@ pub struct TyphooNApp {
     /// Rebuilt only when `bg_rev` changes — used by Outlier Scanner tradability column.
     cached_mt5_symbols: std::collections::HashSet<String>,
     cached_mt5_symbols_rev: Option<u64>,
+    /// SEC window caches — all keyed off `(bg_rev, broker_scope, ...)` so the heavy
+    /// dedup/filter/sort work only runs when state actually changes, not every frame.
+    /// Keys are u64 hashes for zero-alloc per-frame comparison.
+    /// Filings tab: sorted indices into `bg.sec_filings` after dedup+scope+filter+search.
+    sec_cache_filings: Vec<usize>,
+    sec_cache_filings_key: Option<u64>,
+    /// Insiders tab: (ticker, trade index) tuples for cross-symbol rendering.
+    sec_cache_insiders: Vec<(String, usize)>,
+    sec_cache_insiders_clusters: Vec<(String, usize)>,
+    sec_cache_insiders_key: Option<u64>,
+    /// Timeline tab: (month, count, "type:count type:count..." breakdown) per month, newest first.
+    sec_cache_timeline: Vec<(String, usize, String)>,
+    sec_cache_timeline_key: Option<u64>,
+    /// Tab count strings — `(scoped_filings, alerts, insider_total)`.
+    sec_cache_tab_counts: (usize, usize, usize),
+    sec_cache_tab_counts_key: Option<u64>,
     show_event_calendar: bool,
     event_calendar_rows: Vec<EventRow>,
     event_filter_source: EventSource,
@@ -13350,6 +13366,15 @@ impl TyphooNApp {
             cached_scoped_fundamentals_key: None,
             cached_mt5_symbols: std::collections::HashSet::new(),
             cached_mt5_symbols_rev: None,
+            sec_cache_filings: Vec::new(),
+            sec_cache_filings_key: None,
+            sec_cache_insiders: Vec::new(),
+            sec_cache_insiders_clusters: Vec::new(),
+            sec_cache_insiders_key: None,
+            sec_cache_timeline: Vec::new(),
+            sec_cache_timeline_key: None,
+            sec_cache_tab_counts: (0, 0, 0),
+            sec_cache_tab_counts_key: None,
             show_event_calendar: false,
             event_calendar_rows: Vec::new(),
             event_filter_source: EventSource::All,
@@ -14348,6 +14373,198 @@ impl TyphooNApp {
                 .filter(|f| set.contains(f.symbol.as_str()))
                 .cloned()
                 .collect(),
+        }
+    }
+
+    /// Rebuild SEC window caches if any of the keyed state has changed.
+    /// Called once per frame when the SEC window is open. Caches are:
+    ///   - tab counts (scoped filings, alerts, insider trades) — keyed on (bg_rev, scope)
+    ///   - filings indices (dedup+filter+sort) — keyed on (bg_rev, scope, filters, query, sort)
+    ///   - insider aggregation + cluster detection — keyed on (bg_rev, scope, query)
+    ///   - timeline (by-month grouping) — keyed on (bg_rev, scope)
+    /// O(1) steady state: the O(N) work only runs when the user changes a filter,
+    /// types in the search box, or new bg data lands.
+    fn rebuild_sec_caches(&mut self) {
+        use std::hash::{Hash, Hasher};
+
+        let bg_rev = self.bg_rev;
+        let scope = self.broker_scope;
+
+        // Tab counts — (bg_rev, scope)
+        let counts_key = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            bg_rev.hash(&mut h);
+            scope.hash(&mut h);
+            h.finish()
+        };
+        if self.sec_cache_tab_counts_key != Some(counts_key) {
+            let (scoped, insider_total) = match &self.cached_scope_syms {
+                None => (
+                    self.bg.sec_filings.len(),
+                    self.bg.insider_trades.values().map(|v| v.len()).sum(),
+                ),
+                Some(set) => (
+                    self.bg.sec_filings.iter().filter(|f| set.contains(f.ticker.as_str())).count(),
+                    self.bg.insider_trades.iter()
+                        .filter(|(k, _)| set.contains(k.as_str()))
+                        .map(|(_, v)| v.len()).sum(),
+                ),
+            };
+            self.sec_cache_tab_counts = (scoped, self.bg.sec_alerts.len(), insider_total);
+            self.sec_cache_tab_counts_key = Some(counts_key);
+        }
+
+        // Filings tab — (bg_rev, scope, filters, query, sort column, sort direction)
+        let filings_key = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            bg_rev.hash(&mut h);
+            scope.hash(&mut h);
+            self.sec_filters.hash(&mut h);
+            self.sec_search_query.hash(&mut h);
+            self.sec_sort.column.hash(&mut h);
+            self.sec_sort.ascending.hash(&mut h);
+            h.finish()
+        };
+        if self.sec_cache_filings_key != Some(filings_key) {
+            let filter_types: &[&str] = &["4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
+            let all_on = self.sec_filters.iter().all(|&v| v);
+            let none_on = self.sec_filters.iter().all(|&v| !v);
+            let show_all = all_on || none_on;
+            // Symbol-only search: uppercase query once, compare against ticker (stored upper).
+            let search_upper = self.sec_search_query.trim().to_uppercase();
+            let has_search = !search_upper.is_empty();
+            let filings = &self.bg.sec_filings;
+
+            let mut seen: std::collections::HashSet<(String, String, String)> =
+                std::collections::HashSet::with_capacity(filings.len());
+            let mut idxs: Vec<usize> = Vec::with_capacity(filings.len());
+            for (idx, f) in filings.iter().enumerate() {
+                // Dedup by (date, ticker, form_type) — tuple key, no per-row format!() alloc.
+                let key = (f.filing_date.clone(), f.ticker.clone(), f.form_type.clone());
+                if !seen.insert(key) { continue; }
+                if !show_all {
+                    let pass = self.sec_filters.iter().enumerate().any(|(i, &en)| {
+                        if !en { return false; }
+                        let ft = filter_types.get(i).unwrap_or(&"");
+                        if *ft == "4" {
+                            f.form_type == "4"
+                        } else {
+                            f.form_type.contains(ft)
+                        }
+                    });
+                    if !pass { continue; }
+                }
+                if let Some(ref set) = self.cached_scope_syms {
+                    if !set.contains(f.ticker.as_str()) { continue; }
+                }
+                if has_search && !f.ticker.contains(search_upper.as_str()) { continue; }
+                idxs.push(idx);
+            }
+            // Sort by selected column — avoid borrowing self.sec_sort inside closure.
+            let col = self.sec_sort.column;
+            let asc = self.sec_sort.ascending;
+            idxs.sort_by(|&a, &b| {
+                let fa = &filings[a];
+                let fb = &filings[b];
+                let ord = match col {
+                    0 => fa.filing_date.cmp(&fb.filing_date),
+                    1 => fa.ticker.cmp(&fb.ticker),
+                    2 => fa.form_type.cmp(&fb.form_type),
+                    3 => fa.category.cmp(&fb.category),
+                    4 => fa.company_name.cmp(&fb.company_name),
+                    5 => fa.accession_number.cmp(&fb.accession_number),
+                    _ => std::cmp::Ordering::Equal,
+                };
+                if asc { ord } else { ord.reverse() }
+            });
+            self.sec_cache_filings = idxs;
+            self.sec_cache_filings_key = Some(filings_key);
+        }
+
+        // Insiders tab — (bg_rev, scope, query)
+        let insiders_key = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            bg_rev.hash(&mut h);
+            scope.hash(&mut h);
+            self.sec_search_query.hash(&mut h);
+            h.finish()
+        };
+        if self.sec_cache_insiders_key != Some(insiders_key) {
+            let search_upper = self.sec_search_query.trim().to_uppercase();
+            let has_search = !search_upper.is_empty();
+
+            let mut rows: Vec<(String, usize, String)> = Vec::new(); // (ticker, idx, date)
+            for (ticker, trades) in &self.bg.insider_trades {
+                if let Some(ref set) = self.cached_scope_syms {
+                    if !set.contains(ticker.as_str()) { continue; }
+                }
+                if has_search && !ticker.contains(search_upper.as_str()) { continue; }
+                for (i, trade) in trades.iter().enumerate() {
+                    rows.push((ticker.clone(), i, trade.transaction_date.clone()));
+                }
+            }
+            // Sort newest first.
+            rows.sort_by(|a, b| b.2.cmp(&a.2));
+
+            // Cluster detection: 3+ trades for same symbol within 14 days.
+            let mut by_sym: std::collections::HashMap<String, Vec<&str>> = std::collections::HashMap::new();
+            for (ticker, _, date) in &rows {
+                by_sym.entry(ticker.clone()).or_default().push(date.as_str());
+            }
+            let mut clusters: Vec<(String, usize)> = Vec::new();
+            for (ticker, dates) in &by_sym {
+                if dates.len() < 3 { continue; }
+                let mut sorted_dates: Vec<&str> = dates.clone();
+                sorted_dates.sort();
+                let mut is_cluster = false;
+                for window in sorted_dates.windows(3) {
+                    if let (Some(&first), Some(&last)) = (window.first(), window.last()) {
+                        if last.len() >= 10 && first.len() >= 10 {
+                            let d1: i64 = first[..10].replace('-', "").parse().unwrap_or(0);
+                            let d2: i64 = last[..10].replace('-', "").parse().unwrap_or(0);
+                            if (d2 - d1).abs() <= 14 { is_cluster = true; break; }
+                        }
+                    }
+                }
+                if is_cluster {
+                    clusters.push((ticker.clone(), dates.len()));
+                }
+            }
+
+            self.sec_cache_insiders = rows.into_iter().map(|(t, i, _)| (t, i)).collect();
+            self.sec_cache_insiders_clusters = clusters;
+            self.sec_cache_insiders_key = Some(insiders_key);
+        }
+
+        // Timeline tab — (bg_rev, scope)
+        let timeline_key = counts_key; // same key as tab counts
+        if self.sec_cache_timeline_key != Some(timeline_key) {
+            let mut by_month: std::collections::BTreeMap<String, Vec<usize>> =
+                std::collections::BTreeMap::new();
+            for (idx, f) in self.bg.sec_filings.iter().enumerate() {
+                if let Some(ref set) = self.cached_scope_syms {
+                    if !set.contains(f.ticker.as_str()) { continue; }
+                }
+                let month = if f.filing_date.len() >= 7 {
+                    f.filing_date[..7].to_string()
+                } else {
+                    f.filing_date.clone()
+                };
+                by_month.entry(month).or_default().push(idx);
+            }
+            let mut out: Vec<(String, usize, String)> = Vec::with_capacity(by_month.len());
+            for (month, idxs) in by_month.iter().rev() {
+                let count = idxs.len();
+                let mut types: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+                for &i in idxs {
+                    *types.entry(self.bg.sec_filings[i].form_type.as_str()).or_default() += 1;
+                }
+                let mut type_vec: Vec<String> = types.iter().map(|(t, c)| format!("{}:{}", t, c)).collect();
+                type_vec.sort();
+                out.push((month.clone(), count, type_vec.join(" ")));
+            }
+            self.sec_cache_timeline = out;
+            self.sec_cache_timeline_key = Some(timeline_key);
         }
     }
 
@@ -18656,8 +18873,8 @@ impl TyphooNApp {
                                 self.log.push_back(LogEntry::info(format!("MT5 sync started ({} sources)...", self.mt5_db_paths.iter().filter(|p| !p.is_empty()).count())));
                             }
                         }
-                        ui.checkbox(&mut self.mt5_auto_sync, "Auto-sync every 5 min")
-                            .on_hover_text("Periodically fires MT5SYNC in the background. Silent — no log spam.");
+                        ui.checkbox(&mut self.mt5_auto_sync, "Auto-sync every 30s")
+                            .on_hover_text("Matches BarCacheWriter's 30s write cadence. Silent — no log spam.");
                     });
 
                     ui.add_space(10.0);
@@ -23398,10 +23615,13 @@ impl TyphooNApp {
                 });
         }
 
-        // SEC Filing Scanner — tabbed: Filings | Alerts | Detail
+        // SEC Filing Scanner — tabbed: Filings | Alerts | Insiders | Timeline
         if self.show_sec {
-            // PERF2: read from per-frame cache
-            let sec_scope_syms = self.cached_scope_syms.clone();
+            // PERF: rebuild all SEC caches (filings, insiders, timeline, tab counts)
+            // once per frame before rendering. Steady state = zero O(N) work in the
+            // render closure; caches only invalidate when bg data, scope, filters,
+            // search query, or sort direction change.
+            self.rebuild_sec_caches();
             let sec_scope_label = self.broker_scope_label();
             let mut sec_pending_action = SymbolAction::None;
             egui::Window::new("SEC Filing Scanner")
@@ -23419,12 +23639,7 @@ impl TyphooNApp {
 
                     // ── Tab bar + scrape button + scope ──
                     ui.horizontal(|ui| {
-                        let scoped_count = match &sec_scope_syms {
-                            None => self.bg.sec_filings.len(),
-                            Some(set) => self.bg.sec_filings.iter().filter(|f| set.contains(f.ticker.as_str())).count(),
-                        };
-                        let alert_count = self.bg.sec_alerts.len();
-                        let insider_count: usize = self.bg.insider_trades.values().map(|v| v.len()).sum();
+                        let (scoped_count, alert_count, insider_count) = self.sec_cache_tab_counts;
                         if ui.selectable_label(self.sec_tab == 0, egui::RichText::new(format!("Filings ({})", scoped_count)).small()).clicked() { self.sec_tab = 0; }
                         if ui.selectable_label(self.sec_tab == 1, egui::RichText::new(format!("Alerts ({})", alert_count)).small()).clicked() { self.sec_tab = 1; }
                         if ui.selectable_label(self.sec_tab == 2, egui::RichText::new(format!("Insiders ({})", insider_count)).small()).clicked() { self.sec_tab = 2; }
@@ -23459,61 +23674,14 @@ impl TyphooNApp {
 
                     if self.sec_tab == 0 {
                         // ═══════════ FILINGS TAB (full height) ═══════════
+                        // PERF: pull pre-filtered/sorted indices from cache. Cache is
+                        // rebuilt by rebuild_sec_caches() only when state changes.
                         let filings = &self.bg.sec_filings;
-                        let filter_types: &[&str] = &["4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
-                        let all_on = self.sec_filters.iter().all(|&v| v);
-                        let none_on = self.sec_filters.iter().all(|&v| !v);
-                        let show_all = all_on || none_on;
-                        let search_lower = self.sec_search_query.trim().to_lowercase();
-                        let mut seen = std::collections::HashSet::new();
-                        let mut deduped = Vec::new();
-                        for f in filings {
-                            let key = format!("{}:{}:{}", f.filing_date, f.ticker, f.form_type);
-                            if seen.insert(key) {
-                                let pass = show_all || self.sec_filters.iter().enumerate().any(|(i, &en)| {
-                                    if !en { return false; }
-                                    let ft = filter_types.get(i).unwrap_or(&"");
-                                    // Exact match for "4" to avoid "424B2" matching
-                                    if *ft == "4" {
-                                        f.form_type == "4"
-                                    } else {
-                                        f.form_type.contains(ft)
-                                    }
-                                });
-                                if !pass { continue; }
-                                // Broker scope filter (ticker normalized to uppercase at load).
-                                if let Some(ref set) = sec_scope_syms {
-                                    if !set.contains(f.ticker.as_str()) { continue; }
-                                }
-                                // Text search filter (client-side — instant)
-                                if !search_lower.is_empty() {
-                                    let matches = f.ticker.to_lowercase().contains(&search_lower)
-                                        || f.company_name.to_lowercase().contains(&search_lower)
-                                        || f.form_type.to_lowercase().contains(&search_lower)
-                                        || f.category.to_lowercase().contains(&search_lower)
-                                        || f.summary.to_lowercase().contains(&search_lower)
-                                        || f.accession_number.to_lowercase().contains(&search_lower);
-                                    if !matches { continue; }
-                                }
-                                deduped.push(f);
-                            }
-                        }
-
-                        // Sort filings
-                        match self.sec_sort.column {
-                            0 => deduped.sort_by(|a, b| a.filing_date.cmp(&b.filing_date)),
-                            1 => deduped.sort_by(|a, b| a.ticker.cmp(&b.ticker)),
-                            2 => deduped.sort_by(|a, b| a.form_type.cmp(&b.form_type)),
-                            3 => deduped.sort_by(|a, b| a.category.cmp(&b.category)),
-                            4 => deduped.sort_by(|a, b| a.company_name.cmp(&b.company_name)),
-                            5 => deduped.sort_by(|a, b| a.accession_number.cmp(&b.accession_number)),
-                            _ => {}
-                        }
-                        if !self.sec_sort.ascending { deduped.reverse(); }
+                        let idxs = &self.sec_cache_filings;
 
                         // Detail panel at top (if a filing is selected)
                         if let Some(sel) = self.sec_selected_filing {
-                            if let Some(f) = deduped.get(sel) {
+                            if let Some(f) = idxs.get(sel).and_then(|&i| filings.get(i)) {
                                 egui::Frame::NONE
                                     .fill(egui::Color32::from_rgb(15, 18, 30))
                                     .inner_margin(8.0)
@@ -23581,12 +23749,12 @@ impl TyphooNApp {
 
                         // Pagination
                         let page_size = 100;
-                        let total = deduped.len();
+                        let total = idxs.len();
                         let total_pages = (total + page_size - 1) / page_size;
                         if self.sec_page >= total_pages && total_pages > 0 { self.sec_page = total_pages - 1; }
                         let page_start = self.sec_page * page_size;
                         let page_end = (page_start + page_size).min(total);
-                        let page_slice = &deduped[page_start..page_end];
+                        let page_slice = &idxs[page_start..page_end];
 
                         // Pagination controls
                         if total_pages > 1 {
@@ -23607,7 +23775,7 @@ impl TyphooNApp {
                         // Filing table (scrollable, fill remaining height)
                         let avail = ui.available_height().max(200.0);
                         egui::ScrollArea::vertical().id_salt("sec_filings_tab").min_scrolled_height(avail).auto_shrink(false).show(ui, |ui| {
-                            if deduped.is_empty() {
+                            if idxs.is_empty() {
                                 ui.label(egui::RichText::new("No filings. Click Scrape Now to fetch from SEC EDGAR.").color(sec_low));
                             } else {
                                 egui::Grid::new("sec_filings_grid").striped(true).num_columns(6).min_col_width(45.0).show(ui, |ui| {
@@ -23618,16 +23786,24 @@ impl TyphooNApp {
                                     if SortState::header(ui, "Company", 4, &self.sec_sort) { self.sec_sort.toggle(4); }
                                     if SortState::header(ui, "Accession #", 5, &self.sec_sort) { self.sec_sort.toggle(5); }
                                     ui.end_row();
-                                    for (local_idx, f) in page_slice.iter().enumerate() {
+                                    for (local_idx, &fidx) in page_slice.iter().enumerate() {
+                                        let f = &filings[fidx];
                                         let global_idx = page_start + local_idx;
                                         let sel = self.sec_selected_filing == Some(global_idx);
                                         let rc = if sel { egui::Color32::WHITE } else { egui::Color32::from_rgb(180, 180, 190) };
                                         if ui.add(egui::Label::new(egui::RichText::new(&f.filing_date).small().color(rc)).sense(egui::Sense::click())).clicked() { self.sec_selected_filing = if sel { None } else { Some(global_idx) }; }
-                                        // UX3: Right-click context menu on symbol cell
-                                        let (sym_resp, action) = symbol_label_with_menu(ui, &f.ticker,
-                                            egui::RichText::new(&f.ticker).small().strong().color(if sel { egui::Color32::WHITE } else { sec_cyan }));
-                                        if !matches!(action, SymbolAction::None) { sec_pending_action = action; }
-                                        if sym_resp.clicked() { self.sec_selected_filing = if sel { None } else { Some(global_idx) }; }
+                                        // Symbol cell: label + "+" button wrapped in horizontal so Grid treats them as one column.
+                                        let mut sym_clicked = false;
+                                        ui.horizontal(|ui| {
+                                            let (sym_resp, action) = symbol_label_with_menu(ui, &f.ticker,
+                                                egui::RichText::new(&f.ticker).small().strong().color(if sel { egui::Color32::WHITE } else { sec_cyan }));
+                                            if !matches!(action, SymbolAction::None) { sec_pending_action = action; }
+                                            if sym_resp.clicked() { sym_clicked = true; }
+                                            if ui.small_button(egui::RichText::new("+").small()).on_hover_text("Open new chart").clicked() {
+                                                sec_pending_action = SymbolAction::OpenChart(f.ticker.clone());
+                                            }
+                                        });
+                                        if sym_clicked { self.sec_selected_filing = if sel { None } else { Some(global_idx) }; }
                                         let tc = match f.form_type.as_str() { "4" => sec_med, "10-K"|"10-Q" => sec_blue, "8-K" => sec_orange, _ => sec_purple };
                                         ui.label(egui::RichText::new(&f.form_type).color(tc).small());
                                         let cc = match f.category.as_str() { c if c.contains("INSIDER") => sec_med, c if c.contains("DILUTION") => sec_high, c if c.contains("RESTATE") => sec_orange, _ => sec_low };
@@ -23757,54 +23933,13 @@ impl TyphooNApp {
 
                     if self.sec_tab == 2 {
                         // ═══════════ INSIDERS TAB — Cross-symbol insider trade aggregation ═══════════
-                        let search_lower = self.sec_search_query.trim().to_lowercase();
-                        let mut all_insider_trades: Vec<(&str, &sec_filing::InsiderTrade)> = Vec::new();
-                        for (ticker, trades) in &self.bg.insider_trades {
-                            // insider_trades keys are normalized to uppercase at load.
-                            if let Some(ref set) = sec_scope_syms {
-                                if !set.contains(ticker.as_str()) { continue; }
-                            }
-                            for trade in trades {
-                                if !search_lower.is_empty() {
-                                    let matches = trade.ticker.to_lowercase().contains(&search_lower)
-                                        || trade.insider_name.to_lowercase().contains(&search_lower)
-                                        || trade.insider_title.to_lowercase().contains(&search_lower);
-                                    if !matches { continue; }
-                                }
-                                all_insider_trades.push((ticker.as_str(), trade));
-                            }
-                        }
-                        all_insider_trades.sort_by(|a, b| b.1.transaction_date.cmp(&a.1.transaction_date));
-
-                        // Cluster detection: 3+ insiders trading same stock within 14 days
-                        let mut clusters: Vec<(&str, usize, &str)> = Vec::new();
-                        {
-                            let mut by_sym: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
-                            for (ticker, trade) in &all_insider_trades {
-                                by_sym.entry(ticker).or_default().push(&trade.transaction_date);
-                            }
-                            for (ticker, dates) in &by_sym {
-                                if dates.len() < 3 { continue; }
-                                let mut sorted_dates: Vec<&str> = dates.clone();
-                                sorted_dates.sort();
-                                for window in sorted_dates.windows(3) {
-                                    if let (Some(&first), Some(&last)) = (window.first(), window.last()) {
-                                        if last.len() >= 10 && first.len() >= 10 {
-                                            let d1: i64 = first[..10].replace('-', "").parse().unwrap_or(0);
-                                            let d2: i64 = last[..10].replace('-', "").parse().unwrap_or(0);
-                                            if (d2 - d1).abs() <= 14 {
-                                                clusters.push((ticker, dates.len(), "CLUSTER"));
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        // PERF: pull pre-computed rows and clusters from cache.
+                        let rows = &self.sec_cache_insiders;
+                        let clusters = &self.sec_cache_insiders_clusters;
 
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(format!("{} insider trades across {} symbols",
-                                all_insider_trades.len(), self.bg.insider_trades.len())).strong());
+                                rows.len(), self.bg.insider_trades.len())).strong());
                             if !clusters.is_empty() {
                                 ui.separator();
                                 ui.label(egui::RichText::new(format!("{} cluster(s)", clusters.len())).color(sec_high));
@@ -23812,7 +23947,7 @@ impl TyphooNApp {
                         });
                         if !clusters.is_empty() {
                             ui.horizontal_wrapped(|ui| {
-                                for (ticker, count, _) in &clusters {
+                                for (ticker, count) in clusters {
                                     ui.label(egui::RichText::new(format!("{}: {}x", ticker, count)).color(sec_high).small());
                                 }
                             });
@@ -23824,13 +23959,23 @@ impl TyphooNApp {
                                 ui.strong("Date"); ui.strong("Symbol"); ui.strong("Insider"); ui.strong("Title");
                                 ui.strong("Type"); ui.strong("Shares"); ui.strong("Value"); ui.strong("Flag");
                                 ui.end_row();
-                                for (_, trade) in all_insider_trades.iter().take(500) {
+                                for (ticker, trade_idx) in rows.iter().take(500) {
+                                    let trade = match self.bg.insider_trades.get(ticker).and_then(|v| v.get(*trade_idx)) {
+                                        Some(t) => t,
+                                        None => continue, // cache stale for 1 frame — safe to skip
+                                    };
                                     let is_sell = matches!(trade.transaction_type.chars().next(), Some('S') | Some('D'));
                                     let row_color = if is_sell { sec_high } else { egui::Color32::from_rgb(46, 204, 113) };
                                     ui.label(egui::RichText::new(&trade.transaction_date).color(AXIS_TEXT).small());
-                                    let (_, ia_action) = symbol_label_with_menu(ui, &trade.ticker,
-                                        egui::RichText::new(&trade.ticker).color(sec_cyan).small());
-                                    if !matches!(ia_action, SymbolAction::None) { sec_pending_action = ia_action; }
+                                    // Symbol cell: label + "+" button (single Grid column via horizontal).
+                                    ui.horizontal(|ui| {
+                                        let (_, ia_action) = symbol_label_with_menu(ui, &trade.ticker,
+                                            egui::RichText::new(&trade.ticker).color(sec_cyan).small());
+                                        if !matches!(ia_action, SymbolAction::None) { sec_pending_action = ia_action; }
+                                        if ui.small_button(egui::RichText::new("+").small()).on_hover_text("Open new chart").clicked() {
+                                            sec_pending_action = SymbolAction::OpenChart(trade.ticker.clone());
+                                        }
+                                    });
                                     ui.label(egui::RichText::new(&trade.insider_name).color(AXIS_TEXT).small());
                                     ui.label(egui::RichText::new(&trade.insider_title).color(sec_low).small());
                                     ui.label(egui::RichText::new(if is_sell { "SELL" } else { "BUY" }).color(row_color).small());
@@ -23846,37 +23991,23 @@ impl TyphooNApp {
 
                     if self.sec_tab == 3 {
                         // ═══════════ TIMELINE TAB — Filing activity heatmap ═══════════
-                        // Group filings by month for a calendar-like density view
-                        let mut by_month: std::collections::BTreeMap<String, Vec<&sec_filing::SecFiling>> = std::collections::BTreeMap::new();
-                        for f in &self.bg.sec_filings {
-                            if let Some(ref set) = sec_scope_syms {
-                                if !set.contains(f.ticker.as_str()) { continue; }
-                            }
-                            let month = if f.filing_date.len() >= 7 { &f.filing_date[..7] } else { &f.filing_date };
-                            by_month.entry(month.to_string()).or_default().push(f);
-                        }
-
-                        ui.label(egui::RichText::new(format!("Filing activity: {} months with data", by_month.len())).strong());
+                        // PERF: pre-grouped by month, type breakdown pre-formatted in cache.
+                        let timeline = &self.sec_cache_timeline;
+                        ui.label(egui::RichText::new(format!("Filing activity: {} months with data", timeline.len())).strong());
                         ui.separator();
 
                         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                            // Most recent months first
-                            let months: Vec<_> = by_month.iter().rev().collect();
-                            for (month, filings) in &months {
-                                let count = filings.len();
-                                // Color intensity based on filing count
-                                let intensity = (count as f32 / 20.0).min(1.0);
+                            for (month, count, type_str) in timeline {
+                                let intensity = (*count as f32 / 20.0).min(1.0);
                                 let bar_color = egui::Color32::from_rgba_unmultiplied(
                                     (26.0 + 205.0 * intensity) as u8,
                                     (188.0 - 88.0 * intensity) as u8,
                                     (156.0 - 56.0 * intensity) as u8,
                                     200,
                                 );
-
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new(format!("{}: ", month)).color(AXIS_TEXT).monospace().small());
-                                    // Draw a proportional bar
-                                    let bar_width = (count as f32 * 8.0).min(300.0);
+                                    let bar_width = (*count as f32 * 8.0).min(300.0);
                                     let (rect, _) = ui.allocate_exact_size(egui::vec2(bar_width, 14.0), egui::Sense::hover());
                                     ui.painter().rect_filled(rect, 2.0, bar_color);
                                     ui.painter().text(
@@ -23886,13 +24017,7 @@ impl TyphooNApp {
                                         egui::FontId::proportional(10.0),
                                         egui::Color32::WHITE,
                                     );
-
-                                    // Form type breakdown
-                                    let mut types: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-                                    for f in *filings { *types.entry(f.form_type.as_str()).or_default() += 1; }
-                                    let mut type_str: Vec<String> = types.iter().map(|(t, c)| format!("{}:{}", t, c)).collect();
-                                    type_str.sort();
-                                    ui.label(egui::RichText::new(type_str.join(" ")).color(sec_low).small());
+                                    ui.label(egui::RichText::new(type_str).color(sec_low).small());
                                 });
                             }
                         });
@@ -24879,6 +25004,9 @@ impl TyphooNApp {
                     let found = self.bg.all_fundamentals.iter().find(|f| f.symbol == *ticker).cloned();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("Fundamentals: {}", ticker)).strong());
+                        if ui.small_button(egui::RichText::new("+").small()).on_hover_text("Open new chart").clicked() {
+                            self.deferred_symbol_action = SymbolAction::OpenChart(ticker.clone());
+                        }
                         // UX7: ticker is already uppercase (from cached_active_symbols).
                         if let Some(closes) = fw_sparklines.get(ticker.as_str()) {
                             draw_inline_sparkline(ui, closes, 80.0, 18.0);
@@ -25283,6 +25411,9 @@ impl TyphooNApp {
                         .unwrap_or_default();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("Holders: {}", ticker)).strong());
+                        if !ticker.is_empty() && ui.small_button(egui::RichText::new("+").small()).on_hover_text("Open new chart").clicked() {
+                            self.deferred_symbol_action = SymbolAction::OpenChart(ticker.clone());
+                        }
                         if ui.button("Fetch 13F").clicked() && !ticker.is_empty() {
                             let _ = self.broker_tx.send(BrokerCmd::GetHolders { ticker: ticker.clone() });
                             self.log.push_back(LogEntry::info(format!("Fetching 13F holders for {}...", ticker)));
@@ -25893,9 +26024,14 @@ impl TyphooNApp {
                             ui.strong("Symbol"); ui.strong("30d"); ui.strong("Company"); ui.strong("Yield%"); ui.strong("Ex-Div"); ui.strong("P/E");
                             ui.end_row();
                             for d in divs.iter().take(100) {
-                                let (_, dv_action) = symbol_label_with_menu(ui, &d.symbol,
-                                    egui::RichText::new(&d.symbol).strong());
-                                if !matches!(dv_action, SymbolAction::None) { div_pending_action = dv_action; }
+                                ui.horizontal(|ui| {
+                                    let (_, dv_action) = symbol_label_with_menu(ui, &d.symbol,
+                                        egui::RichText::new(&d.symbol).strong());
+                                    if !matches!(dv_action, SymbolAction::None) { div_pending_action = dv_action; }
+                                    if ui.small_button(egui::RichText::new("+").small()).on_hover_text("Open new chart").clicked() {
+                                        div_pending_action = SymbolAction::OpenChart(d.symbol.clone());
+                                    }
+                                });
                                 if let Some(closes) = div_sparklines.get(&d.symbol.to_uppercase()) {
                                     draw_inline_sparkline(ui, closes, 50.0, 12.0);
                                 } else { ui.label(egui::RichText::new("—").color(AXIS_TEXT).small()); }
@@ -27075,9 +27211,14 @@ impl TyphooNApp {
                                     let tradable = mt5_symbols.contains(o.symbol.as_str());
                                     let sym_color = if tradable { egui::Color32::WHITE } else { egui::Color32::from_rgb(80, 80, 90) };
                                     let trade_icon = if tradable { "\u{25CF} " } else { "\u{25CB} " };
-                                    let (_, action) = symbol_label_with_menu(ui, &o.symbol,
-                                        egui::RichText::new(format!("{}{}", trade_icon, o.symbol)).small().strong().color(sym_color));
-                                    if !matches!(action, SymbolAction::None) { pending_action = action; }
+                                    ui.horizontal(|ui| {
+                                        let (_, action) = symbol_label_with_menu(ui, &o.symbol,
+                                            egui::RichText::new(format!("{}{}", trade_icon, o.symbol)).small().strong().color(sym_color));
+                                        if !matches!(action, SymbolAction::None) { pending_action = action; }
+                                        if ui.small_button(egui::RichText::new("+").small()).on_hover_text("Open new chart").clicked() {
+                                            pending_action = SymbolAction::OpenChart(o.symbol.clone());
+                                        }
+                                    });
                                     // UX7: Sparkline column (o.symbol is already uppercase).
                                     if let Some(closes) = outlier_sparklines.get(o.symbol.as_str()) {
                                         draw_inline_sparkline(ui, closes, 50.0, 12.0);
@@ -27162,11 +27303,19 @@ impl TyphooNApp {
                                 ui.end_row();
                                 let mut scrolled = false;
                                 for o in &sorted_single {
-                                    let (sym_resp, action) = symbol_label_with_menu(ui, &o.symbol,
-                                        egui::RichText::new(&o.symbol).strong().color(ol_cyan));
-                                    if !matches!(action, SymbolAction::None) {
-                                        pending_action = action;
-                                    }
+                                    let mut sym_resp_opt: Option<egui::Response> = None;
+                                    ui.horizontal(|ui| {
+                                        let (sym_resp, action) = symbol_label_with_menu(ui, &o.symbol,
+                                            egui::RichText::new(&o.symbol).strong().color(ol_cyan));
+                                        if !matches!(action, SymbolAction::None) {
+                                            pending_action = action;
+                                        }
+                                        if ui.small_button(egui::RichText::new("+").small()).on_hover_text("Open new chart").clicked() {
+                                            pending_action = SymbolAction::OpenChart(o.symbol.clone());
+                                        }
+                                        sym_resp_opt = Some(sym_resp);
+                                    });
+                                    let sym_resp = sym_resp_opt.unwrap();
                                     // UX6: Auto-scroll to first EXTREME tier outlier on pending flag
                                     if self.outlier_scroll_pending && !scrolled && o.tier == "EXTREME" {
                                         sym_resp.scroll_to_me(Some(egui::Align::Center));
@@ -32645,6 +32794,7 @@ impl eframe::App for TyphooNApp {
                             } else {
                                 let mut load_key: Option<String> = None;
                                 let mut remove_sym: Option<String> = None;
+                                let mut open_new_sym: Option<String> = None;
                                 let mut move_up_sym: Option<String> = None;
                                 let mut move_down_sym: Option<String> = None;
                                 let mut move_top_sym: Option<String> = None;
@@ -32653,13 +32803,14 @@ impl eframe::App for TyphooNApp {
                                 let hdr_font = egui::FontId::monospace(9.0);
                                 let avail_w = ui.available_width();
 
-                                // Column layout: Symbol | Last | Chg | Chg% | Ext% | Vol | x
+                                // Column layout: Symbol | Last | Chg | Chg% | Ext% | Vol | + | x
                                 let col_last = avail_w * 0.26;
                                 let col_chg = avail_w * 0.42;
                                 let col_pct = avail_w * 0.56;
                                 let col_ext = avail_w * 0.70;   // Extended hours change%
-                                let col_vol = avail_w * 0.84;
-                                let col_x = avail_w - 14.0;
+                                let col_vol = avail_w * 0.82;
+                                let col_x = avail_w - 12.0;
+                                let col_plus = avail_w - 28.0;  // "+" button (open new chart)
 
                                 // Sortable header row
                                 let (hdr_rect, hdr_resp) = ui.allocate_exact_size(egui::vec2(avail_w, row_h), egui::Sense::click());
@@ -32765,14 +32916,19 @@ impl eframe::App for TyphooNApp {
                                     };
                                     rp.text(egui::pos2(rx + col_vol - 2.0, ry), egui::Align2::RIGHT_CENTER, &vol_str, font.clone(), AXIS_TEXT);
 
+                                    // "+" button (open new chart tab)
+                                    rp.text(egui::pos2(rx + col_plus, ry), egui::Align2::CENTER_CENTER, "+", egui::FontId::monospace(10.0), egui::Color32::from_rgb(80, 180, 80));
                                     // Remove button (x)
                                     rp.text(egui::pos2(rx + col_x, ry), egui::Align2::CENTER_CENTER, "x", egui::FontId::monospace(9.0), egui::Color32::from_rgb(100, 50, 50));
 
                                     // Interactions
                                     if row_resp.clicked() {
                                         if let Some(pos) = row_resp.interact_pointer_pos() {
-                                            if pos.x >= rx + col_x - 8.0 {
+                                            let rel_x = pos.x - rx;
+                                            if rel_x >= col_x - 8.0 {
                                                 remove_sym = Some(wl.symbol.clone()); // clicked x
+                                            } else if rel_x >= col_plus - 8.0 && rel_x < col_plus + 8.0 {
+                                                open_new_sym = Some(wl.symbol.clone()); // clicked +
                                             } else {
                                                 load_key = Some(wl.cache_key.clone()); // clicked row
                                             }
@@ -32845,6 +33001,10 @@ impl eframe::App for TyphooNApp {
                                 if let Some(ref sym) = remove_sym {
                                     self.user_watchlist.retain(|s| s != sym);
                                     self.watchlist_rows.retain(|r| &r.symbol != sym);
+                                }
+                                // Handle + button → open new chart tab
+                                if let Some(sym) = open_new_sym {
+                                    self.deferred_symbol_action = SymbolAction::OpenChart(sym);
                                 }
                                 // Handle load
                                 if let Some(key) = load_key {
@@ -35775,10 +35935,11 @@ impl eframe::App for TyphooNApp {
 
             // No Kraken bulk startup — weekend polling handles it (1 symbol/min, no log flood)
 
-            // Periodic MT5 bar sync — every ~5 minutes when auto-sync is enabled and
-            // at least one MT5 path is configured. Fires MT5SYNC in the background so
-            // the user doesn't have to trigger it manually. Opt-in (off by default).
-            if self.mt5_auto_sync && self.frame_count % 1200 == 600 && self.frame_count > 0 {
+            // Periodic MT5 bar sync — every ~30 seconds when auto-sync is enabled and
+            // at least one MT5 path is configured. Matches BarCacheWriter's 30s write
+            // cadence (UpdateIntervalSec=30) so the terminal never lags behind the EA.
+            // Idle repaint ≈ 250 ms → 120 frames ≈ 30 s.
+            if self.mt5_auto_sync && self.frame_count % 120 == 60 && self.frame_count > 0 {
                 let paths: Vec<String> = self.mt5_db_paths.iter()
                     .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
                     .cloned().collect();
