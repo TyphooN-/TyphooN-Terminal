@@ -10622,7 +10622,9 @@ pub struct TyphooNApp {
     transcripts_body: Option<typhoon_engine::core::research::Transcript>,
     transcripts_loading_list: bool,
     transcripts_loading_body: bool,
+    #[allow(dead_code)]
     transcripts_summary: Option<typhoon_engine::core::sec_filing::FilingSummary>,
+    #[allow(dead_code)]
     transcripts_summary_for: (String, i32, i32),
 
     /// GLCO command — global commodities futures dashboard.
