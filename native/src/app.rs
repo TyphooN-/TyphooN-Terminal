@@ -9788,6 +9788,15 @@ enum BrokerCmd {
     FetchTranscriptBody { symbol: String, quarter: i32, year: i32, fmp_key: String },
     /// Fetch Yahoo quote batch for the GLCO commodities dashboard.
     FetchCommoditiesQuotes,
+    // ── ADR-109 Godel Parity Round 2 ──
+    /// FMP historical dividend payment schedule for a symbol.
+    FetchDividendHistory { symbol: String, fmp_key: String },
+    /// FMP forward EPS + revenue consensus estimates for a symbol.
+    FetchEarningsEstimates { symbol: String, fmp_key: String },
+    /// FMP analyst rating change feed (upgrades/downgrades/initiations).
+    FetchRatingChanges { symbol: String, fmp_key: String },
+    /// Yahoo batch quote for ^IRX/^FVX/^TNX/^TYX treasury yield ladder.
+    FetchTreasuryYields,
     /// Fetch multi-source news for a symbol (GDELT + Yahoo RSS + SEC + Marketaux + AV + FMP),
     /// cache results in SQLite, and return the cached set.
     FetchNewsMulti {
@@ -9902,6 +9911,15 @@ enum BrokerMsg {
     TranscriptBody(typhoon_engine::core::research::Transcript),
     /// Commodities quote batch.
     CommoditiesQuotes(Vec<typhoon_engine::core::research::CommodityQuote>),
+    // ── ADR-109 ──
+    /// Dividend payment history for a symbol.
+    DividendHistory(String, Vec<typhoon_engine::core::research::DividendRecord>),
+    /// Forward earnings estimates for a symbol.
+    EarningsEstimates(String, Vec<typhoon_engine::core::research::EarningsEstimate>),
+    /// Analyst rating change feed for a symbol.
+    RatingChanges(String, Vec<typhoon_engine::core::research::RatingChange>),
+    /// Treasury yield curve snapshot.
+    TreasuryYields(Vec<typhoon_engine::core::research::TreasuryYield>),
     /// Multi-source news articles loaded (from cache + fresh fetch) for a symbol.
     NewsArticlesLoaded {
         symbol: String,
@@ -10639,6 +10657,31 @@ pub struct TyphooNApp {
     tas_symbol: String,
     tas_rows: VecDeque<(String, f64, f64, String, String)>,
     tas_paused: bool,
+
+    // ── ADR-109 Godel Parity Round 2 ──────────────────────────────────
+    /// DVD — per-symbol dividend history.
+    show_dividend_history: bool,
+    dividend_history_symbol: String,
+    dividend_history: Vec<typhoon_engine::core::research::DividendRecord>,
+    dividend_history_loading: bool,
+
+    /// EEB — forward earnings estimates.
+    show_earnings_estimates: bool,
+    earnings_estimates_symbol: String,
+    earnings_estimates: Vec<typhoon_engine::core::research::EarningsEstimate>,
+    earnings_estimates_loading: bool,
+
+    /// UPDG — analyst rating change feed (upgrades/downgrades).
+    show_rating_changes: bool,
+    rating_changes_symbol: String,
+    rating_changes: Vec<typhoon_engine::core::research::RatingChange>,
+    rating_changes_loading: bool,
+
+    /// GY — US Treasury yield curve snapshot.
+    show_treasury_curve: bool,
+    treasury_yields: Vec<typhoon_engine::core::research::TreasuryYield>,
+    treasury_yields_last_fetch: Option<std::time::Instant>,
+    treasury_yields_loading: bool,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -11975,6 +12018,62 @@ impl TyphooNApp {
                                     let _ = msg_tx.send(BrokerMsg::CommoditiesQuotes(out));
                                 }
                                 Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("GLCO: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchDividendHistory { symbol, fmp_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_fmp_dividend_history(&client, &symbol, &fmp_key).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::DividendHistory(symbol, rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("DVD: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchEarningsEstimates { symbol, fmp_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_fmp_earnings_estimates(&client, &symbol, &fmp_key).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::EarningsEstimates(symbol, rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("EEB: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchRatingChanges { symbol, fmp_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_fmp_rating_changes(&client, &symbol, &fmp_key).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::RatingChanges(symbol, rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("UPDG: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchTreasuryYields => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1")
+                                .timeout(std::time::Duration::from_secs(20))
+                                .build().unwrap_or_default();
+                            match research::fetch_treasury_yields(&client).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::TreasuryYields(rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("GY: {}", e))); }
                             }
                         });
                     }
@@ -14151,6 +14250,22 @@ impl TyphooNApp {
             tas_symbol: String::new(),
             tas_rows: VecDeque::with_capacity(500),
             tas_paused: false,
+            show_dividend_history: false,
+            dividend_history_symbol: String::new(),
+            dividend_history: Vec::new(),
+            dividend_history_loading: false,
+            show_earnings_estimates: false,
+            earnings_estimates_symbol: String::new(),
+            earnings_estimates: Vec::new(),
+            earnings_estimates_loading: false,
+            show_rating_changes: false,
+            rating_changes_symbol: String::new(),
+            rating_changes: Vec::new(),
+            rating_changes_loading: false,
+            show_treasury_curve: false,
+            treasury_yields: Vec::new(),
+            treasury_yields_last_fetch: None,
+            treasury_yields_loading: false,
             bottom_tab: BottomTab::Log,
             log,
             log_filter: LogFilter::All,
@@ -16209,6 +16324,54 @@ impl TyphooNApp {
                 self.tas_rows.clear();
                 self.tas_paused = false;
                 self.show_tas = true;
+            }
+            // ── ADR-109 Godel Parity Round 2 ──
+            "DVD" | "DIV_HISTORY" | "DIVIDEND_HISTORY" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.dividend_history_symbol = sym.clone(); }
+                self.show_dividend_history = true;
+                if !self.fmp_key.is_empty() && !self.dividend_history_symbol.is_empty() {
+                    self.dividend_history_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchDividendHistory {
+                        symbol: self.dividend_history_symbol.to_uppercase(),
+                        fmp_key: self.fmp_key.clone(),
+                    });
+                }
+            }
+            "EEB" | "ESTIMATES" | "FORWARD_EARNINGS" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.earnings_estimates_symbol = sym.clone(); }
+                self.show_earnings_estimates = true;
+                if !self.fmp_key.is_empty() && !self.earnings_estimates_symbol.is_empty() {
+                    self.earnings_estimates_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchEarningsEstimates {
+                        symbol: self.earnings_estimates_symbol.to_uppercase(),
+                        fmp_key: self.fmp_key.clone(),
+                    });
+                }
+            }
+            "UPDG" | "UPGRADES" | "DOWNGRADES" | "RATING_CHANGES" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.rating_changes_symbol = sym.clone(); }
+                self.show_rating_changes = true;
+                if !self.fmp_key.is_empty() && !self.rating_changes_symbol.is_empty() {
+                    self.rating_changes_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchRatingChanges {
+                        symbol: self.rating_changes_symbol.to_uppercase(),
+                        fmp_key: self.fmp_key.clone(),
+                    });
+                }
+            }
+            "GY" | "TREASURY" | "YIELD_CURVE" | "YIELDS" => {
+                self.show_treasury_curve = true;
+                self.treasury_yields_loading = true;
+                let _ = self.broker_tx.send(BrokerCmd::FetchTreasuryYields);
             }
             "CALENDAR" => {
                 self.show_calendar = true;
@@ -25056,6 +25219,305 @@ impl TyphooNApp {
             self.show_tas = open;
         }
 
+        // ── ADR-109 Godel Parity Round 2 windows ─────────────────────
+
+        // DVD — Dividend History
+        if self.show_dividend_history {
+            if self.dividend_history_symbol.is_empty() { self.dividend_history_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_dividend_history;
+            egui::Window::new("DVD — Dividend History")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([620.0, 480.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.dividend_history_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.dividend_history_symbol = chart_sym_research.clone(); }
+                        let have_cache = self.cache.is_some();
+                        if ui.add_enabled(have_cache, egui::Button::new("Load Cached")).clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.dividend_history_symbol.to_uppercase();
+                                    if let Ok(Some(rows)) = typhoon_engine::core::research::get_dividends(&conn, &sym_u) {
+                                        self.dividend_history = rows;
+                                        self.dividend_history_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        let have_key = !self.fmp_key.is_empty();
+                        if ui.add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            let sym = self.dividend_history_symbol.to_uppercase();
+                            self.dividend_history_loading = true;
+                            self.dividend_history_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::FetchDividendHistory { symbol: sym, fmp_key: self.fmp_key.clone() });
+                        }
+                        if self.fmp_key.is_empty() {
+                            ui.label(egui::RichText::new("(add FMP key in Settings)").color(AXIS_TEXT).small());
+                        }
+                        if self.dividend_history_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    if self.dividend_history.is_empty() {
+                        ui.label(egui::RichText::new("No dividend history — click Load Cached or Fetch.").color(AXIS_TEXT).small());
+                    } else {
+                        // Summary line: TTM dividend sum + count
+                        let ttm_cut = (chrono::Utc::now() - chrono::Duration::days(365)).format("%Y-%m-%d").to_string();
+                        let ttm_sum: f64 = self.dividend_history.iter().filter(|d| d.ex_date.as_str() >= ttm_cut.as_str()).map(|d| d.amount).sum();
+                        let ttm_count = self.dividend_history.iter().filter(|d| d.ex_date.as_str() >= ttm_cut.as_str()).count();
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(format!("TTM: ${:.4}", ttm_sum)).strong().color(UP));
+                            ui.label(egui::RichText::new(format!("({} payments)", ttm_count)).color(AXIS_TEXT).small());
+                            ui.label(egui::RichText::new(format!("total records: {}", self.dividend_history.len())).color(AXIS_TEXT).small());
+                        });
+                        ui.separator();
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                            egui::Grid::new("dvd_grid").striped(true).num_columns(6).spacing([12.0, 2.0]).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Ex-Date").strong());
+                                ui.label(egui::RichText::new("Pay Date").strong());
+                                ui.label(egui::RichText::new("Record").strong());
+                                ui.label(egui::RichText::new("Amount").strong());
+                                ui.label(egui::RichText::new("Adj").strong());
+                                ui.label(egui::RichText::new("Label").strong());
+                                ui.end_row();
+                                for d in self.dividend_history.iter().take(200) {
+                                    ui.label(egui::RichText::new(&d.ex_date).monospace().small());
+                                    ui.label(egui::RichText::new(&d.pay_date).monospace().small());
+                                    ui.label(egui::RichText::new(&d.record_date).monospace().small());
+                                    ui.label(egui::RichText::new(format!("${:.4}", d.amount)).color(UP).monospace());
+                                    ui.label(egui::RichText::new(format!("${:.4}", d.adjusted_amount)).monospace().small());
+                                    ui.label(egui::RichText::new(&d.label).color(AXIS_TEXT).small());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_dividend_history = open;
+        }
+
+        // EEB — Forward Earnings Estimates
+        if self.show_earnings_estimates {
+            if self.earnings_estimates_symbol.is_empty() { self.earnings_estimates_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_earnings_estimates;
+            egui::Window::new("EEB — Earnings Estimates")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([720.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.earnings_estimates_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.earnings_estimates_symbol = chart_sym_research.clone(); }
+                        let have_cache = self.cache.is_some();
+                        if ui.add_enabled(have_cache, egui::Button::new("Load Cached")).clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.earnings_estimates_symbol.to_uppercase();
+                                    if let Ok(Some(rows)) = typhoon_engine::core::research::get_earnings_estimates(&conn, &sym_u) {
+                                        self.earnings_estimates = rows;
+                                        self.earnings_estimates_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        let have_key = !self.fmp_key.is_empty();
+                        if ui.add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            let sym = self.earnings_estimates_symbol.to_uppercase();
+                            self.earnings_estimates_loading = true;
+                            self.earnings_estimates_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::FetchEarningsEstimates { symbol: sym, fmp_key: self.fmp_key.clone() });
+                        }
+                        if self.fmp_key.is_empty() {
+                            ui.label(egui::RichText::new("(add FMP key in Settings)").color(AXIS_TEXT).small());
+                        }
+                        if self.earnings_estimates_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    if self.earnings_estimates.is_empty() {
+                        ui.label(egui::RichText::new("No forward estimates — click Load Cached or Fetch.").color(AXIS_TEXT).small());
+                    } else {
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                            egui::Grid::new("eeb_grid").striped(true).num_columns(8).spacing([10.0, 2.0]).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Period").strong());
+                                ui.label(egui::RichText::new("EPS Avg").strong());
+                                ui.label(egui::RichText::new("EPS Low").strong());
+                                ui.label(egui::RichText::new("EPS High").strong());
+                                ui.label(egui::RichText::new("Rev Avg").strong());
+                                ui.label(egui::RichText::new("Rev Low").strong());
+                                ui.label(egui::RichText::new("Rev High").strong());
+                                ui.label(egui::RichText::new("#Analysts").strong());
+                                ui.end_row();
+                                for e in self.earnings_estimates.iter().take(40) {
+                                    ui.label(egui::RichText::new(&e.date).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.2}", e.eps_avg)).color(UP).monospace());
+                                    ui.label(egui::RichText::new(format!("{:.2}", e.eps_low)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.2}", e.eps_high)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("${:.0}M", e.revenue_avg / 1_000_000.0)).monospace());
+                                    ui.label(egui::RichText::new(format!("${:.0}M", e.revenue_low / 1_000_000.0)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("${:.0}M", e.revenue_high / 1_000_000.0)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{}", e.num_analysts_eps.max(e.num_analysts_rev))).color(AXIS_TEXT).small());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_earnings_estimates = open;
+        }
+
+        // UPDG — Analyst Rating Changes (upgrades/downgrades)
+        if self.show_rating_changes {
+            if self.rating_changes_symbol.is_empty() { self.rating_changes_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_rating_changes;
+            egui::Window::new("UPDG — Upgrades / Downgrades")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([720.0, 500.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.rating_changes_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.rating_changes_symbol = chart_sym_research.clone(); }
+                        let have_cache = self.cache.is_some();
+                        if ui.add_enabled(have_cache, egui::Button::new("Load Cached")).clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.rating_changes_symbol.to_uppercase();
+                                    if let Ok(Some(rows)) = typhoon_engine::core::research::get_rating_changes(&conn, &sym_u) {
+                                        self.rating_changes = rows;
+                                        self.rating_changes_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        let have_key = !self.fmp_key.is_empty();
+                        if ui.add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            let sym = self.rating_changes_symbol.to_uppercase();
+                            self.rating_changes_loading = true;
+                            self.rating_changes_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::FetchRatingChanges { symbol: sym, fmp_key: self.fmp_key.clone() });
+                        }
+                        if self.fmp_key.is_empty() {
+                            ui.label(egui::RichText::new("(add FMP key in Settings)").color(AXIS_TEXT).small());
+                        }
+                        if self.rating_changes_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    if self.rating_changes.is_empty() {
+                        ui.label(egui::RichText::new("No rating changes — click Load Cached or Fetch.").color(AXIS_TEXT).small());
+                    } else {
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                            egui::Grid::new("updg_grid").striped(true).num_columns(6).spacing([12.0, 2.0]).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Date").strong());
+                                ui.label(egui::RichText::new("Firm").strong());
+                                ui.label(egui::RichText::new("Action").strong());
+                                ui.label(egui::RichText::new("From").strong());
+                                ui.label(egui::RichText::new("To").strong());
+                                ui.label(egui::RichText::new("Target").strong());
+                                ui.end_row();
+                                for r in self.rating_changes.iter().take(200) {
+                                    ui.label(egui::RichText::new(&r.date).monospace().small());
+                                    ui.label(egui::RichText::new(&r.firm).small());
+                                    let act_col = match r.action.as_str() {
+                                        "upgrade" => BTN_GREEN_TEXT,
+                                        "downgrade" => BTN_RED_TEXT,
+                                        "initiation" => egui::Color32::from_rgb(100, 200, 255),
+                                        _ => AXIS_TEXT,
+                                    };
+                                    ui.label(egui::RichText::new(r.action.to_uppercase()).color(act_col).small().strong());
+                                    ui.label(egui::RichText::new(&r.from_grade).color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new(&r.to_grade).small().strong());
+                                    if r.price_target > 0.0 {
+                                        ui.label(egui::RichText::new(format!("${:.2}", r.price_target)).color(UP).monospace());
+                                    } else {
+                                        ui.label(egui::RichText::new("—").color(AXIS_TEXT).small());
+                                    }
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_rating_changes = open;
+        }
+
+        // GY — Treasury Yield Curve
+        if self.show_treasury_curve {
+            let mut open = self.show_treasury_curve;
+            egui::Window::new("GY — US Treasury Yield Curve")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([460.0, 320.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            self.treasury_yields_loading = true;
+                            let _ = self.broker_tx.send(BrokerCmd::FetchTreasuryYields);
+                        }
+                        if self.treasury_yields_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                        if let Some(ts) = self.treasury_yields_last_fetch {
+                            let secs = ts.elapsed().as_secs();
+                            ui.label(egui::RichText::new(format!("Updated {}s ago", secs)).color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    if self.treasury_yields.is_empty() {
+                        ui.label(egui::RichText::new("No data — click Fetch to pull ^IRX/^FVX/^TNX/^TYX from Yahoo.").color(AXIS_TEXT).small());
+                    } else {
+                        // Slope indicators: 10s-3mo, 30s-10s
+                        let by_tenor: std::collections::HashMap<&str, f64> =
+                            self.treasury_yields.iter().map(|t| (t.tenor.as_str(), t.yield_pct)).collect();
+                        let slope_10_3mo = match (by_tenor.get("10Y"), by_tenor.get("13W")) {
+                            (Some(y10), Some(y3m)) => Some(y10 - y3m),
+                            _ => None,
+                        };
+                        let slope_30_10 = match (by_tenor.get("30Y"), by_tenor.get("10Y")) {
+                            (Some(y30), Some(y10)) => Some(y30 - y10),
+                            _ => None,
+                        };
+                        ui.horizontal(|ui| {
+                            if let Some(s) = slope_10_3mo {
+                                let col = if s < 0.0 { DOWN } else { UP };
+                                let label = if s < 0.0 { "INVERTED" } else { "NORMAL" };
+                                ui.label(egui::RichText::new(format!("10Y-3M: {:+.2}%  ({})", s, label)).color(col).strong());
+                            }
+                            if let Some(s) = slope_30_10 {
+                                ui.label(egui::RichText::new(format!("30Y-10Y: {:+.2}%", s)).color(AXIS_TEXT));
+                            }
+                        });
+                        ui.separator();
+                        egui::Grid::new("gy_grid").striped(true).num_columns(5).spacing([18.0, 4.0]).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Tenor").strong());
+                            ui.label(egui::RichText::new("Yahoo").strong());
+                            ui.label(egui::RichText::new("Yield").strong());
+                            ui.label(egui::RichText::new("Δ").strong());
+                            ui.label(egui::RichText::new("Δ%").strong());
+                            ui.end_row();
+                            for t in &self.treasury_yields {
+                                ui.label(egui::RichText::new(&t.tenor).monospace().strong());
+                                ui.label(egui::RichText::new(&t.ticker).color(AXIS_TEXT).monospace().small());
+                                ui.label(egui::RichText::new(format!("{:.3}%", t.yield_pct)).color(UP).monospace());
+                                let dc = if t.change < 0.0 { DOWN } else if t.change > 0.0 { UP } else { AXIS_TEXT };
+                                ui.label(egui::RichText::new(format!("{:+.3}", t.change)).color(dc).monospace().small());
+                                ui.label(egui::RichText::new(format!("{:+.2}%", t.change_pct)).color(dc).monospace().small());
+                                ui.end_row();
+                            }
+                        });
+                    }
+                });
+            self.show_treasury_curve = open;
+        }
+
         // Economic Calendar
         if self.show_calendar {
             egui::Window::new("Economic Calendar")
@@ -31798,6 +32260,47 @@ impl eframe::App for TyphooNApp {
                     self.commodities_quotes = quotes;
                     self.commodities_loading = false;
                     self.commodities_last_fetch = Some(std::time::Instant::now());
+                }
+                BrokerMsg::DividendHistory(sym, rows) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.dividend_history_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.dividend_history = rows.clone();
+                        self.dividend_history_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_dividends(&conn, &sym_u, &rows);
+                        }
+                    }
+                }
+                BrokerMsg::EarningsEstimates(sym, rows) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.earnings_estimates_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.earnings_estimates = rows.clone();
+                        self.earnings_estimates_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_earnings_estimates(&conn, &sym_u, &rows);
+                        }
+                    }
+                }
+                BrokerMsg::RatingChanges(sym, rows) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.rating_changes_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.rating_changes = rows.clone();
+                        self.rating_changes_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_rating_changes(&conn, &sym_u, &rows);
+                        }
+                    }
+                }
+                BrokerMsg::TreasuryYields(rows) => {
+                    self.treasury_yields = rows;
+                    self.treasury_yields_loading = false;
+                    self.treasury_yields_last_fetch = Some(std::time::Instant::now());
                 }
                 BrokerMsg::NewsArticlesLoaded { symbol, articles } => {
                     self.news_loading = false;

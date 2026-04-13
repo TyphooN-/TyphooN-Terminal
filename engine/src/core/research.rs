@@ -114,6 +114,65 @@ pub struct CommodityQuote {
     pub change_pct: f64,
 }
 
+// ── ADR-109 Godel Parity Round 2 types ─────────────────────────────────────
+
+/// DVD — single historical dividend payment.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DividendRecord {
+    pub ex_date: String,            // YYYY-MM-DD
+    pub pay_date: String,
+    pub record_date: String,
+    pub declaration_date: String,
+    pub amount: f64,                // cash per share
+    pub adjusted_amount: f64,       // split-adjusted
+    pub label: String,              // e.g. "Regular Cash"
+}
+
+/// EEB — one forward earnings estimate row (one fiscal period).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EarningsEstimate {
+    pub date: String,               // period end YYYY-MM-DD
+    pub eps_avg: f64,
+    pub eps_high: f64,
+    pub eps_low: f64,
+    pub revenue_avg: f64,
+    pub revenue_high: f64,
+    pub revenue_low: f64,
+    pub num_analysts_eps: i32,
+    pub num_analysts_rev: i32,
+}
+
+/// UPDG — one analyst rating change (upgrade/downgrade/initiation).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RatingChange {
+    pub date: String,               // YYYY-MM-DD
+    pub symbol: String,
+    pub company: String,
+    pub firm: String,               // publisher / analyst house
+    pub action: String,             // "upgrade" | "downgrade" | "initiation" | "maintain"
+    pub from_grade: String,
+    pub to_grade: String,
+    pub price_target: f64,
+}
+
+/// GY — US Treasury yield curve snapshot row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TreasuryYield {
+    pub tenor: String,              // "13W" | "5Y" | "10Y" | "30Y"
+    pub ticker: String,              // Yahoo ticker ^IRX etc
+    pub yield_pct: f64,
+    pub change: f64,
+    pub change_pct: f64,
+}
+
+/// Hardcoded Treasury yield ladder — Yahoo tickers only (free, no key).
+pub const TREASURY_TENORS: &[(&str, &str)] = &[
+    ("^IRX", "13W"),
+    ("^FVX", "5Y"),
+    ("^TNX", "10Y"),
+    ("^TYX", "30Y"),
+];
+
 /// Hardcoded commodity-futures universe for the GLCO dashboard.
 /// Yahoo continuous-futures tickers, which are free via /v7/finance/quote.
 pub const COMMODITIES_UNIVERSE: &[(&str, &str, &str)] = &[
@@ -844,9 +903,272 @@ pub async fn scrape_and_cache_symbol(
             Err(e) => cb(&format!("research/transcripts {} failed: {}", sym, e)),
         }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+        // ADR-109: dividend history (FMP)
+        match fetch_fmp_dividend_history(client, &sym, fmp_key).await {
+            Ok(rows) => {
+                if !rows.is_empty() {
+                    let _ = upsert_dividends(conn, &sym, &rows);
+                }
+            }
+            Err(e) => cb(&format!("research/dividends {} failed: {}", sym, e)),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+        // ADR-109: forward earnings estimates (FMP)
+        match fetch_fmp_earnings_estimates(client, &sym, fmp_key).await {
+            Ok(rows) => {
+                if !rows.is_empty() {
+                    let _ = upsert_earnings_estimates(conn, &sym, &rows);
+                }
+            }
+            Err(e) => cb(&format!("research/estimates {} failed: {}", sym, e)),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+        // ADR-109: analyst rating changes (FMP)
+        match fetch_fmp_rating_changes(client, &sym, fmp_key).await {
+            Ok(rows) => {
+                if !rows.is_empty() {
+                    let _ = upsert_rating_changes(conn, &sym, &rows);
+                }
+            }
+            Err(e) => cb(&format!("research/ratings {} failed: {}", sym, e)),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     }
 
     Ok(())
+}
+
+// ── ADR-109 fetchers ───────────────────────────────────────────────────────
+
+/// FMP /historical-price-full/stock_dividend/{symbol} — full dividend payment history.
+pub async fn fetch_fmp_dividend_history(
+    client: &reqwest::Client,
+    symbol: &str,
+    fmp_key: &str,
+) -> Result<Vec<DividendRecord>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v3/historical-price-full/stock_dividend/{}?apikey={}",
+        symbol, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP dividends failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP dividends: HTTP {}", resp.status()));
+    }
+    let v: serde_json::Value = resp.json().await
+        .map_err(|e| format!("FMP dividends parse: {e}"))?;
+    let mut rows = Vec::new();
+    if let Some(arr) = v["historical"].as_array() {
+        for e in arr {
+            rows.push(DividendRecord {
+                ex_date: e["date"].as_str().unwrap_or("").to_string(),
+                pay_date: e["paymentDate"].as_str().unwrap_or("").to_string(),
+                record_date: e["recordDate"].as_str().unwrap_or("").to_string(),
+                declaration_date: e["declarationDate"].as_str().unwrap_or("").to_string(),
+                amount: e["dividend"].as_f64().unwrap_or(0.0),
+                adjusted_amount: e["adjDividend"].as_f64().unwrap_or(0.0),
+                label: e["label"].as_str().unwrap_or("").to_string(),
+            });
+        }
+    }
+    Ok(rows)
+}
+
+/// FMP /analyst-estimates/{symbol} — forward EPS and revenue consensus estimates.
+pub async fn fetch_fmp_earnings_estimates(
+    client: &reqwest::Client,
+    symbol: &str,
+    fmp_key: &str,
+) -> Result<Vec<EarningsEstimate>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v3/analyst-estimates/{}?apikey={}",
+        symbol, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP estimates failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP estimates: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("FMP estimates parse: {e}"))?;
+    let rows = arr.into_iter().map(|e| EarningsEstimate {
+        date: e["date"].as_str().unwrap_or("").to_string(),
+        eps_avg: e["estimatedEpsAvg"].as_f64().unwrap_or(0.0),
+        eps_high: e["estimatedEpsHigh"].as_f64().unwrap_or(0.0),
+        eps_low: e["estimatedEpsLow"].as_f64().unwrap_or(0.0),
+        revenue_avg: e["estimatedRevenueAvg"].as_f64().unwrap_or(0.0),
+        revenue_high: e["estimatedRevenueHigh"].as_f64().unwrap_or(0.0),
+        revenue_low: e["estimatedRevenueLow"].as_f64().unwrap_or(0.0),
+        num_analysts_eps: e["numberAnalystEstimatedEps"].as_i64().unwrap_or(0) as i32,
+        num_analysts_rev: e["numberAnalystsEstimatedRevenue"].as_i64().unwrap_or(0) as i32,
+    }).collect();
+    Ok(rows)
+}
+
+/// FMP /upgrades-downgrades (v4) — analyst rating change feed for a symbol.
+pub async fn fetch_fmp_rating_changes(
+    client: &reqwest::Client,
+    symbol: &str,
+    fmp_key: &str,
+) -> Result<Vec<RatingChange>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v4/upgrades-downgrades?symbol={}&apikey={}",
+        symbol, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP rating changes failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP rating changes: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("FMP rating changes parse: {e}"))?;
+    let rows = arr.into_iter().map(|e| {
+        let to = e["newGrade"].as_str().unwrap_or("").to_string();
+        let from = e["previousGrade"].as_str().unwrap_or("").to_string();
+        let action_raw = e["action"].as_str().unwrap_or("").to_lowercase();
+        // FMP action strings like "hold","buy" — map to upgrade/downgrade where we can.
+        let action = if action_raw.is_empty() {
+            if from.is_empty() { "initiation" } else if to != from { "changed" } else { "maintain" }.to_string()
+        } else { action_raw };
+        RatingChange {
+            date: e["publishedDate"].as_str().unwrap_or("").chars().take(10).collect(),
+            symbol: e["symbol"].as_str().unwrap_or(symbol).to_uppercase(),
+            company: e["gradingCompany"].as_str().unwrap_or("").to_string(),
+            firm: e["gradingCompany"].as_str().unwrap_or("").to_string(),
+            action,
+            from_grade: from,
+            to_grade: to,
+            price_target: e["priceTarget"].as_f64().unwrap_or(0.0),
+        }
+    }).collect();
+    Ok(rows)
+}
+
+/// Yahoo batch quote → Treasury yield curve snapshot (no auth).
+pub async fn fetch_treasury_yields(
+    client: &reqwest::Client,
+) -> Result<Vec<TreasuryYield>, String> {
+    let tickers: Vec<&str> = TREASURY_TENORS.iter().map(|(t, _)| *t).collect();
+    let quotes = fetch_yahoo_quotes(client, &tickers).await?;
+    let mut out = Vec::new();
+    for (sym, price, change, pct) in quotes {
+        if let Some((_, tenor)) = TREASURY_TENORS.iter().find(|(t, _)| *t == sym.as_str()) {
+            out.push(TreasuryYield {
+                tenor: (*tenor).to_string(),
+                ticker: sym,
+                yield_pct: price,
+                change,
+                change_pct: pct,
+            });
+        }
+    }
+    // Preserve ladder order (13W, 5Y, 10Y, 30Y).
+    out.sort_by_key(|t| TREASURY_TENORS.iter().position(|(_, lbl)| *lbl == t.tenor.as_str()).unwrap_or(99));
+    Ok(out)
+}
+
+// ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
+
+pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_dividends (
+            symbol TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_earnings_estimates (
+            symbol TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_rating_changes (
+            symbol TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_dividends_updated ON research_dividends(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_estimates_updated ON research_earnings_estimates(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_rating_changes_updated ON research_rating_changes(updated_at);"
+    ).map_err(|e| format!("create research_v2 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_dividends(conn: &Connection, symbol: &str, rows: &[DividendRecord]) -> Result<(), String> {
+    let _ = create_research_tables_v2(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("div json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_dividends(symbol, rows_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert dividends: {e}"))?;
+    Ok(())
+}
+
+pub fn get_dividends(conn: &Connection, symbol: &str) -> Result<Option<Vec<DividendRecord>>, String> {
+    let _ = create_research_tables_v2(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_dividends WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_dividends: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_dividends: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_dividends: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_earnings_estimates(conn: &Connection, symbol: &str, rows: &[EarningsEstimate]) -> Result<(), String> {
+    let _ = create_research_tables_v2(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("estimates json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_earnings_estimates(symbol, rows_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert estimates: {e}"))?;
+    Ok(())
+}
+
+pub fn get_earnings_estimates(conn: &Connection, symbol: &str) -> Result<Option<Vec<EarningsEstimate>>, String> {
+    let _ = create_research_tables_v2(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_earnings_estimates WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_estimates: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_estimates: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_estimates: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_rating_changes(conn: &Connection, symbol: &str, rows: &[RatingChange]) -> Result<(), String> {
+    let _ = create_research_tables_v2(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("rating changes json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_rating_changes(symbol, rows_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert rating changes: {e}"))?;
+    Ok(())
+}
+
+pub fn get_rating_changes(conn: &Connection, symbol: &str) -> Result<Option<Vec<RatingChange>>, String> {
+    let _ = create_research_tables_v2(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_rating_changes WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_rating_changes: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_rating_changes: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_rating_changes: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -894,5 +1216,97 @@ mod tests {
         let b: TranscriptMeta = serde_json::from_str(&j).unwrap();
         assert_eq!(b.symbol, "AAPL");
         assert_eq!(b.quarter, 4);
+    }
+
+    // ── ADR-109 ─────────────────────────────────────────────────────────
+
+    fn open_mem_conn() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v2(&c).unwrap();
+        c
+    }
+
+    #[test]
+    fn dividend_record_roundtrip() {
+        let c = open_mem_conn();
+        let rows = vec![
+            DividendRecord {
+                ex_date: "2024-11-01".into(), pay_date: "2024-11-14".into(),
+                record_date: "2024-11-04".into(), declaration_date: "2024-10-15".into(),
+                amount: 0.24, adjusted_amount: 0.24, label: "Regular Cash".into(),
+            },
+        ];
+        upsert_dividends(&c, "AAPL", &rows).unwrap();
+        let got = get_dividends(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].amount, 0.24);
+        assert_eq!(got[0].label, "Regular Cash");
+    }
+
+    #[test]
+    fn earnings_estimate_roundtrip() {
+        let c = open_mem_conn();
+        let rows = vec![
+            EarningsEstimate {
+                date: "2025-12-31".into(),
+                eps_avg: 2.45, eps_high: 2.60, eps_low: 2.30,
+                revenue_avg: 123_000_000.0, revenue_high: 128_000_000.0, revenue_low: 118_000_000.0,
+                num_analysts_eps: 12, num_analysts_rev: 12,
+            },
+        ];
+        upsert_earnings_estimates(&c, "MSFT", &rows).unwrap();
+        let got = get_earnings_estimates(&c, "MSFT").unwrap().unwrap();
+        assert_eq!(got.len(), 1);
+        assert!((got[0].eps_avg - 2.45).abs() < 1e-9);
+        assert_eq!(got[0].num_analysts_eps, 12);
+    }
+
+    #[test]
+    fn rating_change_roundtrip() {
+        let c = open_mem_conn();
+        let rows = vec![
+            RatingChange {
+                date: "2024-03-01".into(), symbol: "AAPL".into(),
+                company: "Apple Inc.".into(), firm: "Morgan Stanley".into(),
+                action: "upgrade".into(),
+                from_grade: "Hold".into(), to_grade: "Buy".into(),
+                price_target: 220.0,
+            },
+        ];
+        upsert_rating_changes(&c, "AAPL", &rows).unwrap();
+        let got = get_rating_changes(&c, "AAPL").unwrap().unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].action, "upgrade");
+        assert!((got[0].price_target - 220.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn treasury_tenor_ladder_has_four_rungs() {
+        let tenors: std::collections::HashSet<&str> = TREASURY_TENORS.iter().map(|(_, t)| *t).collect();
+        assert!(tenors.contains("13W"));
+        assert!(tenors.contains("5Y"));
+        assert!(tenors.contains("10Y"));
+        assert!(tenors.contains("30Y"));
+    }
+
+    #[test]
+    fn treasury_yield_default_is_empty() {
+        let y = TreasuryYield::default();
+        assert!(y.tenor.is_empty());
+        assert_eq!(y.yield_pct, 0.0);
+    }
+
+    #[test]
+    fn dividend_upsert_overwrites() {
+        let c = open_mem_conn();
+        upsert_dividends(&c, "IBM", &[
+            DividendRecord { ex_date: "2024-05-01".into(), amount: 1.66, ..Default::default() }
+        ]).unwrap();
+        upsert_dividends(&c, "IBM", &[
+            DividendRecord { ex_date: "2024-05-01".into(), amount: 1.67, ..Default::default() },
+            DividendRecord { ex_date: "2024-08-01".into(), amount: 1.67, ..Default::default() },
+        ]).unwrap();
+        let rows = get_dividends(&c, "IBM").unwrap().unwrap();
+        assert_eq!(rows.len(), 2);
     }
 }
