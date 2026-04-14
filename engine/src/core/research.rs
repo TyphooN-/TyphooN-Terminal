@@ -1216,6 +1216,141 @@ pub struct PriceTargetDispersion {
     pub note: String,
 }
 
+// ── ADR-119 Godel Parity Round 12 ───────────────────────────────────────────
+
+/// MNGR — Insider Activity Bias snapshot for a symbol.
+/// Computed from cached INS (Form 4 insider trades) within a lookback window.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InsiderActivitySnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub window_days: i32,
+    pub total_trades: usize,
+    pub buy_count: usize,
+    pub sell_count: usize,
+    pub other_count: usize,         // awards, exercises, etc.
+    pub unique_insiders: usize,
+    pub gross_buy_value_usd: f64,
+    pub gross_sell_value_usd: f64,
+    pub net_value_usd: f64,         // buy - sell
+    pub buy_sell_ratio: f64,        // buy_count / max(sell_count, 1)
+    pub net_shares: f64,            // buy_shares - sell_shares
+    pub latest_trade_date: String,
+    pub bias_label: String,         // "BULLISH" | "NEUTRAL" | "BEARISH" | "NO_ACTIVITY"
+    pub conviction_label: String,   // "HIGH" | "MEDIUM" | "LOW" | "NONE"
+    pub note: String,
+}
+
+/// DIVG — one annual-bucket dividend aggregation row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DivgAnnualRow {
+    pub year: i32,
+    pub total_amount: f64,          // sum of cash dividends in the calendar year
+    pub payment_count: usize,
+    pub growth_pct: f64,            // yoy % change vs prior year (0 if prior = 0)
+}
+
+/// DIVG — Dividend Growth Analysis snapshot.
+/// Computed from cached DVD historical dividend payments.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DivgSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub total_payments: usize,
+    pub first_payment_date: String,
+    pub latest_payment_date: String,
+    pub latest_amount: f64,
+    pub annualized_dividend: f64,    // sum of most recent 4 payments
+    pub years_covered: usize,
+    pub cagr_1y_pct: f64,           // year-over-year growth (latest annual bucket)
+    pub cagr_3y_pct: f64,           // 3-year CAGR
+    pub cagr_5y_pct: f64,           // 5-year CAGR
+    pub consecutive_growth_years: usize,
+    pub consistency_score_pct: f64, // % of yoy deltas that are non-negative
+    pub annual_rows: Vec<DivgAnnualRow>,
+    pub trend_label: String,        // "GROWING" | "STABLE" | "CUTTING" | "NO_HISTORY"
+    pub note: String,
+}
+
+/// EARM — one quarterly momentum row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EarmQuarterRow {
+    pub period: String,             // "YYYY-MM-DD"
+    pub revenue: f64,
+    pub revenue_yoy_pct: f64,       // vs year-ago quarter (same position + 4)
+    pub eps_actual: f64,
+    pub eps_estimate: f64,
+    pub eps_surprise_pct: f64,
+}
+
+/// EARM — Earnings Momentum Trend snapshot.
+/// Computed from cached FA (quarterly income statements) + EPS (surprise history).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EarmSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub quarters_used: usize,
+    pub recent_revenue_growth_pct: f64, // avg yoy of latest 4 Qs
+    pub prior_revenue_growth_pct: f64,  // avg yoy of prior 4 Qs
+    pub revenue_acceleration_pct: f64,  // recent - prior
+    pub recent_eps_surprise_pct: f64,   // avg surprise % of latest 4 reports
+    pub prior_eps_surprise_pct: f64,    // avg surprise % of prior 4 reports
+    pub eps_surprise_acceleration_pct: f64,
+    pub composite_score: f64,           // 0..100 blended momentum score
+    pub momentum_label: String,         // "ACCELERATING" | "STABLE" | "DECELERATING" | "INSUFFICIENT_DATA"
+    pub quarters: Vec<EarmQuarterRow>,
+    pub note: String,
+}
+
+/// SECTR — Sector Rotation Strength snapshot for a symbol.
+/// Computed from cached INDU (current sector % changes) + symbol's sector field.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SectorRotationSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub symbol_sector: String,
+    pub symbol_sector_change_pct: f64,
+    pub sector_rank: i32,               // 1 = strongest, N = weakest
+    pub sectors_total: i32,
+    pub avg_sector_change_pct: f64,
+    pub median_sector_change_pct: f64,
+    pub relative_strength_pct: f64,     // sector - avg
+    pub breadth_pct: f64,               // % of sectors with positive change
+    pub strongest_sector: String,
+    pub strongest_sector_pct: f64,
+    pub weakest_sector: String,
+    pub weakest_sector_pct: f64,
+    pub strength_label: String,         // "LEADER" | "NEUTRAL" | "LAGGARD" | "NO_DATA"
+    pub note: String,
+}
+
+/// UPDM — Upgrade/Downgrade Momentum snapshot for a symbol.
+/// Computed from cached UPDG (RatingChange history).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UpdmSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub total_actions: usize,
+    pub upgrades_30d: usize,
+    pub downgrades_30d: usize,
+    pub upgrades_90d: usize,
+    pub downgrades_90d: usize,
+    pub upgrades_180d: usize,
+    pub downgrades_180d: usize,
+    pub initiations_90d: usize,
+    pub maintains_90d: usize,
+    pub net_30d: i32,                   // upgrades - downgrades, 30d window
+    pub net_90d: i32,
+    pub net_180d: i32,
+    pub latest_date: String,
+    pub latest_action: String,          // "upgrade" / "downgrade" / "initiation" / "maintain"
+    pub latest_firm: String,
+    pub latest_to_grade: String,
+    pub bias_label: String,             // "BULLISH" | "NEUTRAL" | "BEARISH" | "NO_COVERAGE"
+    pub trend_label: String,            // "IMPROVING" | "STABLE" | "DETERIORATING"
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -5609,6 +5744,604 @@ pub fn compute_price_target_dispersion(
     }
 }
 
+// ── ADR-119 Godel Parity Round 12 compute fns ──────────────────────────────
+
+fn parse_yyyy_mm_dd_to_days(s: &str) -> Option<i64> {
+    // Crude julian-ish day number. We don't need calendar correctness — just
+    // a monotone integer for sorting & window comparisons against "today".
+    let parts: Vec<&str> = s.splitn(3, '-').collect();
+    if parts.len() != 3 { return None; }
+    let y: i64 = parts[0].parse().ok()?;
+    let m: i64 = parts[1].parse().ok()?;
+    let d: i64 = parts[2].parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) { return None; }
+    Some(y * 372 + m * 31 + d)
+}
+
+/// MNGR — Insider Activity Bias score computed over a lookback window.
+/// Buckets insider trades into buys/sells/other, computes gross/net values,
+/// classifies bias from net-value direction and conviction from trade count.
+pub fn compute_insider_activity_snapshot(
+    symbol: &str,
+    as_of: &str,
+    trades: &[InsiderTrade],
+    window_days: i32,
+) -> InsiderActivitySnapshot {
+    let sym = symbol.to_uppercase();
+    let as_of_days = parse_yyyy_mm_dd_to_days(as_of);
+    let cutoff_days = as_of_days.map(|d| d - window_days as i64);
+
+    let in_window: Vec<&InsiderTrade> = trades.iter().filter(|t| {
+        match (cutoff_days, parse_yyyy_mm_dd_to_days(&t.transaction_date)) {
+            (Some(c), Some(td)) => td >= c,
+            _ => true, // if either date unparsable, include it
+        }
+    }).collect();
+
+    if in_window.is_empty() {
+        return InsiderActivitySnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            window_days,
+            bias_label: "NO_ACTIVITY".to_string(),
+            conviction_label: "NONE".to_string(),
+            note: "no insider trades in lookback window — run INS first".to_string(),
+            ..Default::default()
+        };
+    }
+
+    let classify = |t: &InsiderTrade| -> &'static str {
+        let upper = t.transaction_type.to_uppercase();
+        let disp = t.acquisition_disposition.to_uppercase();
+        if upper.contains("P-PURCHASE") || upper.starts_with("P ") || upper == "P" || upper.contains("PURCHASE") {
+            "buy"
+        } else if upper.contains("S-SALE") || upper.starts_with("S ") || upper == "S" || upper.contains("SALE") {
+            "sell"
+        } else if disp == "A" {
+            "buy"
+        } else if disp == "D" {
+            "sell"
+        } else {
+            "other"
+        }
+    };
+
+    let mut buy_count = 0usize;
+    let mut sell_count = 0usize;
+    let mut other_count = 0usize;
+    let mut gross_buy_value = 0.0f64;
+    let mut gross_sell_value = 0.0f64;
+    let mut net_shares = 0.0f64;
+    let mut insiders: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut latest_date = String::new();
+    let mut latest_days: i64 = i64::MIN;
+
+    for t in &in_window {
+        let v = if t.value_usd.abs() > 0.0 {
+            t.value_usd.abs()
+        } else {
+            (t.shares * t.price).abs()
+        };
+        match classify(t) {
+            "buy" => {
+                buy_count += 1;
+                gross_buy_value += v;
+                net_shares += t.shares.abs();
+            }
+            "sell" => {
+                sell_count += 1;
+                gross_sell_value += v;
+                net_shares -= t.shares.abs();
+            }
+            _ => other_count += 1,
+        }
+        if !t.reporting_name.trim().is_empty() {
+            insiders.insert(t.reporting_name.trim().to_lowercase());
+        }
+        if let Some(td) = parse_yyyy_mm_dd_to_days(&t.transaction_date) {
+            if td > latest_days {
+                latest_days = td;
+                latest_date = t.transaction_date.clone();
+            }
+        }
+    }
+
+    let net_value = gross_buy_value - gross_sell_value;
+    let buy_sell_ratio = if sell_count > 0 { buy_count as f64 / sell_count as f64 } else { buy_count as f64 };
+
+    let total_trades = in_window.len();
+    let unique = insiders.len();
+
+    let bias = if buy_count == 0 && sell_count == 0 {
+        "NO_ACTIVITY"
+    } else if net_value > 0.0 && buy_count >= sell_count {
+        "BULLISH"
+    } else if net_value < 0.0 && sell_count > buy_count {
+        "BEARISH"
+    } else {
+        "NEUTRAL"
+    };
+
+    let total_gross = gross_buy_value + gross_sell_value;
+    let conviction = if total_gross <= 0.0 || unique == 0 {
+        "NONE"
+    } else if unique >= 3 && total_gross >= 1_000_000.0 {
+        "HIGH"
+    } else if unique >= 2 || total_gross >= 250_000.0 {
+        "MEDIUM"
+    } else {
+        "LOW"
+    };
+
+    InsiderActivitySnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        window_days,
+        total_trades,
+        buy_count,
+        sell_count,
+        other_count,
+        unique_insiders: unique,
+        gross_buy_value_usd: gross_buy_value,
+        gross_sell_value_usd: gross_sell_value,
+        net_value_usd: net_value,
+        buy_sell_ratio,
+        net_shares,
+        latest_trade_date: latest_date,
+        bias_label: bias.to_string(),
+        conviction_label: conviction.to_string(),
+        note: String::new(),
+    }
+}
+
+/// DIVG — Dividend Growth Analysis computed over cached DVD rows.
+/// Buckets payments by calendar year, computes CAGRs and consistency.
+pub fn compute_divg_snapshot(
+    symbol: &str,
+    as_of: &str,
+    dividends: &[DividendRecord],
+) -> DivgSnapshot {
+    let sym = symbol.to_uppercase();
+
+    if dividends.is_empty() {
+        return DivgSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            trend_label: "NO_HISTORY".to_string(),
+            note: "no dividend history cached — run DVD first".to_string(),
+            ..Default::default()
+        };
+    }
+
+    // Sort by ex_date ascending
+    let mut sorted: Vec<&DividendRecord> = dividends.iter()
+        .filter(|d| d.amount > 0.0 && !d.ex_date.is_empty())
+        .collect();
+    sorted.sort_by(|a, b| a.ex_date.cmp(&b.ex_date));
+
+    if sorted.is_empty() {
+        return DivgSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            trend_label: "NO_HISTORY".to_string(),
+            note: "dividend rows all zero or missing ex_date".to_string(),
+            ..Default::default()
+        };
+    }
+
+    let first_payment_date = sorted.first().unwrap().ex_date.clone();
+    let latest_payment_date = sorted.last().unwrap().ex_date.clone();
+    let latest_amount = sorted.last().unwrap().amount;
+    let total_payments = sorted.len();
+
+    // Annualized = sum of most recent up-to-4 payments
+    let tail_n = sorted.len().min(4);
+    let annualized: f64 = sorted.iter().rev().take(tail_n).map(|d| d.amount).sum();
+
+    // Bucket by year
+    let mut by_year: std::collections::BTreeMap<i32, (f64, usize)> = std::collections::BTreeMap::new();
+    for d in &sorted {
+        let year: i32 = match d.ex_date.splitn(2, '-').next().and_then(|y| y.parse().ok()) {
+            Some(y) => y,
+            None => continue,
+        };
+        let e = by_year.entry(year).or_insert((0.0, 0));
+        e.0 += d.amount;
+        e.1 += 1;
+    }
+
+    // Determine current year from as_of
+    let as_of_year: Option<i32> = as_of.splitn(2, '-').next().and_then(|y| y.parse().ok());
+
+    // Exclude the in-progress current year when it's incomplete (fewer payments than prior year).
+    // We still keep prior years as-is. Sort into Vec<(year, amount, count)>.
+    let mut years: Vec<(i32, f64, usize)> = by_year.iter().map(|(y, (a, c))| (*y, *a, *c)).collect();
+    if let Some(cur) = as_of_year {
+        if let Some(last) = years.last() {
+            if last.0 == cur {
+                let prior_avg_count = if years.len() >= 2 {
+                    years[..years.len()-1].iter().rev().take(3).map(|r| r.2).sum::<usize>() as f64 / years.len().min(3) as f64
+                } else { 0.0 };
+                if (last.2 as f64) < prior_avg_count.max(1.0) * 0.75 {
+                    years.pop(); // drop incomplete current year from growth analysis
+                }
+            }
+        }
+    }
+
+    let mut annual_rows: Vec<DivgAnnualRow> = Vec::with_capacity(years.len());
+    for (i, (y, a, c)) in years.iter().enumerate() {
+        let growth = if i == 0 { 0.0 } else {
+            let prior = years[i-1].1;
+            if prior > 0.0 { (a - prior) / prior * 100.0 } else { 0.0 }
+        };
+        annual_rows.push(DivgAnnualRow { year: *y, total_amount: *a, payment_count: *c, growth_pct: growth });
+    }
+
+    let years_covered = annual_rows.len();
+    let cagr = |from: f64, to: f64, n: f64| -> f64 {
+        if from <= 0.0 || to <= 0.0 || n <= 0.0 { 0.0 }
+        else { ((to / from).powf(1.0 / n) - 1.0) * 100.0 }
+    };
+
+    let cagr_1y = if years_covered >= 2 {
+        annual_rows.last().unwrap().growth_pct
+    } else { 0.0 };
+    let cagr_3y = if years_covered >= 4 {
+        let n = years_covered;
+        cagr(annual_rows[n-4].total_amount, annual_rows[n-1].total_amount, 3.0)
+    } else { 0.0 };
+    let cagr_5y = if years_covered >= 6 {
+        let n = years_covered;
+        cagr(annual_rows[n-6].total_amount, annual_rows[n-1].total_amount, 5.0)
+    } else { 0.0 };
+
+    // Consecutive growth years counted from the latest backwards
+    let mut consecutive = 0usize;
+    for row in annual_rows.iter().rev() {
+        if row.growth_pct > 0.0 { consecutive += 1; } else { break; }
+    }
+    // Consecutive counting consumes the latest `consecutive` rows whose growth > 0.
+    // The earliest row always has growth_pct = 0.0 so we never count it.
+
+    // Consistency: share of yoy deltas that were non-negative
+    let deltas = annual_rows.iter().skip(1).count();
+    let non_neg = annual_rows.iter().skip(1).filter(|r| r.growth_pct >= 0.0).count();
+    let consistency_pct = if deltas == 0 { 0.0 } else { non_neg as f64 / deltas as f64 * 100.0 };
+
+    let trend_label = if years_covered < 2 {
+        "NO_HISTORY"
+    } else if cagr_1y >= 3.0 && consistency_pct >= 70.0 {
+        "GROWING"
+    } else if cagr_1y <= -5.0 {
+        "CUTTING"
+    } else {
+        "STABLE"
+    };
+
+    DivgSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        total_payments,
+        first_payment_date,
+        latest_payment_date,
+        latest_amount,
+        annualized_dividend: annualized,
+        years_covered,
+        cagr_1y_pct: cagr_1y,
+        cagr_3y_pct: cagr_3y,
+        cagr_5y_pct: cagr_5y,
+        consecutive_growth_years: consecutive,
+        consistency_score_pct: consistency_pct,
+        annual_rows,
+        trend_label: trend_label.to_string(),
+        note: String::new(),
+    }
+}
+
+/// EARM — Earnings Momentum Trend computed over cached FA + EPS surprises.
+pub fn compute_earm_snapshot(
+    symbol: &str,
+    as_of: &str,
+    statements: &FinancialStatements,
+    surprises: &[EarningsSurprise],
+) -> EarmSnapshot {
+    let sym = symbol.to_uppercase();
+
+    let quarters: Vec<&IncomeStatement> = statements.income_quarterly.iter().take(12).collect();
+
+    if quarters.len() < 5 {
+        return EarmSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            quarters_used: quarters.len(),
+            momentum_label: "INSUFFICIENT_DATA".to_string(),
+            note: "need at least 5 quarterly statements — run FA first".to_string(),
+            ..Default::default()
+        };
+    }
+
+    // Assume income_quarterly is newest-first (consistent with other compute fns in this file).
+    // quarters[0] = latest, quarters[4] = year ago.
+    let mut rows: Vec<EarmQuarterRow> = Vec::with_capacity(quarters.len());
+    for (i, q) in quarters.iter().enumerate() {
+        let yoy_pct = if i + 4 < quarters.len() {
+            let prior = quarters[i + 4].revenue;
+            if prior.abs() > 0.0 { (q.revenue - prior) / prior.abs() * 100.0 } else { 0.0 }
+        } else { 0.0 };
+        let surprise = surprises.iter().find(|s| s.date == q.date);
+        rows.push(EarmQuarterRow {
+            period: q.date.clone(),
+            revenue: q.revenue,
+            revenue_yoy_pct: yoy_pct,
+            eps_actual: surprise.map(|s| s.eps_actual).unwrap_or(q.eps),
+            eps_estimate: surprise.map(|s| s.eps_estimate).unwrap_or(0.0),
+            eps_surprise_pct: surprise.map(|s| s.surprise_pct).unwrap_or(0.0),
+        });
+    }
+
+    // Compute revenue growth averages: latest 4Q vs prior 4Q.
+    // Row indices 0..=3 are "recent", 4..=7 are "prior". If we have fewer than 8 rows,
+    // use whatever overlap is available for "prior".
+    let recent_count = rows.iter().take(4).filter(|r| r.revenue_yoy_pct != 0.0).count();
+    let recent_rev_growth: f64 = if recent_count == 0 { 0.0 } else {
+        rows.iter().take(4).map(|r| r.revenue_yoy_pct).sum::<f64>() / recent_count as f64
+    };
+    let prior_slice = if rows.len() >= 8 { &rows[4..8] } else if rows.len() > 4 { &rows[4..] } else { &[] };
+    let prior_count = prior_slice.iter().filter(|r| r.revenue_yoy_pct != 0.0).count();
+    let prior_rev_growth: f64 = if prior_count == 0 { 0.0 } else {
+        prior_slice.iter().map(|r| r.revenue_yoy_pct).sum::<f64>() / prior_count as f64
+    };
+    let rev_accel = recent_rev_growth - prior_rev_growth;
+
+    // Similar for EPS surprise %. Pull directly from surprises array if FA/surprise alignment is sparse.
+    let recent_surprises: Vec<f64> = surprises.iter().take(4).map(|s| s.surprise_pct).collect();
+    let prior_surprises: Vec<f64> = surprises.iter().skip(4).take(4).map(|s| s.surprise_pct).collect();
+    let recent_eps_surp = if recent_surprises.is_empty() { 0.0 }
+        else { recent_surprises.iter().sum::<f64>() / recent_surprises.len() as f64 };
+    let prior_eps_surp = if prior_surprises.is_empty() { 0.0 }
+        else { prior_surprises.iter().sum::<f64>() / prior_surprises.len() as f64 };
+    let eps_accel = recent_eps_surp - prior_eps_surp;
+
+    // Composite 0..100: combine growth level, growth acceleration, surprise level, surprise acceleration.
+    // Each component clamped and scaled.
+    let clamp = |x: f64, lo: f64, hi: f64| -> f64 { x.max(lo).min(hi) };
+    let g1 = (clamp(recent_rev_growth, -30.0, 30.0) + 30.0) / 60.0 * 100.0;
+    let g2 = (clamp(rev_accel,          -15.0, 15.0) + 15.0) / 30.0 * 100.0;
+    let g3 = (clamp(recent_eps_surp,    -30.0, 30.0) + 30.0) / 60.0 * 100.0;
+    let g4 = (clamp(eps_accel,          -15.0, 15.0) + 15.0) / 30.0 * 100.0;
+    let composite = (g1 * 0.35 + g2 * 0.25 + g3 * 0.25 + g4 * 0.15).max(0.0).min(100.0);
+
+    let momentum = if composite >= 65.0 && (rev_accel > 0.0 || eps_accel > 0.0) {
+        "ACCELERATING"
+    } else if composite <= 35.0 && (rev_accel < 0.0 || eps_accel < 0.0) {
+        "DECELERATING"
+    } else {
+        "STABLE"
+    };
+
+    EarmSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        quarters_used: quarters.len(),
+        recent_revenue_growth_pct: recent_rev_growth,
+        prior_revenue_growth_pct: prior_rev_growth,
+        revenue_acceleration_pct: rev_accel,
+        recent_eps_surprise_pct: recent_eps_surp,
+        prior_eps_surprise_pct: prior_eps_surp,
+        eps_surprise_acceleration_pct: eps_accel,
+        composite_score: composite,
+        momentum_label: momentum.to_string(),
+        quarters: rows,
+        note: String::new(),
+    }
+}
+
+/// SECTR — Sector Rotation Strength for a symbol, using the latest INDU snapshot.
+pub fn compute_sector_rotation_snapshot(
+    symbol: &str,
+    as_of: &str,
+    symbol_sector: &str,
+    sectors: &[SectorPerformance],
+) -> SectorRotationSnapshot {
+    let sym = symbol.to_uppercase();
+
+    if sectors.is_empty() {
+        return SectorRotationSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            symbol_sector: symbol_sector.to_string(),
+            strength_label: "NO_DATA".to_string(),
+            note: "no sector performance cached — run INDU first".to_string(),
+            ..Default::default()
+        };
+    }
+
+    let mut ranked: Vec<&SectorPerformance> = sectors.iter().collect();
+    ranked.sort_by(|a, b| b.change_pct.partial_cmp(&a.change_pct).unwrap_or(std::cmp::Ordering::Equal));
+
+    let sectors_total = ranked.len() as i32;
+    let avg_change = ranked.iter().map(|s| s.change_pct).sum::<f64>() / ranked.len() as f64;
+
+    let mut sorted_pcts: Vec<f64> = ranked.iter().map(|s| s.change_pct).collect();
+    sorted_pcts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_change = if sorted_pcts.is_empty() { 0.0 }
+        else if sorted_pcts.len() % 2 == 1 { sorted_pcts[sorted_pcts.len() / 2] }
+        else { (sorted_pcts[sorted_pcts.len() / 2 - 1] + sorted_pcts[sorted_pcts.len() / 2]) / 2.0 };
+
+    let breadth = ranked.iter().filter(|s| s.change_pct > 0.0).count() as f64 / ranked.len() as f64 * 100.0;
+
+    let strongest = ranked.first().unwrap();
+    let weakest = ranked.last().unwrap();
+
+    // Locate symbol's sector. Fuzzy-match: exact, case-insensitive, contains.
+    let target = symbol_sector.trim();
+    let target_lower = target.to_lowercase();
+    let (symbol_rank, symbol_change) = if target.is_empty() {
+        (0i32, 0.0f64)
+    } else {
+        let mut rank = 0i32;
+        let mut change = 0.0f64;
+        for (i, s) in ranked.iter().enumerate() {
+            let a = s.sector.to_lowercase();
+            if a == target_lower || a.contains(&target_lower) || target_lower.contains(&a) {
+                rank = (i + 1) as i32;
+                change = s.change_pct;
+                break;
+            }
+        }
+        (rank, change)
+    };
+
+    let rel_strength = symbol_change - avg_change;
+
+    let strength = if symbol_rank == 0 {
+        "NO_DATA"
+    } else if symbol_rank <= (sectors_total / 3).max(1) && rel_strength > 0.0 {
+        "LEADER"
+    } else if symbol_rank > sectors_total - (sectors_total / 3).max(1) && rel_strength < 0.0 {
+        "LAGGARD"
+    } else {
+        "NEUTRAL"
+    };
+
+    let note = if symbol_rank == 0 && !target.is_empty() {
+        format!("symbol sector '{}' not found in cached INDU snapshot", target)
+    } else {
+        String::new()
+    };
+
+    SectorRotationSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        symbol_sector: symbol_sector.to_string(),
+        symbol_sector_change_pct: symbol_change,
+        sector_rank: symbol_rank,
+        sectors_total,
+        avg_sector_change_pct: avg_change,
+        median_sector_change_pct: median_change,
+        relative_strength_pct: rel_strength,
+        breadth_pct: breadth,
+        strongest_sector: strongest.sector.clone(),
+        strongest_sector_pct: strongest.change_pct,
+        weakest_sector: weakest.sector.clone(),
+        weakest_sector_pct: weakest.change_pct,
+        strength_label: strength.to_string(),
+        note,
+    }
+}
+
+/// UPDM — Upgrade/Downgrade Momentum snapshot for a symbol.
+pub fn compute_updm_snapshot(
+    symbol: &str,
+    as_of: &str,
+    actions: &[RatingChange],
+) -> UpdmSnapshot {
+    let sym = symbol.to_uppercase();
+    let as_of_days = parse_yyyy_mm_dd_to_days(as_of);
+
+    if actions.is_empty() || as_of_days.is_none() {
+        return UpdmSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bias_label: "NO_COVERAGE".to_string(),
+            trend_label: "STABLE".to_string(),
+            note: "no rating change history cached — run UPDG first".to_string(),
+            ..Default::default()
+        };
+    }
+    let as_of_days = as_of_days.unwrap();
+
+    let (mut up30, mut dn30, mut up90, mut dn90, mut up180, mut dn180) = (0,0,0,0,0,0);
+    let mut init90 = 0;
+    let mut maint90 = 0;
+    let mut total = 0;
+    let mut latest_days: i64 = i64::MIN;
+    let mut latest: Option<&RatingChange> = None;
+
+    for a in actions {
+        total += 1;
+        let ad = match parse_yyyy_mm_dd_to_days(&a.date) { Some(d) => d, None => continue };
+        let delta = as_of_days - ad;
+        if delta < 0 { continue; }
+        let act = a.action.to_lowercase();
+        let is_up = act.contains("upgrade");
+        let is_dn = act.contains("downgrade");
+        let is_init = act.contains("init");
+        let is_maint = act.contains("maintain") || act.contains("reiterat");
+
+        if delta <= 30 {
+            if is_up { up30 += 1; }
+            if is_dn { dn30 += 1; }
+        }
+        if delta <= 90 {
+            if is_up { up90 += 1; }
+            if is_dn { dn90 += 1; }
+            if is_init { init90 += 1; }
+            if is_maint { maint90 += 1; }
+        }
+        if delta <= 180 {
+            if is_up { up180 += 1; }
+            if is_dn { dn180 += 1; }
+        }
+
+        if ad > latest_days {
+            latest_days = ad;
+            latest = Some(a);
+        }
+    }
+
+    let net_30 = up30 as i32 - dn30 as i32;
+    let net_90 = up90 as i32 - dn90 as i32;
+    let net_180 = up180 as i32 - dn180 as i32;
+
+    let bias = if up90 == 0 && dn90 == 0 && init90 == 0 && maint90 == 0 {
+        "NO_COVERAGE"
+    } else if net_90 > 0 {
+        "BULLISH"
+    } else if net_90 < 0 {
+        "BEARISH"
+    } else {
+        "NEUTRAL"
+    };
+
+    let trend = if net_30 > 0 && net_30 as i64 * 3 >= net_90 as i64 {
+        "IMPROVING"
+    } else if net_30 < 0 && net_30 as i64 * 3 <= net_90 as i64 {
+        "DETERIORATING"
+    } else {
+        "STABLE"
+    };
+
+    let (latest_date, latest_action, latest_firm, latest_grade) = latest.map(|l| (
+        l.date.clone(), l.action.clone(), l.firm.clone(), l.to_grade.clone(),
+    )).unwrap_or_default();
+
+    UpdmSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        total_actions: total,
+        upgrades_30d: up30,
+        downgrades_30d: dn30,
+        upgrades_90d: up90,
+        downgrades_90d: dn90,
+        upgrades_180d: up180,
+        downgrades_180d: dn180,
+        initiations_90d: init90,
+        maintains_90d: maint90,
+        net_30d: net_30,
+        net_90d: net_90,
+        net_180d: net_180,
+        latest_date,
+        latest_action,
+        latest_firm,
+        latest_to_grade: latest_grade,
+        bias_label: bias.to_string(),
+        trend_label: trend.to_string(),
+        note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -6994,6 +7727,154 @@ pub fn get_price_target_dispersion(conn: &Connection, symbol: &str) -> Result<Op
         .map_err(|e| format!("prepare get_price_target_dispersion: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_price_target_dispersion: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_price_target_dispersion: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-119 Godel Parity Round 12 schema + helpers ─────────────────────────
+
+pub fn create_research_tables_v12(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_insider_activity (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_divg (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_earm (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_sector_rotation (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_updm (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_insider_activity_updated ON research_insider_activity(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_divg_updated             ON research_divg(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_earm_updated             ON research_earm(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_sector_rotation_updated  ON research_sector_rotation(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_updm_updated             ON research_updm(updated_at);"
+    ).map_err(|e| format!("create research_v12 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_insider_activity(conn: &Connection, symbol: &str, snap: &InsiderActivitySnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v12(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("insider_activity json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_insider_activity(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert insider_activity: {e}"))?;
+    Ok(())
+}
+
+pub fn get_insider_activity(conn: &Connection, symbol: &str) -> Result<Option<InsiderActivitySnapshot>, String> {
+    let _ = create_research_tables_v12(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_insider_activity WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_insider_activity: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_insider_activity: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_insider_activity: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_divg(conn: &Connection, symbol: &str, snap: &DivgSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v12(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("divg json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_divg(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert divg: {e}"))?;
+    Ok(())
+}
+
+pub fn get_divg(conn: &Connection, symbol: &str) -> Result<Option<DivgSnapshot>, String> {
+    let _ = create_research_tables_v12(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_divg WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_divg: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_divg: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_divg: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_earm(conn: &Connection, symbol: &str, snap: &EarmSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v12(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("earm json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_earm(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert earm: {e}"))?;
+    Ok(())
+}
+
+pub fn get_earm(conn: &Connection, symbol: &str) -> Result<Option<EarmSnapshot>, String> {
+    let _ = create_research_tables_v12(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_earm WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_earm: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_earm: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_earm: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_sector_rotation(conn: &Connection, symbol: &str, snap: &SectorRotationSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v12(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("sector_rotation json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_sector_rotation(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert sector_rotation: {e}"))?;
+    Ok(())
+}
+
+pub fn get_sector_rotation(conn: &Connection, symbol: &str) -> Result<Option<SectorRotationSnapshot>, String> {
+    let _ = create_research_tables_v12(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_sector_rotation WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_sector_rotation: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_sector_rotation: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_sector_rotation: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_updm(conn: &Connection, symbol: &str, snap: &UpdmSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v12(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("updm json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_updm(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert updm: {e}"))?;
+    Ok(())
+}
+
+pub fn get_updm(conn: &Connection, symbol: &str) -> Result<Option<UpdmSnapshot>, String> {
+    let _ = create_research_tables_v12(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_updm WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_updm: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_updm: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_updm: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -9130,5 +10011,399 @@ mod tests {
         let snap = compute_price_target_dispersion("X", "2026-04-14", 100.0, None);
         assert_eq!(snap.consensus_label, "NO_COVERAGE");
         assert!(!snap.note.is_empty());
+    }
+
+    // ── ADR-119 Godel Parity Round 12 tests ────────────────────────────────
+
+    fn open_mem_conn_v12() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v12(&c).unwrap();
+        c
+    }
+
+    fn trade(date: &str, name: &str, ttype: &str, disp: &str, shares: f64, price: f64) -> InsiderTrade {
+        InsiderTrade {
+            filing_date: date.to_string(),
+            transaction_date: date.to_string(),
+            reporting_name: name.to_string(),
+            transaction_type: ttype.to_string(),
+            acquisition_disposition: disp.to_string(),
+            shares,
+            price,
+            value_usd: shares * price,
+            shares_owned_after: 0.0,
+            link: String::new(),
+        }
+    }
+
+    #[test]
+    fn insider_activity_snapshot_roundtrip() {
+        let c = open_mem_conn_v12();
+        let snap = InsiderActivitySnapshot {
+            symbol: "AAPL".into(),
+            as_of: "2026-04-14".into(),
+            window_days: 90,
+            total_trades: 5,
+            buy_count: 3,
+            sell_count: 2,
+            other_count: 0,
+            unique_insiders: 2,
+            gross_buy_value_usd: 1_000_000.0,
+            gross_sell_value_usd: 400_000.0,
+            net_value_usd: 600_000.0,
+            buy_sell_ratio: 1.5,
+            net_shares: 5_000.0,
+            latest_trade_date: "2026-04-10".into(),
+            bias_label: "BULLISH".into(),
+            conviction_label: "MEDIUM".into(),
+            note: String::new(),
+        };
+        upsert_insider_activity(&c, "AAPL", &snap).unwrap();
+        let got = get_insider_activity(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.bias_label, "BULLISH");
+        assert_eq!(got.buy_count, 3);
+        assert!((got.buy_sell_ratio - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_insider_activity_bullish_net_buys() {
+        let trades = vec![
+            trade("2026-04-10", "Alice CEO", "P-Purchase", "A", 1000.0, 150.0),
+            trade("2026-04-05", "Bob CFO",   "P-Purchase", "A", 2000.0, 148.0),
+            trade("2026-03-20", "Alice CEO", "P-Purchase", "A",  500.0, 145.0),
+            trade("2026-03-10", "Carol COO", "S-Sale",     "D", 500.0, 160.0),
+        ];
+        let snap = compute_insider_activity_snapshot("AAPL", "2026-04-14", &trades, 90);
+        assert_eq!(snap.bias_label, "BULLISH");
+        assert_eq!(snap.buy_count, 3);
+        assert_eq!(snap.sell_count, 1);
+        assert_eq!(snap.unique_insiders, 3);
+        assert!(snap.gross_buy_value_usd > snap.gross_sell_value_usd);
+        assert!(snap.net_value_usd > 0.0);
+        assert_eq!(snap.latest_trade_date, "2026-04-10");
+    }
+
+    #[test]
+    fn compute_insider_activity_bearish_net_sales() {
+        let trades = vec![
+            trade("2026-04-10", "Alice CEO", "S-Sale", "D", 10_000.0, 150.0),
+            trade("2026-04-05", "Bob CFO",   "S-Sale", "D",  5_000.0, 148.0),
+            trade("2026-03-10", "Alice CEO", "P-Purchase", "A", 100.0, 145.0),
+        ];
+        let snap = compute_insider_activity_snapshot("AAPL", "2026-04-14", &trades, 90);
+        assert_eq!(snap.bias_label, "BEARISH");
+        assert_eq!(snap.sell_count, 2);
+        assert!(snap.net_value_usd < 0.0);
+    }
+
+    #[test]
+    fn compute_insider_activity_no_activity() {
+        let snap = compute_insider_activity_snapshot("X", "2026-04-14", &[], 90);
+        assert_eq!(snap.bias_label, "NO_ACTIVITY");
+        assert_eq!(snap.conviction_label, "NONE");
+        assert!(!snap.note.is_empty());
+    }
+
+    #[test]
+    fn insider_activity_respects_lookback_window() {
+        let trades = vec![
+            trade("2026-04-01", "Alice CEO", "P-Purchase", "A", 1000.0, 150.0),
+            trade("2025-01-01", "Old CEO",   "P-Purchase", "A", 9999.0, 100.0),
+        ];
+        // 90-day window from 2026-04-14 should exclude 2025-01-01
+        let snap = compute_insider_activity_snapshot("X", "2026-04-14", &trades, 90);
+        assert_eq!(snap.total_trades, 1);
+        assert_eq!(snap.buy_count, 1);
+    }
+
+    fn dvd(ex: &str, amt: f64) -> DividendRecord {
+        DividendRecord { ex_date: ex.to_string(), amount: amt, ..Default::default() }
+    }
+
+    #[test]
+    fn divg_snapshot_roundtrip() {
+        let c = open_mem_conn_v12();
+        let snap = DivgSnapshot {
+            symbol: "KO".into(),
+            as_of: "2026-04-14".into(),
+            total_payments: 20,
+            latest_amount: 0.49,
+            annualized_dividend: 1.96,
+            years_covered: 5,
+            cagr_1y_pct: 5.0,
+            cagr_3y_pct: 4.5,
+            cagr_5y_pct: 4.0,
+            trend_label: "GROWING".into(),
+            ..Default::default()
+        };
+        upsert_divg(&c, "KO", &snap).unwrap();
+        let got = get_divg(&c, "ko").unwrap().unwrap();
+        assert_eq!(got.trend_label, "GROWING");
+        assert!((got.cagr_1y_pct - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_divg_growing_consistent() {
+        // Five complete years of 4 payments each, 5 % YoY growth, last payment before as_of.
+        let mut rows = Vec::new();
+        for (y, base) in [(2020, 0.40), (2021, 0.42), (2022, 0.44), (2023, 0.46), (2024, 0.49)] {
+            for q in ["03-15", "06-15", "09-15", "12-15"] {
+                rows.push(dvd(&format!("{y}-{q}"), base));
+            }
+        }
+        let snap = compute_divg_snapshot("KO", "2026-04-14", &rows);
+        assert_eq!(snap.trend_label, "GROWING");
+        assert!(snap.years_covered >= 5);
+        assert!(snap.cagr_1y_pct > 0.0);
+        assert!(snap.consecutive_growth_years >= 4);
+        assert!(snap.consistency_score_pct >= 70.0);
+    }
+
+    #[test]
+    fn compute_divg_cutting() {
+        let rows = vec![
+            dvd("2022-03-15", 0.80),
+            dvd("2022-06-15", 0.80),
+            dvd("2022-09-15", 0.80),
+            dvd("2022-12-15", 0.80),
+            dvd("2023-03-15", 0.70),
+            dvd("2023-06-15", 0.60),
+            dvd("2023-09-15", 0.50),
+            dvd("2023-12-15", 0.40),
+        ];
+        let snap = compute_divg_snapshot("X", "2026-04-14", &rows);
+        assert_eq!(snap.trend_label, "CUTTING");
+        assert!(snap.cagr_1y_pct < 0.0);
+    }
+
+    #[test]
+    fn compute_divg_no_history() {
+        let snap = compute_divg_snapshot("X", "2026-04-14", &[]);
+        assert_eq!(snap.trend_label, "NO_HISTORY");
+    }
+
+    fn inc(date: &str, rev: f64, eps: f64) -> IncomeStatement {
+        IncomeStatement {
+            date: date.to_string(),
+            period: "Q".to_string(),
+            revenue: rev,
+            eps,
+            ..Default::default()
+        }
+    }
+
+    fn surp(date: &str, actual: f64, est: f64) -> EarningsSurprise {
+        let s = actual - est;
+        EarningsSurprise {
+            date: date.to_string(),
+            symbol: "X".into(),
+            eps_actual: actual,
+            eps_estimate: est,
+            surprise: s,
+            surprise_pct: if est.abs() > 0.0 { s / est.abs() * 100.0 } else { 0.0 },
+        }
+    }
+
+    #[test]
+    fn earm_snapshot_roundtrip() {
+        let c = open_mem_conn_v12();
+        let snap = EarmSnapshot {
+            symbol: "NVDA".into(),
+            as_of: "2026-04-14".into(),
+            quarters_used: 8,
+            recent_revenue_growth_pct: 40.0,
+            prior_revenue_growth_pct: 25.0,
+            revenue_acceleration_pct: 15.0,
+            recent_eps_surprise_pct: 10.0,
+            prior_eps_surprise_pct: 5.0,
+            eps_surprise_acceleration_pct: 5.0,
+            composite_score: 80.0,
+            momentum_label: "ACCELERATING".into(),
+            quarters: vec![EarmQuarterRow {
+                period: "2026-01-31".into(),
+                revenue: 22000.0,
+                revenue_yoy_pct: 40.0,
+                eps_actual: 5.0,
+                eps_estimate: 4.5,
+                eps_surprise_pct: 11.1,
+            }],
+            note: String::new(),
+        };
+        upsert_earm(&c, "NVDA", &snap).unwrap();
+        let got = get_earm(&c, "nvda").unwrap().unwrap();
+        assert_eq!(got.momentum_label, "ACCELERATING");
+        assert!((got.composite_score - 80.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_earm_accelerating() {
+        // 8 quarters, newest-first. Revenue grows yoy, recent pace faster than prior.
+        let statements = FinancialStatements {
+            income_quarterly: vec![
+                inc("2026-03-31", 140.0, 2.40),   // 0  yoy vs 4 = +16.67%
+                inc("2025-12-31", 135.0, 2.30),   // 1  yoy vs 5 = +17.39%
+                inc("2025-09-30", 130.0, 2.20),   // 2  yoy vs 6 = +18.18%
+                inc("2025-06-30", 125.0, 2.10),   // 3  yoy vs 7 = +19.05%
+                inc("2025-03-31", 120.0, 2.00),   // 4
+                inc("2024-12-31", 115.0, 1.90),   // 5
+                inc("2024-09-30", 110.0, 1.80),   // 6
+                inc("2024-06-30", 105.0, 1.75),   // 7
+            ],
+            ..Default::default()
+        };
+        let surprises = vec![
+            surp("2026-03-31", 2.40, 2.30),
+            surp("2025-12-31", 2.30, 2.20),
+            surp("2025-09-30", 2.20, 2.15),
+            surp("2025-06-30", 2.10, 2.08),
+            surp("2025-03-31", 2.00, 1.99),
+            surp("2024-12-31", 1.90, 1.90),
+            surp("2024-09-30", 1.80, 1.81),
+            surp("2024-06-30", 1.75, 1.77),
+        ];
+        let snap = compute_earm_snapshot("NVDA", "2026-04-14", &statements, &surprises);
+        assert_eq!(snap.quarters_used, 8);
+        assert!(snap.recent_revenue_growth_pct > 0.0);
+        assert!(snap.composite_score > 0.0);
+        assert!(matches!(snap.momentum_label.as_str(), "ACCELERATING" | "STABLE"));
+    }
+
+    #[test]
+    fn compute_earm_insufficient_data() {
+        let statements = FinancialStatements {
+            income_quarterly: vec![inc("2026-03-31", 100.0, 1.0)],
+            ..Default::default()
+        };
+        let snap = compute_earm_snapshot("X", "2026-04-14", &statements, &[]);
+        assert_eq!(snap.momentum_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn sector_rotation_snapshot_roundtrip() {
+        let c = open_mem_conn_v12();
+        let snap = SectorRotationSnapshot {
+            symbol: "AAPL".into(),
+            as_of: "2026-04-14".into(),
+            symbol_sector: "Technology".into(),
+            symbol_sector_change_pct: 1.5,
+            sector_rank: 1,
+            sectors_total: 11,
+            avg_sector_change_pct: 0.3,
+            relative_strength_pct: 1.2,
+            strength_label: "LEADER".into(),
+            ..Default::default()
+        };
+        upsert_sector_rotation(&c, "AAPL", &snap).unwrap();
+        let got = get_sector_rotation(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.strength_label, "LEADER");
+        assert_eq!(got.sector_rank, 1);
+    }
+
+    #[test]
+    fn compute_sector_rotation_leader() {
+        let sectors = vec![
+            SectorPerformance { sector: "Technology".into(),          change_pct: 2.0 },
+            SectorPerformance { sector: "Healthcare".into(),          change_pct: 0.5 },
+            SectorPerformance { sector: "Financial Services".into(),  change_pct: 0.1 },
+            SectorPerformance { sector: "Energy".into(),              change_pct: -0.5 },
+            SectorPerformance { sector: "Consumer Cyclical".into(),   change_pct: 1.0 },
+            SectorPerformance { sector: "Utilities".into(),           change_pct: -1.0 },
+        ];
+        let snap = compute_sector_rotation_snapshot("AAPL", "2026-04-14", "Technology", &sectors);
+        assert_eq!(snap.strength_label, "LEADER");
+        assert_eq!(snap.sector_rank, 1);
+        assert_eq!(snap.strongest_sector, "Technology");
+        assert_eq!(snap.weakest_sector, "Utilities");
+        assert!(snap.relative_strength_pct > 0.0);
+    }
+
+    #[test]
+    fn compute_sector_rotation_laggard() {
+        let sectors = vec![
+            SectorPerformance { sector: "Technology".into(),  change_pct: 2.0 },
+            SectorPerformance { sector: "Healthcare".into(),  change_pct: 1.5 },
+            SectorPerformance { sector: "Financials".into(),  change_pct: 1.0 },
+            SectorPerformance { sector: "Energy".into(),      change_pct: -1.5 },
+        ];
+        let snap = compute_sector_rotation_snapshot("XOM", "2026-04-14", "Energy", &sectors);
+        assert_eq!(snap.strength_label, "LAGGARD");
+        assert!(snap.relative_strength_pct < 0.0);
+    }
+
+    #[test]
+    fn compute_sector_rotation_no_data() {
+        let snap = compute_sector_rotation_snapshot("X", "2026-04-14", "Technology", &[]);
+        assert_eq!(snap.strength_label, "NO_DATA");
+    }
+
+    fn rc(date: &str, action: &str, firm: &str, to: &str) -> RatingChange {
+        RatingChange {
+            date: date.to_string(),
+            symbol: "X".into(),
+            company: String::new(),
+            firm: firm.to_string(),
+            action: action.to_string(),
+            from_grade: String::new(),
+            to_grade: to.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn updm_snapshot_roundtrip() {
+        let c = open_mem_conn_v12();
+        let snap = UpdmSnapshot {
+            symbol: "NVDA".into(),
+            as_of: "2026-04-14".into(),
+            total_actions: 8,
+            upgrades_90d: 5,
+            downgrades_90d: 2,
+            net_90d: 3,
+            latest_date: "2026-04-10".into(),
+            latest_action: "upgrade".into(),
+            bias_label: "BULLISH".into(),
+            trend_label: "IMPROVING".into(),
+            ..Default::default()
+        };
+        upsert_updm(&c, "NVDA", &snap).unwrap();
+        let got = get_updm(&c, "nvda").unwrap().unwrap();
+        assert_eq!(got.bias_label, "BULLISH");
+        assert_eq!(got.net_90d, 3);
+    }
+
+    #[test]
+    fn compute_updm_bullish_improving() {
+        let actions = vec![
+            rc("2026-04-10", "upgrade",   "Morgan Stanley", "Overweight"),
+            rc("2026-04-05", "upgrade",   "Goldman Sachs",  "Buy"),
+            rc("2026-03-28", "initiation","JPM",            "Overweight"),
+            rc("2026-03-15", "downgrade", "Bernstein",      "Market-Perform"),
+            rc("2026-02-20", "upgrade",   "Wells Fargo",    "Outperform"),
+            rc("2025-12-10", "downgrade", "Citi",           "Neutral"),
+        ];
+        let snap = compute_updm_snapshot("NVDA", "2026-04-14", &actions);
+        assert_eq!(snap.bias_label, "BULLISH");
+        assert!(snap.net_90d > 0);
+        assert_eq!(snap.latest_date, "2026-04-10");
+        assert_eq!(snap.latest_action, "upgrade");
+    }
+
+    #[test]
+    fn compute_updm_bearish() {
+        let actions = vec![
+            rc("2026-04-10", "downgrade", "Morgan Stanley", "Underweight"),
+            rc("2026-04-01", "downgrade", "Goldman Sachs",  "Sell"),
+            rc("2026-03-20", "downgrade", "Bernstein",      "Market-Perform"),
+            rc("2026-03-10", "upgrade",   "Wells Fargo",    "Outperform"),
+        ];
+        let snap = compute_updm_snapshot("X", "2026-04-14", &actions);
+        assert_eq!(snap.bias_label, "BEARISH");
+        assert!(snap.net_90d < 0);
+    }
+
+    #[test]
+    fn compute_updm_no_coverage() {
+        let snap = compute_updm_snapshot("X", "2026-04-14", &[]);
+        assert_eq!(snap.bias_label, "NO_COVERAGE");
     }
 }

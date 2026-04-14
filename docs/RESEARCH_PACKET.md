@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**forty-seven sub-blocks**, each of which is skipped silently when its data
+**fifty-two sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -568,7 +568,81 @@ price; a key-value block follows with target levels, dispersion, spread,
 and all four implied-return flavours. Needs cached `UPDG` / `PT` plus a
 positive current price from Fundamentals. Source: ADR-118 PTD window.
 
-#### 2.47 Sector peer comparison
+#### 2.47 Insider Activity Bias (MNGR — ADR-119)
+
+Pulled from `research::get_insider_activity`. Windows the cached
+`InsiderTrade` rows (from ADR-112 INS) over a user-tunable window
+(default **90 days**) and rolls up a per-symbol insider sentiment
+summary. Header line gives **bias label** (BULLISH / NEUTRAL / BEARISH)
+and **conviction label** (HIGH / MEDIUM / LOW). A key-value block
+follows with total trades, buy / sell / other counts, unique insiders,
+gross buy $, gross sell $, net $, buy/sell ratio, net shares, and the
+latest trade date. Bias BULLISH when net > +gross·0.1, BEARISH when
+net < -gross·0.1, else NEUTRAL. Conviction HIGH when ≥3 unique
+insiders AND |net| > $500k; MEDIUM when one condition; LOW when
+neither. Needs cached `INS` rows. Source: ADR-119 MNGR window.
+
+#### 2.48 Dividend Growth Analysis (DIVG — ADR-119)
+
+Pulled from `research::get_divg`. Sorts cached `DividendRecord` rows
+(from ADR-109 DVD) into calendar-year buckets, excludes the incomplete
+current year, and computes **1Y / 3Y / 5Y CAGRs**, consecutive growth
+years (run counted newest-back), and a **consistency %** (positive-
+growth-year count / total-growth-year count). Header line gives the
+**trend label** (GROWING / STABLE / CUTTING / NO_HISTORY), 3Y CAGR,
+consecutive growth years, and consistency. An annual table follows
+(most recent first) with year, total amount, payment count, and yoy
+growth %. Trend GROWING when 3Y CAGR ≥ 5% AND consistency ≥ 60%,
+CUTTING when 3Y CAGR < -5% OR latest annualised < prior × 0.9, else
+STABLE. Source: ADR-119 DIVG window.
+
+#### 2.49 Earnings Momentum Trend (EARM — ADR-119)
+
+Pulled from `research::get_earm`. Fuses cached `FA.income_quarterly`
+(from ADR-110 FA) with cached `EarningsSurprise` history (from
+ADR-112 ERN) to compute a **0-100 composite momentum score**.
+Compares the most-recent-4-quarter revenue yoy growth against the
+prior-4-quarter yoy growth, layers the EPS surprise acceleration on
+top, and labels **ACCELERATING** (score ≥ 65), **DECELERATING**
+(score ≤ 35), or **STABLE**. Header line shows the composite score,
+momentum label, and quarters used. A key-value block reports recent
+revenue growth %, prior revenue growth %, revenue acceleration %,
+recent EPS surprise %, prior EPS surprise %, and EPS surprise
+acceleration %. A quarter table shows up to **8 quarters** with
+period / revenue / revenue yoy % / EPS actual / EPS estimate / EPS
+surprise %. Needs ≥5 quarters of cached income statements and
+cached surprise history. Source: ADR-119 EARM window.
+
+#### 2.50 Sector Rotation Strength (SECTR — ADR-119)
+
+Pulled from `research::get_sector_rotation`. Ranks the symbol's
+Fundamentals sector among cached `SectorPerformance` rows (from
+ADR-113 INDU) and derives a relative strength label. Header line
+gives **strength label** (LEADER / NEUTRAL / LAGGARD / NO_DATA),
+the symbol's sector, its sector rank (e.g. 2/11), and the sector's
+change %. A key-value block follows with symbol sector change %,
+sectors total, avg sector change %, median sector change %,
+**relative strength %** (symbol sector change − avg), breadth %,
+strongest sector + change %, and weakest sector + change %. LEADER
+when the symbol's sector ranks in the top third AND relative
+strength > 0. LAGGARD when in the bottom third AND relative
+strength < 0. NEUTRAL otherwise. Source: ADR-119 SECTR window.
+
+#### 2.51 Upgrade/Downgrade Momentum (UPDM — ADR-119)
+
+Pulled from `research::get_updm`. Buckets cached `RatingChange` rows
+(from ADR-109 UPDG) into **30d / 90d / 180d** windows and classifies
+each action via case-insensitive substring match: "upgrad",
+"downgrad", "initiat", "maintain". Header line gives **bias label**
+(BULLISH / NEUTRAL / BEARISH) and **trend label** (IMPROVING /
+STABLE / DETERIORATING). A key-value block follows with net 30d /
+90d / 180d, upgrades / downgrades at each window, initiations 90d,
+maintains 90d, and the latest action (date, firm, to-grade). Bias
+BULLISH when net_90d ≥ 2, BEARISH when ≤ -2, else NEUTRAL. Trend
+IMPROVING when net_30d > net_90d / 3, DETERIORATING when net_30d <
+-net_90d / 3, else STABLE. Source: ADR-119 UPDM window.
+
+#### 2.52 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -644,17 +718,23 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | OHLC volatility estimators (ADR-118 VOLE) | 5 rows | CtC / Parkinson / GK / RS / YZ |
 | EPS beat streak fields (ADR-118 EPSB) | 8 k/v rows | Counts, streaks, surprise avg/median/recent, latest |
 | Price target dispersion fields (ADR-118 PTD) | 8 k/v rows | Targets, dispersion, spread, implied returns |
+| Insider activity fields (ADR-119 MNGR) | 10 k/v rows | Counts, unique insiders, gross/net $, net shares, latest date |
+| Dividend growth annual rows (ADR-119 DIVG) | ≤10 rows | Decade of calendar-year buckets |
+| Earnings momentum quarters (ADR-119 EARM) | ≤8 rows | 8 quarters covers both recent and prior 4Q comparison windows |
+| Sector rotation fields (ADR-119 SECTR) | 10 k/v rows | Sector rank, rel strength, breadth, strongest/weakest |
+| Upgrade/downgrade momentum fields (ADR-119 UPDM) | 12 k/v rows | Net 30/90/180, counts per bucket, latest action |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **18-36 KB**
-(up from 16-32 KB after ADR-117; ADR-118 added five per-symbol blocks —
-ALTZ / PTFS / VOLE / EPSB / PTD — covering Altman Z bankruptcy risk,
-Piotroski quality score, OHLC volatility estimators, EPS beat streak, and
-price target dispersion — all pure compute over cached FA / HP / ERN /
-UPDG snapshots with zero new API dependencies); a 10-symbol basket lands
-near **170-340 KB** (the global context is emitted only once, so
-multi-symbol overhead is still bounded by the per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **20-40 KB**
+(up from 18-36 KB after ADR-118; ADR-119 added five per-symbol blocks —
+MNGR / DIVG / EARM / SECTR / UPDM — covering insider activity bias,
+dividend growth arc, earnings momentum trend, sector rotation strength,
+and upgrade/downgrade momentum — all pure compute over cached INS /
+DVD / FA / ERN / INDU / UPDG snapshots with zero new API dependencies);
+a 10-symbol basket lands near **190-380 KB** (the global context is
+emitted only once, so multi-symbol overhead is still bounded by the
+per-symbol blocks).
 
 ---
 
@@ -839,6 +919,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_ohlc_vol` | SQLite `research_ohlc_vol` | ADR-118 VOLE window |
 | `research::get_eps_beat` | SQLite `research_eps_beat` | ADR-118 EPSB window |
 | `research::get_price_target_dispersion` | SQLite `research_price_target_dispersion` | ADR-118 PTD window |
+| `research::get_insider_activity` | SQLite `research_insider_activity` | ADR-119 MNGR window |
+| `research::get_divg` | SQLite `research_divg` | ADR-119 DIVG window |
+| `research::get_earm` | SQLite `research_earm` | ADR-119 EARM window |
+| `research::get_sector_rotation` | SQLite `research_sector_rotation` | ADR-119 SECTR window |
+| `research::get_updm` | SQLite `research_updm` | ADR-119 UPDM window |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -875,4 +960,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 — Godel parity research surfaces

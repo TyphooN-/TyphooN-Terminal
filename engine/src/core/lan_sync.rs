@@ -184,6 +184,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_ohlc_vol",
     "research_eps_beat",
     "research_price_target_dispersion",
+    // ── ADR-119 Round 12 ────────────────────────────
+    "research_insider_activity",
+    "research_divg",
+    "research_earm",
+    "research_sector_rotation",
+    "research_updm",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -666,6 +672,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_insider_activity" => Some(
+            "CREATE TABLE IF NOT EXISTS research_insider_activity (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_divg" => Some(
+            "CREATE TABLE IF NOT EXISTS research_divg (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_earm" => Some(
+            "CREATE TABLE IF NOT EXISTS research_earm (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_sector_rotation" => Some(
+            "CREATE TABLE IF NOT EXISTS research_sector_rotation (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_updm" => Some(
+            "CREATE TABLE IF NOT EXISTS research_updm (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -729,6 +770,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_ohlc_vol" => Some("updated_at"),
         "research_eps_beat" => Some("updated_at"),
         "research_price_target_dispersion" => Some("updated_at"),
+        "research_insider_activity" => Some("updated_at"),
+        "research_divg" => Some("updated_at"),
+        "research_earm" => Some("updated_at"),
+        "research_sector_rotation" => Some("updated_at"),
+        "research_updm" => Some("updated_at"),
         _ => None,
     }
 }
