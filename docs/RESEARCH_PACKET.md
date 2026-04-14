@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**thirty-two sub-blocks**, each of which is skipped silently when its data
+**thirty-seven sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -386,7 +386,60 @@ OMON fetches (each compute appends today's ATM IV from the nearest-to-
 money contract on the nearest expiry). Populated by running the `IVOL`
 command after `OMON` has pulled the chain. Source: ADR-115 IVOL window.
 
-#### 2.32 Sector peer comparison
+#### 2.32 Seasonality (SEAG — ADR-116)
+
+Pulled from `research::get_seasonality`. Header line lists years covered,
+best month, and worst month — followed by a **monthly table** (Month / Avg /
+Median / Stdev / +Years / N) and a **day-of-week table** (Day / Avg /
++Days / N). Pure compute over cached daily bars from the `HP` window, using
+a BTreeMap to bucket monthly first/last close and Zeller's congruence to
+derive day-of-week from dates. Populated by running the `SEAG` command.
+Source: ADR-116 SEAG window.
+
+#### 2.33 Correlation matrix (COR — ADR-116)
+
+Pulled from `research::get_correlation`. Header line gives mean peer
+correlation, highest-correlated peer, and lowest-correlated peer — followed
+by a table of up to **10 peer rows**: Peer / ρ (Pearson) / β (regression
+slope) / N (observations). Window is user-configurable (30–1260 trading
+days); ρ computed on daily log-returns with HashMap-based date
+intersection. Peers come from `research::get_peers` (ADR-109 PEERS
+surface). Populated by running the `COR` command after `PEERS` + `HP`.
+Source: ADR-116 COR window.
+
+#### 2.34 Total return analysis (TRA — ADR-116)
+
+Pulled from `research::get_total_return`. Header line gives last close,
+trailing 12-month dividends, and trailing 12-month dividend yield —
+followed by a **window table** (Window / Price % / Div Yield / Total % /
+Annualized / N div) across standard periods (1M / 3M / 6M / YTD / 1Y /
+3Y / 5Y / ITD). Each window sums price return and dividend-yield
+contribution into a total return. Pure compute over cached `HP` bars
+plus cached `DVD` dividend history. Populated by running the `TRA`
+command. Source: ADR-116 TRA window.
+
+#### 2.35 Technical indicators (TECH — ADR-116)
+
+Pulled from `research::get_technicals`. Header line gives last close and
+a **trend summary** derived from counting bullish vs. bearish indicator
+signals — followed by an **indicator table** (Indicator / Value / Signal)
+covering RSI(14) Wilder-smoothed, MACD(12,26,9) with signal / histogram,
+Bollinger Bands(20,2) with %B, ATR(14), ADX(14) with +DI/−DI, and
+Stochastic(14,3) %K/%D. Pure compute over cached `HP` bars. Populated
+by running the `TECH` command. Source: ADR-116 TECH window.
+
+#### 2.36 Volatility skew / smile (SKEW — ADR-116)
+
+Pulled from `research::get_vol_skew`. Header line gives underlying price
+and count of cached expiries — followed by a **nearest-expiry summary**
+(expiration, DTE, ATM IV, 25Δ put/call skew) and a **strike table** of up
+to **9 points** (Strike / Moneyness / Call IV / Put IV / Combined IV).
+Strikes are merged call+put by integer key; ATM is the strike nearest to
+the underlying; ±10% OTM put vs call IV difference drives the skew proxy.
+Pure compute over cached `OMON` chain data. Populated by running the
+`SKEW` command after `OMON`. Source: ADR-116 SKEW window.
+
+#### 2.37 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -446,15 +499,21 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | SVM model rows (ADR-115 SVM) | ≤6 rows | WACC / DDM / DCF / 3 peer-multiple rows |
 | OMON ATM-zone strikes (ADR-115 OMON) | 11 rows | 5 ITM + ATM + 5 OTM across both sides |
 | IVOL history trail (ADR-115 IVOL) | 8 points | Trend into today without dumping full 52w |
+| Seasonality months (ADR-116 SEAG) | 12 rows | One per calendar month |
+| Seasonality day-of-week (ADR-116 SEAG) | 5 rows | Mon–Fri trading sessions |
+| Correlation peer cells (ADR-116 COR) | 10 rows | Sector peers capped at top-10 for readability |
+| Total return windows (ADR-116 TRA) | ≤8 rows | Standard 1M–ITD ladder |
+| Technical indicators (ADR-116 TECH) | 6 rows | RSI / MACD / BB / ATR / ADX / Stoch |
+| Volatility skew points (ADR-116 SKEW) | 9 rows per expiry | ±10% OTM window + ATM coverage |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **12-24 KB**
-(up from 10-19 KB after ADR-114; ADR-115 added five per-symbol blocks —
-HRA / DCF / SVM / OMON / IVOL — including DCF's projection-year table and
-OMON's ATM-zone chain table); a 10-symbol basket lands near **110-225 KB**
-(the global context is emitted only once, so multi-symbol overhead is still
-bounded by the per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **14-28 KB**
+(up from 12-24 KB after ADR-115; ADR-116 added five per-symbol blocks —
+SEAG / COR / TRA / TECH / SKEW — including SEAG's 12-row monthly table and
+COR's per-peer correlation rows); a 10-symbol basket lands near **130-260
+KB** (the global context is emitted only once, so multi-symbol overhead is
+still bounded by the per-symbol blocks).
 
 ---
 
@@ -624,6 +683,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_svm` | SQLite `research_svm` | ADR-115 SVM window |
 | `research::get_options_chain` | SQLite `research_options_chain` | ADR-115 OMON window |
 | `research::get_ivol` | SQLite `research_ivol` | ADR-115 IVOL window |
+| `research::get_seasonality` | SQLite `research_seasonality` | ADR-116 SEAG window |
+| `research::get_correlation` | SQLite `research_correlation` | ADR-116 COR window |
+| `research::get_total_return` | SQLite `research_total_return` | ADR-116 TRA window |
+| `research::get_technicals` | SQLite `research_technicals` | ADR-116 TECH window |
+| `research::get_vol_skew` | SQLite `research_vol_skew` | ADR-116 SKEW window |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -660,4 +724,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 — Godel parity research surfaces

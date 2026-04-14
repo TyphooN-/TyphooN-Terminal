@@ -166,6 +166,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_svm",
     "research_options_chain",
     "research_ivol",
+    // ── ADR-116 Round 9 ─────────────────────────────
+    "research_seasonality",
+    "research_correlation",
+    "research_total_return",
+    "research_technicals",
+    "research_vol_skew",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -542,6 +548,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-116 Round 9 ─────────────────────────────
+        "research_seasonality" => Some(
+            "CREATE TABLE IF NOT EXISTS research_seasonality (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_correlation" => Some(
+            "CREATE TABLE IF NOT EXISTS research_correlation (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_total_return" => Some(
+            "CREATE TABLE IF NOT EXISTS research_total_return (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_technicals" => Some(
+            "CREATE TABLE IF NOT EXISTS research_technicals (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_vol_skew" => Some(
+            "CREATE TABLE IF NOT EXISTS research_vol_skew (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -590,6 +632,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_svm" => Some("updated_at"),
         "research_options_chain" => Some("updated_at"),
         "research_ivol" => Some("updated_at"),
+        "research_seasonality" => Some("updated_at"),
+        "research_correlation" => Some("updated_at"),
+        "research_total_return" => Some("updated_at"),
+        "research_technicals" => Some("updated_at"),
+        "research_vol_skew" => Some("updated_at"),
         _ => None,
     }
 }

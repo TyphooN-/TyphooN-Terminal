@@ -828,6 +828,147 @@ pub struct IvolSnapshot {
     pub note: String,
 }
 
+// ── ADR-116 Godel Parity Round 9 ─────────────────────────────────────────
+// SEAG / COR / TRA / TECH / SKEW surfaces — all pure compute over existing
+// HP / DVD / OMON caches, zero new API dependencies.
+
+/// SEAG — one month's historical seasonality bucket (Jan..Dec).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SeasonalityMonth {
+    pub month: u32,               // 1..12
+    pub label: String,            // "Jan", "Feb", …
+    pub avg_return_pct: f64,      // mean monthly return across years
+    pub median_return_pct: f64,
+    pub stdev_pct: f64,
+    pub positive_years: usize,
+    pub total_years: usize,
+    pub best_return_pct: f64,
+    pub worst_return_pct: f64,
+}
+
+/// SEAG — one day-of-week historical bucket (Mon..Fri).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SeasonalityDow {
+    pub dow: u32,                 // 1..7 (Mon=1, Sun=7)
+    pub label: String,            // "Mon", "Tue", …
+    pub avg_return_pct: f64,      // mean daily log-return
+    pub positive_days: usize,
+    pub total_days: usize,
+}
+
+/// SEAG — Seasonality analysis snapshot for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SeasonalitySnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub years_covered: usize,
+    pub months: Vec<SeasonalityMonth>,
+    pub dow: Vec<SeasonalityDow>,
+    pub best_month: String,
+    pub worst_month: String,
+    pub note: String,
+}
+
+/// COR — one pairwise correlation cell.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CorrelationCell {
+    pub peer_symbol: String,
+    pub correlation: f64,         // Pearson on daily log-returns
+    pub n_observations: usize,
+    pub beta_vs_peer: f64,        // slope of ln(subject) vs ln(peer)
+}
+
+/// COR — Correlation matrix for a subject vs its peer set.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CorrelationMatrix {
+    pub symbol: String,
+    pub as_of: String,
+    pub window_days: usize,       // e.g. 252 (1Y)
+    pub cells: Vec<CorrelationCell>,
+    pub mean_correlation: f64,    // average |ρ| across cells
+    pub highest_corr_symbol: String,
+    pub lowest_corr_symbol: String,
+    pub note: String,
+}
+
+/// TRA — one total-return window (price return + dividend yield).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TotalReturnWindow {
+    pub label: String,            // "1M" / "3M" / "6M" / "YTD" / "1Y" / "3Y" / "5Y"
+    pub trading_days: usize,
+    pub price_return_pct: f64,
+    pub dividend_yield_pct: f64,  // dividends paid in window / start price × 100
+    pub total_return_pct: f64,    // price + dividend yield (simple, not compound)
+    pub annualized_pct: f64,      // annualized for windows ≥ 1Y, else simple
+    pub dividends_paid: f64,      // cash per share in window
+    pub n_dividends: usize,
+}
+
+/// TRA — Total return analysis snapshot for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TotalReturnSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub last_close: f64,
+    pub trailing_12m_dividends: f64,
+    pub trailing_12m_yield_pct: f64,
+    pub windows: Vec<TotalReturnWindow>,
+    pub note: String,
+}
+
+/// TECH — one indicator value with its signal interpretation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TechnicalIndicator {
+    pub name: String,             // "RSI(14)", "MACD(12,26,9)", "BB(20,2)", "ATR(14)", "ADX(14)", "Stoch(14,3)"
+    pub value: f64,               // primary value (for MACD this is the histogram)
+    pub value_secondary: f64,     // signal line / middle band / +DI / etc.
+    pub value_tertiary: f64,      // -DI / lower band / …
+    pub signal: String,           // "overbought" / "oversold" / "bullish" / "bearish" / "neutral"
+    pub note: String,             // short contextual hint
+}
+
+/// TECH — Technical indicator snapshot for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TechnicalSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub last_close: f64,
+    pub indicators: Vec<TechnicalIndicator>,
+    pub trend_summary: String,    // short synthesized label
+    pub note: String,
+}
+
+/// SKEW — one strike row on a volatility smile curve.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkewPoint {
+    pub strike: f64,
+    pub moneyness_pct: f64,       // (strike / underlying - 1) × 100
+    pub call_iv_pct: f64,
+    pub put_iv_pct: f64,
+    pub combined_iv_pct: f64,     // average of call/put when both present
+}
+
+/// SKEW — one expiry's full smile + summary stats.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkewExpiry {
+    pub expiration: String,
+    pub days_to_expiry: i64,
+    pub atm_iv_pct: f64,
+    pub points: Vec<SkewPoint>,
+    pub put_call_skew_25d_pct: f64, // 25-delta put IV − 25-delta call IV (placeholder using ±10% OTM)
+    pub term_note: String,
+}
+
+/// SKEW — Implied-volatility skew snapshot for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VolatilitySkew {
+    pub symbol: String,
+    pub as_of: String,
+    pub underlying_price: f64,
+    pub expiries: Vec<SkewExpiry>,
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -3452,6 +3593,724 @@ pub fn compute_ivol_snapshot(
     }
 }
 
+// ── ADR-116 Round 9 — SEAG compute (seasonality) ─────────────────────────
+
+/// Compute a `SeasonalitySnapshot` from a chronologically-ordered slice of
+/// bars. Builds monthly buckets (Jan..Dec) of year-over-year per-month returns
+/// (first bar of month → last bar of month) and day-of-week buckets of daily
+/// log-returns. Pure compute, no network.
+pub fn compute_seasonality_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars_oldest_first: &[HistoricalPriceRow],
+) -> SeasonalitySnapshot {
+    if bars_oldest_first.len() < 30 {
+        return SeasonalitySnapshot {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            note: "insufficient bar history (need ≥ 30 bars)".to_string(),
+            ..Default::default()
+        };
+    }
+
+    let px = |b: &HistoricalPriceRow| -> f64 {
+        if b.adj_close > 0.0 { b.adj_close } else { b.close }
+    };
+
+    // ── Monthly buckets: group bars by YYYY-MM and compute per-(year, month)
+    // simple return from first bar to last bar of that month, then aggregate
+    // across years into the 12 buckets.
+    use std::collections::BTreeMap;
+    let mut per_ym: BTreeMap<(i32, u32), (f64, f64)> = BTreeMap::new(); // (year, month) → (first, last)
+    let mut years_seen: std::collections::BTreeSet<i32> = std::collections::BTreeSet::new();
+    for b in bars_oldest_first {
+        if b.date.len() < 10 { continue; }
+        let year: i32 = match b.date.get(0..4).and_then(|s| s.parse().ok()) { Some(y) => y, None => continue };
+        let month: u32 = match b.date.get(5..7).and_then(|s| s.parse().ok()) { Some(m) => m, None => continue };
+        let p = px(b);
+        if p <= 0.0 { continue; }
+        years_seen.insert(year);
+        per_ym.entry((year, month)).and_modify(|e| e.1 = p).or_insert((p, p));
+    }
+
+    let month_label = |m: u32| -> &'static str {
+        match m {
+            1 => "Jan", 2 => "Feb", 3 => "Mar", 4 => "Apr",
+            5 => "May", 6 => "Jun", 7 => "Jul", 8 => "Aug",
+            9 => "Sep", 10 => "Oct", 11 => "Nov", 12 => "Dec",
+            _ => "?",
+        }
+    };
+
+    let mut months: Vec<SeasonalityMonth> = Vec::new();
+    for m in 1u32..=12 {
+        let rets: Vec<f64> = per_ym.iter()
+            .filter_map(|((_y, mm), (first, last))| {
+                if *mm == m && *first > 0.0 { Some((last / first - 1.0) * 100.0) } else { None }
+            })
+            .collect();
+        if rets.is_empty() {
+            months.push(SeasonalityMonth { month: m, label: month_label(m).to_string(), ..Default::default() });
+            continue;
+        }
+        let mean = rets.iter().sum::<f64>() / rets.len() as f64;
+        let var = rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / rets.len() as f64;
+        let stdev = var.sqrt();
+        let mut sorted = rets.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = sorted[sorted.len() / 2];
+        let positive = rets.iter().filter(|r| **r > 0.0).count();
+        let best = sorted.last().copied().unwrap_or(0.0);
+        let worst = sorted.first().copied().unwrap_or(0.0);
+        months.push(SeasonalityMonth {
+            month: m,
+            label: month_label(m).to_string(),
+            avg_return_pct: mean,
+            median_return_pct: median,
+            stdev_pct: stdev,
+            positive_years: positive,
+            total_years: rets.len(),
+            best_return_pct: best,
+            worst_return_pct: worst,
+        });
+    }
+
+    // ── Day-of-week buckets using log-returns on successive bars.
+    let dow_label = |d: u32| -> &'static str {
+        match d {
+            1 => "Mon", 2 => "Tue", 3 => "Wed", 4 => "Thu",
+            5 => "Fri", 6 => "Sat", 7 => "Sun", _ => "?",
+        }
+    };
+    // Zeller-style computation for a YYYY-MM-DD string.
+    let dow_of = |date: &str| -> Option<u32> {
+        let y: i32 = date.get(0..4)?.parse().ok()?;
+        let m: i32 = date.get(5..7)?.parse().ok()?;
+        let d: i32 = date.get(8..10)?.parse().ok()?;
+        // Zeller's congruence — returns 0=Sat..6=Fri; we remap to 1=Mon..7=Sun.
+        let (q, m2, k_year) = if m < 3 { (d, m + 12, y - 1) } else { (d, m, y) };
+        let k = k_year % 100;
+        let j = k_year / 100;
+        let h = (q + (13 * (m2 + 1)) / 5 + k + k / 4 + j / 4 + 5 * j).rem_euclid(7);
+        // Zeller h: 0=Sat, 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri
+        let iso = match h { 0 => 6, 1 => 7, 2 => 1, 3 => 2, 4 => 3, 5 => 4, 6 => 5, _ => 1 };
+        Some(iso as u32)
+    };
+
+    let mut dow_map: BTreeMap<u32, (f64, usize, usize)> = BTreeMap::new(); // dow → (sum_log_ret, pos_count, total)
+    for w in bars_oldest_first.windows(2) {
+        let p0 = px(&w[0]);
+        let p1 = px(&w[1]);
+        if p0 <= 0.0 || p1 <= 0.0 { continue; }
+        let r = (p1 / p0).ln();
+        if let Some(d) = dow_of(&w[1].date) {
+            let entry = dow_map.entry(d).or_insert((0.0, 0, 0));
+            entry.0 += r;
+            entry.2 += 1;
+            if r > 0.0 { entry.1 += 1; }
+        }
+    }
+    let mut dow_out: Vec<SeasonalityDow> = Vec::new();
+    for d in 1u32..=5 {
+        if let Some((sum, pos, total)) = dow_map.get(&d).cloned() {
+            let mean_pct = if total > 0 { (sum / total as f64).exp().ln() * 100.0 } else { 0.0 };
+            dow_out.push(SeasonalityDow {
+                dow: d,
+                label: dow_label(d).to_string(),
+                avg_return_pct: mean_pct,
+                positive_days: pos,
+                total_days: total,
+            });
+        }
+    }
+
+    let mut best_month = String::new();
+    let mut worst_month = String::new();
+    let mut best_avg = f64::NEG_INFINITY;
+    let mut worst_avg = f64::INFINITY;
+    for m in &months {
+        if m.total_years == 0 { continue; }
+        if m.avg_return_pct > best_avg { best_avg = m.avg_return_pct; best_month = m.label.clone(); }
+        if m.avg_return_pct < worst_avg { worst_avg = m.avg_return_pct; worst_month = m.label.clone(); }
+    }
+
+    SeasonalitySnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        years_covered: years_seen.len(),
+        months,
+        dow: dow_out,
+        best_month,
+        worst_month,
+        note: String::new(),
+    }
+}
+
+// ── ADR-116 Round 9 — COR compute (correlation matrix vs peers) ──────────
+
+/// Compute a pairwise correlation matrix for a subject symbol against a set
+/// of peer bar series over a rolling window of `window_days`. Uses Pearson
+/// correlation on daily log-returns intersected by date, skipping peers with
+/// fewer than 30 overlapping observations. Pure compute.
+pub fn compute_correlation_matrix(
+    symbol: &str,
+    as_of: &str,
+    window_days: usize,
+    subject_bars: &[HistoricalPriceRow],
+    peer_series: &[(String, Vec<HistoricalPriceRow>)],
+) -> CorrelationMatrix {
+    let px = |b: &HistoricalPriceRow| -> f64 {
+        if b.adj_close > 0.0 { b.adj_close } else { b.close }
+    };
+    // Truncate subject to the most recent `window_days` bars (plus one anchor).
+    let take = window_days.saturating_add(1).min(subject_bars.len());
+    let subject_slice = &subject_bars[subject_bars.len() - take..];
+    if subject_slice.len() < 31 {
+        return CorrelationMatrix {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            window_days,
+            note: "insufficient subject bar history (need ≥ 31)".to_string(),
+            ..Default::default()
+        };
+    }
+
+    // Build date→logret map for subject.
+    use std::collections::HashMap;
+    let mut sub_map: HashMap<String, f64> = HashMap::new();
+    for w in subject_slice.windows(2) {
+        let p0 = px(&w[0]);
+        let p1 = px(&w[1]);
+        if p0 > 0.0 && p1 > 0.0 {
+            sub_map.insert(w[1].date.clone(), (p1 / p0).ln());
+        }
+    }
+
+    let mut cells: Vec<CorrelationCell> = Vec::new();
+    for (peer_sym, peer_bars) in peer_series {
+        if peer_bars.len() < 31 { continue; }
+        let ptake = window_days.saturating_add(1).min(peer_bars.len());
+        let peer_slice = &peer_bars[peer_bars.len() - ptake..];
+        // Build peer logret and intersect dates.
+        let mut paired: Vec<(f64, f64)> = Vec::new();
+        for w in peer_slice.windows(2) {
+            let p0 = px(&w[0]);
+            let p1 = px(&w[1]);
+            if p0 <= 0.0 || p1 <= 0.0 { continue; }
+            if let Some(s) = sub_map.get(&w[1].date) {
+                paired.push((*s, (p1 / p0).ln()));
+            }
+        }
+        if paired.len() < 30 { continue; }
+        let n = paired.len() as f64;
+        let mean_s: f64 = paired.iter().map(|(s, _)| *s).sum::<f64>() / n;
+        let mean_p: f64 = paired.iter().map(|(_, p)| *p).sum::<f64>() / n;
+        let mut cov = 0.0;
+        let mut var_s = 0.0;
+        let mut var_p = 0.0;
+        for (s, p) in &paired {
+            let ds = s - mean_s;
+            let dp = p - mean_p;
+            cov += ds * dp;
+            var_s += ds * ds;
+            var_p += dp * dp;
+        }
+        let denom = (var_s * var_p).sqrt();
+        let rho = if denom > 1e-12 { cov / denom } else { 0.0 };
+        let beta = if var_p > 1e-12 { cov / var_p } else { 0.0 };
+        cells.push(CorrelationCell {
+            peer_symbol: peer_sym.to_uppercase(),
+            correlation: rho.clamp(-1.0, 1.0),
+            n_observations: paired.len(),
+            beta_vs_peer: beta,
+        });
+    }
+
+    if cells.is_empty() {
+        return CorrelationMatrix {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            window_days,
+            note: "no peer pairs with ≥ 30 overlapping observations".to_string(),
+            ..Default::default()
+        };
+    }
+    let mean_corr = cells.iter().map(|c| c.correlation.abs()).sum::<f64>() / cells.len() as f64;
+    let mut highest_sym = String::new();
+    let mut lowest_sym = String::new();
+    let mut hi = f64::NEG_INFINITY;
+    let mut lo = f64::INFINITY;
+    for c in &cells {
+        if c.correlation > hi { hi = c.correlation; highest_sym = c.peer_symbol.clone(); }
+        if c.correlation < lo { lo = c.correlation; lowest_sym = c.peer_symbol.clone(); }
+    }
+
+    CorrelationMatrix {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        window_days,
+        cells,
+        mean_correlation: mean_corr,
+        highest_corr_symbol: highest_sym,
+        lowest_corr_symbol: lowest_sym,
+        note: String::new(),
+    }
+}
+
+// ── ADR-116 Round 9 — TRA compute (total return = price + dividends) ────
+
+/// Compute a `TotalReturnSnapshot` by combining HP price returns with the
+/// sum of cash dividends paid over the same window. Pure compute; inputs are
+/// already-cached bars and dividend records.
+pub fn compute_total_return_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars_oldest_first: &[HistoricalPriceRow],
+    dividends: &[DividendRecord],
+) -> TotalReturnSnapshot {
+    if bars_oldest_first.len() < 2 {
+        return TotalReturnSnapshot {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            note: "insufficient bar history (need ≥ 2 bars)".to_string(),
+            ..Default::default()
+        };
+    }
+    let n = bars_oldest_first.len();
+    let last_close = bars_oldest_first[n - 1].close;
+    let last_date = bars_oldest_first[n - 1].date.clone();
+
+    let px = |i: usize| -> f64 {
+        let b = &bars_oldest_first[i];
+        if b.adj_close > 0.0 { b.adj_close } else { b.close }
+    };
+    let last_px = px(n - 1);
+
+    // Trailing 12 month dividends by ex_date cutoff.
+    let cutoff_ttm = {
+        // Naive 12-month cutoff: subtract one from the year component.
+        let y: i32 = last_date.get(0..4).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let m = last_date.get(5..7).unwrap_or("01");
+        let d = last_date.get(8..10).unwrap_or("01");
+        format!("{:04}-{}-{}", y - 1, m, d)
+    };
+    let ttm_divs: f64 = dividends.iter()
+        .filter(|d| d.ex_date.as_str() > cutoff_ttm.as_str() && d.ex_date.as_str() <= last_date.as_str())
+        .map(|d| d.amount)
+        .sum();
+    let ttm_yield = if last_close > 0.0 { ttm_divs / last_close * 100.0 } else { 0.0 };
+
+    let mut windows: Vec<TotalReturnWindow> = Vec::new();
+    let push_window = |windows: &mut Vec<TotalReturnWindow>, label: &str, start_idx: usize, trading_days: usize| {
+        if start_idx >= n - 1 { return; }
+        let start_px = px(start_idx);
+        if start_px <= 0.0 { return; }
+        let start_date = bars_oldest_first[start_idx].date.clone();
+        let price_ret = (last_px / start_px - 1.0) * 100.0;
+        let window_divs: f64 = dividends.iter()
+            .filter(|d| d.ex_date.as_str() > start_date.as_str() && d.ex_date.as_str() <= last_date.as_str())
+            .map(|d| d.amount)
+            .sum();
+        let n_divs = dividends.iter()
+            .filter(|d| d.ex_date.as_str() > start_date.as_str() && d.ex_date.as_str() <= last_date.as_str())
+            .count();
+        let div_yield = if start_px > 0.0 { window_divs / start_px * 100.0 } else { 0.0 };
+        let total = price_ret + div_yield;
+        let annualized = if trading_days >= 252 {
+            let years = trading_days as f64 / 252.0;
+            (((total / 100.0) + 1.0).powf(1.0 / years) - 1.0) * 100.0
+        } else { total };
+        windows.push(TotalReturnWindow {
+            label: label.to_string(),
+            trading_days,
+            price_return_pct: price_ret,
+            dividend_yield_pct: div_yield,
+            total_return_pct: total,
+            annualized_pct: annualized,
+            dividends_paid: window_divs,
+            n_dividends: n_divs,
+        });
+    };
+
+    for (label, days) in &[("1M", 21), ("3M", 63), ("6M", 126), ("1Y", 252), ("3Y", 756), ("5Y", 1260)] {
+        if n > *days {
+            push_window(&mut windows, label, n - 1 - days, *days);
+        }
+    }
+    // YTD
+    let year_prefix = as_of.get(..4).unwrap_or("");
+    if !year_prefix.is_empty() {
+        if let Some(ytd_start) = bars_oldest_first.iter().position(|b| b.date.starts_with(year_prefix)) {
+            push_window(&mut windows, "YTD", ytd_start, n - ytd_start);
+        }
+    }
+
+    TotalReturnSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        last_close,
+        trailing_12m_dividends: ttm_divs,
+        trailing_12m_yield_pct: ttm_yield,
+        windows,
+        note: String::new(),
+    }
+}
+
+// ── ADR-116 Round 9 — TECH compute (technical indicators) ────────────────
+
+/// Compute standard technical indicators (RSI, MACD, Bollinger, ATR, ADX,
+/// Stochastic) from a chronologically-ordered slice of bars. Pure compute.
+pub fn compute_technical_indicators(
+    symbol: &str,
+    as_of: &str,
+    bars_oldest_first: &[HistoricalPriceRow],
+) -> TechnicalSnapshot {
+    if bars_oldest_first.len() < 35 {
+        return TechnicalSnapshot {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            note: "insufficient bar history (need ≥ 35 bars)".to_string(),
+            ..Default::default()
+        };
+    }
+    let n = bars_oldest_first.len();
+    let closes: Vec<f64> = bars_oldest_first.iter().map(|b| if b.adj_close > 0.0 { b.adj_close } else { b.close }).collect();
+    let highs: Vec<f64> = bars_oldest_first.iter().map(|b| b.high.max(b.close)).collect();
+    let lows: Vec<f64> = bars_oldest_first.iter().map(|b| b.low.min(b.close)).collect();
+    let last_close = closes[n - 1];
+
+    let mut out: Vec<TechnicalIndicator> = Vec::new();
+
+    // RSI(14) — Wilder's smoothing.
+    if n >= 15 {
+        let mut gains: Vec<f64> = Vec::with_capacity(n - 1);
+        let mut losses: Vec<f64> = Vec::with_capacity(n - 1);
+        for i in 1..n {
+            let diff = closes[i] - closes[i - 1];
+            gains.push(if diff > 0.0 { diff } else { 0.0 });
+            losses.push(if diff < 0.0 { -diff } else { 0.0 });
+        }
+        let mut avg_gain: f64 = gains[..14].iter().sum::<f64>() / 14.0;
+        let mut avg_loss: f64 = losses[..14].iter().sum::<f64>() / 14.0;
+        for i in 14..gains.len() {
+            avg_gain = (avg_gain * 13.0 + gains[i]) / 14.0;
+            avg_loss = (avg_loss * 13.0 + losses[i]) / 14.0;
+        }
+        let rs = if avg_loss > 1e-12 { avg_gain / avg_loss } else { f64::INFINITY };
+        let rsi = if rs.is_infinite() { 100.0 } else { 100.0 - 100.0 / (1.0 + rs) };
+        let signal = if rsi >= 70.0 { "overbought" }
+                     else if rsi <= 30.0 { "oversold" }
+                     else if rsi >= 55.0 { "bullish" }
+                     else if rsi <= 45.0 { "bearish" }
+                     else { "neutral" };
+        out.push(TechnicalIndicator {
+            name: "RSI(14)".to_string(),
+            value: rsi,
+            value_secondary: 0.0,
+            value_tertiary: 0.0,
+            signal: signal.to_string(),
+            note: String::new(),
+        });
+    }
+
+    // MACD(12,26,9) — EMA crossover.
+    if n >= 35 {
+        let ema = |period: usize, data: &[f64]| -> Vec<f64> {
+            let k = 2.0 / (period as f64 + 1.0);
+            let mut out = Vec::with_capacity(data.len());
+            let mut prev = data[0];
+            out.push(prev);
+            for v in &data[1..] {
+                prev = v * k + prev * (1.0 - k);
+                out.push(prev);
+            }
+            out
+        };
+        let ema12 = ema(12, &closes);
+        let ema26 = ema(26, &closes);
+        let macd_line: Vec<f64> = ema12.iter().zip(ema26.iter()).map(|(a, b)| a - b).collect();
+        let signal_line = ema(9, &macd_line);
+        let macd = *macd_line.last().unwrap_or(&0.0);
+        let sig = *signal_line.last().unwrap_or(&0.0);
+        let hist = macd - sig;
+        let signal = if hist > 0.0 { "bullish" } else if hist < 0.0 { "bearish" } else { "neutral" };
+        out.push(TechnicalIndicator {
+            name: "MACD(12,26,9)".to_string(),
+            value: hist,
+            value_secondary: macd,
+            value_tertiary: sig,
+            signal: signal.to_string(),
+            note: format!("MACD={:.3} Signal={:.3}", macd, sig),
+        });
+    }
+
+    // Bollinger Bands (20, 2σ).
+    if n >= 20 {
+        let slice = &closes[n - 20..];
+        let mean: f64 = slice.iter().sum::<f64>() / 20.0;
+        let var: f64 = slice.iter().map(|c| (c - mean).powi(2)).sum::<f64>() / 20.0;
+        let sd = var.sqrt();
+        let upper = mean + 2.0 * sd;
+        let lower = mean - 2.0 * sd;
+        let bandwidth_pct = if mean > 0.0 { (upper - lower) / mean * 100.0 } else { 0.0 };
+        let pct_b = if (upper - lower).abs() > 1e-9 { (last_close - lower) / (upper - lower) * 100.0 } else { 50.0 };
+        let signal = if pct_b >= 100.0 { "overbought" }
+                     else if pct_b <= 0.0 { "oversold" }
+                     else if pct_b >= 80.0 { "bullish" }
+                     else if pct_b <= 20.0 { "bearish" }
+                     else { "neutral" };
+        out.push(TechnicalIndicator {
+            name: "BB(20,2)".to_string(),
+            value: pct_b,
+            value_secondary: upper,
+            value_tertiary: lower,
+            signal: signal.to_string(),
+            note: format!("mid={:.2} bw={:.2}%", mean, bandwidth_pct),
+        });
+    }
+
+    // ATR(14) — Wilder.
+    if n >= 15 {
+        let mut tr: Vec<f64> = Vec::with_capacity(n - 1);
+        for i in 1..n {
+            let hl = highs[i] - lows[i];
+            let hc = (highs[i] - closes[i - 1]).abs();
+            let lc = (lows[i] - closes[i - 1]).abs();
+            tr.push(hl.max(hc).max(lc));
+        }
+        let mut atr: f64 = tr[..14].iter().sum::<f64>() / 14.0;
+        for v in &tr[14..] {
+            atr = (atr * 13.0 + v) / 14.0;
+        }
+        let atr_pct = if last_close > 0.0 { atr / last_close * 100.0 } else { 0.0 };
+        out.push(TechnicalIndicator {
+            name: "ATR(14)".to_string(),
+            value: atr,
+            value_secondary: atr_pct,
+            value_tertiary: 0.0,
+            signal: "neutral".to_string(),
+            note: format!("{:.2}% of close", atr_pct),
+        });
+    }
+
+    // ADX(14) — Wilder directional movement.
+    if n >= 28 {
+        let mut plus_dm: Vec<f64> = Vec::with_capacity(n - 1);
+        let mut minus_dm: Vec<f64> = Vec::with_capacity(n - 1);
+        let mut tr: Vec<f64> = Vec::with_capacity(n - 1);
+        for i in 1..n {
+            let up = highs[i] - highs[i - 1];
+            let down = lows[i - 1] - lows[i];
+            plus_dm.push(if up > down && up > 0.0 { up } else { 0.0 });
+            minus_dm.push(if down > up && down > 0.0 { down } else { 0.0 });
+            let hl = highs[i] - lows[i];
+            let hc = (highs[i] - closes[i - 1]).abs();
+            let lc = (lows[i] - closes[i - 1]).abs();
+            tr.push(hl.max(hc).max(lc));
+        }
+        // Wilder smoothing (14).
+        let mut pdm: f64 = plus_dm[..14].iter().sum::<f64>();
+        let mut mdm: f64 = minus_dm[..14].iter().sum::<f64>();
+        let mut trs: f64 = tr[..14].iter().sum::<f64>();
+        let mut dx_hist: Vec<f64> = Vec::new();
+        for i in 14..plus_dm.len() {
+            pdm = pdm - pdm / 14.0 + plus_dm[i];
+            mdm = mdm - mdm / 14.0 + minus_dm[i];
+            trs = trs - trs / 14.0 + tr[i];
+            let plus_di = if trs > 1e-12 { pdm / trs * 100.0 } else { 0.0 };
+            let minus_di = if trs > 1e-12 { mdm / trs * 100.0 } else { 0.0 };
+            let sum = plus_di + minus_di;
+            let dx = if sum > 1e-12 { ((plus_di - minus_di).abs() / sum) * 100.0 } else { 0.0 };
+            dx_hist.push(dx);
+        }
+        if dx_hist.len() >= 14 {
+            let mut adx: f64 = dx_hist[..14].iter().sum::<f64>() / 14.0;
+            for v in &dx_hist[14..] {
+                adx = (adx * 13.0 + v) / 14.0;
+            }
+            let plus_di = if trs > 1e-12 { pdm / trs * 100.0 } else { 0.0 };
+            let minus_di = if trs > 1e-12 { mdm / trs * 100.0 } else { 0.0 };
+            let signal = if adx >= 25.0 {
+                if plus_di > minus_di { "bullish" } else { "bearish" }
+            } else { "neutral" };
+            out.push(TechnicalIndicator {
+                name: "ADX(14)".to_string(),
+                value: adx,
+                value_secondary: plus_di,
+                value_tertiary: minus_di,
+                signal: signal.to_string(),
+                note: format!("+DI={:.1} −DI={:.1}", plus_di, minus_di),
+            });
+        }
+    }
+
+    // Stochastic %K(14), %D(3).
+    if n >= 17 {
+        let mut k_series: Vec<f64> = Vec::new();
+        for i in 13..n {
+            let window_high = highs[i - 13..=i].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let window_low  = lows[i - 13..=i].iter().cloned().fold(f64::INFINITY, f64::min);
+            let denom = window_high - window_low;
+            let k = if denom.abs() > 1e-12 { (closes[i] - window_low) / denom * 100.0 } else { 50.0 };
+            k_series.push(k);
+        }
+        let k_last = *k_series.last().unwrap_or(&50.0);
+        let d_last = if k_series.len() >= 3 {
+            k_series[k_series.len() - 3..].iter().sum::<f64>() / 3.0
+        } else { k_last };
+        let signal = if k_last >= 80.0 { "overbought" }
+                     else if k_last <= 20.0 { "oversold" }
+                     else if k_last > d_last { "bullish" }
+                     else if k_last < d_last { "bearish" }
+                     else { "neutral" };
+        out.push(TechnicalIndicator {
+            name: "Stoch(14,3)".to_string(),
+            value: k_last,
+            value_secondary: d_last,
+            value_tertiary: 0.0,
+            signal: signal.to_string(),
+            note: format!("%K={:.1} %D={:.1}", k_last, d_last),
+        });
+    }
+
+    // Trend synthesis — count bullish/bearish across tradeable indicators.
+    let mut bull = 0usize;
+    let mut bear = 0usize;
+    for ind in &out {
+        match ind.signal.as_str() {
+            "bullish" | "overbought" => bull += 1,
+            "bearish" | "oversold"   => bear += 1,
+            _ => {}
+        }
+    }
+    let trend_summary = if bull > bear + 1 { "bullish composite".to_string() }
+                        else if bear > bull + 1 { "bearish composite".to_string() }
+                        else { "mixed / neutral composite".to_string() };
+
+    TechnicalSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        last_close,
+        indicators: out,
+        trend_summary,
+        note: String::new(),
+    }
+}
+
+// ── ADR-116 Round 9 — SKEW compute (volatility smile/skew) ───────────────
+
+/// Compute a `VolatilitySkew` snapshot from a cached options chain. For each
+/// expiry, walk the strike ladder and emit a `SkewPoint` combining call & put
+/// IV at that strike; compute ATM IV from the nearest-to-money strike, and
+/// approximate a 25-delta put-call skew using ±10% OTM contracts.
+pub fn compute_volatility_skew(
+    symbol: &str,
+    as_of: &str,
+    chain: &OptionsChainSnapshot,
+) -> VolatilitySkew {
+    if chain.expirations.is_empty() || chain.underlying_price <= 0.0 {
+        return VolatilitySkew {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            underlying_price: chain.underlying_price,
+            note: "no expirations in options chain".to_string(),
+            ..Default::default()
+        };
+    }
+
+    let u = chain.underlying_price;
+    let mut out_expiries: Vec<SkewExpiry> = Vec::new();
+
+    for ex in &chain.expirations {
+        // Merge calls + puts by strike.
+        use std::collections::BTreeMap;
+        let mut map: BTreeMap<i64, (Option<f64>, Option<f64>)> = BTreeMap::new(); // key = strike×100
+        for c in &ex.calls {
+            if c.implied_volatility <= 0.0 { continue; }
+            let k = (c.strike * 100.0).round() as i64;
+            map.entry(k).and_modify(|e| e.0 = Some(c.implied_volatility)).or_insert((Some(c.implied_volatility), None));
+        }
+        for p in &ex.puts {
+            if p.implied_volatility <= 0.0 { continue; }
+            let k = (p.strike * 100.0).round() as i64;
+            map.entry(k).and_modify(|e| e.1 = Some(p.implied_volatility)).or_insert((None, Some(p.implied_volatility)));
+        }
+        let mut points: Vec<SkewPoint> = Vec::new();
+        for (k, (cv, pv)) in &map {
+            let strike = (*k as f64) / 100.0;
+            let moneyness = (strike / u - 1.0) * 100.0;
+            let call_iv = cv.map(|v| v * 100.0).unwrap_or(0.0);
+            let put_iv = pv.map(|v| v * 100.0).unwrap_or(0.0);
+            let combined = match (cv, pv) {
+                (Some(a), Some(b)) => (a + b) / 2.0 * 100.0,
+                (Some(a), None)    => a * 100.0,
+                (None, Some(b))    => b * 100.0,
+                (None, None)       => 0.0,
+            };
+            points.push(SkewPoint {
+                strike,
+                moneyness_pct: moneyness,
+                call_iv_pct: call_iv,
+                put_iv_pct: put_iv,
+                combined_iv_pct: combined,
+            });
+        }
+
+        if points.is_empty() {
+            out_expiries.push(SkewExpiry {
+                expiration: ex.expiration.clone(),
+                days_to_expiry: ex.days_to_expiry,
+                atm_iv_pct: 0.0,
+                points,
+                put_call_skew_25d_pct: 0.0,
+                term_note: "no IV-populated strikes".to_string(),
+            });
+            continue;
+        }
+
+        // ATM IV: find strike closest to underlying.
+        let mut atm_idx = 0usize;
+        let mut best_dist = f64::INFINITY;
+        for (i, p) in points.iter().enumerate() {
+            let d = (p.strike - u).abs();
+            if d < best_dist { best_dist = d; atm_idx = i; }
+        }
+        let atm_iv = points[atm_idx].combined_iv_pct;
+
+        // ±10% OTM skew proxy.
+        let target_otm_call = u * 1.10;
+        let target_otm_put  = u * 0.90;
+        let mut otm_call_iv = 0.0;
+        let mut otm_put_iv = 0.0;
+        let mut best_c = f64::INFINITY;
+        let mut best_p = f64::INFINITY;
+        for p in &points {
+            let dc = (p.strike - target_otm_call).abs();
+            let dp = (p.strike - target_otm_put).abs();
+            if dc < best_c && p.call_iv_pct > 0.0 { best_c = dc; otm_call_iv = p.call_iv_pct; }
+            if dp < best_p && p.put_iv_pct > 0.0 { best_p = dp; otm_put_iv = p.put_iv_pct; }
+        }
+        let skew = otm_put_iv - otm_call_iv;
+
+        out_expiries.push(SkewExpiry {
+            expiration: ex.expiration.clone(),
+            days_to_expiry: ex.days_to_expiry,
+            atm_iv_pct: atm_iv,
+            points,
+            put_call_skew_25d_pct: skew,
+            term_note: String::new(),
+        });
+    }
+
+    VolatilitySkew {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        underlying_price: u,
+        expiries: out_expiries,
+        note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -4393,6 +5252,154 @@ pub fn get_ivol(conn: &Connection, symbol: &str) -> Result<Option<IvolSnapshot>,
         .map_err(|e| format!("prepare get_ivol: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_ivol: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_ivol: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-116 Round 9 schema: SEAG / COR / TRA / TECH / SKEW ───────────────
+
+pub fn create_research_tables_v9(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_seasonality (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_correlation (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_total_return (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_technicals (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_vol_skew (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_seasonality_updated  ON research_seasonality(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_correlation_updated  ON research_correlation(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_total_return_updated ON research_total_return(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_technicals_updated   ON research_technicals(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_vol_skew_updated     ON research_vol_skew(updated_at);"
+    ).map_err(|e| format!("create research_v9 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_seasonality(conn: &Connection, symbol: &str, snap: &SeasonalitySnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v9(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("seasonality json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_seasonality(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert seasonality: {e}"))?;
+    Ok(())
+}
+
+pub fn get_seasonality(conn: &Connection, symbol: &str) -> Result<Option<SeasonalitySnapshot>, String> {
+    let _ = create_research_tables_v9(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_seasonality WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_seasonality: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_seasonality: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_seasonality: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_correlation(conn: &Connection, symbol: &str, snap: &CorrelationMatrix) -> Result<(), String> {
+    let _ = create_research_tables_v9(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("correlation json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_correlation(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert correlation: {e}"))?;
+    Ok(())
+}
+
+pub fn get_correlation(conn: &Connection, symbol: &str) -> Result<Option<CorrelationMatrix>, String> {
+    let _ = create_research_tables_v9(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_correlation WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_correlation: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_correlation: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_correlation: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_total_return(conn: &Connection, symbol: &str, snap: &TotalReturnSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v9(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("total return json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_total_return(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert total return: {e}"))?;
+    Ok(())
+}
+
+pub fn get_total_return(conn: &Connection, symbol: &str) -> Result<Option<TotalReturnSnapshot>, String> {
+    let _ = create_research_tables_v9(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_total_return WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_total_return: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_total_return: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_total_return: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_technicals(conn: &Connection, symbol: &str, snap: &TechnicalSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v9(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("technicals json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_technicals(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert technicals: {e}"))?;
+    Ok(())
+}
+
+pub fn get_technicals(conn: &Connection, symbol: &str) -> Result<Option<TechnicalSnapshot>, String> {
+    let _ = create_research_tables_v9(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_technicals WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_technicals: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_technicals: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_technicals: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_vol_skew(conn: &Connection, symbol: &str, snap: &VolatilitySkew) -> Result<(), String> {
+    let _ = create_research_tables_v9(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("vol skew json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_vol_skew(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert vol skew: {e}"))?;
+    Ok(())
+}
+
+pub fn get_vol_skew(conn: &Connection, symbol: &str) -> Result<Option<VolatilitySkew>, String> {
+    let _ = create_research_tables_v9(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_vol_skew WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_vol_skew: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_vol_skew: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_vol_skew: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -5685,5 +6692,283 @@ mod tests {
         assert!(!snap.note.is_empty());
         assert!((snap.iv_52w_low_pct - 25.0).abs() < 1e-6);
         assert!((snap.iv_52w_high_pct - 25.0).abs() < 1e-6);
+    }
+
+    // ── ADR-116 Round 9 tests ──────────────────────────────────────────
+
+    fn open_mem_conn_v9() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v9(&c).unwrap();
+        c
+    }
+
+    fn synth_bars(n: usize, start: f64, daily_drift: f64) -> Vec<HistoricalPriceRow> {
+        let mut bars = Vec::with_capacity(n);
+        let mut px = start;
+        for i in 0..n {
+            let base_day = 1 + (i % 28);
+            let month    = 1 + ((i / 28) % 12);
+            let year     = 2024 + (i / (28 * 12));
+            bars.push(HistoricalPriceRow {
+                date: format!("{:04}-{:02}-{:02}", year, month, base_day),
+                open: px, high: px * 1.005, low: px * 0.995,
+                close: px, adj_close: px,
+                volume: 1_000.0, change: 0.0, change_pct: 0.0,
+            });
+            px *= 1.0 + daily_drift;
+        }
+        bars
+    }
+
+    #[test]
+    fn seasonality_snapshot_roundtrip() {
+        let c = open_mem_conn_v9();
+        let snap = SeasonalitySnapshot {
+            symbol: "AAPL".into(),
+            as_of: "2026-04-14".into(),
+            years_covered: 3,
+            months: vec![SeasonalityMonth {
+                month: 1, label: "Jan".into(),
+                avg_return_pct: 2.1, median_return_pct: 1.8, stdev_pct: 3.4,
+                positive_years: 2, total_years: 3,
+                best_return_pct: 5.1, worst_return_pct: -1.2,
+            }],
+            dow: vec![SeasonalityDow { dow: 1, label: "Mon".into(), avg_return_pct: 0.05, positive_days: 28, total_days: 52 }],
+            best_month: "Jul".into(),
+            worst_month: "Sep".into(),
+            note: String::new(),
+        };
+        upsert_seasonality(&c, "AAPL", &snap).unwrap();
+        let got = get_seasonality(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.symbol, "AAPL");
+        assert_eq!(got.months.len(), 1);
+        assert_eq!(got.best_month, "Jul");
+    }
+
+    #[test]
+    fn correlation_matrix_roundtrip() {
+        let c = open_mem_conn_v9();
+        let snap = CorrelationMatrix {
+            symbol: "AAPL".into(),
+            as_of: "2026-04-14".into(),
+            window_days: 252,
+            cells: vec![CorrelationCell { peer_symbol: "MSFT".into(), correlation: 0.85, n_observations: 245, beta_vs_peer: 0.92 }],
+            mean_correlation: 0.85,
+            highest_corr_symbol: "MSFT".into(),
+            lowest_corr_symbol: "MSFT".into(),
+            note: String::new(),
+        };
+        upsert_correlation(&c, "AAPL", &snap).unwrap();
+        let got = get_correlation(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.cells.len(), 1);
+        assert!((got.mean_correlation - 0.85).abs() < 1e-6);
+    }
+
+    #[test]
+    fn total_return_snapshot_roundtrip() {
+        let c = open_mem_conn_v9();
+        let snap = TotalReturnSnapshot {
+            symbol: "KO".into(),
+            as_of: "2026-04-14".into(),
+            last_close: 60.0,
+            trailing_12m_dividends: 1.84,
+            trailing_12m_yield_pct: 3.07,
+            windows: vec![TotalReturnWindow {
+                label: "1Y".into(),
+                trading_days: 252,
+                price_return_pct: 8.0,
+                dividend_yield_pct: 3.1,
+                total_return_pct: 11.1,
+                annualized_pct: 11.1,
+                dividends_paid: 1.84,
+                n_dividends: 4,
+            }],
+            note: String::new(),
+        };
+        upsert_total_return(&c, "KO", &snap).unwrap();
+        let got = get_total_return(&c, "ko").unwrap().unwrap();
+        assert_eq!(got.windows.len(), 1);
+        assert!((got.trailing_12m_yield_pct - 3.07).abs() < 1e-6);
+    }
+
+    #[test]
+    fn technicals_snapshot_roundtrip() {
+        let c = open_mem_conn_v9();
+        let snap = TechnicalSnapshot {
+            symbol: "NVDA".into(),
+            as_of: "2026-04-14".into(),
+            last_close: 850.0,
+            indicators: vec![TechnicalIndicator {
+                name: "RSI(14)".into(),
+                value: 72.5, value_secondary: 0.0, value_tertiary: 0.0,
+                signal: "overbought".into(), note: String::new(),
+            }],
+            trend_summary: "bullish composite".into(),
+            note: String::new(),
+        };
+        upsert_technicals(&c, "NVDA", &snap).unwrap();
+        let got = get_technicals(&c, "nvda").unwrap().unwrap();
+        assert_eq!(got.indicators.len(), 1);
+        assert_eq!(got.trend_summary, "bullish composite");
+    }
+
+    #[test]
+    fn vol_skew_roundtrip() {
+        let c = open_mem_conn_v9();
+        let snap = VolatilitySkew {
+            symbol: "SPY".into(),
+            as_of: "2026-04-14".into(),
+            underlying_price: 520.0,
+            expiries: vec![SkewExpiry {
+                expiration: "2026-05-16".into(),
+                days_to_expiry: 32,
+                atm_iv_pct: 18.5,
+                points: vec![SkewPoint {
+                    strike: 520.0, moneyness_pct: 0.0,
+                    call_iv_pct: 18.3, put_iv_pct: 18.7, combined_iv_pct: 18.5,
+                }],
+                put_call_skew_25d_pct: 2.1,
+                term_note: String::new(),
+            }],
+            note: String::new(),
+        };
+        upsert_vol_skew(&c, "SPY", &snap).unwrap();
+        let got = get_vol_skew(&c, "spy").unwrap().unwrap();
+        assert_eq!(got.expiries.len(), 1);
+        assert_eq!(got.expiries[0].points.len(), 1);
+    }
+
+    #[test]
+    fn compute_seasonality_on_monthly_uptrend() {
+        // 2 full years × 12 months × 21 bars = 504 bars.
+        // Deterministic upward drift so every month is positive.
+        let bars = synth_bars(504, 100.0, 0.001);
+        let snap = compute_seasonality_snapshot("TEST", "2026-04-14", &bars);
+        assert_eq!(snap.symbol, "TEST");
+        assert!(snap.years_covered >= 2);
+        assert!(snap.months.iter().any(|m| m.total_years > 0));
+        // With uniform positive drift the best month should have a positive mean.
+        let best = snap.months.iter().max_by(|a, b| a.avg_return_pct.partial_cmp(&b.avg_return_pct).unwrap()).unwrap();
+        assert!(best.avg_return_pct > 0.0);
+    }
+
+    #[test]
+    fn compute_seasonality_on_empty_returns_note() {
+        let snap = compute_seasonality_snapshot("X", "2026-04-14", &[]);
+        assert!(!snap.note.is_empty());
+        assert_eq!(snap.years_covered, 0);
+    }
+
+    #[test]
+    fn compute_correlation_matrix_perfect_copy() {
+        // Bars need variable returns — constant drift produces zero variance
+        // and an undefined ρ (our compute treats this as 0).
+        let mut bars: Vec<HistoricalPriceRow> = Vec::new();
+        let mut px = 100.0;
+        for i in 0..300 {
+            let base_day = 1 + (i % 28);
+            let month    = 1 + ((i / 28) % 12);
+            let year     = 2024 + (i / (28 * 12));
+            let drift = if i % 2 == 0 { 0.005 } else { -0.003 };
+            bars.push(HistoricalPriceRow {
+                date: format!("{:04}-{:02}-{:02}", year, month, base_day),
+                open: px, high: px * 1.01, low: px * 0.99,
+                close: px, adj_close: px,
+                volume: 1_000.0, change: 0.0, change_pct: 0.0,
+            });
+            px *= 1.0 + drift;
+        }
+        let peer = bars.clone();
+        let snap = compute_correlation_matrix("A", "2026-04-14", 252,
+            &bars, &[("B".into(), peer)]);
+        assert_eq!(snap.cells.len(), 1);
+        // Perfect copy ⇒ correlation ≈ 1.0 (allow numerical slack).
+        assert!(snap.cells[0].correlation > 0.999,
+            "expected ρ≈1.0, got {}", snap.cells[0].correlation);
+        assert!((snap.cells[0].beta_vs_peer - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_correlation_matrix_skips_empty_peers() {
+        let bars = synth_bars(300, 100.0, 0.001);
+        let snap = compute_correlation_matrix("A", "2026-04-14", 252,
+            &bars, &[("NO_DATA".into(), vec![])]);
+        assert!(!snap.note.is_empty() || snap.cells.is_empty());
+    }
+
+    #[test]
+    fn compute_total_return_with_dividends_sums_windows() {
+        // synth_bars(260, ...) spans 2024-01-01 through roughly 2024-10-08, so
+        // dividend ex-dates must live inside that window to be counted.
+        let bars = synth_bars(260, 100.0, 0.0004);
+        let divs: Vec<DividendRecord> = vec![
+            DividendRecord { ex_date: "2024-03-15".into(), amount: 0.5, ..Default::default() },
+            DividendRecord { ex_date: "2024-06-15".into(), amount: 0.5, ..Default::default() },
+            DividendRecord { ex_date: "2024-09-15".into(), amount: 0.5, ..Default::default() },
+        ];
+        let snap = compute_total_return_snapshot("TEST", "2024-10-15", &bars, &divs);
+        assert!(snap.windows.iter().any(|w| w.label == "1Y"));
+        // At least one window should record some dividends paid.
+        assert!(snap.windows.iter().any(|w| w.dividends_paid > 0.0));
+    }
+
+    #[test]
+    fn compute_technical_indicators_on_uptrend_is_bullish() {
+        let bars = synth_bars(120, 100.0, 0.002);
+        let snap = compute_technical_indicators("TEST", "2026-04-14", &bars);
+        assert!(!snap.indicators.is_empty());
+        // RSI on a steady uptrend should bias above 50 (often into overbought).
+        let rsi = snap.indicators.iter().find(|i| i.name.starts_with("RSI")).unwrap();
+        assert!(rsi.value > 50.0, "expected RSI > 50 on uptrend, got {:.2}", rsi.value);
+    }
+
+    #[test]
+    fn compute_technical_indicators_insufficient_bars_returns_note() {
+        let bars = synth_bars(10, 100.0, 0.001);
+        let snap = compute_technical_indicators("X", "2026-04-14", &bars);
+        assert!(!snap.note.is_empty());
+        assert!(snap.indicators.is_empty());
+    }
+
+    #[test]
+    fn compute_volatility_skew_basic_smile() {
+        let chain = OptionsChainSnapshot {
+            symbol: "SPY".into(),
+            as_of: "2026-04-14".into(),
+            underlying_price: 500.0,
+            expirations: vec![OptionExpiry {
+                expiration: "2026-05-16".into(),
+                days_to_expiry: 32,
+                calls: vec![
+                    OptionContract { strike: 450.0, option_type: "CALL".into(), implied_volatility: 0.23, in_the_money: true, ..Default::default() },
+                    OptionContract { strike: 500.0, option_type: "CALL".into(), implied_volatility: 0.18, in_the_money: false, ..Default::default() },
+                    OptionContract { strike: 550.0, option_type: "CALL".into(), implied_volatility: 0.21, in_the_money: false, ..Default::default() },
+                ],
+                puts: vec![
+                    OptionContract { strike: 450.0, option_type: "PUT".into(), implied_volatility: 0.25, in_the_money: false, ..Default::default() },
+                    OptionContract { strike: 500.0, option_type: "PUT".into(), implied_volatility: 0.19, in_the_money: false, ..Default::default() },
+                    OptionContract { strike: 550.0, option_type: "PUT".into(), implied_volatility: 0.20, in_the_money: true, ..Default::default() },
+                ],
+            }],
+            note: String::new(),
+        };
+        let snap = compute_volatility_skew("SPY", "2026-04-14", &chain);
+        assert_eq!(snap.expiries.len(), 1);
+        let e = &snap.expiries[0];
+        assert_eq!(e.points.len(), 3);
+        // ATM (500) IV should be lowest (smile).
+        assert!(e.atm_iv_pct > 0.0);
+        // OTM put (450) IV 25% > OTM call (550) IV 21% → positive skew.
+        assert!(e.put_call_skew_25d_pct > 0.0, "expected positive skew, got {}", e.put_call_skew_25d_pct);
+    }
+
+    #[test]
+    fn compute_volatility_skew_empty_chain_returns_note() {
+        let chain = OptionsChainSnapshot {
+            symbol: "X".into(), as_of: "2026-04-14".into(),
+            underlying_price: 100.0, expirations: Vec::new(), note: String::new(),
+        };
+        let snap = compute_volatility_skew("X", "2026-04-14", &chain);
+        assert!(!snap.note.is_empty());
     }
 }

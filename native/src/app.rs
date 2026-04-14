@@ -9918,6 +9918,19 @@ enum BrokerCmd {
     /// IV rank / percentile from stored OMON history. Main thread hands over
     /// the history rows as JSON so the handler stays Send-safe.
     ComputeIvolSnapshot { symbol: String, current_atm_iv_pct: f64, history_json: String },
+    // ── ADR-116 Godel Parity Round 9 ──
+    /// SEAG — seasonality compute over cached HP bars (pure compute).
+    ComputeSeasonalitySnapshot { symbol: String },
+    /// COR — correlation matrix over cached HP for subject + peers.
+    /// Peer bars are passed as JSON (`Vec<(String, Vec<HistoricalPriceRow>)>`)
+    /// so the handler stays Send-safe.
+    ComputeCorrelationMatrix { symbol: String, window_days: usize, peer_series_json: String },
+    /// TRA — total return (price + dividends) from cached HP + DVD.
+    ComputeTotalReturnSnapshot { symbol: String },
+    /// TECH — technical indicators (RSI/MACD/BB/ATR/ADX/Stoch) from cached HP.
+    ComputeTechnicalsSnapshot { symbol: String },
+    /// SKEW — volatility smile/skew compute over cached OMON.
+    ComputeVolSkewSnapshot { symbol: String },
     /// Fetch multi-source news for a symbol (GDELT + Yahoo RSS + SEC + Marketaux + AV + FMP),
     /// cache results in SQLite, and return the cached set.
     FetchNewsMulti {
@@ -10103,6 +10116,17 @@ enum BrokerMsg {
     OptionsChainMsg(String, typhoon_engine::core::research::OptionsChainSnapshot),
     /// Implied-vol rank / percentile snapshot for a symbol.
     IvolSnapshotMsg(String, typhoon_engine::core::research::IvolSnapshot),
+    // ── ADR-116 ──
+    /// SEAG — monthly/dow seasonality snapshot for a symbol.
+    SeasonalitySnapshotMsg(String, typhoon_engine::core::research::SeasonalitySnapshot),
+    /// COR — pairwise correlation matrix snapshot for a symbol.
+    CorrelationMatrixMsg(String, typhoon_engine::core::research::CorrelationMatrix),
+    /// TRA — total-return windows (price + dividend yield) for a symbol.
+    TotalReturnSnapshotMsg(String, typhoon_engine::core::research::TotalReturnSnapshot),
+    /// TECH — technical indicators snapshot for a symbol.
+    TechnicalsSnapshotMsg(String, typhoon_engine::core::research::TechnicalSnapshot),
+    /// SKEW — implied-volatility smile/skew snapshot for a symbol.
+    VolSkewSnapshotMsg(String, typhoon_engine::core::research::VolatilitySkew),
     /// Multi-source news articles loaded (from cache + fresh fetch) for a symbol.
     NewsArticlesLoaded {
         symbol: String,
@@ -11061,6 +11085,38 @@ pub struct TyphooNApp {
     ivol_symbol: String,
     ivol_snapshot: typhoon_engine::core::research::IvolSnapshot,
     ivol_loading: bool,
+
+    // ── ADR-116 Godel Parity Round 9 ──────────────────────────────────
+    /// SEAG — monthly + day-of-week seasonality over cached HP.
+    show_seag: bool,
+    seag_symbol: String,
+    seag_snapshot: typhoon_engine::core::research::SeasonalitySnapshot,
+    seag_loading: bool,
+
+    /// COR — correlation matrix vs peers.
+    show_cor: bool,
+    cor_symbol: String,
+    cor_snapshot: typhoon_engine::core::research::CorrelationMatrix,
+    cor_window_days: usize,
+    cor_loading: bool,
+
+    /// TRA — total return (price + dividends) snapshot.
+    show_tra: bool,
+    tra_symbol: String,
+    tra_snapshot: typhoon_engine::core::research::TotalReturnSnapshot,
+    tra_loading: bool,
+
+    /// TECH — technical-indicator dashboard.
+    show_tech: bool,
+    tech_symbol: String,
+    tech_snapshot: typhoon_engine::core::research::TechnicalSnapshot,
+    tech_loading: bool,
+
+    /// SKEW — volatility-skew/smile over cached OMON.
+    show_skew: bool,
+    skew_symbol: String,
+    skew_snapshot: typhoon_engine::core::research::VolatilitySkew,
+    skew_loading: bool,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -12991,6 +13047,123 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 serde_json::from_str(&history_json).unwrap_or_default();
                             let snap = research::compute_ivol_snapshot(&symbol, &today, current_atm_iv_pct, &history);
                             let _ = msg_tx.send(BrokerMsg::IvolSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    // ── ADR-116 Round 9 handlers ──
+                    BrokerCmd::ComputeSeasonalitySnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let mut bars: Vec<research::HistoricalPriceRow> = Vec::new();
+                            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(rows)) = research::get_historical_price(&conn, &symbol) {
+                                        bars = rows;
+                                    }
+                                }
+                            }
+                            if bars.len() >= 2 && bars[0].date > bars[bars.len()-1].date {
+                                bars.reverse();
+                            }
+                            let snap = research::compute_seasonality_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::SeasonalitySnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeCorrelationMatrix { symbol, window_days, peer_series_json } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let mut subject: Vec<research::HistoricalPriceRow> = Vec::new();
+                            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(rows)) = research::get_historical_price(&conn, &symbol) {
+                                        subject = rows;
+                                    }
+                                }
+                            }
+                            if subject.len() >= 2 && subject[0].date > subject[subject.len()-1].date {
+                                subject.reverse();
+                            }
+                            let peers: Vec<(String, Vec<research::HistoricalPriceRow>)> =
+                                serde_json::from_str(&peer_series_json).unwrap_or_default();
+                            let snap = research::compute_correlation_matrix(&symbol, &today, window_days, &subject, &peers);
+                            let _ = msg_tx.send(BrokerMsg::CorrelationMatrixMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeTotalReturnSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let mut bars: Vec<research::HistoricalPriceRow> = Vec::new();
+                            let mut divs: Vec<research::DividendRecord> = Vec::new();
+                            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(rows)) = research::get_historical_price(&conn, &symbol) {
+                                        bars = rows;
+                                    }
+                                    if let Ok(Some(d)) = research::get_dividends(&conn, &symbol) {
+                                        divs = d;
+                                    }
+                                }
+                            }
+                            if bars.len() >= 2 && bars[0].date > bars[bars.len()-1].date {
+                                bars.reverse();
+                            }
+                            let snap = research::compute_total_return_snapshot(&symbol, &today, &bars, &divs);
+                            let _ = msg_tx.send(BrokerMsg::TotalReturnSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeTechnicalsSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let mut bars: Vec<research::HistoricalPriceRow> = Vec::new();
+                            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(rows)) = research::get_historical_price(&conn, &symbol) {
+                                        bars = rows;
+                                    }
+                                }
+                            }
+                            if bars.len() >= 2 && bars[0].date > bars[bars.len()-1].date {
+                                bars.reverse();
+                            }
+                            let snap = research::compute_technical_indicators(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::TechnicalsSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeVolSkewSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let mut chain: Option<research::OptionsChainSnapshot> = None;
+                            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(c) = research::get_options_chain(&conn, &symbol) {
+                                        chain = c;
+                                    }
+                                }
+                            }
+                            let snap = match chain {
+                                Some(c) => research::compute_volatility_skew(&symbol, &today, &c),
+                                None => research::VolatilitySkew {
+                                    symbol: symbol.to_uppercase(),
+                                    as_of: today,
+                                    note: "no cached OMON chain — run OMON first".to_string(),
+                                    ..Default::default()
+                                },
+                            };
+                            let _ = msg_tx.send(BrokerMsg::VolSkewSnapshotMsg(symbol, snap));
                         });
                     }
                     BrokerCmd::FetchNewsMulti { symbol, marketaux_key, alpha_vantage_key, fmp_key } => {
@@ -15309,6 +15482,28 @@ When the question touches recent news, sentiment, or prices, combine the researc
             ivol_symbol: String::new(),
             ivol_snapshot: typhoon_engine::core::research::IvolSnapshot::default(),
             ivol_loading: false,
+            // ── ADR-116 Round 9 defaults ──
+            show_seag: false,
+            seag_symbol: String::new(),
+            seag_snapshot: typhoon_engine::core::research::SeasonalitySnapshot::default(),
+            seag_loading: false,
+            show_cor: false,
+            cor_symbol: String::new(),
+            cor_snapshot: typhoon_engine::core::research::CorrelationMatrix::default(),
+            cor_window_days: 252,
+            cor_loading: false,
+            show_tra: false,
+            tra_symbol: String::new(),
+            tra_snapshot: typhoon_engine::core::research::TotalReturnSnapshot::default(),
+            tra_loading: false,
+            show_tech: false,
+            tech_symbol: String::new(),
+            tech_snapshot: typhoon_engine::core::research::TechnicalSnapshot::default(),
+            tech_loading: false,
+            show_skew: false,
+            skew_symbol: String::new(),
+            skew_snapshot: typhoon_engine::core::research::VolatilitySkew::default(),
+            skew_loading: false,
             bottom_tab: BottomTab::Log,
             log,
             log_filter: LogFilter::All,
@@ -17257,6 +17452,119 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = writeln!(p);
                         }
                     }
+
+                    // ADR-116 Round 9 — SEAG seasonality (monthly + day-of-week)
+                    if let Ok(Some(sg)) = rx::get_seasonality(&conn, &sym_upper) {
+                        if !sg.months.is_empty() || !sg.dow.is_empty() {
+                            let _ = writeln!(p, "### Seasonality (as of {})", sg.as_of);
+                            let _ = writeln!(p, "- Years covered: {} · best month {} · worst month {}",
+                                sg.years_covered, sg.best_month, sg.worst_month);
+                            if !sg.months.is_empty() {
+                                let _ = writeln!(p, "| Month | Avg | Median | Stdev | +Years | N |");
+                                let _ = writeln!(p, "|---|---|---|---|---|---|");
+                                for m in sg.months.iter() {
+                                    let _ = writeln!(p, "| {} | {:+.2}% | {:+.2}% | {:.2}% | {}/{} | {} |",
+                                        m.label, m.avg_return_pct, m.median_return_pct, m.stdev_pct,
+                                        m.positive_years, m.total_years, m.total_years);
+                                }
+                            }
+                            if !sg.dow.is_empty() {
+                                let _ = writeln!(p, "| Day | Avg | +Days | N |");
+                                let _ = writeln!(p, "|---|---|---|---|");
+                                for d in sg.dow.iter() {
+                                    let _ = writeln!(p, "| {} | {:+.3}% | {}/{} | {} |",
+                                        d.label, d.avg_return_pct, d.positive_days, d.total_days, d.total_days);
+                                }
+                            }
+                            if !sg.note.is_empty() { let _ = writeln!(p, "- Note: {}", sg.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // ADR-116 Round 9 — COR correlation matrix vs peers
+                    if let Ok(Some(cm)) = rx::get_correlation(&conn, &sym_upper) {
+                        if !cm.cells.is_empty() {
+                            let _ = writeln!(p, "### Correlation Matrix (as of {}, window {}d)",
+                                cm.as_of, cm.window_days);
+                            let _ = writeln!(p, "- Mean peer corr {:.2} · highest {} · lowest {}",
+                                cm.mean_correlation, cm.highest_corr_symbol, cm.lowest_corr_symbol);
+                            let _ = writeln!(p, "| Peer | ρ | β | N |");
+                            let _ = writeln!(p, "|---|---|---|---|");
+                            for c in cm.cells.iter().take(10) {
+                                let _ = writeln!(p, "| {} | {:+.2} | {:+.2} | {} |",
+                                    c.peer_symbol, c.correlation, c.beta_vs_peer, c.n_observations);
+                            }
+                            if !cm.note.is_empty() { let _ = writeln!(p, "- Note: {}", cm.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // ADR-116 Round 9 — TRA total return (price + dividends)
+                    if let Ok(Some(tr)) = rx::get_total_return(&conn, &sym_upper) {
+                        if !tr.windows.is_empty() {
+                            let _ = writeln!(p, "### Total Return Analysis (as of {})", tr.as_of);
+                            let _ = writeln!(p, "- Last ${:.2} · TTM div ${:.4} · TTM yield {:.2}%",
+                                tr.last_close, tr.trailing_12m_dividends, tr.trailing_12m_yield_pct);
+                            let _ = writeln!(p, "| Window | Price | Div Yield | Total | Annualized | N div |");
+                            let _ = writeln!(p, "|---|---|---|---|---|---|");
+                            for w in tr.windows.iter() {
+                                let _ = writeln!(p, "| {} | {:+.2}% | {:.2}% | {:+.2}% | {:+.2}% | {} |",
+                                    w.label, w.price_return_pct, w.dividend_yield_pct,
+                                    w.total_return_pct, w.annualized_pct, w.n_dividends);
+                            }
+                            if !tr.note.is_empty() { let _ = writeln!(p, "- Note: {}", tr.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // ADR-116 Round 9 — TECH technical indicators (RSI/MACD/BB/ATR/ADX/Stoch)
+                    if let Ok(Some(ti)) = rx::get_technicals(&conn, &sym_upper) {
+                        if !ti.indicators.is_empty() {
+                            let _ = writeln!(p, "### Technical Indicators (as of {})", ti.as_of);
+                            let _ = writeln!(p, "- Last ${:.2} · trend: {}", ti.last_close, ti.trend_summary);
+                            let _ = writeln!(p, "| Indicator | Value | Signal |");
+                            let _ = writeln!(p, "|---|---|---|");
+                            for ind in ti.indicators.iter() {
+                                let val = if ind.value_secondary != 0.0 || ind.value_tertiary != 0.0 {
+                                    format!("{:.2} / {:.2} / {:.2}", ind.value, ind.value_secondary, ind.value_tertiary)
+                                } else {
+                                    format!("{:.2}", ind.value)
+                                };
+                                let _ = writeln!(p, "| {} | {} | {} |", ind.name, val, ind.signal);
+                            }
+                            if !ti.note.is_empty() { let _ = writeln!(p, "- Note: {}", ti.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // ADR-116 Round 9 — SKEW volatility skew / smile
+                    if let Ok(Some(sk)) = rx::get_vol_skew(&conn, &sym_upper) {
+                        if !sk.expiries.is_empty() {
+                            let _ = writeln!(p, "### Volatility Skew (as of {})", sk.as_of);
+                            let _ = writeln!(p, "- Underlying ${:.2} · {} expir{} cached",
+                                sk.underlying_price, sk.expiries.len(),
+                                if sk.expiries.len() == 1 { "y" } else { "ies" });
+                            if let Some(exp) = sk.expiries.first() {
+                                let _ = writeln!(p, "- Nearest expiry {} ({} DTE) · ATM IV {:.1}% · 25Δ P/C skew {:+.2}%",
+                                    exp.expiration, exp.days_to_expiry,
+                                    exp.atm_iv_pct, exp.put_call_skew_25d_pct);
+                                if !exp.points.is_empty() {
+                                    let _ = writeln!(p, "| Strike | Moneyness | Call IV | Put IV | Combined |");
+                                    let _ = writeln!(p, "|---|---|---|---|---|");
+                                    for pt in exp.points.iter().take(9) {
+                                        let fmt_iv = |v: f64| if v > 0.0 { format!("{:.1}%", v) } else { "—".to_string() };
+                                        let _ = writeln!(p, "| ${:.2} | {:+.1}% | {} | {} | {} |",
+                                            pt.strike, pt.moneyness_pct,
+                                            fmt_iv(pt.call_iv_pct), fmt_iv(pt.put_iv_pct),
+                                            fmt_iv(pt.combined_iv_pct));
+                                    }
+                                }
+                                if !exp.term_note.is_empty() { let _ = writeln!(p, "- Term: {}", exp.term_note); }
+                            }
+                            if !sk.note.is_empty() { let _ = writeln!(p, "- Note: {}", sk.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
                 }
             }
 
@@ -18524,6 +18832,86 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         if let Ok(conn) = cache.connection() {
                             if let Ok(Some(snap)) = typhoon_engine::core::research::get_ivol(&conn, &self.ivol_symbol) {
                                 self.ivol_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "SEAG" | "SEASONALITY" | "SEASONAL_ANALYSIS" | "SEASONAL" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.seag_symbol = sym; }
+                self.show_seag = true;
+                if self.seag_snapshot.symbol.is_empty() && !self.seag_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_seasonality(&conn, &self.seag_symbol) {
+                                self.seag_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "COR" | "CORRELATION_MATRIX" | "CORR_MATRIX" | "PEER_CORR" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.cor_symbol = sym; }
+                self.show_cor = true;
+                if self.cor_snapshot.symbol.is_empty() && !self.cor_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_correlation(&conn, &self.cor_symbol) {
+                                self.cor_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "TRA" | "TOTAL_RETURN" | "TOTAL_RETURN_ANALYSIS" | "TRET" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.tra_symbol = sym; }
+                self.show_tra = true;
+                if self.tra_snapshot.symbol.is_empty() && !self.tra_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_total_return(&conn, &self.tra_symbol) {
+                                self.tra_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "TECH" | "TECHNICALS" | "TECHNICAL_INDICATORS" | "TA" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.tech_symbol = sym; }
+                self.show_tech = true;
+                if self.tech_snapshot.symbol.is_empty() && !self.tech_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_technicals(&conn, &self.tech_symbol) {
+                                self.tech_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "SKEW" | "VOL_SKEW" | "VOLATILITY_SKEW" | "SMILE" | "IV_SKEW" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.skew_symbol = sym; }
+                self.show_skew = true;
+                if self.skew_snapshot.symbol.is_empty() && !self.skew_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_vol_skew(&conn, &self.skew_symbol) {
+                                self.skew_snapshot = snap;
                             }
                         }
                     }
@@ -30269,6 +30657,419 @@ When the question touches recent news, sentiment, or prices, combine the researc
             self.show_ivol = open;
         }
 
+        // ── ADR-116 Round 9 windows ──
+
+        // SEAG — Seasonality (monthly + day-of-week)
+        if self.show_seag {
+            if self.seag_symbol.is_empty() { self.seag_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_seag;
+            egui::Window::new("SEAG — Seasonality Analysis")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([620.0, 480.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.seag_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.seag_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.seag_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_seasonality(&conn, &sym_u) {
+                                        self.seag_snapshot = snap;
+                                        self.seag_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.seag_symbol.to_uppercase();
+                            self.seag_loading = true;
+                            self.seag_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeSeasonalitySnapshot { symbol: sym });
+                        }
+                        if self.seag_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.seag_snapshot;
+                    if snap.symbol.is_empty() || snap.months.is_empty() {
+                        ui.label(egui::RichText::new("No data — run HP to populate bar history, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        ui.label(egui::RichText::new(format!("{} — {} years covered — best {} · worst {} — as of {}",
+                            snap.symbol, snap.years_covered, snap.best_month, snap.worst_month, snap.as_of))
+                            .strong().color(AXIS_TEXT));
+                        ui.separator();
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            ui.label(egui::RichText::new("Monthly seasonality").strong().color(AXIS_TEXT));
+                            egui::Grid::new("seag_months_grid").striped(true).num_columns(6).min_col_width(70.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Month").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Avg").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Median").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("σ").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Pos/Tot").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Best/Worst").color(AXIS_TEXT).small().strong());
+                                ui.end_row();
+                                for m in &snap.months {
+                                    if m.total_years == 0 { continue; }
+                                    let c = if m.avg_return_pct >= 0.0 { UP } else { DOWN };
+                                    ui.label(egui::RichText::new(&m.label).small().monospace().strong());
+                                    ui.label(egui::RichText::new(format!("{:+.2}%", m.avg_return_pct)).color(c).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:+.2}%", m.median_return_pct)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.2}", m.stdev_pct)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{}/{}", m.positive_years, m.total_years)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:+.1}% / {:+.1}%", m.best_return_pct, m.worst_return_pct)).small().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                            ui.separator();
+                            ui.label(egui::RichText::new("Day-of-week seasonality").strong().color(AXIS_TEXT));
+                            egui::Grid::new("seag_dow_grid").striped(true).num_columns(3).min_col_width(90.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Day").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Avg log-ret").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Pos/Tot").color(AXIS_TEXT).small().strong());
+                                ui.end_row();
+                                for d in &snap.dow {
+                                    let c = if d.avg_return_pct >= 0.0 { UP } else { DOWN };
+                                    ui.label(egui::RichText::new(&d.label).small().monospace().strong());
+                                    ui.label(egui::RichText::new(format!("{:+.3}%", d.avg_return_pct)).color(c).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{}/{}", d.positive_days, d.total_days)).small().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_seag = open;
+        }
+
+        // COR — Correlation Matrix
+        if self.show_cor {
+            if self.cor_symbol.is_empty() { self.cor_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_cor;
+            egui::Window::new("COR — Correlation Matrix")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([620.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.cor_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.cor_symbol = chart_sym_research.clone(); }
+                        ui.label(egui::RichText::new("Window (days)").color(AXIS_TEXT).small());
+                        ui.add(egui::DragValue::new(&mut self.cor_window_days).range(30..=1260));
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.cor_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_correlation(&conn, &sym_u) {
+                                        self.cor_snapshot = snap;
+                                        self.cor_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.cor_symbol.to_uppercase();
+                            self.cor_loading = true;
+                            self.cor_symbol = sym.clone();
+                            let window_days = self.cor_window_days;
+                            // Build peer series JSON on the main thread where the cache lives.
+                            let peer_json = if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let peer_syms = typhoon_engine::core::research::get_peers(&conn, &sym)
+                                        .unwrap_or(None).unwrap_or_default();
+                                    let mut peers_raw: Vec<(String, Vec<typhoon_engine::core::research::HistoricalPriceRow>)> = Vec::new();
+                                    for p in &peer_syms {
+                                        if p.eq_ignore_ascii_case(&sym) { continue; }
+                                        if let Ok(Some(mut rows)) = typhoon_engine::core::research::get_historical_price(&conn, p) {
+                                            if rows.len() >= 2 && rows[0].date > rows[rows.len()-1].date { rows.reverse(); }
+                                            peers_raw.push((p.to_uppercase(), rows));
+                                        }
+                                    }
+                                    serde_json::to_string(&peers_raw).unwrap_or_else(|_| "[]".to_string())
+                                } else { "[]".to_string() }
+                            } else { "[]".to_string() };
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeCorrelationMatrix {
+                                symbol: sym, window_days, peer_series_json: peer_json,
+                            });
+                        }
+                        if self.cor_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.cor_snapshot;
+                    if snap.symbol.is_empty() || snap.cells.is_empty() {
+                        ui.label(egui::RichText::new("No data — run PEERS + HP for the symbol and its peers, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {}-day window — avg |ρ| {:.2} — highest {} · lowest {} — as of {}",
+                            snap.symbol, snap.window_days, snap.mean_correlation,
+                            snap.highest_corr_symbol, snap.lowest_corr_symbol, snap.as_of))
+                            .strong().color(AXIS_TEXT));
+                        ui.separator();
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            egui::Grid::new("cor_grid").striped(true).num_columns(4).min_col_width(100.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Peer").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("ρ").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("β").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("N").color(AXIS_TEXT).small().strong());
+                                ui.end_row();
+                                for c in &snap.cells {
+                                    let color = if c.correlation >= 0.0 { UP } else { DOWN };
+                                    ui.label(egui::RichText::new(&c.peer_symbol).small().monospace().strong());
+                                    ui.label(egui::RichText::new(format!("{:+.3}", c.correlation)).color(color).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:+.3}", c.beta_vs_peer)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{}", c.n_observations)).small().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_cor = open;
+        }
+
+        // TRA — Total Return Analysis
+        if self.show_tra {
+            if self.tra_symbol.is_empty() { self.tra_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_tra;
+            egui::Window::new("TRA — Total Return Analysis")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([600.0, 420.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.tra_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.tra_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.tra_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_total_return(&conn, &sym_u) {
+                                        self.tra_snapshot = snap;
+                                        self.tra_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.tra_symbol.to_uppercase();
+                            self.tra_loading = true;
+                            self.tra_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeTotalReturnSnapshot { symbol: sym });
+                        }
+                        if self.tra_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.tra_snapshot;
+                    if snap.symbol.is_empty() || snap.windows.is_empty() {
+                        ui.label(egui::RichText::new("No data — run HP and DVD for this symbol, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        ui.label(egui::RichText::new(format!(
+                            "{} — last close ${:.2} — TTM div ${:.2} ({:.2}%) — as of {}",
+                            snap.symbol, snap.last_close, snap.trailing_12m_dividends,
+                            snap.trailing_12m_yield_pct, snap.as_of))
+                            .strong().color(AXIS_TEXT));
+                        ui.separator();
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            egui::Grid::new("tra_grid").striped(true).num_columns(6).min_col_width(80.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Window").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Price %").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Div %").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Total %").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Annualized").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("N divs").color(AXIS_TEXT).small().strong());
+                                ui.end_row();
+                                for w in &snap.windows {
+                                    let c = if w.total_return_pct >= 0.0 { UP } else { DOWN };
+                                    ui.label(egui::RichText::new(&w.label).small().monospace().strong());
+                                    ui.label(egui::RichText::new(format!("{:+.2}%", w.price_return_pct)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:+.2}%", w.dividend_yield_pct)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:+.2}%", w.total_return_pct)).color(c).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:+.2}%", w.annualized_pct)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{}", w.n_dividends)).small().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_tra = open;
+        }
+
+        // TECH — Technical Indicators
+        if self.show_tech {
+            if self.tech_symbol.is_empty() { self.tech_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_tech;
+            egui::Window::new("TECH — Technical Indicators")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([620.0, 460.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.tech_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.tech_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.tech_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_technicals(&conn, &sym_u) {
+                                        self.tech_snapshot = snap;
+                                        self.tech_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.tech_symbol.to_uppercase();
+                            self.tech_loading = true;
+                            self.tech_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeTechnicalsSnapshot { symbol: sym });
+                        }
+                        if self.tech_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.tech_snapshot;
+                    if snap.symbol.is_empty() || snap.indicators.is_empty() {
+                        ui.label(egui::RichText::new("No data — run HP for this symbol, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        ui.label(egui::RichText::new(format!(
+                            "{} — last close ${:.2} — {} — as of {}",
+                            snap.symbol, snap.last_close, snap.trend_summary, snap.as_of))
+                            .strong().color(AXIS_TEXT));
+                        ui.separator();
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            egui::Grid::new("tech_grid").striped(true).num_columns(5).min_col_width(80.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Indicator").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Value").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Secondary").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Signal").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Note").color(AXIS_TEXT).small().strong());
+                                ui.end_row();
+                                for ind in &snap.indicators {
+                                    let color = match ind.signal.as_str() {
+                                        "bullish" | "oversold" => UP,
+                                        "bearish" | "overbought" => DOWN,
+                                        _ => AXIS_TEXT,
+                                    };
+                                    ui.label(egui::RichText::new(&ind.name).small().monospace().strong());
+                                    ui.label(egui::RichText::new(format!("{:.3}", ind.value)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.3}", ind.value_secondary)).small().monospace());
+                                    ui.label(egui::RichText::new(&ind.signal).color(color).small().monospace().strong());
+                                    ui.label(egui::RichText::new(&ind.note).color(AXIS_TEXT).small().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_tech = open;
+        }
+
+        // SKEW — Volatility Skew / Smile
+        if self.show_skew {
+            if self.skew_symbol.is_empty() { self.skew_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_skew;
+            egui::Window::new("SKEW — Implied Volatility Skew")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([680.0, 480.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.skew_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.skew_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.skew_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_vol_skew(&conn, &sym_u) {
+                                        self.skew_snapshot = snap;
+                                        self.skew_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.skew_symbol.to_uppercase();
+                            self.skew_loading = true;
+                            self.skew_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeVolSkewSnapshot { symbol: sym });
+                        }
+                        if self.skew_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.skew_snapshot;
+                    if snap.symbol.is_empty() || snap.expiries.is_empty() {
+                        ui.label(egui::RichText::new("No data — run OMON for this symbol first to cache the chain, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        ui.label(egui::RichText::new(format!(
+                            "{} — underlying ${:.2} — {} expiries — as of {}",
+                            snap.symbol, snap.underlying_price, snap.expiries.len(), snap.as_of))
+                            .strong().color(AXIS_TEXT));
+                        ui.separator();
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            for ex in &snap.expiries {
+                                ui.label(egui::RichText::new(format!(
+                                    "Expiry {} ({} days) — ATM IV {:.1}% — skew 25Δ≈ {:+.2}%",
+                                    ex.expiration, ex.days_to_expiry, ex.atm_iv_pct, ex.put_call_skew_25d_pct))
+                                    .strong().color(AXIS_TEXT));
+                                egui::Grid::new(format!("skew_grid_{}", ex.expiration)).striped(true).num_columns(5).min_col_width(80.0).show(ui, |ui| {
+                                    ui.label(egui::RichText::new("Strike").color(AXIS_TEXT).small().strong());
+                                    ui.label(egui::RichText::new("Moneyness").color(AXIS_TEXT).small().strong());
+                                    ui.label(egui::RichText::new("Call IV").color(AXIS_TEXT).small().strong());
+                                    ui.label(egui::RichText::new("Put IV").color(AXIS_TEXT).small().strong());
+                                    ui.label(egui::RichText::new("Combined").color(AXIS_TEXT).small().strong());
+                                    ui.end_row();
+                                    for p in &ex.points {
+                                        ui.label(egui::RichText::new(format!("{:.2}", p.strike)).small().monospace().strong());
+                                        ui.label(egui::RichText::new(format!("{:+.2}%", p.moneyness_pct)).small().monospace());
+                                        ui.label(egui::RichText::new(format!("{:.1}%", p.call_iv_pct)).small().monospace());
+                                        ui.label(egui::RichText::new(format!("{:.1}%", p.put_iv_pct)).small().monospace());
+                                        ui.label(egui::RichText::new(format!("{:.1}%", p.combined_iv_pct)).small().monospace());
+                                        ui.end_row();
+                                    }
+                                });
+                                ui.separator();
+                            }
+                        });
+                    }
+                });
+            self.show_skew = open;
+        }
+
         // GY — Treasury Yield Curve
         if self.show_treasury_curve {
             let mut open = self.show_treasury_curve;
@@ -37439,6 +38240,67 @@ impl eframe::App for TyphooNApp {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let _ = typhoon_engine::core::research::upsert_ivol(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                // ── ADR-116 Round 9 receive arms ──
+                BrokerMsg::SeasonalitySnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.seag_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.seag_snapshot = snap.clone();
+                        self.seag_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_seasonality(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::CorrelationMatrixMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.cor_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.cor_snapshot = snap.clone();
+                        self.cor_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_correlation(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::TotalReturnSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.tra_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.tra_snapshot = snap.clone();
+                        self.tra_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_total_return(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::TechnicalsSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.tech_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.tech_snapshot = snap.clone();
+                        self.tech_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_technicals(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::VolSkewSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.skew_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.skew_snapshot = snap.clone();
+                        self.skew_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_vol_skew(&conn, &sym_u, &snap);
                         }
                     }
                 }
