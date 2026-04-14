@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**thirty-seven sub-blocks**, each of which is skipped silently when its data
+**forty-two sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -439,7 +439,69 @@ the underlying; ±10% OTM put vs call IV difference drives the skew proxy.
 Pure compute over cached `OMON` chain data. Populated by running the
 `SKEW` command after `OMON`. Source: ADR-116 SKEW window.
 
-#### 2.37 Sector peer comparison
+#### 2.37 Leverage & coverage (LEV — ADR-117)
+
+Pulled from `research::get_leverage`. Header line summarises solvency
+(Debt/EBITDA, Net Debt/EBITDA, Debt/Equity, Interest Coverage, Current/Quick
+ratios) and absolute magnitudes (Total Debt, Net Debt, TTM EBITDA, TTM
+interest, Total Equity). A ratio table follows with **signal classification**
+HEALTHY / ELEVATED / STRETCHED per row — thresholds come from the standard
+solvency cones (Debt/EBITDA <2.5 healthy, <4 elevated; interest coverage
+≥5 healthy, ≥2 elevated; etc.). Pure compute over cached `FA` quarterly
+statements + balance sheet + Fundamentals `total_debt` / `cash_and_equivalents`
+fallbacks. Populated by running the `LEV` command after `FA`. Source: ADR-117
+LEV window.
+
+#### 2.38 Earnings quality / accruals (ACRL — ADR-117)
+
+Pulled from `research::get_accruals`. Header line gives the **trend label**
+(IMPROVING / STABLE / DETERIORATING / MIXED / INSUFFICIENT) and TTM net
+income, TTM free cash flow, TTM cash conversion %, and the running average.
+The period table (up to 8 quarters) shows NI, FCF, cash-conv %, and a
+**per-quarter quality label** (HIGH ≥90%, MEDIUM ≥60%, LOW <60%, or
+NEGATIVE_NI when reported NI ≤0). Accruals = NI − FCF. Pure compute over
+cached `FA` quarterly income + cashflow statements matched by date.
+Populated by running the `ACRL` command after `FA`. Source: ADR-117 ACRL
+window.
+
+#### 2.39 Realized volatility cone (RVOL — ADR-117)
+
+Pulled from `research::get_realized_vol`. Header line gives last close,
+current ATM IV (from cached `IVOL`, 0 when unknown), IV/RV gap, and the
+**regime label** (CHEAP_IV / FAIR_IV / RICH_IV / NO_IV_REFERENCE). A window
+table follows with realized vol % (annualized) and **percentile rank** for
+20d / 60d / 120d / 252d — percentile is computed against the rolling
+history of the same window, so a 252d reading at 90th percentile means
+current realized vol is higher than 90% of the last year's rolling 252d
+observations. Needs ≥25 cached HP bars; no IV reference when `IVOL` has
+not been run or returns 0. Source: ADR-117 RVOL window.
+
+#### 2.40 FCF yield & dividend sustainability (FCFY — ADR-117)
+
+Pulled from `research::get_fcf_yield`. Header line gives the
+**sustainability label** (SAFE / STRETCHED / UNSUSTAINABLE / NO_DIVIDEND),
+TTM FCF yield, dividend yield, payout-from-FCF %, payout-from-NI %, and
+5-year FCF CAGR. The period table (up to 6 rows — TTM first, then up to
+5 annuals) shows FCF, dividends paid, payout ratio, and period-level
+yield. Labels: UNSUSTAINABLE when FCF ≤0 or payout-from-FCF >100%,
+STRETCHED when >75%, SAFE otherwise. 5Y CAGR only populated when ≥5
+annual rows exist. Needs cached `FA` statements and a positive market cap
+from Fundamentals. Source: ADR-117 FCFY window.
+
+#### 2.41 Short interest & days-to-cover (SHRT — ADR-117)
+
+Pulled from `research::get_short_interest`. Header line gives
+**squeeze risk** (LOW / ELEVATED / HIGH / EXTREME / INSUFFICIENT_DATA)
+and the two headline numbers (short % of float, days-to-cover). A
+key-value block follows with short shares, float, shares outstanding,
+avg daily volume (20-day), vendor-reported short ratio, and utilization
+proxy. Thresholds: short ≥30% of float OR DTC ≥10 → EXTREME; ≥20% / ≥7
+→ HIGH; ≥10% / ≥4 → ELEVATED; else LOW. Needs Fundamentals
+(`short_percent_of_float`, `short_ratio`, `shares_outstanding`),
+cached `FLOAT` (`float_shares`), and ≥20 cached HP bars. Source:
+ADR-117 SHRT window.
+
+#### 2.42 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -505,15 +567,22 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | Total return windows (ADR-116 TRA) | ≤8 rows | Standard 1M–ITD ladder |
 | Technical indicators (ADR-116 TECH) | 6 rows | RSI / MACD / BB / ATR / ADX / Stoch |
 | Volatility skew points (ADR-116 SKEW) | 9 rows per expiry | ±10% OTM window + ATM coverage |
+| Leverage ratios (ADR-117 LEV) | 6 rows | Debt/EBITDA, Net Debt/EBITDA, Debt/Equity, Interest Coverage, Current, Quick |
+| Accruals periods (ADR-117 ACRL) | 8 quarters | 2-year cash-conversion trajectory |
+| Realized vol windows (ADR-117 RVOL) | 4 rows | 20d / 60d / 120d / 252d cone |
+| FCF yield periods (ADR-117 FCFY) | 6 rows | TTM + 5 annual rows for 5Y CAGR |
+| Short interest headline fields (ADR-117 SHRT) | 7 k/v rows | Short%, DTC, float, shares out, ADV, short ratio, utilization |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **14-28 KB**
-(up from 12-24 KB after ADR-115; ADR-116 added five per-symbol blocks —
-SEAG / COR / TRA / TECH / SKEW — including SEAG's 12-row monthly table and
-COR's per-peer correlation rows); a 10-symbol basket lands near **130-260
-KB** (the global context is emitted only once, so multi-symbol overhead is
-still bounded by the per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **16-32 KB**
+(up from 14-28 KB after ADR-116; ADR-117 added five per-symbol blocks —
+LEV / ACRL / RVOL / FCFY / SHRT — covering leverage, earnings quality,
+realized vol cone, FCF yield / dividend sustainability, and short interest
+/ DTC — all pure compute over cached FA / HP / IVOL / FLOAT snapshots with
+zero new API dependencies); a 10-symbol basket lands near **150-300 KB**
+(the global context is emitted only once, so multi-symbol overhead is still
+bounded by the per-symbol blocks).
 
 ---
 
@@ -688,6 +757,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_total_return` | SQLite `research_total_return` | ADR-116 TRA window |
 | `research::get_technicals` | SQLite `research_technicals` | ADR-116 TECH window |
 | `research::get_vol_skew` | SQLite `research_vol_skew` | ADR-116 SKEW window |
+| `research::get_leverage` | SQLite `research_leverage` | ADR-117 LEV window |
+| `research::get_accruals` | SQLite `research_accruals` | ADR-117 ACRL window |
+| `research::get_realized_vol` | SQLite `research_realized_vol` | ADR-117 RVOL window |
+| `research::get_fcf_yield` | SQLite `research_fcf_yield` | ADR-117 FCFY window |
+| `research::get_short_interest` | SQLite `research_short_interest` | ADR-117 SHRT window |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -724,4 +798,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 — Godel parity research surfaces

@@ -969,6 +969,131 @@ pub struct VolatilitySkew {
     pub note: String,
 }
 
+// ── ADR-117 Godel Parity Round 10 ───────────────────────────────────────────
+
+/// LEV — one leverage / coverage ratio row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LeverageRatio {
+    pub name: String,
+    pub value: f64,
+    pub peer_median: f64,      // 0.0 when unknown
+    pub signal: String,        // "HEALTHY" | "ELEVATED" | "STRETCHED" | "NEUTRAL"
+    pub note: String,
+}
+
+/// LEV — full leverage / solvency snapshot for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LeverageSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub total_debt: f64,
+    pub net_debt: f64,
+    pub ebitda_ttm: f64,
+    pub interest_expense_ttm: f64,
+    pub total_equity: f64,
+    pub ratios: Vec<LeverageRatio>,
+    pub solvency_summary: String,
+    pub note: String,
+}
+
+/// ACRL — one quarter's earnings-quality row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AccrualPeriod {
+    pub period: String,          // "FY2024" or "Q3 2024"
+    pub date: String,            // YYYY-MM-DD
+    pub net_income: f64,
+    pub free_cash_flow: f64,
+    pub fcf_to_ni_ratio: f64,    // FCF / NI
+    pub cash_conversion_pct: f64, // FCF / NI × 100
+    pub accruals: f64,           // NI - FCF
+    pub quality_label: String,   // "HIGH" | "MEDIUM" | "LOW" | "NEGATIVE_NI"
+}
+
+/// ACRL — earnings quality snapshot (accruals vs cash flow conversion).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AccrualsSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub ttm_net_income: f64,
+    pub ttm_free_cash_flow: f64,
+    pub ttm_cash_conversion_pct: f64,
+    pub avg_cash_conversion_pct: f64,    // across the tracked periods
+    pub periods: Vec<AccrualPeriod>,
+    pub trend_label: String,             // "IMPROVING" | "STABLE" | "DETERIORATING" | "MIXED"
+    pub note: String,
+}
+
+/// RVOL — one realized-volatility window observation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RealizedVolWindow {
+    pub label: String,       // "20d" / "60d" / "120d" / "252d"
+    pub trading_days: usize,
+    pub realized_vol_pct: f64,   // annualized
+    pub percentile: f64,         // 0..=100 — cone rank vs the full history of this window
+    pub n_observations: usize,
+}
+
+/// RVOL — realized volatility + IV/RV gap snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RealizedVolSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub last_close: f64,
+    pub current_atm_iv_pct: f64,      // from cached IVOL, 0.0 when unknown
+    pub iv_rv_gap_pct: f64,           // IV − RV(20d)
+    pub iv_rv_ratio: f64,             // IV / RV(20d)
+    pub windows: Vec<RealizedVolWindow>,
+    pub regime_label: String,         // "CHEAP_IV" | "FAIR_IV" | "RICH_IV" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// FCFY — one dividend coverage / FCF yield row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FcfYieldPeriod {
+    pub period: String,
+    pub date: String,
+    pub free_cash_flow: f64,
+    pub dividends_paid: f64,
+    pub payout_from_fcf_pct: f64,   // dividends_paid / FCF × 100 (absolute cash-out ratio)
+    pub payout_from_ni_pct: f64,    // dividends_paid / NI × 100
+    pub fcf_yield_pct: f64,         // FCF / market_cap_at_period × 100 (only TTM-level rows populate this)
+}
+
+/// FCFY — FCF yield + dividend sustainability snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FcfYieldSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub market_cap: f64,
+    pub ttm_free_cash_flow: f64,
+    pub ttm_dividends_paid: f64,
+    pub ttm_fcf_yield_pct: f64,
+    pub ttm_dividend_yield_pct: f64,
+    pub ttm_payout_from_fcf_pct: f64,
+    pub ttm_payout_from_ni_pct: f64,
+    pub fcf_cagr_5y_pct: f64,       // 0.0 when <5 years of annuals
+    pub periods: Vec<FcfYieldPeriod>,
+    pub sustainability_label: String,   // "SAFE" | "STRETCHED" | "UNSUSTAINABLE" | "NO_DIVIDEND"
+    pub note: String,
+}
+
+/// SHRT — short interest + days-to-cover + squeeze signal snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ShortInterestSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub shares_outstanding: f64,
+    pub shares_float: f64,
+    pub short_shares: f64,
+    pub short_percent_of_float: f64,
+    pub avg_daily_volume_20d: f64,
+    pub days_to_cover: f64,             // short_shares / avg_daily_volume_20d
+    pub short_ratio_reported: f64,      // from Fundamentals (vendor-provided, may differ)
+    pub utilization_proxy_pct: f64,     // short / float × 100 (same as short_percent_of_float but normalized)
+    pub squeeze_risk_label: String,     // "LOW" | "ELEVATED" | "HIGH" | "EXTREME" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -4311,6 +4436,486 @@ pub fn compute_volatility_skew(
     }
 }
 
+// ── ADR-117 Round 10 — LEV compute (leverage & coverage ratios) ─────────────
+
+/// Compute a `LeverageSnapshot` from cached financial statements and the
+/// Fundamentals row. Pulls trailing-12-month EBITDA + interest expense from
+/// quarterly income statements, total debt / equity / cash from the most
+/// recent annual balance sheet, and produces a standard battery of ratios.
+pub fn compute_leverage_snapshot(
+    symbol: &str,
+    as_of: &str,
+    statements: &FinancialStatements,
+    total_debt_fund: f64,
+    cash_fund: f64,
+) -> LeverageSnapshot {
+    // Prefer the latest annual balance sheet; fall back to the most recent quarter.
+    let bal = statements.balance_annual.first()
+        .or_else(|| statements.balance_quarterly.first());
+
+    let total_debt = bal.map(|b| b.total_debt).filter(|v| *v > 0.0).unwrap_or(total_debt_fund);
+    let cash = bal.map(|b| b.cash_and_equiv).filter(|v| *v > 0.0).unwrap_or(cash_fund);
+    let net_debt = (total_debt - cash).max(0.0);
+    let total_equity = bal.map(|b| b.total_equity).unwrap_or(0.0);
+
+    // TTM roll-ups from quarterly income statements (last 4 quarters).
+    let q = &statements.income_quarterly;
+    let take = q.iter().take(4);
+    let ebitda_ttm: f64 = take.clone().map(|i| i.ebitda).sum();
+    let interest_ttm: f64 = take.clone().map(|i| i.interest_expense.abs()).sum();
+    let op_inc_ttm: f64 = take.clone().map(|i| i.operating_income).sum();
+
+    let cur_assets = bal.map(|b| b.total_current_assets).unwrap_or(0.0);
+    let cur_liab = bal.map(|b| b.total_current_liabilities).unwrap_or(0.0);
+    let inventory = bal.map(|b| b.inventory).unwrap_or(0.0);
+
+    let mut ratios: Vec<LeverageRatio> = Vec::new();
+
+    // Debt / EBITDA
+    if ebitda_ttm > 0.0 && total_debt > 0.0 {
+        let v = total_debt / ebitda_ttm;
+        let sig = if v < 2.5 { "HEALTHY" } else if v < 4.0 { "ELEVATED" } else { "STRETCHED" };
+        ratios.push(LeverageRatio {
+            name: "Debt / EBITDA".into(), value: v, peer_median: 0.0,
+            signal: sig.into(),
+            note: "lower is safer; >4× typically flags high leverage".into(),
+        });
+    }
+
+    // Net Debt / EBITDA
+    if ebitda_ttm > 0.0 {
+        let v = net_debt / ebitda_ttm;
+        let sig = if v < 2.0 { "HEALTHY" } else if v < 3.5 { "ELEVATED" } else { "STRETCHED" };
+        ratios.push(LeverageRatio {
+            name: "Net Debt / EBITDA".into(), value: v, peer_median: 0.0,
+            signal: sig.into(), note: "net of cash; negative when cash > debt".into(),
+        });
+    }
+
+    // Debt / Equity
+    if total_equity > 0.0 && total_debt > 0.0 {
+        let v = total_debt / total_equity;
+        let sig = if v < 1.0 { "HEALTHY" } else if v < 2.0 { "ELEVATED" } else { "STRETCHED" };
+        ratios.push(LeverageRatio {
+            name: "Debt / Equity".into(), value: v, peer_median: 0.0,
+            signal: sig.into(), note: "gearing ratio; varies by sector".into(),
+        });
+    }
+
+    // Interest Coverage (EBIT / Interest)
+    if interest_ttm > 0.0 {
+        let v = op_inc_ttm / interest_ttm;
+        let sig = if v >= 5.0 { "HEALTHY" } else if v >= 2.0 { "ELEVATED" } else { "STRETCHED" };
+        ratios.push(LeverageRatio {
+            name: "Interest Coverage".into(), value: v, peer_median: 0.0,
+            signal: sig.into(),
+            note: "EBIT / interest expense; higher is safer; <2× distress signal".into(),
+        });
+    }
+
+    // Current Ratio
+    if cur_liab > 0.0 && cur_assets > 0.0 {
+        let v = cur_assets / cur_liab;
+        let sig = if v >= 1.5 { "HEALTHY" } else if v >= 1.0 { "ELEVATED" } else { "STRETCHED" };
+        ratios.push(LeverageRatio {
+            name: "Current Ratio".into(), value: v, peer_median: 0.0,
+            signal: sig.into(),
+            note: "short-term liquidity; <1 flags near-term squeeze".into(),
+        });
+    }
+
+    // Quick Ratio
+    if cur_liab > 0.0 && cur_assets > 0.0 {
+        let v = (cur_assets - inventory) / cur_liab;
+        let sig = if v >= 1.0 { "HEALTHY" } else if v >= 0.7 { "ELEVATED" } else { "STRETCHED" };
+        ratios.push(LeverageRatio {
+            name: "Quick Ratio".into(), value: v, peer_median: 0.0,
+            signal: sig.into(),
+            note: "excludes inventory; more conservative than current ratio".into(),
+        });
+    }
+
+    // Solvency summary: count HEALTHY vs STRETCHED signals.
+    let n_health = ratios.iter().filter(|r| r.signal == "HEALTHY").count();
+    let n_stretch = ratios.iter().filter(|r| r.signal == "STRETCHED").count();
+    let solvency_summary = if ratios.is_empty() {
+        "insufficient data — run FA + EVSCRAPE first".to_string()
+    } else if n_stretch >= 2 {
+        format!("STRETCHED — {}/{} ratios flagged", n_stretch, ratios.len())
+    } else if n_health >= ratios.len() / 2 + 1 {
+        format!("HEALTHY — {}/{} ratios in safe zone", n_health, ratios.len())
+    } else {
+        "MIXED — some pressure points but no widespread stress".to_string()
+    };
+
+    let note = if ratios.is_empty() {
+        "no cached financial statements — run FA".to_string()
+    } else {
+        String::new()
+    };
+
+    LeverageSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        total_debt,
+        net_debt,
+        ebitda_ttm,
+        interest_expense_ttm: interest_ttm,
+        total_equity,
+        ratios,
+        solvency_summary,
+        note,
+    }
+}
+
+// ── ADR-117 Round 10 — ACRL compute (earnings quality / accruals) ───────────
+
+/// Compute an `AccrualsSnapshot` from cached financial statements. Walks the
+/// last 4 quarterly income + cash-flow pairs, producing an FCF/NI ratio per
+/// period plus a TTM roll-up and trend label.
+pub fn compute_accruals_snapshot(
+    symbol: &str,
+    as_of: &str,
+    statements: &FinancialStatements,
+) -> AccrualsSnapshot {
+    let mut periods: Vec<AccrualPeriod> = Vec::new();
+
+    // Match income rows to cashflow rows by date. Keep order as-provided (newest first).
+    for inc in statements.income_quarterly.iter().take(8) {
+        let cf = statements.cashflow_quarterly.iter().find(|c| c.date == inc.date);
+        let ni = inc.net_income;
+        let fcf = cf.map(|c| c.free_cash_flow).unwrap_or(0.0);
+        if ni == 0.0 && fcf == 0.0 { continue; }
+        let ratio = if ni != 0.0 { fcf / ni } else { 0.0 };
+        let conv_pct = ratio * 100.0;
+        let accruals = ni - fcf;
+        let quality_label = if ni <= 0.0 {
+            "NEGATIVE_NI".to_string()
+        } else if conv_pct >= 90.0 {
+            "HIGH".to_string()
+        } else if conv_pct >= 60.0 {
+            "MEDIUM".to_string()
+        } else {
+            "LOW".to_string()
+        };
+        periods.push(AccrualPeriod {
+            period: inc.period.clone(),
+            date: inc.date.clone(),
+            net_income: ni,
+            free_cash_flow: fcf,
+            fcf_to_ni_ratio: ratio,
+            cash_conversion_pct: conv_pct,
+            accruals,
+            quality_label,
+        });
+    }
+
+    // TTM roll-up from the last 4 quarters.
+    let ttm_ni: f64 = periods.iter().take(4).map(|p| p.net_income).sum();
+    let ttm_fcf: f64 = periods.iter().take(4).map(|p| p.free_cash_flow).sum();
+    let ttm_conv_pct = if ttm_ni != 0.0 { ttm_fcf / ttm_ni * 100.0 } else { 0.0 };
+
+    let avg_conv_pct: f64 = if !periods.is_empty() {
+        periods.iter().map(|p| p.cash_conversion_pct).sum::<f64>() / periods.len() as f64
+    } else { 0.0 };
+
+    // Trend: compare recent-2 average vs older-2 average.
+    let trend_label = if periods.len() < 4 {
+        "INSUFFICIENT".to_string()
+    } else {
+        let recent: f64 = periods.iter().take(2).map(|p| p.cash_conversion_pct).sum::<f64>() / 2.0;
+        let older: f64 = periods.iter().skip(2).take(2).map(|p| p.cash_conversion_pct).sum::<f64>() / 2.0;
+        let delta = recent - older;
+        if delta.abs() < 5.0 { "STABLE".to_string() }
+        else if delta > 0.0 { "IMPROVING".to_string() }
+        else { "DETERIORATING".to_string() }
+    };
+
+    let note = if periods.is_empty() {
+        "no cached quarterly statements — run FA".to_string()
+    } else {
+        String::new()
+    };
+
+    AccrualsSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        ttm_net_income: ttm_ni,
+        ttm_free_cash_flow: ttm_fcf,
+        ttm_cash_conversion_pct: ttm_conv_pct,
+        avg_cash_conversion_pct: avg_conv_pct,
+        periods,
+        trend_label,
+        note,
+    }
+}
+
+// ── ADR-117 Round 10 — RVOL compute (realized volatility cone) ──────────────
+
+/// Compute a `RealizedVolSnapshot` from oldest-first daily bars. Produces
+/// rolling 20d / 60d / 120d / 252d realized volatility (annualized stdev of
+/// daily log-returns × √252) plus a cone percentile for each window
+/// (where does today's RV rank against the full history of that window?),
+/// and — when `current_atm_iv_pct > 0` — an IV / RV gap and ratio.
+pub fn compute_realized_vol_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars_oldest_first: &[HistoricalPriceRow],
+    current_atm_iv_pct: f64,
+) -> RealizedVolSnapshot {
+    if bars_oldest_first.len() < 25 {
+        return RealizedVolSnapshot {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            regime_label: "INSUFFICIENT_DATA".into(),
+            note: "need ≥25 daily bars; run HP first".into(),
+            ..Default::default()
+        };
+    }
+
+    let last_close = bars_oldest_first.last().map(|b| b.close).unwrap_or(0.0);
+
+    let mut log_returns: Vec<f64> = Vec::with_capacity(bars_oldest_first.len() - 1);
+    for w in bars_oldest_first.windows(2) {
+        if w[0].close > 0.0 && w[1].close > 0.0 {
+            log_returns.push((w[1].close / w[0].close).ln());
+        }
+    }
+
+    let stdev = |xs: &[f64]| -> f64 {
+        if xs.len() < 2 { return 0.0; }
+        let mean = xs.iter().sum::<f64>() / xs.len() as f64;
+        let var: f64 = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (xs.len() as f64 - 1.0);
+        var.sqrt()
+    };
+    let ann_vol_pct = |xs: &[f64]| -> f64 { stdev(xs) * (252.0_f64).sqrt() * 100.0 };
+
+    let rolling_vols = |window: usize| -> (f64, Vec<f64>) {
+        if log_returns.len() < window {
+            return (0.0, Vec::new());
+        }
+        let mut series: Vec<f64> = Vec::new();
+        for i in window..=log_returns.len() {
+            let slice = &log_returns[i - window..i];
+            series.push(ann_vol_pct(slice));
+        }
+        let latest = *series.last().unwrap_or(&0.0);
+        (latest, series)
+    };
+
+    let specs = [
+        ("20d", 20usize),
+        ("60d", 60usize),
+        ("120d", 120usize),
+        ("252d", 252usize),
+    ];
+    let mut windows: Vec<RealizedVolWindow> = Vec::new();
+    let mut rv_20d = 0.0;
+    for (label, n) in specs.iter() {
+        let (latest, series) = rolling_vols(*n);
+        if series.is_empty() { continue; }
+        if *label == "20d" { rv_20d = latest; }
+        // Percentile rank of `latest` within its own rolling history.
+        let count_below = series.iter().filter(|v| **v < latest).count();
+        let pct = (count_below as f64 / series.len() as f64) * 100.0;
+        windows.push(RealizedVolWindow {
+            label: (*label).to_string(),
+            trading_days: *n,
+            realized_vol_pct: latest,
+            percentile: pct,
+            n_observations: series.len(),
+        });
+    }
+
+    let (iv_rv_gap, iv_rv_ratio, regime_label) = if current_atm_iv_pct > 0.0 && rv_20d > 0.0 {
+        let gap = current_atm_iv_pct - rv_20d;
+        let ratio = current_atm_iv_pct / rv_20d;
+        let label = if ratio < 0.95 { "CHEAP_IV".to_string() }
+                    else if ratio > 1.15 { "RICH_IV".to_string() }
+                    else { "FAIR_IV".to_string() };
+        (gap, ratio, label)
+    } else if rv_20d > 0.0 {
+        (0.0, 0.0, "NO_IV_REFERENCE".to_string())
+    } else {
+        (0.0, 0.0, "INSUFFICIENT_DATA".to_string())
+    };
+
+    let note = if windows.is_empty() {
+        "need more bars for rolling windows".to_string()
+    } else {
+        String::new()
+    };
+
+    RealizedVolSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        last_close,
+        current_atm_iv_pct,
+        iv_rv_gap_pct: iv_rv_gap,
+        iv_rv_ratio,
+        windows,
+        regime_label,
+        note,
+    }
+}
+
+// ── ADR-117 Round 10 — FCFY compute (FCF yield + dividend coverage) ─────────
+
+/// Compute an `FcfYieldSnapshot` from cached financial statements + market cap.
+/// Builds per-annual FCF yield / dividend coverage rows, rolls TTM from the last
+/// 4 quarterly cash flow statements, computes a 5-year FCF CAGR when enough
+/// annual rows exist, and emits a dividend-sustainability label.
+pub fn compute_fcf_yield_snapshot(
+    symbol: &str,
+    as_of: &str,
+    statements: &FinancialStatements,
+    market_cap: f64,
+    stock_price: f64,
+) -> FcfYieldSnapshot {
+    let mut periods: Vec<FcfYieldPeriod> = Vec::new();
+
+    for cf in statements.cashflow_annual.iter().take(5) {
+        let ni = statements.income_annual.iter()
+            .find(|i| i.date == cf.date).map(|i| i.net_income).unwrap_or(0.0);
+        let div = cf.dividends_paid.abs();
+        let payout_fcf = if cf.free_cash_flow > 0.0 { div / cf.free_cash_flow * 100.0 } else { 0.0 };
+        let payout_ni = if ni > 0.0 { div / ni * 100.0 } else { 0.0 };
+        let yield_pct = if market_cap > 0.0 { cf.free_cash_flow / market_cap * 100.0 } else { 0.0 };
+        periods.push(FcfYieldPeriod {
+            period: cf.period.clone(),
+            date: cf.date.clone(),
+            free_cash_flow: cf.free_cash_flow,
+            dividends_paid: div,
+            payout_from_fcf_pct: payout_fcf,
+            payout_from_ni_pct: payout_ni,
+            fcf_yield_pct: yield_pct,
+        });
+    }
+
+    // TTM roll-up from the last 4 quarterly cash flow statements.
+    let q_cf = &statements.cashflow_quarterly;
+    let ttm_fcf: f64 = q_cf.iter().take(4).map(|c| c.free_cash_flow).sum();
+    let ttm_div: f64 = q_cf.iter().take(4).map(|c| c.dividends_paid.abs()).sum();
+    let ttm_ni: f64 = statements.income_quarterly.iter().take(4).map(|i| i.net_income).sum();
+    let ttm_fcf_yield = if market_cap > 0.0 { ttm_fcf / market_cap * 100.0 } else { 0.0 };
+    let ttm_div_yield = if market_cap > 0.0 { ttm_div / market_cap * 100.0 } else { 0.0 };
+    let ttm_payout_fcf = if ttm_fcf > 0.0 { ttm_div / ttm_fcf * 100.0 } else { 0.0 };
+    let ttm_payout_ni = if ttm_ni > 0.0 { ttm_div / ttm_ni * 100.0 } else { 0.0 };
+
+    // 5-year FCF CAGR (oldest → newest) when we have ≥5 annual rows.
+    let fcf_cagr = if statements.cashflow_annual.len() >= 5 {
+        let sorted_rev: Vec<&CashFlowStatement> = {
+            let mut v: Vec<&CashFlowStatement> = statements.cashflow_annual.iter().take(5).collect();
+            v.sort_by(|a, b| a.date.cmp(&b.date));
+            v
+        };
+        let start = sorted_rev.first().map(|c| c.free_cash_flow).unwrap_or(0.0);
+        let end = sorted_rev.last().map(|c| c.free_cash_flow).unwrap_or(0.0);
+        if start > 0.0 && end > 0.0 {
+            ((end / start).powf(1.0 / 4.0) - 1.0) * 100.0
+        } else { 0.0 }
+    } else { 0.0 };
+
+    let sustainability_label = if ttm_div <= 0.0 {
+        "NO_DIVIDEND".to_string()
+    } else if ttm_fcf <= 0.0 || ttm_payout_fcf > 100.0 {
+        "UNSUSTAINABLE".to_string()
+    } else if ttm_payout_fcf > 75.0 {
+        "STRETCHED".to_string()
+    } else {
+        "SAFE".to_string()
+    };
+
+    let note = if periods.is_empty() && ttm_fcf == 0.0 {
+        "no cached cash-flow statements — run FA".to_string()
+    } else if market_cap <= 0.0 {
+        format!("market cap missing — yield pct not computed (last ${:.2})", stock_price)
+    } else {
+        String::new()
+    };
+
+    FcfYieldSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        market_cap,
+        ttm_free_cash_flow: ttm_fcf,
+        ttm_dividends_paid: ttm_div,
+        ttm_fcf_yield_pct: ttm_fcf_yield,
+        ttm_dividend_yield_pct: ttm_div_yield,
+        ttm_payout_from_fcf_pct: ttm_payout_fcf,
+        ttm_payout_from_ni_pct: ttm_payout_ni,
+        fcf_cagr_5y_pct: fcf_cagr,
+        periods,
+        sustainability_label,
+        note,
+    }
+}
+
+// ── ADR-117 Round 10 — SHRT compute (short interest + days-to-cover) ────────
+
+/// Compute a `ShortInterestSnapshot` from the Fundamentals short fields plus
+/// daily HP bars. Days-to-cover comes from `short_shares / avg_daily_volume_20d`.
+pub fn compute_short_interest_snapshot(
+    symbol: &str,
+    as_of: &str,
+    shares_outstanding: f64,
+    shares_float: f64,
+    short_percent_of_float: f64,
+    short_ratio_reported: f64,
+    bars_oldest_first: &[HistoricalPriceRow],
+) -> ShortInterestSnapshot {
+    let short_shares = if shares_float > 0.0 && short_percent_of_float > 0.0 {
+        shares_float * (short_percent_of_float / 100.0)
+    } else { 0.0 };
+
+    // 20-day average daily volume from the tail of the bar series.
+    let avg_dv_20d = if bars_oldest_first.len() >= 20 {
+        let tail = &bars_oldest_first[bars_oldest_first.len() - 20..];
+        tail.iter().map(|b| b.volume).sum::<f64>() / 20.0
+    } else if !bars_oldest_first.is_empty() {
+        bars_oldest_first.iter().map(|b| b.volume).sum::<f64>() / bars_oldest_first.len() as f64
+    } else { 0.0 };
+
+    let days_to_cover = if avg_dv_20d > 0.0 && short_shares > 0.0 {
+        short_shares / avg_dv_20d
+    } else { 0.0 };
+
+    let squeeze_risk_label = if short_shares <= 0.0 || avg_dv_20d <= 0.0 {
+        "INSUFFICIENT_DATA".to_string()
+    } else if short_percent_of_float >= 30.0 || days_to_cover >= 10.0 {
+        "EXTREME".to_string()
+    } else if short_percent_of_float >= 20.0 || days_to_cover >= 7.0 {
+        "HIGH".to_string()
+    } else if short_percent_of_float >= 10.0 || days_to_cover >= 4.0 {
+        "ELEVATED".to_string()
+    } else {
+        "LOW".to_string()
+    };
+
+    let note = if short_shares <= 0.0 {
+        "no short data in Fundamentals — run EVSCRAPE".to_string()
+    } else if bars_oldest_first.is_empty() {
+        "no bar volumes — run HP first".to_string()
+    } else {
+        String::new()
+    };
+
+    ShortInterestSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        shares_outstanding,
+        shares_float,
+        short_shares,
+        short_percent_of_float,
+        avg_daily_volume_20d: avg_dv_20d,
+        days_to_cover,
+        short_ratio_reported,
+        utilization_proxy_pct: short_percent_of_float,
+        squeeze_risk_label,
+        note,
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -5400,6 +6005,154 @@ pub fn get_vol_skew(conn: &Connection, symbol: &str) -> Result<Option<Volatility
         .map_err(|e| format!("prepare get_vol_skew: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_vol_skew: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_vol_skew: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-117 Round 10 schema: LEV / ACRL / RVOL / FCFY / SHRT ──────────────
+
+pub fn create_research_tables_v10(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_leverage (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_accruals (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_realized_vol (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_fcf_yield (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_short_interest (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_leverage_updated        ON research_leverage(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_accruals_updated        ON research_accruals(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_realized_vol_updated    ON research_realized_vol(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_fcf_yield_updated       ON research_fcf_yield(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_short_interest_updated  ON research_short_interest(updated_at);"
+    ).map_err(|e| format!("create research_v10 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_leverage(conn: &Connection, symbol: &str, snap: &LeverageSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v10(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("leverage json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_leverage(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert leverage: {e}"))?;
+    Ok(())
+}
+
+pub fn get_leverage(conn: &Connection, symbol: &str) -> Result<Option<LeverageSnapshot>, String> {
+    let _ = create_research_tables_v10(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_leverage WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_leverage: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_leverage: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_leverage: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_accruals(conn: &Connection, symbol: &str, snap: &AccrualsSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v10(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("accruals json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_accruals(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert accruals: {e}"))?;
+    Ok(())
+}
+
+pub fn get_accruals(conn: &Connection, symbol: &str) -> Result<Option<AccrualsSnapshot>, String> {
+    let _ = create_research_tables_v10(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_accruals WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_accruals: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_accruals: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_accruals: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_realized_vol(conn: &Connection, symbol: &str, snap: &RealizedVolSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v10(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("realized vol json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_realized_vol(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert realized vol: {e}"))?;
+    Ok(())
+}
+
+pub fn get_realized_vol(conn: &Connection, symbol: &str) -> Result<Option<RealizedVolSnapshot>, String> {
+    let _ = create_research_tables_v10(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_realized_vol WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_realized_vol: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_realized_vol: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_realized_vol: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_fcf_yield(conn: &Connection, symbol: &str, snap: &FcfYieldSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v10(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("fcf yield json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_fcf_yield(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert fcf yield: {e}"))?;
+    Ok(())
+}
+
+pub fn get_fcf_yield(conn: &Connection, symbol: &str) -> Result<Option<FcfYieldSnapshot>, String> {
+    let _ = create_research_tables_v10(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_fcf_yield WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_fcf_yield: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_fcf_yield: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_fcf_yield: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_short_interest(conn: &Connection, symbol: &str, snap: &ShortInterestSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v10(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("short interest json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_short_interest(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert short interest: {e}"))?;
+    Ok(())
+}
+
+pub fn get_short_interest(conn: &Connection, symbol: &str) -> Result<Option<ShortInterestSnapshot>, String> {
+    let _ = create_research_tables_v10(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_short_interest WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_short_interest: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_short_interest: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_short_interest: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -6970,5 +7723,272 @@ mod tests {
         };
         let snap = compute_volatility_skew("X", "2026-04-14", &chain);
         assert!(!snap.note.is_empty());
+    }
+
+    // ── ADR-117 Round 10 tests ──────────────────────────────────────────
+
+    fn open_mem_conn_v10() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v10(&c).unwrap();
+        c
+    }
+
+    fn sample_statements() -> FinancialStatements {
+        // Build 4 quarters of synthetic financials with positive EBITDA + FCF.
+        let q = |d: &str, p: &str, ni: f64, ebitda: f64, int_exp: f64, fcf: f64| (
+            IncomeStatement {
+                date: d.into(), period: p.into(),
+                revenue: ni * 10.0, cost_of_revenue: ni * 5.0, gross_profit: ni * 5.0,
+                research_and_development: ni * 0.5, selling_general_admin: ni * 1.0,
+                operating_expenses: ni * 1.5, operating_income: ni * 2.0,
+                interest_expense: int_exp, ebitda, income_before_tax: ni * 1.2,
+                income_tax_expense: ni * 0.2, net_income: ni, eps: ni / 1000.0,
+                eps_diluted: ni / 1000.0, weighted_shares_out: 1000.0,
+            },
+            CashFlowStatement {
+                date: d.into(), period: p.into(),
+                net_income: ni, depreciation_amortization: ebitda - ni * 2.0,
+                stock_based_comp: 0.0, change_working_capital: 0.0,
+                cash_from_operations: fcf + 50.0, capex: -50.0,
+                acquisitions: 0.0, investments_purchases: 0.0,
+                cash_from_investing: -50.0, debt_repayment: 0.0,
+                dividends_paid: -20.0, stock_repurchases: 0.0,
+                cash_from_financing: -20.0, net_change_cash: 10.0,
+                free_cash_flow: fcf,
+            }
+        );
+        let periods = [
+            ("2024-12-31", "Q4", 300.0, 500.0, 30.0, 280.0),
+            ("2024-09-30", "Q3", 280.0, 480.0, 30.0, 260.0),
+            ("2024-06-30", "Q2", 260.0, 460.0, 30.0, 240.0),
+            ("2024-03-31", "Q1", 240.0, 440.0, 30.0, 220.0),
+        ];
+        let mut income_q = Vec::new();
+        let mut cf_q = Vec::new();
+        for (d, p, ni, ebitda, int_exp, fcf) in periods.iter() {
+            let (i, c) = q(d, p, *ni, *ebitda, *int_exp, *fcf);
+            income_q.push(i);
+            cf_q.push(c);
+        }
+        let bal = BalanceSheet {
+            date: "2024-12-31".into(), period: "FY".into(),
+            cash_and_equiv: 500.0, short_term_investments: 0.0,
+            net_receivables: 100.0, inventory: 200.0,
+            total_current_assets: 800.0,
+            property_plant_equipment: 1000.0, goodwill: 0.0, intangible_assets: 0.0,
+            long_term_investments: 0.0, total_non_current_assets: 1000.0,
+            total_assets: 1800.0,
+            accounts_payable: 150.0, short_term_debt: 100.0,
+            total_current_liabilities: 400.0, long_term_debt: 600.0,
+            total_non_current_liabilities: 800.0, total_liabilities: 1200.0,
+            common_stock: 200.0, retained_earnings: 400.0, total_equity: 600.0,
+            total_debt: 700.0, net_debt: 200.0,
+        };
+        FinancialStatements {
+            income_annual: vec![income_q[0].clone()],
+            income_quarterly: income_q,
+            balance_annual: vec![bal.clone()],
+            balance_quarterly: vec![bal],
+            cashflow_annual: vec![cf_q[0].clone()],
+            cashflow_quarterly: cf_q,
+        }
+    }
+
+    #[test]
+    fn leverage_snapshot_roundtrip() {
+        let c = open_mem_conn_v10();
+        let snap = LeverageSnapshot {
+            symbol: "AAPL".into(),
+            as_of: "2026-04-14".into(),
+            total_debt: 700.0, net_debt: 200.0,
+            ebitda_ttm: 1880.0, interest_expense_ttm: 120.0,
+            total_equity: 600.0,
+            ratios: vec![LeverageRatio {
+                name: "Debt / EBITDA".into(), value: 0.37,
+                peer_median: 0.0, signal: "HEALTHY".into(),
+                note: "".into(),
+            }],
+            solvency_summary: "HEALTHY".into(),
+            note: "".into(),
+        };
+        upsert_leverage(&c, "AAPL", &snap).unwrap();
+        let got = get_leverage(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.symbol, "AAPL");
+        assert_eq!(got.ratios.len(), 1);
+        assert_eq!(got.solvency_summary, "HEALTHY");
+    }
+
+    #[test]
+    fn accruals_snapshot_roundtrip() {
+        let c = open_mem_conn_v10();
+        let snap = AccrualsSnapshot {
+            symbol: "MSFT".into(), as_of: "2026-04-14".into(),
+            ttm_net_income: 1000.0, ttm_free_cash_flow: 900.0,
+            ttm_cash_conversion_pct: 90.0, avg_cash_conversion_pct: 85.0,
+            periods: vec![], trend_label: "STABLE".into(), note: "".into(),
+        };
+        upsert_accruals(&c, "MSFT", &snap).unwrap();
+        let got = get_accruals(&c, "msft").unwrap().unwrap();
+        assert_eq!(got.ttm_cash_conversion_pct, 90.0);
+    }
+
+    #[test]
+    fn realized_vol_snapshot_roundtrip() {
+        let c = open_mem_conn_v10();
+        let snap = RealizedVolSnapshot {
+            symbol: "NVDA".into(), as_of: "2026-04-14".into(),
+            last_close: 900.0, current_atm_iv_pct: 45.0,
+            iv_rv_gap_pct: 10.0, iv_rv_ratio: 1.28,
+            windows: vec![RealizedVolWindow {
+                label: "20d".into(), trading_days: 20,
+                realized_vol_pct: 35.0, percentile: 60.0, n_observations: 100,
+            }],
+            regime_label: "RICH_IV".into(), note: "".into(),
+        };
+        upsert_realized_vol(&c, "NVDA", &snap).unwrap();
+        let got = get_realized_vol(&c, "nvda").unwrap().unwrap();
+        assert_eq!(got.windows.len(), 1);
+        assert_eq!(got.regime_label, "RICH_IV");
+    }
+
+    #[test]
+    fn fcf_yield_snapshot_roundtrip() {
+        let c = open_mem_conn_v10();
+        let snap = FcfYieldSnapshot {
+            symbol: "KO".into(), as_of: "2026-04-14".into(),
+            market_cap: 300_000_000_000.0, ttm_free_cash_flow: 10_000_000_000.0,
+            ttm_dividends_paid: 8_000_000_000.0, ttm_fcf_yield_pct: 3.33,
+            ttm_dividend_yield_pct: 2.67, ttm_payout_from_fcf_pct: 80.0,
+            ttm_payout_from_ni_pct: 70.0, fcf_cagr_5y_pct: 5.2,
+            periods: vec![], sustainability_label: "STRETCHED".into(),
+            note: "".into(),
+        };
+        upsert_fcf_yield(&c, "KO", &snap).unwrap();
+        let got = get_fcf_yield(&c, "ko").unwrap().unwrap();
+        assert_eq!(got.sustainability_label, "STRETCHED");
+    }
+
+    #[test]
+    fn short_interest_snapshot_roundtrip() {
+        let c = open_mem_conn_v10();
+        let snap = ShortInterestSnapshot {
+            symbol: "GME".into(), as_of: "2026-04-14".into(),
+            shares_outstanding: 300_000_000.0, shares_float: 200_000_000.0,
+            short_shares: 50_000_000.0, short_percent_of_float: 25.0,
+            avg_daily_volume_20d: 5_000_000.0, days_to_cover: 10.0,
+            short_ratio_reported: 0.0, utilization_proxy_pct: 25.0,
+            squeeze_risk_label: "EXTREME".into(), note: "".into(),
+        };
+        upsert_short_interest(&c, "GME", &snap).unwrap();
+        let got = get_short_interest(&c, "gme").unwrap().unwrap();
+        assert_eq!(got.squeeze_risk_label, "EXTREME");
+        assert_eq!(got.days_to_cover, 10.0);
+    }
+
+    #[test]
+    fn compute_leverage_on_healthy_statements() {
+        let st = sample_statements();
+        let snap = compute_leverage_snapshot("TEST", "2026-04-14", &st, 700.0, 500.0);
+        // TTM EBITDA = 500+480+460+440 = 1880 → Debt/EBITDA = 700/1880 ≈ 0.37.
+        assert!(!snap.ratios.is_empty());
+        let de = snap.ratios.iter().find(|r| r.name == "Debt / EBITDA").unwrap();
+        assert!((de.value - 700.0 / 1880.0).abs() < 1e-6);
+        assert_eq!(de.signal, "HEALTHY");
+        assert_eq!(snap.ebitda_ttm, 1880.0);
+    }
+
+    #[test]
+    fn compute_leverage_empty_statements_produces_note() {
+        let st = FinancialStatements::default();
+        let snap = compute_leverage_snapshot("X", "2026-04-14", &st, 0.0, 0.0);
+        assert!(snap.ratios.is_empty());
+        assert!(!snap.note.is_empty());
+    }
+
+    #[test]
+    fn compute_accruals_high_conversion_labels_high() {
+        let st = sample_statements();
+        let snap = compute_accruals_snapshot("TEST", "2026-04-14", &st);
+        // Q4: NI=300, FCF=280 → conv=93.3% → HIGH.
+        assert_eq!(snap.periods.len(), 4);
+        let latest = &snap.periods[0];
+        assert_eq!(latest.quality_label, "HIGH");
+        let ttm_ni: f64 = 300.0 + 280.0 + 260.0 + 240.0;
+        assert!((snap.ttm_net_income - ttm_ni).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_accruals_insufficient_periods_labels_insufficient() {
+        let mut st = FinancialStatements::default();
+        st.income_quarterly.push(IncomeStatement {
+            date: "2024-12-31".into(), period: "Q4".into(),
+            net_income: 100.0, ..Default::default()
+        });
+        st.cashflow_quarterly.push(CashFlowStatement {
+            date: "2024-12-31".into(), period: "Q4".into(),
+            net_income: 100.0, free_cash_flow: 90.0,
+            ..Default::default()
+        });
+        let snap = compute_accruals_snapshot("X", "2026-04-14", &st);
+        assert_eq!(snap.periods.len(), 1);
+        assert_eq!(snap.trend_label, "INSUFFICIENT");
+    }
+
+    #[test]
+    fn compute_realized_vol_with_drift_produces_rich_regime() {
+        let bars = synth_bars(260, 100.0, 0.001);
+        let snap = compute_realized_vol_snapshot("TEST", "2026-04-14", &bars, 40.0);
+        assert!(!snap.windows.is_empty());
+        assert!(snap.windows.iter().any(|w| w.label == "20d"));
+        // Constant drift → near-zero RV → IV/RV should flag RICH_IV or NO_IV_REFERENCE.
+        assert!(snap.regime_label == "RICH_IV" || snap.regime_label == "NO_IV_REFERENCE");
+    }
+
+    #[test]
+    fn compute_realized_vol_insufficient_bars_returns_note() {
+        let bars = synth_bars(10, 100.0, 0.001);
+        let snap = compute_realized_vol_snapshot("X", "2026-04-14", &bars, 40.0);
+        assert_eq!(snap.regime_label, "INSUFFICIENT_DATA");
+        assert!(!snap.note.is_empty());
+    }
+
+    #[test]
+    fn compute_fcf_yield_with_market_cap() {
+        let st = sample_statements();
+        let snap = compute_fcf_yield_snapshot("TEST", "2026-04-14", &st, 100_000.0, 100.0);
+        // TTM FCF = 280+260+240+220 = 1000; yield = 1000/100000 = 1.0%
+        assert!((snap.ttm_free_cash_flow - 1000.0).abs() < 1e-6);
+        assert!((snap.ttm_fcf_yield_pct - 1.0).abs() < 1e-6);
+        // TTM dividends paid = 20*4 = 80, payout_fcf = 80/1000 = 8%, label SAFE.
+        assert_eq!(snap.sustainability_label, "SAFE");
+    }
+
+    #[test]
+    fn compute_fcf_yield_no_market_cap_emits_note() {
+        let st = sample_statements();
+        let snap = compute_fcf_yield_snapshot("X", "2026-04-14", &st, 0.0, 100.0);
+        assert!(!snap.note.is_empty());
+    }
+
+    #[test]
+    fn compute_short_interest_high_risk_squeeze() {
+        let bars = synth_bars(30, 100.0, 0.0);
+        // 200M float × 25% = 50M short; 50M / 1K avg = 50K days-to-cover → EXTREME.
+        let snap = compute_short_interest_snapshot(
+            "GME", "2026-04-14",
+            300_000_000.0, 200_000_000.0, 25.0, 0.0, &bars,
+        );
+        assert_eq!(snap.short_shares, 50_000_000.0);
+        assert_eq!(snap.squeeze_risk_label, "EXTREME");
+    }
+
+    #[test]
+    fn compute_short_interest_no_shorts_insufficient() {
+        let bars = synth_bars(30, 100.0, 0.0);
+        let snap = compute_short_interest_snapshot(
+            "X", "2026-04-14",
+            100_000_000.0, 80_000_000.0, 0.0, 0.0, &bars,
+        );
+        assert_eq!(snap.squeeze_risk_label, "INSUFFICIENT_DATA");
     }
 }

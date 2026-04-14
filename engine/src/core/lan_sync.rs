@@ -172,6 +172,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_total_return",
     "research_technicals",
     "research_vol_skew",
+    // ── ADR-117 Round 10 ────────────────────────────
+    "research_leverage",
+    "research_accruals",
+    "research_realized_vol",
+    "research_fcf_yield",
+    "research_short_interest",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -584,6 +590,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_leverage" => Some(
+            "CREATE TABLE IF NOT EXISTS research_leverage (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_accruals" => Some(
+            "CREATE TABLE IF NOT EXISTS research_accruals (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_realized_vol" => Some(
+            "CREATE TABLE IF NOT EXISTS research_realized_vol (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_fcf_yield" => Some(
+            "CREATE TABLE IF NOT EXISTS research_fcf_yield (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_short_interest" => Some(
+            "CREATE TABLE IF NOT EXISTS research_short_interest (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -637,6 +678,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_total_return" => Some("updated_at"),
         "research_technicals" => Some("updated_at"),
         "research_vol_skew" => Some("updated_at"),
+        "research_leverage" => Some("updated_at"),
+        "research_accruals" => Some("updated_at"),
+        "research_realized_vol" => Some("updated_at"),
+        "research_fcf_yield" => Some("updated_at"),
+        "research_short_interest" => Some("updated_at"),
         _ => None,
     }
 }
