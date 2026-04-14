@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**forty-two sub-blocks**, each of which is skipped silently when its data
+**forty-seven sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -501,7 +501,74 @@ proxy. Thresholds: short ≥30% of float OR DTC ≥10 → EXTREME; ≥20% / ≥7
 cached `FLOAT` (`float_shares`), and ≥20 cached HP bars. Source:
 ADR-117 SHRT window.
 
-#### 2.42 Sector peer comparison
+#### 2.42 Altman Z-Score (ALTZ — ADR-118)
+
+Pulled from `research::get_altman_z`. Classic 5-component Z-score
+Z = 1.2(WC/TA) + 1.4(RE/TA) + 3.3(EBIT/TA) + 0.6(MVE/TL) + 1.0(Sales/TA)
+with **zone classification** DISTRESS (<1.81) / GRAY / SAFE (≥2.99) or
+INSUFFICIENT_DATA when balance sheet / income / MVE is missing. Header
+line shows the Z-score and zone; a summary line reports the five raw
+inputs (working capital, retained earnings, EBIT, market value equity,
+sales, total assets, total liabilities) in $M. A component table lists
+each of the 5 contributions (ratio × coefficient). Prefers
+`balance_annual.first()` / `income_annual.first()` with quarterly
+fallback when annuals are missing. Needs cached `FA` plus a positive
+market cap from Fundamentals. Source: ADR-118 ALTZ window.
+
+#### 2.43 Piotroski F-Score (PTFS — ADR-118)
+
+Pulled from `research::get_piotroski`. 9-point quality checklist scored
+across **three categories**: Profitability (4 points — positive NI,
+positive OCF, ROA↑, OCF>NI), Leverage/Liquidity (3 points — LTDebt/TA↓,
+current ratio↑, no new shares), and Operating Efficiency (2 points —
+gross margin↑, asset turnover↑). Header gives total F-score (0-9),
+**strength label** STRONG (≥7) / MIXED / WEAK (≤3) or INSUFFICIENT_DATA,
+and the current vs prior period dates. A check table follows with
+PASS/FAIL and the current/prior values that drove each comparison. Needs
+`FA` with ≥2 annual income statements, ≥2 annual balance sheets, and ≥1
+annual cashflow statement. Source: ADR-118 PTFS window.
+
+#### 2.44 OHLC Volatility Estimators (VOLE — ADR-118)
+
+Pulled from `research::get_ohlc_vol`. Five volatility estimators computed
+from cached HP bars over a 60-day window (user-configurable), all
+annualized with √252: **Close-to-Close** (log return stdev), **Parkinson**
+(range-based, 1/(4·ln2) · mean(ln(H/L)²)), **Garman-Klass** (0.5·ln(H/L)² −
+(2·ln2−1)·ln(C/O)²), **Rogers-Satchell** (drift-independent:
+hc·ho + lc·lo), and **Yang-Zhang** (overnight + k·oc + (1−k)·rs with
+k=0.34/(1.34+(N+1)/(N−1)) — the preferred estimator). Header line gives
+the preferred estimate, its label, and trading days. A table shows each
+estimator with its annualized % and efficiency-vs-close ratio. Needs ≥20
+valid HP bars. Source: ADR-118 VOLE window.
+
+#### 2.45 EPS Beat Streak & Surprise (EPSB — ADR-118)
+
+Pulled from `research::get_eps_beat`. Walks the cached
+`EarningsSurprise` history (from ADR-112 ERN fetch) sorted oldest-first.
+Computes beats/misses/inlines, beat rate, **current streak** (signed —
+positive means active beat streak), longest beat and miss streaks,
+average + median surprise %, and a **recent-4** average. Bias label:
+**POSITIVE** if avg surprise > 2%, **NEGATIVE** if < -2%, else NEUTRAL.
+Trend label: **ACCELERATING** if recent-4 > avg + 1%, **DECELERATING**
+if recent-4 < avg - 1%, else STABLE. Header summarises bias, trend, beat
+rate, and current streak; a key-value block follows with every counter
+and the latest report date + surprise %. Needs ≥1 cached
+`EarningsSurprise` row. Source: ADR-118 EPSB window.
+
+#### 2.46 Price Target Dispersion (PTD — ADR-118)
+
+Pulled from `research::get_price_target_dispersion`. Aggregates cached
+`PriceTarget` (from ADR-108 UPDG fetch) against current price to compute:
+**dispersion %** ((high − low) / mean × 100), **spread %** ((high − low)
+/ current × 100), implied return vs median and mean targets, upside to
+high, and downside to low. **Consensus label** BULLISH (implied median
+≥ 10%), BEARISH (≤ -5%), else NEUTRAL; NO_COVERAGE when num_analysts ≤ 0
+or no cached target. Header gives consensus / analyst count / current
+price; a key-value block follows with target levels, dispersion, spread,
+and all four implied-return flavours. Needs cached `UPDG` / `PT` plus a
+positive current price from Fundamentals. Source: ADR-118 PTD window.
+
+#### 2.47 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -572,17 +639,22 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | Realized vol windows (ADR-117 RVOL) | 4 rows | 20d / 60d / 120d / 252d cone |
 | FCF yield periods (ADR-117 FCFY) | 6 rows | TTM + 5 annual rows for 5Y CAGR |
 | Short interest headline fields (ADR-117 SHRT) | 7 k/v rows | Short%, DTC, float, shares out, ADV, short ratio, utilization |
+| Altman Z components (ADR-118 ALTZ) | 5 rows | A/B/C/D/E with ratio + coefficient + contribution |
+| Piotroski F-score checks (ADR-118 PTFS) | 9 rows | Fixed 9-point quality checklist |
+| OHLC volatility estimators (ADR-118 VOLE) | 5 rows | CtC / Parkinson / GK / RS / YZ |
+| EPS beat streak fields (ADR-118 EPSB) | 8 k/v rows | Counts, streaks, surprise avg/median/recent, latest |
+| Price target dispersion fields (ADR-118 PTD) | 8 k/v rows | Targets, dispersion, spread, implied returns |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **16-32 KB**
-(up from 14-28 KB after ADR-116; ADR-117 added five per-symbol blocks —
-LEV / ACRL / RVOL / FCFY / SHRT — covering leverage, earnings quality,
-realized vol cone, FCF yield / dividend sustainability, and short interest
-/ DTC — all pure compute over cached FA / HP / IVOL / FLOAT snapshots with
-zero new API dependencies); a 10-symbol basket lands near **150-300 KB**
-(the global context is emitted only once, so multi-symbol overhead is still
-bounded by the per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **18-36 KB**
+(up from 16-32 KB after ADR-117; ADR-118 added five per-symbol blocks —
+ALTZ / PTFS / VOLE / EPSB / PTD — covering Altman Z bankruptcy risk,
+Piotroski quality score, OHLC volatility estimators, EPS beat streak, and
+price target dispersion — all pure compute over cached FA / HP / ERN /
+UPDG snapshots with zero new API dependencies); a 10-symbol basket lands
+near **170-340 KB** (the global context is emitted only once, so
+multi-symbol overhead is still bounded by the per-symbol blocks).
 
 ---
 
@@ -762,6 +834,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_realized_vol` | SQLite `research_realized_vol` | ADR-117 RVOL window |
 | `research::get_fcf_yield` | SQLite `research_fcf_yield` | ADR-117 FCFY window |
 | `research::get_short_interest` | SQLite `research_short_interest` | ADR-117 SHRT window |
+| `research::get_altman_z` | SQLite `research_altman_z` | ADR-118 ALTZ window |
+| `research::get_piotroski` | SQLite `research_piotroski` | ADR-118 PTFS window |
+| `research::get_ohlc_vol` | SQLite `research_ohlc_vol` | ADR-118 VOLE window |
+| `research::get_eps_beat` | SQLite `research_eps_beat` | ADR-118 EPSB window |
+| `research::get_price_target_dispersion` | SQLite `research_price_target_dispersion` | ADR-118 PTD window |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -798,4 +875,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 — Godel parity research surfaces

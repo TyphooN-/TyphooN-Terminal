@@ -1094,6 +1094,128 @@ pub struct ShortInterestSnapshot {
     pub note: String,
 }
 
+// ── ADR-118 Godel Parity Round 11 ───────────────────────────────────────────
+
+/// ALTZ — one component of the Altman Z-score.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AltmanComponent {
+    pub name: String,               // e.g. "A: WC/TA"
+    pub ratio: f64,                 // raw ratio value
+    pub coefficient: f64,           // 1.2 / 1.4 / 3.3 / 0.6 / 1.0
+    pub contribution: f64,          // coefficient × ratio
+    pub note: String,
+}
+
+/// ALTZ — Altman Z-score snapshot for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AltmanZSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub working_capital: f64,
+    pub retained_earnings: f64,
+    pub ebit: f64,
+    pub market_value_equity: f64,
+    pub sales: f64,
+    pub total_assets: f64,
+    pub total_liabilities: f64,
+    pub z_score: f64,               // sum of all contributions
+    pub zone: String,               // "DISTRESS" (<1.81) | "GRAY" | "SAFE" (>=2.99) | "INSUFFICIENT_DATA"
+    pub components: Vec<AltmanComponent>,
+    pub note: String,
+}
+
+/// PTFS — one Piotroski F-score check with signal.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PiotroskiCheck {
+    pub category: String,           // "Profitability" | "Leverage/Liquidity" | "Operating Efficiency"
+    pub name: String,
+    pub passed: bool,
+    pub value_current: f64,
+    pub value_prior: f64,
+    pub note: String,
+}
+
+/// PTFS — Piotroski F-score snapshot for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PiotroskiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub current_period: String,
+    pub prior_period: String,
+    pub f_score: i32,               // 0..9
+    pub strength_label: String,     // "STRONG" (>=7) | "MIXED" | "WEAK" (<=3) | "INSUFFICIENT_DATA"
+    pub profitability_score: i32,   // 0..4
+    pub leverage_score: i32,        // 0..3
+    pub efficiency_score: i32,      // 0..2
+    pub checks: Vec<PiotroskiCheck>,
+    pub note: String,
+}
+
+/// VOLE — one volatility estimator row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VolEstimator {
+    pub name: String,               // "ClosedToClose" / "Parkinson" / "GarmanKlass" / "RogersSatchell" / "YangZhang"
+    pub annualized_vol_pct: f64,
+    pub efficiency_vs_close: f64,   // multiplicative gain vs close-to-close (1.0 = same)
+    pub note: String,
+}
+
+/// VOLE — OHLC volatility estimator snapshot for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OhlcVolSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub trading_days: usize,
+    pub estimators: Vec<VolEstimator>,
+    pub preferred_estimate_pct: f64,  // Yang-Zhang when all 4 available, else Parkinson, else CtC
+    pub preferred_label: String,
+    pub note: String,
+}
+
+/// EPSB — EPS beat streak & surprise analysis snapshot for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EpsBeatSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub total_reports: usize,
+    pub beats: usize,
+    pub misses: usize,
+    pub inlines: usize,
+    pub beat_rate_pct: f64,         // beats / total × 100
+    pub current_streak: i32,        // positive = beat streak, negative = miss streak
+    pub longest_beat_streak: usize,
+    pub longest_miss_streak: usize,
+    pub avg_surprise_pct: f64,
+    pub median_surprise_pct: f64,
+    pub recent_avg_surprise_pct: f64,  // last 4 reports
+    pub bias_label: String,         // "POSITIVE" | "NEGATIVE" | "NEUTRAL"
+    pub trend_label: String,        // "ACCELERATING" | "STABLE" | "DECELERATING"
+    pub latest_date: String,
+    pub latest_surprise_pct: f64,
+    pub note: String,
+}
+
+/// PTD — Price Target Dispersion & Implied Return snapshot for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PriceTargetDispersion {
+    pub symbol: String,
+    pub as_of: String,
+    pub current_price: f64,
+    pub target_high: f64,
+    pub target_low: f64,
+    pub target_mean: f64,
+    pub target_median: f64,
+    pub num_analysts: i32,
+    pub dispersion_pct: f64,        // (high - low) / mean × 100
+    pub spread_pct: f64,            // (high - low) / current × 100
+    pub implied_return_median_pct: f64,
+    pub implied_return_mean_pct: f64,
+    pub upside_to_high_pct: f64,
+    pub downside_to_low_pct: f64,
+    pub consensus_label: String,    // "BULLISH" | "NEUTRAL" | "BEARISH" | "NO_COVERAGE"
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -4916,6 +5038,577 @@ pub fn compute_short_interest_snapshot(
     }
 }
 
+// ── ADR-118 Godel Parity Round 11 compute fns ──────────────────────────────
+
+/// ALTZ — classic Altman Z-score for public manufacturers.
+/// Z = 1.2(WC/TA) + 1.4(RE/TA) + 3.3(EBIT/TA) + 0.6(MVE/TL) + 1.0(Sales/TA)
+pub fn compute_altman_z_snapshot(
+    symbol: &str,
+    as_of: &str,
+    statements: &FinancialStatements,
+    market_value_equity: f64,
+) -> AltmanZSnapshot {
+    let bal = statements.balance_annual.first()
+        .or_else(|| statements.balance_quarterly.first());
+    let inc = statements.income_annual.first()
+        .or_else(|| statements.income_quarterly.first());
+
+    let bal = match bal {
+        Some(b) => b,
+        None => {
+            return AltmanZSnapshot {
+                symbol: symbol.to_uppercase(),
+                as_of: as_of.to_string(),
+                zone: "INSUFFICIENT_DATA".to_string(),
+                note: "no balance sheet cached — run FA first".to_string(),
+                ..Default::default()
+            };
+        }
+    };
+    let inc = match inc {
+        Some(i) => i,
+        None => {
+            return AltmanZSnapshot {
+                symbol: symbol.to_uppercase(),
+                as_of: as_of.to_string(),
+                zone: "INSUFFICIENT_DATA".to_string(),
+                note: "no income statement cached — run FA first".to_string(),
+                ..Default::default()
+            };
+        }
+    };
+
+    let wc = bal.total_current_assets - bal.total_current_liabilities;
+    let re = bal.retained_earnings;
+    let ebit = inc.operating_income;
+    let mve = market_value_equity;
+    let sales = inc.revenue;
+    let ta = bal.total_assets;
+    let tl = bal.total_liabilities;
+
+    if ta <= 0.0 || tl <= 0.0 {
+        return AltmanZSnapshot {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            total_assets: ta,
+            total_liabilities: tl,
+            zone: "INSUFFICIENT_DATA".to_string(),
+            note: "non-positive assets or liabilities".to_string(),
+            ..Default::default()
+        };
+    }
+
+    let a = wc / ta;
+    let b = re / ta;
+    let c = ebit / ta;
+    let d = if tl > 0.0 { mve / tl } else { 0.0 };
+    let e = sales / ta;
+
+    let components = vec![
+        AltmanComponent { name: "A: WC/TA".into(), ratio: a, coefficient: 1.2, contribution: 1.2 * a, note: "liquidity".into() },
+        AltmanComponent { name: "B: RE/TA".into(), ratio: b, coefficient: 1.4, contribution: 1.4 * b, note: "cumulative profitability".into() },
+        AltmanComponent { name: "C: EBIT/TA".into(), ratio: c, coefficient: 3.3, contribution: 3.3 * c, note: "operating leverage".into() },
+        AltmanComponent { name: "D: MVE/TL".into(), ratio: d, coefficient: 0.6, contribution: 0.6 * d, note: if mve > 0.0 { "solvency" } else { "no market cap" }.into() },
+        AltmanComponent { name: "E: Sales/TA".into(), ratio: e, coefficient: 1.0, contribution: 1.0 * e, note: "asset turnover".into() },
+    ];
+
+    let z_score: f64 = components.iter().map(|c| c.contribution).sum();
+    let zone = if mve <= 0.0 {
+        "INSUFFICIENT_DATA".to_string()
+    } else if z_score >= 2.99 {
+        "SAFE".to_string()
+    } else if z_score >= 1.81 {
+        "GRAY".to_string()
+    } else {
+        "DISTRESS".to_string()
+    };
+
+    let note = if mve <= 0.0 {
+        "no market cap from Fundamentals — D component is zero, zone reports as INSUFFICIENT_DATA".to_string()
+    } else {
+        String::new()
+    };
+
+    AltmanZSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        working_capital: wc,
+        retained_earnings: re,
+        ebit,
+        market_value_equity: mve,
+        sales,
+        total_assets: ta,
+        total_liabilities: tl,
+        z_score,
+        zone,
+        components,
+        note,
+    }
+}
+
+/// PTFS — Piotroski F-score (9-point quality checklist).
+/// Requires at least 2 annual periods of FinancialStatements.
+pub fn compute_piotroski_snapshot(
+    symbol: &str,
+    as_of: &str,
+    statements: &FinancialStatements,
+) -> PiotroskiSnapshot {
+    if statements.income_annual.len() < 2
+        || statements.balance_annual.len() < 2
+        || statements.cashflow_annual.is_empty()
+    {
+        return PiotroskiSnapshot {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            strength_label: "INSUFFICIENT_DATA".to_string(),
+            note: "need ≥2 annual statements — run FA first".to_string(),
+            ..Default::default()
+        };
+    }
+
+    let inc_cur = &statements.income_annual[0];
+    let inc_prev = &statements.income_annual[1];
+    let bal_cur = &statements.balance_annual[0];
+    let bal_prev = &statements.balance_annual[1];
+    let cf_cur = &statements.cashflow_annual[0];
+
+    let ni = inc_cur.net_income;
+    let cfo = cf_cur.cash_from_operations;
+    let ta_cur = bal_cur.total_assets.max(1.0);
+    let ta_prev = bal_prev.total_assets.max(1.0);
+    let roa_cur = ni / ta_cur;
+    let roa_prev = inc_prev.net_income / ta_prev;
+    let accrual_proxy = cfo - ni;
+
+    let ltd_cur = bal_cur.long_term_debt / ta_cur;
+    let ltd_prev = bal_prev.long_term_debt / ta_prev;
+    let cr_cur = if bal_cur.total_current_liabilities > 0.0 {
+        bal_cur.total_current_assets / bal_cur.total_current_liabilities
+    } else { 0.0 };
+    let cr_prev = if bal_prev.total_current_liabilities > 0.0 {
+        bal_prev.total_current_assets / bal_prev.total_current_liabilities
+    } else { 0.0 };
+    let shares_cur = inc_cur.weighted_shares_out;
+    let shares_prev = inc_prev.weighted_shares_out;
+
+    let gm_cur = if inc_cur.revenue > 0.0 { inc_cur.gross_profit / inc_cur.revenue } else { 0.0 };
+    let gm_prev = if inc_prev.revenue > 0.0 { inc_prev.gross_profit / inc_prev.revenue } else { 0.0 };
+    let at_cur = if ta_cur > 0.0 { inc_cur.revenue / ta_cur } else { 0.0 };
+    let at_prev = if ta_prev > 0.0 { inc_prev.revenue / ta_prev } else { 0.0 };
+
+    let mut checks: Vec<PiotroskiCheck> = Vec::new();
+
+    // Profitability (4)
+    checks.push(PiotroskiCheck {
+        category: "Profitability".into(), name: "Positive Net Income".into(),
+        passed: ni > 0.0, value_current: ni, value_prior: 0.0,
+        note: String::new(),
+    });
+    checks.push(PiotroskiCheck {
+        category: "Profitability".into(), name: "Positive OCF".into(),
+        passed: cfo > 0.0, value_current: cfo, value_prior: 0.0,
+        note: String::new(),
+    });
+    checks.push(PiotroskiCheck {
+        category: "Profitability".into(), name: "ROA ↑".into(),
+        passed: roa_cur > roa_prev, value_current: roa_cur, value_prior: roa_prev,
+        note: String::new(),
+    });
+    checks.push(PiotroskiCheck {
+        category: "Profitability".into(), name: "OCF > NI (accrual)".into(),
+        passed: cfo > ni, value_current: cfo, value_prior: ni,
+        note: format!("accrual = {:.0}", accrual_proxy),
+    });
+
+    // Leverage / Liquidity (3)
+    checks.push(PiotroskiCheck {
+        category: "Leverage/Liquidity".into(), name: "LT Debt / Assets ↓".into(),
+        passed: ltd_cur < ltd_prev, value_current: ltd_cur, value_prior: ltd_prev,
+        note: String::new(),
+    });
+    checks.push(PiotroskiCheck {
+        category: "Leverage/Liquidity".into(), name: "Current Ratio ↑".into(),
+        passed: cr_cur > cr_prev, value_current: cr_cur, value_prior: cr_prev,
+        note: String::new(),
+    });
+    checks.push(PiotroskiCheck {
+        category: "Leverage/Liquidity".into(), name: "No new share issue".into(),
+        passed: shares_cur <= shares_prev * 1.005, // 0.5% tolerance for option grants
+        value_current: shares_cur, value_prior: shares_prev,
+        note: String::new(),
+    });
+
+    // Operating Efficiency (2)
+    checks.push(PiotroskiCheck {
+        category: "Operating Efficiency".into(), name: "Gross Margin ↑".into(),
+        passed: gm_cur > gm_prev, value_current: gm_cur, value_prior: gm_prev,
+        note: String::new(),
+    });
+    checks.push(PiotroskiCheck {
+        category: "Operating Efficiency".into(), name: "Asset Turnover ↑".into(),
+        passed: at_cur > at_prev, value_current: at_cur, value_prior: at_prev,
+        note: String::new(),
+    });
+
+    let profitability_score: i32 = checks.iter().take(4).filter(|c| c.passed).count() as i32;
+    let leverage_score: i32 = checks.iter().skip(4).take(3).filter(|c| c.passed).count() as i32;
+    let efficiency_score: i32 = checks.iter().skip(7).take(2).filter(|c| c.passed).count() as i32;
+    let f_score = profitability_score + leverage_score + efficiency_score;
+
+    let strength_label = if f_score >= 7 {
+        "STRONG".to_string()
+    } else if f_score <= 3 {
+        "WEAK".to_string()
+    } else {
+        "MIXED".to_string()
+    };
+
+    PiotroskiSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        current_period: inc_cur.date.clone(),
+        prior_period: inc_prev.date.clone(),
+        f_score,
+        strength_label,
+        profitability_score,
+        leverage_score,
+        efficiency_score,
+        checks,
+        note: String::new(),
+    }
+}
+
+/// VOLE — OHLC volatility estimators (Parkinson / Garman-Klass / Rogers-Satchell / Yang-Zhang).
+/// Needs ≥20 bars with valid OHLC. Uses the tail of the bar series.
+pub fn compute_ohlc_vol_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars_oldest_first: &[HistoricalPriceRow],
+    window_days: usize,
+) -> OhlcVolSnapshot {
+    let needed = window_days.max(20);
+    if bars_oldest_first.len() < needed {
+        return OhlcVolSnapshot {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            trading_days: bars_oldest_first.len(),
+            note: format!("need ≥{} bars, have {}", needed, bars_oldest_first.len()),
+            ..Default::default()
+        };
+    }
+
+    let tail_start = bars_oldest_first.len() - needed;
+    let tail = &bars_oldest_first[tail_start..];
+    let n = tail.len();
+    let ann = 252.0f64;
+
+    // Valid bars: positive OHLC and high >= low, high >= open, etc.
+    let valid: Vec<&HistoricalPriceRow> = tail.iter()
+        .filter(|b| b.open > 0.0 && b.high > 0.0 && b.low > 0.0 && b.close > 0.0 && b.high >= b.low)
+        .collect();
+    if valid.len() < 20 {
+        return OhlcVolSnapshot {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            trading_days: valid.len(),
+            note: "fewer than 20 bars with valid OHLC".to_string(),
+            ..Default::default()
+        };
+    }
+
+    // Close-to-close realized vol (baseline).
+    let log_ret_cc: Vec<f64> = valid.windows(2)
+        .map(|w| (w[1].close / w[0].close).ln())
+        .collect();
+    let mean_cc: f64 = log_ret_cc.iter().sum::<f64>() / log_ret_cc.len() as f64;
+    let var_cc: f64 = log_ret_cc.iter().map(|r| (r - mean_cc).powi(2)).sum::<f64>() / (log_ret_cc.len() - 1).max(1) as f64;
+    let ctc_daily = var_cc.sqrt();
+    let ctc = ctc_daily * ann.sqrt() * 100.0;
+
+    // Parkinson (range-based).
+    // σ² = (1 / (4·ln2·N)) × Σ ln(H/L)²
+    let ln2 = 2.0f64.ln();
+    let park_sum: f64 = valid.iter()
+        .filter(|b| b.low > 0.0)
+        .map(|b| (b.high / b.low).ln().powi(2))
+        .sum();
+    let park_var_daily = park_sum / (4.0 * ln2 * valid.len() as f64);
+    let park = park_var_daily.sqrt() * ann.sqrt() * 100.0;
+
+    // Garman-Klass.
+    // σ² = (1/N) × Σ [0.5·ln(H/L)² − (2·ln2 − 1)·ln(C/O)²]
+    let gk_sum: f64 = valid.iter()
+        .filter(|b| b.low > 0.0 && b.open > 0.0)
+        .map(|b| {
+            let hl = (b.high / b.low).ln();
+            let co = (b.close / b.open).ln();
+            0.5 * hl * hl - (2.0 * ln2 - 1.0) * co * co
+        })
+        .sum();
+    let gk_var_daily = gk_sum / valid.len() as f64;
+    let gk = gk_var_daily.max(0.0).sqrt() * ann.sqrt() * 100.0;
+
+    // Rogers-Satchell (drift-independent).
+    // σ² = (1/N) × Σ [ln(H/C)·ln(H/O) + ln(L/C)·ln(L/O)]
+    let rs_sum: f64 = valid.iter()
+        .filter(|b| b.low > 0.0 && b.open > 0.0 && b.close > 0.0)
+        .map(|b| {
+            let hc = (b.high / b.close).ln();
+            let ho = (b.high / b.open).ln();
+            let lc = (b.low / b.close).ln();
+            let lo = (b.low / b.open).ln();
+            hc * ho + lc * lo
+        })
+        .sum();
+    let rs_var_daily = rs_sum / valid.len() as f64;
+    let rs = rs_var_daily.max(0.0).sqrt() * ann.sqrt() * 100.0;
+
+    // Yang-Zhang = overnight_var + k × open-to-close_var + (1-k) × RS_var
+    // k = 0.34 / (1.34 + (N+1)/(N-1)). Overnight returns use previous_close → open.
+    let overnight_rets: Vec<f64> = valid.windows(2)
+        .map(|w| (w[1].open / w[0].close).ln())
+        .collect();
+    let on_mean: f64 = overnight_rets.iter().sum::<f64>() / overnight_rets.len().max(1) as f64;
+    let on_var: f64 = overnight_rets.iter().map(|r| (r - on_mean).powi(2)).sum::<f64>()
+        / (overnight_rets.len().saturating_sub(1)).max(1) as f64;
+    let oc_rets: Vec<f64> = valid.iter().map(|b| (b.close / b.open).ln()).collect();
+    let oc_mean: f64 = oc_rets.iter().sum::<f64>() / oc_rets.len() as f64;
+    let oc_var: f64 = oc_rets.iter().map(|r| (r - oc_mean).powi(2)).sum::<f64>()
+        / (oc_rets.len() - 1).max(1) as f64;
+    let n_f = n as f64;
+    let k = 0.34 / (1.34 + (n_f + 1.0) / (n_f - 1.0).max(1.0));
+    let yz_var_daily = on_var + k * oc_var + (1.0 - k) * rs_var_daily.max(0.0);
+    let yz = yz_var_daily.max(0.0).sqrt() * ann.sqrt() * 100.0;
+
+    let make_row = |name: &str, vol: f64| VolEstimator {
+        name: name.to_string(),
+        annualized_vol_pct: vol,
+        efficiency_vs_close: if ctc > 0.0 { ctc / vol.max(0.0001) } else { 1.0 },
+        note: String::new(),
+    };
+
+    let estimators = vec![
+        make_row("Close-to-Close", ctc),
+        make_row("Parkinson", park),
+        make_row("Garman-Klass", gk),
+        make_row("Rogers-Satchell", rs),
+        make_row("Yang-Zhang", yz),
+    ];
+
+    let (preferred_label, preferred) = if yz > 0.0 {
+        ("Yang-Zhang".to_string(), yz)
+    } else if park > 0.0 {
+        ("Parkinson".to_string(), park)
+    } else {
+        ("Close-to-Close".to_string(), ctc)
+    };
+
+    OhlcVolSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        trading_days: valid.len(),
+        estimators,
+        preferred_estimate_pct: preferred,
+        preferred_label,
+        note: String::new(),
+    }
+}
+
+/// EPSB — EPS beat streak & surprise analysis over cached earnings-surprise history.
+pub fn compute_eps_beat_snapshot(
+    symbol: &str,
+    as_of: &str,
+    reports: &[EarningsSurprise],
+) -> EpsBeatSnapshot {
+    if reports.is_empty() {
+        return EpsBeatSnapshot {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            bias_label: "NEUTRAL".to_string(),
+            trend_label: "STABLE".to_string(),
+            note: "no EPS surprise history — run EPS first".to_string(),
+            ..Default::default()
+        };
+    }
+
+    // Sort oldest-first by date string (YYYY-MM-DD sorts lexicographically).
+    let mut sorted: Vec<EarningsSurprise> = reports.to_vec();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+
+    let beats = sorted.iter().filter(|r| r.surprise > 0.0).count();
+    let misses = sorted.iter().filter(|r| r.surprise < 0.0).count();
+    let inlines = sorted.iter().filter(|r| r.surprise == 0.0).count();
+    let total = sorted.len();
+
+    // Beat rate (beats / total).
+    let beat_rate_pct = (beats as f64 / total as f64) * 100.0;
+
+    // Current streak: walk from the newest report backwards.
+    let mut current_streak: i32 = 0;
+    let newest = sorted.last().map(|r| r.surprise).unwrap_or(0.0);
+    let direction = if newest > 0.0 { 1i32 } else if newest < 0.0 { -1i32 } else { 0i32 };
+    if direction != 0 {
+        for r in sorted.iter().rev() {
+            if r.surprise > 0.0 && direction == 1 {
+                current_streak += 1;
+            } else if r.surprise < 0.0 && direction == -1 {
+                current_streak -= 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Longest streaks of each kind.
+    let mut longest_beat = 0usize;
+    let mut longest_miss = 0usize;
+    let mut run_beat = 0usize;
+    let mut run_miss = 0usize;
+    for r in sorted.iter() {
+        if r.surprise > 0.0 {
+            run_beat += 1;
+            if run_beat > longest_beat { longest_beat = run_beat; }
+            run_miss = 0;
+        } else if r.surprise < 0.0 {
+            run_miss += 1;
+            if run_miss > longest_miss { longest_miss = run_miss; }
+            run_beat = 0;
+        } else {
+            run_beat = 0;
+            run_miss = 0;
+        }
+    }
+
+    let avg_surprise_pct = sorted.iter().map(|r| r.surprise_pct).sum::<f64>() / total as f64;
+    let mut sorted_pcts: Vec<f64> = sorted.iter().map(|r| r.surprise_pct).collect();
+    sorted_pcts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_surprise_pct = if sorted_pcts.len() % 2 == 0 {
+        (sorted_pcts[sorted_pcts.len() / 2 - 1] + sorted_pcts[sorted_pcts.len() / 2]) / 2.0
+    } else {
+        sorted_pcts[sorted_pcts.len() / 2]
+    };
+
+    let recent_n = 4.min(sorted.len());
+    let recent_slice = &sorted[sorted.len() - recent_n..];
+    let recent_avg = recent_slice.iter().map(|r| r.surprise_pct).sum::<f64>() / recent_n as f64;
+
+    let bias_label = if avg_surprise_pct > 2.0 {
+        "POSITIVE".to_string()
+    } else if avg_surprise_pct < -2.0 {
+        "NEGATIVE".to_string()
+    } else {
+        "NEUTRAL".to_string()
+    };
+
+    let trend_label = if recent_avg > avg_surprise_pct + 1.0 {
+        "ACCELERATING".to_string()
+    } else if recent_avg < avg_surprise_pct - 1.0 {
+        "DECELERATING".to_string()
+    } else {
+        "STABLE".to_string()
+    };
+
+    let latest = sorted.last().unwrap();
+
+    EpsBeatSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        total_reports: total,
+        beats,
+        misses,
+        inlines,
+        beat_rate_pct,
+        current_streak,
+        longest_beat_streak: longest_beat,
+        longest_miss_streak: longest_miss,
+        avg_surprise_pct,
+        median_surprise_pct,
+        recent_avg_surprise_pct: recent_avg,
+        bias_label,
+        trend_label,
+        latest_date: latest.date.clone(),
+        latest_surprise_pct: latest.surprise_pct,
+        note: String::new(),
+    }
+}
+
+/// PTD — Price Target Dispersion & Implied Return from cached aggregates.
+pub fn compute_price_target_dispersion(
+    symbol: &str,
+    as_of: &str,
+    current_price: f64,
+    target: Option<&PriceTarget>,
+) -> PriceTargetDispersion {
+    let target = match target {
+        Some(t) => t,
+        None => {
+            return PriceTargetDispersion {
+                symbol: symbol.to_uppercase(),
+                as_of: as_of.to_string(),
+                current_price,
+                consensus_label: "NO_COVERAGE".to_string(),
+                note: "no cached price target — run UPDG / PT first".to_string(),
+                ..Default::default()
+            };
+        }
+    };
+
+    let dispersion_pct = if target.target_mean > 0.0 {
+        (target.target_high - target.target_low) / target.target_mean * 100.0
+    } else { 0.0 };
+    let spread_pct = if current_price > 0.0 {
+        (target.target_high - target.target_low) / current_price * 100.0
+    } else { 0.0 };
+
+    let implied_median = if current_price > 0.0 && target.target_median > 0.0 {
+        (target.target_median - current_price) / current_price * 100.0
+    } else { 0.0 };
+    let implied_mean = if current_price > 0.0 && target.target_mean > 0.0 {
+        (target.target_mean - current_price) / current_price * 100.0
+    } else { 0.0 };
+    let upside_high = if current_price > 0.0 && target.target_high > 0.0 {
+        (target.target_high - current_price) / current_price * 100.0
+    } else { 0.0 };
+    let downside_low = if current_price > 0.0 && target.target_low > 0.0 {
+        (target.target_low - current_price) / current_price * 100.0
+    } else { 0.0 };
+
+    let consensus_label = if target.num_analysts <= 0 || current_price <= 0.0 {
+        "NO_COVERAGE".to_string()
+    } else if implied_median >= 10.0 {
+        "BULLISH".to_string()
+    } else if implied_median <= -5.0 {
+        "BEARISH".to_string()
+    } else {
+        "NEUTRAL".to_string()
+    };
+
+    let note = if target.num_analysts <= 0 {
+        "target has zero analyst coverage".to_string()
+    } else {
+        String::new()
+    };
+
+    PriceTargetDispersion {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        current_price,
+        target_high: target.target_high,
+        target_low: target.target_low,
+        target_mean: target.target_mean,
+        target_median: target.target_median,
+        num_analysts: target.num_analysts,
+        dispersion_pct,
+        spread_pct,
+        implied_return_median_pct: implied_median,
+        implied_return_mean_pct: implied_mean,
+        upside_to_high_pct: upside_high,
+        downside_to_low_pct: downside_low,
+        consensus_label,
+        note,
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -6153,6 +6846,154 @@ pub fn get_short_interest(conn: &Connection, symbol: &str) -> Result<Option<Shor
         .map_err(|e| format!("prepare get_short_interest: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_short_interest: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_short_interest: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-118 Godel Parity Round 11 schema + helpers ─────────────────────────
+
+pub fn create_research_tables_v11(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_altman_z (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_piotroski (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_ohlc_vol (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_eps_beat (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_price_target_dispersion (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_altman_z_updated                 ON research_altman_z(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_piotroski_updated                ON research_piotroski(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_ohlc_vol_updated                 ON research_ohlc_vol(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_eps_beat_updated                 ON research_eps_beat(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_price_target_dispersion_updated  ON research_price_target_dispersion(updated_at);"
+    ).map_err(|e| format!("create research_v11 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_altman_z(conn: &Connection, symbol: &str, snap: &AltmanZSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v11(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("altman_z json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_altman_z(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert altman_z: {e}"))?;
+    Ok(())
+}
+
+pub fn get_altman_z(conn: &Connection, symbol: &str) -> Result<Option<AltmanZSnapshot>, String> {
+    let _ = create_research_tables_v11(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_altman_z WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_altman_z: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_altman_z: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_altman_z: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_piotroski(conn: &Connection, symbol: &str, snap: &PiotroskiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v11(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("piotroski json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_piotroski(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert piotroski: {e}"))?;
+    Ok(())
+}
+
+pub fn get_piotroski(conn: &Connection, symbol: &str) -> Result<Option<PiotroskiSnapshot>, String> {
+    let _ = create_research_tables_v11(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_piotroski WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_piotroski: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_piotroski: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_piotroski: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ohlc_vol(conn: &Connection, symbol: &str, snap: &OhlcVolSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v11(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ohlc_vol json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ohlc_vol(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ohlc_vol: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ohlc_vol(conn: &Connection, symbol: &str) -> Result<Option<OhlcVolSnapshot>, String> {
+    let _ = create_research_tables_v11(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ohlc_vol WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_ohlc_vol: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_ohlc_vol: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_ohlc_vol: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_eps_beat(conn: &Connection, symbol: &str, snap: &EpsBeatSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v11(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("eps_beat json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_eps_beat(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert eps_beat: {e}"))?;
+    Ok(())
+}
+
+pub fn get_eps_beat(conn: &Connection, symbol: &str) -> Result<Option<EpsBeatSnapshot>, String> {
+    let _ = create_research_tables_v11(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_eps_beat WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_eps_beat: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_eps_beat: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_eps_beat: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_price_target_dispersion(conn: &Connection, symbol: &str, snap: &PriceTargetDispersion) -> Result<(), String> {
+    let _ = create_research_tables_v11(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("price_target_dispersion json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_price_target_dispersion(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert price_target_dispersion: {e}"))?;
+    Ok(())
+}
+
+pub fn get_price_target_dispersion(conn: &Connection, symbol: &str) -> Result<Option<PriceTargetDispersion>, String> {
+    let _ = create_research_tables_v11(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_price_target_dispersion WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_price_target_dispersion: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_price_target_dispersion: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_price_target_dispersion: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -7990,5 +8831,304 @@ mod tests {
             100_000_000.0, 80_000_000.0, 0.0, 0.0, &bars,
         );
         assert_eq!(snap.squeeze_risk_label, "INSUFFICIENT_DATA");
+    }
+
+    // ── ADR-118 Godel Parity Round 11 tests ─────────────────────────────
+
+    fn open_mem_conn_v11() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v11(&c).unwrap();
+        c
+    }
+
+    fn two_year_statements() -> FinancialStatements {
+        // Build two annual snapshots so Piotroski and Altman have enough data.
+        let inc_current = IncomeStatement {
+            date: "2024-12-31".into(), period: "FY".into(),
+            revenue: 2000.0, cost_of_revenue: 1000.0, gross_profit: 1000.0,
+            research_and_development: 100.0, selling_general_admin: 200.0,
+            operating_expenses: 300.0, operating_income: 700.0,
+            interest_expense: 50.0, ebitda: 800.0,
+            income_before_tax: 650.0, income_tax_expense: 150.0,
+            net_income: 500.0, eps: 5.0, eps_diluted: 5.0,
+            weighted_shares_out: 100.0,
+        };
+        let inc_prior = IncomeStatement {
+            date: "2023-12-31".into(), period: "FY".into(),
+            revenue: 1800.0, cost_of_revenue: 1000.0, gross_profit: 800.0,
+            research_and_development: 100.0, selling_general_admin: 200.0,
+            operating_expenses: 300.0, operating_income: 500.0,
+            interest_expense: 50.0, ebitda: 600.0,
+            income_before_tax: 450.0, income_tax_expense: 100.0,
+            net_income: 350.0, eps: 3.5, eps_diluted: 3.5,
+            weighted_shares_out: 100.0,
+        };
+        let bal_current = BalanceSheet {
+            date: "2024-12-31".into(), period: "FY".into(),
+            cash_and_equiv: 400.0, short_term_investments: 0.0,
+            net_receivables: 200.0, inventory: 300.0,
+            total_current_assets: 900.0,
+            property_plant_equipment: 1500.0, goodwill: 0.0, intangible_assets: 0.0,
+            long_term_investments: 0.0, total_non_current_assets: 1500.0,
+            total_assets: 2400.0,
+            accounts_payable: 150.0, short_term_debt: 100.0,
+            total_current_liabilities: 400.0, long_term_debt: 500.0,
+            total_non_current_liabilities: 700.0, total_liabilities: 1100.0,
+            common_stock: 300.0, retained_earnings: 1000.0, total_equity: 1300.0,
+            total_debt: 600.0, net_debt: 200.0,
+        };
+        let bal_prior = BalanceSheet {
+            date: "2023-12-31".into(), period: "FY".into(),
+            cash_and_equiv: 300.0, short_term_investments: 0.0,
+            net_receivables: 180.0, inventory: 280.0,
+            total_current_assets: 760.0,
+            property_plant_equipment: 1400.0, goodwill: 0.0, intangible_assets: 0.0,
+            long_term_investments: 0.0, total_non_current_assets: 1400.0,
+            total_assets: 2160.0,
+            accounts_payable: 150.0, short_term_debt: 100.0,
+            total_current_liabilities: 400.0, long_term_debt: 600.0,
+            total_non_current_liabilities: 800.0, total_liabilities: 1200.0,
+            common_stock: 300.0, retained_earnings: 660.0, total_equity: 960.0,
+            total_debt: 700.0, net_debt: 400.0,
+        };
+        let cf_current = CashFlowStatement {
+            date: "2024-12-31".into(), period: "FY".into(),
+            net_income: 500.0, depreciation_amortization: 100.0,
+            stock_based_comp: 0.0, change_working_capital: 0.0,
+            cash_from_operations: 600.0, capex: -200.0,
+            acquisitions: 0.0, investments_purchases: 0.0,
+            cash_from_investing: -200.0, debt_repayment: -100.0,
+            dividends_paid: 0.0, stock_repurchases: 0.0,
+            cash_from_financing: -100.0, net_change_cash: 300.0,
+            free_cash_flow: 400.0,
+        };
+        let cf_prior = CashFlowStatement {
+            date: "2023-12-31".into(), period: "FY".into(),
+            net_income: 350.0, depreciation_amortization: 90.0,
+            stock_based_comp: 0.0, change_working_capital: 0.0,
+            cash_from_operations: 420.0, capex: -180.0,
+            acquisitions: 0.0, investments_purchases: 0.0,
+            cash_from_investing: -180.0, debt_repayment: 0.0,
+            dividends_paid: 0.0, stock_repurchases: 0.0,
+            cash_from_financing: 0.0, net_change_cash: 240.0,
+            free_cash_flow: 240.0,
+        };
+        FinancialStatements {
+            income_annual: vec![inc_current.clone(), inc_prior.clone()],
+            income_quarterly: vec![inc_current],
+            balance_annual: vec![bal_current.clone(), bal_prior.clone()],
+            balance_quarterly: vec![bal_current],
+            cashflow_annual: vec![cf_current.clone(), cf_prior.clone()],
+            cashflow_quarterly: vec![cf_current],
+        }
+    }
+
+    #[test]
+    fn altman_z_snapshot_roundtrip() {
+        let c = open_mem_conn_v11();
+        let snap = AltmanZSnapshot {
+            symbol: "AAPL".into(),
+            as_of: "2026-04-14".into(),
+            working_capital: 500.0, retained_earnings: 1000.0,
+            ebit: 700.0, market_value_equity: 5000.0,
+            sales: 2000.0, total_assets: 2400.0, total_liabilities: 1100.0,
+            z_score: 4.2, zone: "SAFE".into(),
+            components: vec![AltmanComponent {
+                name: "A: WC/TA".into(), ratio: 0.208, coefficient: 1.2,
+                contribution: 0.25, note: "".into(),
+            }],
+            note: "".into(),
+        };
+        upsert_altman_z(&c, "AAPL", &snap).unwrap();
+        let got = get_altman_z(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.symbol, "AAPL");
+        assert_eq!(got.zone, "SAFE");
+        assert_eq!(got.components.len(), 1);
+    }
+
+    #[test]
+    fn piotroski_snapshot_roundtrip() {
+        let c = open_mem_conn_v11();
+        let snap = PiotroskiSnapshot {
+            symbol: "MSFT".into(), as_of: "2026-04-14".into(),
+            current_period: "2024-12-31".into(), prior_period: "2023-12-31".into(),
+            f_score: 8, strength_label: "STRONG".into(),
+            profitability_score: 4, leverage_score: 2, efficiency_score: 2,
+            checks: vec![PiotroskiCheck {
+                category: "Profitability".into(),
+                name: "Positive Net Income".into(),
+                passed: true, value_current: 500.0, value_prior: 350.0,
+                note: "".into(),
+            }],
+            note: "".into(),
+        };
+        upsert_piotroski(&c, "MSFT", &snap).unwrap();
+        let got = get_piotroski(&c, "msft").unwrap().unwrap();
+        assert_eq!(got.f_score, 8);
+        assert_eq!(got.strength_label, "STRONG");
+    }
+
+    #[test]
+    fn ohlc_vol_snapshot_roundtrip() {
+        let c = open_mem_conn_v11();
+        let snap = OhlcVolSnapshot {
+            symbol: "NVDA".into(), as_of: "2026-04-14".into(),
+            trading_days: 60,
+            estimators: vec![VolEstimator {
+                name: "YangZhang".into(), annualized_vol_pct: 35.0,
+                efficiency_vs_close: 1.1, note: "".into(),
+            }],
+            preferred_estimate_pct: 35.0, preferred_label: "YangZhang".into(),
+            note: "".into(),
+        };
+        upsert_ohlc_vol(&c, "NVDA", &snap).unwrap();
+        let got = get_ohlc_vol(&c, "nvda").unwrap().unwrap();
+        assert_eq!(got.preferred_label, "YangZhang");
+        assert_eq!(got.estimators.len(), 1);
+    }
+
+    #[test]
+    fn eps_beat_snapshot_roundtrip() {
+        let c = open_mem_conn_v11();
+        let snap = EpsBeatSnapshot {
+            symbol: "AMZN".into(), as_of: "2026-04-14".into(),
+            total_reports: 8, beats: 6, misses: 1, inlines: 1,
+            beat_rate_pct: 75.0, current_streak: 3,
+            longest_beat_streak: 4, longest_miss_streak: 1,
+            avg_surprise_pct: 5.2, median_surprise_pct: 4.8,
+            recent_avg_surprise_pct: 6.5,
+            bias_label: "POSITIVE".into(), trend_label: "ACCELERATING".into(),
+            latest_date: "2024-10-31".into(), latest_surprise_pct: 7.0,
+            note: "".into(),
+        };
+        upsert_eps_beat(&c, "AMZN", &snap).unwrap();
+        let got = get_eps_beat(&c, "amzn").unwrap().unwrap();
+        assert_eq!(got.beats, 6);
+        assert_eq!(got.trend_label, "ACCELERATING");
+    }
+
+    #[test]
+    fn price_target_dispersion_roundtrip() {
+        let c = open_mem_conn_v11();
+        let snap = PriceTargetDispersion {
+            symbol: "TSLA".into(), as_of: "2026-04-14".into(),
+            current_price: 200.0,
+            target_high: 350.0, target_low: 150.0,
+            target_mean: 250.0, target_median: 240.0,
+            num_analysts: 25,
+            dispersion_pct: 80.0, spread_pct: 100.0,
+            implied_return_median_pct: 20.0, implied_return_mean_pct: 25.0,
+            upside_to_high_pct: 75.0, downside_to_low_pct: -25.0,
+            consensus_label: "BULLISH".into(), note: "".into(),
+        };
+        upsert_price_target_dispersion(&c, "TSLA", &snap).unwrap();
+        let got = get_price_target_dispersion(&c, "tsla").unwrap().unwrap();
+        assert_eq!(got.consensus_label, "BULLISH");
+        assert_eq!(got.num_analysts, 25);
+    }
+
+    #[test]
+    fn compute_altman_z_on_healthy_statements() {
+        let st = two_year_statements();
+        let snap = compute_altman_z_snapshot("TEST", "2026-04-14", &st, 5000.0);
+        // WC = 900-400 = 500, TA = 2400, RE = 1000, EBIT = 700, MVE = 5000, TL = 1100, Sales = 2000
+        // Z = 1.2*(500/2400) + 1.4*(1000/2400) + 3.3*(700/2400) + 0.6*(5000/1100) + 1.0*(2000/2400)
+        //   ≈ 0.25 + 0.583 + 0.963 + 2.727 + 0.833 ≈ 5.36 → SAFE
+        assert_eq!(snap.components.len(), 5);
+        assert!(snap.z_score > 2.99);
+        assert_eq!(snap.zone, "SAFE");
+        assert_eq!(snap.total_assets, 2400.0);
+    }
+
+    #[test]
+    fn compute_altman_z_insufficient_data_returns_note() {
+        let st = FinancialStatements::default();
+        let snap = compute_altman_z_snapshot("X", "2026-04-14", &st, 1000.0);
+        assert_eq!(snap.zone, "INSUFFICIENT_DATA");
+        assert!(!snap.note.is_empty());
+    }
+
+    #[test]
+    fn compute_piotroski_strong_score() {
+        let st = two_year_statements();
+        let snap = compute_piotroski_snapshot("TEST", "2026-04-14", &st);
+        // Improving NI (350→500), positive OCF (600), OCF>NI, LTDebt↓ (600→500),
+        // current ratio ≈ 900/400 vs 760/400 → improved, no new shares, GM ≈ 50% vs 44% → improved,
+        // asset turnover ≈ 2000/2400 vs 1800/2160 → similar, expect STRONG (≥7).
+        assert!(snap.f_score >= 7);
+        assert_eq!(snap.strength_label, "STRONG");
+        assert_eq!(snap.checks.len(), 9);
+    }
+
+    #[test]
+    fn compute_piotroski_insufficient_data() {
+        let st = FinancialStatements::default();
+        let snap = compute_piotroski_snapshot("X", "2026-04-14", &st);
+        assert_eq!(snap.strength_label, "INSUFFICIENT_DATA");
+        assert!(!snap.note.is_empty());
+    }
+
+    #[test]
+    fn compute_ohlc_vol_five_estimators() {
+        let bars = synth_bars(60, 100.0, 0.001);
+        let snap = compute_ohlc_vol_snapshot("TEST", "2026-04-14", &bars, 30);
+        assert_eq!(snap.estimators.len(), 5);
+        assert!(snap.preferred_estimate_pct >= 0.0);
+        assert_eq!(snap.preferred_label, "Yang-Zhang");
+    }
+
+    #[test]
+    fn compute_ohlc_vol_insufficient_bars() {
+        let bars = synth_bars(10, 100.0, 0.001);
+        let snap = compute_ohlc_vol_snapshot("X", "2026-04-14", &bars, 20);
+        assert!(!snap.note.is_empty());
+        assert!(snap.estimators.is_empty());
+    }
+
+    #[test]
+    fn compute_eps_beat_six_beats_labels_positive() {
+        let rows: Vec<EarningsSurprise> = (0..8).map(|i| EarningsSurprise {
+            date: format!("2024-{:02}-01", i + 1),
+            symbol: "TEST".into(),
+            eps_actual: 1.0 + (i as f64) * 0.05,
+            eps_estimate: 1.0,
+            surprise: (i as f64) * 0.05,
+            surprise_pct: (i as f64) * 5.0,
+        }).collect();
+        let snap = compute_eps_beat_snapshot("TEST", "2026-04-14", &rows);
+        assert_eq!(snap.total_reports, 8);
+        assert!(snap.beats >= 6);
+        assert_eq!(snap.bias_label, "POSITIVE");
+        assert!(snap.current_streak > 0);
+    }
+
+    #[test]
+    fn compute_eps_beat_empty_reports() {
+        let snap = compute_eps_beat_snapshot("X", "2026-04-14", &[]);
+        assert_eq!(snap.total_reports, 0);
+        assert!(!snap.note.is_empty());
+    }
+
+    #[test]
+    fn compute_price_target_dispersion_bullish() {
+        let target = PriceTarget {
+            symbol: "TEST".into(),
+            target_high: 150.0, target_low: 110.0,
+            target_mean: 130.0, target_median: 125.0,
+            last_updated: "2024-11-01".into(),
+            num_analysts: 15,
+        };
+        let snap = compute_price_target_dispersion("TEST", "2026-04-14", 100.0, Some(&target));
+        // implied_median = (125-100)/100 = 25% → BULLISH
+        assert_eq!(snap.consensus_label, "BULLISH");
+        assert!((snap.implied_return_median_pct - 25.0).abs() < 1e-6);
+        assert!((snap.spread_pct - 40.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_price_target_dispersion_no_coverage() {
+        let snap = compute_price_target_dispersion("X", "2026-04-14", 100.0, None);
+        assert_eq!(snap.consensus_label, "NO_COVERAGE");
+        assert!(!snap.note.is_empty());
     }
 }
