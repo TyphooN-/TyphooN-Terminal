@@ -9759,7 +9759,13 @@ enum BrokerCmd {
     /// Set TP for current symbol: places a limit order opposite to position direction.
     AlpacaSetTP { symbol: String, price: f64 },
     /// AI chat request (Anthropic Claude or OpenAI GPT).
-    AiChat { provider: String, api_key: String, message: String, history: Vec<(bool, String)> },
+    /// `system` — optional system prompt / research packet.
+    /// `model` — optional model override (else the provider default is used).
+    AiChat {
+        provider: String, api_key: String,
+        message: String, history: Vec<(bool, String)>,
+        system: Option<String>, model: Option<String>,
+    },
     /// Join a Matrix room (idempotent — no-op if already joined).
     MatrixJoinRoom { room_id: String, access_token: String },
     /// Fetch recent messages from a public Matrix room.
@@ -9819,6 +9825,19 @@ enum BrokerCmd {
     FetchExecutives { symbol: String, finnhub_key: String },
     /// CFTC Socrata — latest weekly Commitments of Traders (legacy futures).
     FetchCotReports,
+    // ── ADR-111 Godel Parity Round 4 ──
+    /// FMP historical stock split events for a symbol.
+    FetchStockSplits { symbol: String, fmp_key: String },
+    /// FMP ETF holdings (constituents) for an ETF ticker.
+    FetchEtfHoldings { symbol: String, fmp_key: String },
+    /// Finnhub analyst recommendation bucket trend (monthly).
+    FetchAnalystRecs { symbol: String, finnhub_key: String },
+    /// Finnhub consensus price target snapshot (single row).
+    FetchPriceTarget { symbol: String, finnhub_key: String },
+    /// FMP ESG (environmental/social/governance) score history.
+    FetchEsgScores { symbol: String, fmp_key: String },
+    /// FMP index constituents by index code (SP500/NDX/DJIA).
+    FetchIndexMembers { index_code: String, fmp_key: String },
     /// Fetch multi-source news for a symbol (GDELT + Yahoo RSS + SEC + Marketaux + AV + FMP),
     /// cache results in SQLite, and return the cached set.
     FetchNewsMulti {
@@ -9949,6 +9968,19 @@ enum BrokerMsg {
     Executives(String, Vec<typhoon_engine::core::research::Executive>),
     /// CFTC COT weekly snapshot.
     CotReports(Vec<typhoon_engine::core::research::CotReport>),
+    // ── ADR-111 ──
+    /// Stock split history for a symbol.
+    StockSplitsMsg(String, Vec<typhoon_engine::core::research::StockSplit>),
+    /// ETF holdings (constituents) for an ETF ticker.
+    EtfHoldingsMsg(String, Vec<typhoon_engine::core::research::EtfHolding>),
+    /// Analyst recommendation buckets (monthly trend) for a symbol.
+    AnalystRecsMsg(String, Vec<typhoon_engine::core::research::AnalystRecommendation>),
+    /// Consensus price target snapshot for a symbol.
+    PriceTargetMsg(String, typhoon_engine::core::research::PriceTarget),
+    /// ESG score history for a symbol.
+    EsgScoresMsg(String, Vec<typhoon_engine::core::research::EsgScore>),
+    /// Index members (constituents) for an index code.
+    IndexMembersMsg(String, Vec<typhoon_engine::core::research::IndexMember>),
     /// Multi-source news articles loaded (from cache + fresh fetch) for a symbol.
     NewsArticlesLoaded {
         symbol: String,
@@ -10172,13 +10204,26 @@ pub struct TyphooNApp {
     claude_code_input: String,
     claude_code_history: Vec<(bool, String)>, // (is_user, message)
     claude_code_rx: Option<std::sync::mpsc::Receiver<String>>,
+    /// Research packet stored verbatim so follow-ups in the chat window still see
+    /// the TyphooN fundamentals — not just the `[Research packet: AAPL]` placeholder.
+    claude_code_packet: Option<String>,
+    /// Per-session UUID (reused across Send clicks so Claude CLI resumes the same thread).
+    claude_code_session_id: Option<String>,
+    /// Picked model alias for Claude CLI: "opus" | "sonnet" | "haiku".
+    claude_model: String,
     /// Gemini CLI chat window.
     show_gemini_cli: bool,
     gemini_cli_input: String,
     gemini_cli_history: Vec<(bool, String)>,
     gemini_cli_rx: Option<std::sync::mpsc::Receiver<String>>,
+    gemini_cli_packet: Option<String>,
+    gemini_model: String,
     ai_chat_history: Vec<(bool, String)>, // (is_user, message)
     ai_chat_input: String,
+    ai_chat_packet: Option<String>,
+    /// Currently selected model name for the ai_provider picker. Resets to the
+    /// provider default when the user switches providers.
+    ai_model: String,
     ai_provider: usize, // 0=Claude, 1=GPT
     /// Reddit WSB posts.
     show_reddit: bool,
@@ -10733,6 +10778,39 @@ pub struct TyphooNApp {
     cot_loading: bool,
     cot_last_fetch: Option<std::time::Instant>,
     cot_filter: String,
+
+    // ── ADR-111 Godel Parity Round 4 ──────────────────────────────────
+    /// SPLT — historical stock split events.
+    show_splits: bool,
+    splits_symbol: String,
+    splits_list: Vec<typhoon_engine::core::research::StockSplit>,
+    splits_loading: bool,
+
+    /// ETF — exchange-traded fund holdings (constituents).
+    show_etf_holdings: bool,
+    etf_symbol: String,
+    etf_holdings: Vec<typhoon_engine::core::research::EtfHolding>,
+    etf_loading: bool,
+
+    /// ANR — analyst recommendation buckets + consensus price target.
+    show_analyst_recs: bool,
+    anr_symbol: String,
+    analyst_recs: Vec<typhoon_engine::core::research::AnalystRecommendation>,
+    price_target: typhoon_engine::core::research::PriceTarget,
+    anr_loading: bool,
+
+    /// ESG — environmental / social / governance scores by year.
+    show_esg: bool,
+    esg_symbol: String,
+    esg_rows: Vec<typhoon_engine::core::research::EsgScore>,
+    esg_loading: bool,
+
+    /// MEMB — equity index constituents (global, cached by index code).
+    show_index_members: bool,
+    index_code: String,
+    index_members: Vec<typhoon_engine::core::research::IndexMember>,
+    memb_loading: bool,
+    memb_filter: String,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -11578,18 +11656,37 @@ impl TyphooNApp {
                             }
                         }
                     }
-                    BrokerCmd::AiChat { provider, api_key, message, history } => {
+                    BrokerCmd::AiChat { provider, api_key, message, history, system, model } => {
                         let client = reqwest::Client::new();
                         let msg_tx = broker_msg_tx_clone.clone();
                         tokio::spawn(async move {
+                            // The base system prompt: trading assistant + research packet if supplied.
+                            let base_system = "You are a trading assistant inside TyphooN-Terminal. \
+When the question touches recent news, sentiment, or prices, combine the research packet \
+(if provided) with your own live web search and cite the sources you rely on.".to_string();
+                            let full_system = match &system {
+                                Some(packet) if !packet.is_empty() => format!(
+                                    "{base_system}\n\n=== RESEARCH PACKET ===\n{packet}\n=== END RESEARCH PACKET ==="
+                                ),
+                                _ => base_system,
+                            };
+
+                            // Build the message chain (history + new user turn).
                             let msgs: Vec<serde_json::Value> = history.iter()
                                 .map(|(is_user, text)| serde_json::json!({"role": if *is_user { "user" } else { "assistant" }, "content": text}))
                                 .chain(std::iter::once(serde_json::json!({"role": "user", "content": message})))
                                 .collect();
 
                             if provider == "claude" {
-                                // Anthropic uses its own API format (not OpenAI-compatible)
-                                let body = serde_json::json!({"model": "claude-sonnet-4-20250514", "max_tokens": 1024, "messages": msgs});
+                                // Anthropic uses its own API format (not OpenAI-compatible).
+                                // `system` goes in its own top-level field, not as a role.
+                                let anth_model = model.clone().unwrap_or_else(|| "claude-opus-4-5".to_string());
+                                let body = serde_json::json!({
+                                    "model": anth_model,
+                                    "max_tokens": 4096,
+                                    "system": full_system,
+                                    "messages": msgs,
+                                });
                                 match client.post("https://api.anthropic.com/v1/messages")
                                     .header("x-api-key", &api_key).header("anthropic-version", "2023-06-01")
                                     .header("content-type", "application/json").json(&body).send().await {
@@ -11603,24 +11700,24 @@ impl TyphooNApp {
                                 }
                             } else {
                                 // OpenAI-compatible endpoint (GPT, Gemini, Grok, Mistral, Perplexity, Ollama)
-                                let (url, model, auth_header) = match provider.as_str() {
+                                let (url, default_model, auth_header) = match provider.as_str() {
                                     "openai" => ("https://api.openai.com/v1/chat/completions", "gpt-4o", format!("Bearer {}", api_key)),
-                                    "gemini" => ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash", format!("Bearer {}", api_key)),
-                                    "grok" => ("https://api.x.ai/v1/chat/completions", "grok-3-mini", format!("Bearer {}", api_key)),
+                                    "gemini" => ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-pro", format!("Bearer {}", api_key)),
+                                    "grok" => ("https://api.x.ai/v1/chat/completions", "grok-3", format!("Bearer {}", api_key)),
                                     "mistral" => ("https://api.mistral.ai/v1/chat/completions", "mistral-large-latest", format!("Bearer {}", api_key)),
                                     "perplexity" => ("https://api.perplexity.ai/chat/completions", "sonar-pro", format!("Bearer {}", api_key)),
                                     "local" => {
                                         // Ollama / LM Studio: local OpenAI-compatible server
                                         let local_url = if api_key.starts_with("http") { api_key.as_str() } else { "http://localhost:11434" };
-                                        // Leak-safe: use a static-ish string for the URL
                                         (if local_url.contains("11434") { "http://localhost:11434/v1/chat/completions" } else { "http://localhost:1234/v1/chat/completions" },
                                          "llama3.2", String::new())
                                     }
                                     _ => ("https://api.openai.com/v1/chat/completions", "gpt-4o", format!("Bearer {}", api_key)),
                                 };
-                                let mut all = vec![serde_json::json!({"role": "system", "content": "You are a trading assistant for TyphooN Terminal."})];
+                                let effective_model = model.clone().unwrap_or_else(|| default_model.to_string());
+                                let mut all = vec![serde_json::json!({"role": "system", "content": full_system})];
                                 all.extend(msgs);
-                                let body = serde_json::json!({"model": model, "messages": all, "max_tokens": 1024});
+                                let body = serde_json::json!({"model": effective_model, "messages": all, "max_tokens": 4096});
                                 let mut req = client.post(url).header("content-type", "application/json").json(&body);
                                 if !auth_header.is_empty() {
                                     req = req.header("Authorization", &auth_header);
@@ -12167,6 +12264,90 @@ impl TyphooNApp {
                             match research::fetch_cftc_cot(&client).await {
                                 Ok(rows) => { let _ = msg_tx.send(BrokerMsg::CotReports(rows)); }
                                 Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("COT: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchStockSplits { symbol, fmp_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_fmp_stock_splits(&client, &symbol, &fmp_key).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::StockSplitsMsg(symbol, rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("SPLT: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchEtfHoldings { symbol, fmp_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(20))
+                                .build().unwrap_or_default();
+                            match research::fetch_fmp_etf_holdings(&client, &symbol, &fmp_key).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::EtfHoldingsMsg(symbol, rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("ETF: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchAnalystRecs { symbol, finnhub_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_finnhub_recommendations(&client, &symbol, &finnhub_key).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::AnalystRecsMsg(symbol, rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("ANR: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchPriceTarget { symbol, finnhub_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_finnhub_price_target(&client, &symbol, &finnhub_key).await {
+                                Ok(pt) => { let _ = msg_tx.send(BrokerMsg::PriceTargetMsg(symbol, pt)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("PT: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchEsgScores { symbol, fmp_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_fmp_esg(&client, &symbol, &fmp_key).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::EsgScoresMsg(symbol, rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("ESG: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchIndexMembers { index_code, fmp_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(20))
+                                .build().unwrap_or_default();
+                            match research::fetch_fmp_index_members(&client, &index_code, &fmp_key).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::IndexMembersMsg(index_code, rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("MEMB: {}", e))); }
                             }
                         });
                     }
@@ -13975,12 +14156,19 @@ impl TyphooNApp {
             claude_code_input: String::new(),
             claude_code_history: Vec::new(),
             claude_code_rx: None,
+            claude_code_packet: None,
+            claude_code_session_id: None,
+            claude_model: "opus".to_string(),
             show_gemini_cli: false,
             gemini_cli_input: String::new(),
             gemini_cli_history: Vec::new(),
             gemini_cli_rx: None,
+            gemini_cli_packet: None,
+            gemini_model: "gemini-2.5-pro".to_string(),
+            ai_chat_packet: None,
             ai_chat_history: Vec::new(),
             ai_chat_input: String::new(),
+            ai_model: "claude-opus-4-5".to_string(),
             ai_provider: 0,
             show_reddit: false,
             show_bardata: false,
@@ -14374,6 +14562,28 @@ impl TyphooNApp {
             cot_loading: false,
             cot_last_fetch: None,
             cot_filter: String::new(),
+            show_splits: false,
+            splits_symbol: String::new(),
+            splits_list: Vec::new(),
+            splits_loading: false,
+            show_etf_holdings: false,
+            etf_symbol: String::new(),
+            etf_holdings: Vec::new(),
+            etf_loading: false,
+            show_analyst_recs: false,
+            anr_symbol: String::new(),
+            analyst_recs: Vec::new(),
+            price_target: typhoon_engine::core::research::PriceTarget::default(),
+            anr_loading: false,
+            show_esg: false,
+            esg_symbol: String::new(),
+            esg_rows: Vec::new(),
+            esg_loading: false,
+            show_index_members: false,
+            index_code: String::new(),
+            index_members: Vec::new(),
+            memb_loading: false,
+            memb_filter: String::new(),
             bottom_tab: BottomTab::Log,
             log,
             log_filter: LogFilter::All,
@@ -15736,6 +15946,186 @@ impl TyphooNApp {
                 }
             }
 
+            // ── Godel-parity research surfaces (ADR-108/109/110/111) ─────────
+            // Pull cached DVD/EEB/UPDG/FA/MGMT/SPLT/ANR/ESG rows into the packet
+            // so the AI has the same data the user sees in the research windows.
+            if let Some(ref cache) = self.cache {
+                if let Some(conn) = cache.try_connection() {
+                    use typhoon_engine::core::research as rx;
+                    let fmt_money = typhoon_engine::core::fundamentals::format_large_number;
+
+                    // Recent news (research_news + news crate — most relevant wins)
+                    if let Ok(articles) = typhoon_engine::core::news::get_news_by_symbol(&conn, &sym_upper, 8) {
+                        if !articles.is_empty() {
+                            let _ = writeln!(p, "### Recent News ({} of {})", articles.len().min(8), articles.len());
+                            let _ = writeln!(p, "| Date | Source | Sentiment | Headline |");
+                            let _ = writeln!(p, "|---|---|---|---|");
+                            for a in articles.iter().take(8) {
+                                let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(a.published_at, 0)
+                                    .map(|d| d.format("%Y-%m-%d").to_string())
+                                    .unwrap_or_else(|| "—".into());
+                                let sent = if a.sentiment.is_empty() { "—".to_string() } else { a.sentiment.clone() };
+                                let hl = if a.headline.len() > 120 { &a.headline[..120] } else { a.headline.as_str() };
+                                let src = if a.provider.is_empty() { a.source.as_str() } else { a.provider.as_str() };
+                                let _ = writeln!(p, "| {} | {} | {} | {} |", dt, src, sent, hl);
+                            }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // DVD — dividend history (last 6 rows)
+                    if let Ok(Some(divs)) = rx::get_dividends(&conn, &sym_upper) {
+                        if !divs.is_empty() {
+                            let _ = writeln!(p, "### Dividend History ({})", divs.len());
+                            let _ = writeln!(p, "| Ex-Date | Pay Date | Amount | Label |");
+                            let _ = writeln!(p, "|---|---|---|---|");
+                            for d in divs.iter().take(6) {
+                                let _ = writeln!(p, "| {} | {} | {:.4} | {} |",
+                                    d.ex_date, d.pay_date, d.amount, d.label);
+                            }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // EEB — forward earnings estimates (next 4 periods)
+                    if let Ok(Some(est)) = rx::get_earnings_estimates(&conn, &sym_upper) {
+                        if !est.is_empty() {
+                            let _ = writeln!(p, "### Forward Earnings Estimates");
+                            let _ = writeln!(p, "| Period | EPS Avg | EPS Lo/Hi | Rev Avg | Analysts |");
+                            let _ = writeln!(p, "|---|---|---|---|---|");
+                            for e in est.iter().take(4) {
+                                let _ = writeln!(p, "| {} | {:.2} | {:.2}/{:.2} | {} | eps {} / rev {} |",
+                                    e.date, e.eps_avg, e.eps_low, e.eps_high,
+                                    fmt_money(e.revenue_avg),
+                                    e.num_analysts_eps, e.num_analysts_rev);
+                            }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // UPDG — analyst rating changes (most recent 6)
+                    if let Ok(Some(rc)) = rx::get_rating_changes(&conn, &sym_upper) {
+                        if !rc.is_empty() {
+                            let _ = writeln!(p, "### Analyst Rating Changes ({})", rc.len());
+                            let _ = writeln!(p, "| Date | Firm | Action | From → To | PT |");
+                            let _ = writeln!(p, "|---|---|---|---|---|");
+                            for r in rc.iter().take(6) {
+                                let pt = if r.price_target > 0.0 { format!("{:.2}", r.price_target) } else { "—".into() };
+                                let _ = writeln!(p, "| {} | {} | {} | {} → {} | {} |",
+                                    r.date, r.firm, r.action, r.from_grade, r.to_grade, pt);
+                            }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // FA — financial statements trend (last 4 annual periods)
+                    if let Ok(Some(fa)) = rx::get_financials(&conn, &sym_upper) {
+                        if !fa.income_annual.is_empty() {
+                            let _ = writeln!(p, "### Annual Financial Statements Trend");
+                            let _ = writeln!(p, "| FY | Revenue | Gross | Op Inc | Net Inc | EPS |");
+                            let _ = writeln!(p, "|---|---|---|---|---|---|");
+                            for i in fa.income_annual.iter().take(4) {
+                                let _ = writeln!(p, "| {} | {} | {} | {} | {} | {:.2} |",
+                                    i.date, fmt_money(i.revenue), fmt_money(i.gross_profit),
+                                    fmt_money(i.operating_income), fmt_money(i.net_income), i.eps);
+                            }
+                            let _ = writeln!(p);
+                        }
+                        if !fa.cashflow_annual.is_empty() {
+                            let _ = writeln!(p, "### Annual Cash Flow Trend");
+                            let _ = writeln!(p, "| FY | CFO | Capex | FCF | Div Paid | Buybacks |");
+                            let _ = writeln!(p, "|---|---|---|---|---|---|");
+                            for c in fa.cashflow_annual.iter().take(4) {
+                                let _ = writeln!(p, "| {} | {} | {} | {} | {} | {} |",
+                                    c.date,
+                                    fmt_money(c.cash_from_operations),
+                                    fmt_money(c.capex),
+                                    fmt_money(c.free_cash_flow),
+                                    fmt_money(c.dividends_paid),
+                                    fmt_money(c.stock_repurchases));
+                            }
+                            let _ = writeln!(p);
+                        }
+                        if !fa.balance_annual.is_empty() {
+                            let _ = writeln!(p, "### Annual Balance Sheet Trend");
+                            let _ = writeln!(p, "| FY | Assets | Net Debt | Total Equity |");
+                            let _ = writeln!(p, "|---|---|---|---|");
+                            for b in fa.balance_annual.iter().take(4) {
+                                let _ = writeln!(p, "| {} | {} | {} | {} |",
+                                    b.date, fmt_money(b.total_assets),
+                                    fmt_money(b.net_debt),
+                                    fmt_money(b.total_equity));
+                            }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // MGMT — executive team (top 6)
+                    if let Ok(Some(execs)) = rx::get_executives(&conn, &sym_upper) {
+                        if !execs.is_empty() {
+                            let total_comp: f64 = execs.iter().map(|e| e.compensation).sum();
+                            let _ = writeln!(p, "### Management ({} listed, total comp {})", execs.len(), fmt_money(total_comp));
+                            let _ = writeln!(p, "| Name | Position | Since | Compensation |");
+                            let _ = writeln!(p, "|---|---|---|---|");
+                            for e in execs.iter().take(6) {
+                                let comp = if e.compensation > 0.0 { fmt_money(e.compensation) } else { "—".into() };
+                                let _ = writeln!(p, "| {} | {} | {} | {} |",
+                                    e.name, e.position, e.since, comp);
+                            }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // SPLT — stock splits (most recent 4)
+                    if let Ok(Some(splits)) = rx::get_stock_splits(&conn, &sym_upper) {
+                        if !splits.is_empty() {
+                            let _ = writeln!(p, "### Stock Split History");
+                            let _ = writeln!(p, "| Date | Ratio |");
+                            let _ = writeln!(p, "|---|---|");
+                            for s in splits.iter().take(4) {
+                                let _ = writeln!(p, "| {} | {} |", s.date, s.label);
+                            }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // ANR — analyst recommendations + consensus price target
+                    let pt = rx::get_price_target(&conn, &sym_upper).ok().flatten();
+                    let recs = rx::get_analyst_recs(&conn, &sym_upper).ok().flatten();
+                    if pt.is_some() || recs.as_ref().map_or(false, |r| !r.is_empty()) {
+                        let _ = writeln!(p, "### Analyst Consensus");
+                        if let Some(pt) = pt {
+                            let _ = writeln!(p, "- Price target ({} analysts): mean {:.2}, median {:.2}, range {:.2}–{:.2} (as of {})",
+                                pt.num_analysts, pt.target_mean, pt.target_median,
+                                pt.target_low, pt.target_high, pt.last_updated);
+                        }
+                        if let Some(r) = recs {
+                            if let Some(latest) = r.first() {
+                                let total = latest.strong_buy + latest.buy + latest.hold + latest.sell + latest.strong_sell;
+                                if total > 0 {
+                                    let _ = writeln!(p,
+                                        "- Recommendations ({}): SBuy {} / Buy {} / Hold {} / Sell {} / SSell {} (of {} analysts)",
+                                        latest.period,
+                                        latest.strong_buy, latest.buy, latest.hold, latest.sell, latest.strong_sell, total);
+                                }
+                            }
+                        }
+                        let _ = writeln!(p);
+                    }
+
+                    // ESG — latest sustainability score
+                    if let Ok(Some(esg)) = rx::get_esg(&conn, &sym_upper) {
+                        if let Some(latest) = esg.first() {
+                            let _ = writeln!(p, "### ESG Score ({})", latest.year);
+                            let _ = writeln!(p, "- Environmental {:.1} | Social {:.1} | Governance {:.1} | Composite {:.1}",
+                                latest.environmental_score, latest.social_score,
+                                latest.governance_score, latest.esg_score);
+                            let _ = writeln!(p);
+                        }
+                    }
+                }
+            }
+
             // Sector peer comparison (median of sector peers for the same fields)
             if let Some(f) = fund {
                 if !f.sector.is_empty() {
@@ -15829,6 +16219,64 @@ impl TyphooNApp {
     #[allow(dead_code)]
     fn parse_ask_args_test(args: &str) -> (Vec<String>, String) {
         Self::parse_ask_args(args)
+    }
+
+    /// Generate a UUID-ish string for per-window Claude session tracking.
+    /// Uses the system random source + nanos so collisions across restarts are
+    /// effectively impossible. RFC 4122 v4 shape so Claude CLI accepts it.
+    fn new_uuid() -> String {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id() as u128;
+        let mut seed = nanos ^ (pid << 64);
+        let mut bytes = [0u8; 16];
+        for b in bytes.iter_mut() {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *b = (seed >> 33) as u8;
+        }
+        // RFC 4122 v4 bits.
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+            bytes[6], bytes[7], bytes[8], bytes[9],
+            bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        )
+    }
+
+    /// Build the full Claude CLI prompt from a stored research packet, the
+    /// visible chat history, and the user's latest message. The packet and
+    /// transcript are prepended every call so follow-ups don't lose context
+    /// between `claude --print` invocations.
+    fn build_claude_prompt(packet: Option<&str>, history: &[(bool, String)], latest: &str) -> String {
+        let mut out = String::with_capacity(4096);
+        if let Some(p) = packet {
+            out.push_str("You have this TyphooN-Terminal research packet as background context. ");
+            out.push_str("Use it to ground your answers; combine it with live web searches when the question needs recent news or prices.\n\n");
+            out.push_str("=== RESEARCH PACKET ===\n");
+            out.push_str(p);
+            out.push_str("\n=== END RESEARCH PACKET ===\n\n");
+        }
+        // Prior turns excluding the just-pushed "latest" message (last entry in history).
+        let prior: Vec<&(bool, String)> = history.iter()
+            .take(history.len().saturating_sub(1))
+            .filter(|(_, m)| !m.starts_with("[Research packet:"))
+            .collect();
+        if !prior.is_empty() {
+            out.push_str("=== PRIOR CONVERSATION ===\n");
+            for (is_user, m) in &prior {
+                out.push_str(if *is_user { "User: " } else { "Assistant: " });
+                out.push_str(m);
+                out.push_str("\n\n");
+            }
+            out.push_str("=== END PRIOR CONVERSATION ===\n\n");
+        }
+        out.push_str("User: ");
+        out.push_str(latest);
+        out
     }
 
     /// Format a Unix timestamp as a relative staleness label for UI display.
@@ -16519,6 +16967,85 @@ impl TyphooNApp {
                 self.show_cot = true;
                 self.cot_loading = true;
                 let _ = self.broker_tx.send(BrokerCmd::FetchCotReports);
+            }
+            // ── ADR-111 Round 4 palette entries ──
+            "SPLT" | "SPLIT" | "SPLITS" | "STOCK_SPLIT" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.splits_symbol = sym.clone(); }
+                self.show_splits = true;
+                if !self.fmp_key.is_empty() && !self.splits_symbol.is_empty() {
+                    self.splits_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchStockSplits {
+                        symbol: self.splits_symbol.to_uppercase(),
+                        fmp_key: self.fmp_key.clone(),
+                    });
+                }
+            }
+            "ETF" | "HOLDINGS" | "ETF_HOLDINGS" | "FUND" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.etf_symbol = sym.clone(); }
+                self.show_etf_holdings = true;
+                if !self.fmp_key.is_empty() && !self.etf_symbol.is_empty() {
+                    self.etf_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchEtfHoldings {
+                        symbol: self.etf_symbol.to_uppercase(),
+                        fmp_key: self.fmp_key.clone(),
+                    });
+                }
+            }
+            "ANR" | "ANALYST_RECS" | "RECOMMENDATIONS" | "PRICE_TARGET" | "PT" | "TARGET" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.anr_symbol = sym.clone(); }
+                self.show_analyst_recs = true;
+                if !self.finnhub_key.is_empty() && !self.anr_symbol.is_empty() {
+                    self.anr_loading = true;
+                    let sym_u = self.anr_symbol.to_uppercase();
+                    let _ = self.broker_tx.send(BrokerCmd::FetchAnalystRecs {
+                        symbol: sym_u.clone(),
+                        finnhub_key: self.finnhub_key.clone(),
+                    });
+                    let _ = self.broker_tx.send(BrokerCmd::FetchPriceTarget {
+                        symbol: sym_u,
+                        finnhub_key: self.finnhub_key.clone(),
+                    });
+                }
+            }
+            "ESG" | "SUSTAINABILITY" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.esg_symbol = sym.clone(); }
+                self.show_esg = true;
+                if !self.fmp_key.is_empty() && !self.esg_symbol.is_empty() {
+                    self.esg_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchEsgScores {
+                        symbol: self.esg_symbol.to_uppercase(),
+                        fmp_key: self.fmp_key.clone(),
+                    });
+                }
+            }
+            "MEMB" | "MEMBERS" | "CONSTITUENTS" | "SP500" | "NDX" | "DJIA" => {
+                let requested = match cmd_upper.as_str() {
+                    "NDX" => "NDX",
+                    "DJIA" => "DJIA",
+                    "SP500" => "SP500",
+                    _ => if self.index_code.is_empty() { "SP500" } else { self.index_code.as_str() },
+                };
+                self.index_code = requested.to_string();
+                self.show_index_members = true;
+                if !self.fmp_key.is_empty() {
+                    self.memb_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchIndexMembers {
+                        index_code: self.index_code.clone(),
+                        fmp_key: self.fmp_key.clone(),
+                    });
+                }
             }
             "CALENDAR" => {
                 self.show_calendar = true;
@@ -17921,9 +18448,21 @@ impl TyphooNApp {
                     self.show_ai_chat = true;
                     self.log.push_back(LogEntry::warn("Usage: ASKAI SYM1[,SYM2] [optional question]"));
                 } else {
-                    let prompt = self.investigate_symbols(&syms, &question);
+                    let packet = self.investigate_symbols(&syms, &question);
+                    // Persist the packet so follow-up Sends still see the fundamentals
+                    // (not just a "[Research packet: …]" placeholder in the history).
+                    self.ai_chat_packet = Some(packet.clone());
                     self.show_ai_chat = true;
-                    self.ai_chat_history.push((true, format!("[Research packet: {}]", syms.join(", "))));
+                    self.ai_chat_history.push((true, format!(
+                        "[Research packet loaded: {}] {}",
+                        syms.join(", "),
+                        if question.is_empty() { "Give me an overall read on these tickers.".to_string() } else { question.clone() }
+                    )));
+                    let first_turn = if question.is_empty() {
+                        "Give me an overall read on these tickers — combine the research packet with live web search for recent news/sentiment.".to_string()
+                    } else {
+                        question.clone()
+                    };
                     let (provider, key) = match self.ai_provider {
                         0 => ("claude", self.anthropic_key.clone()),
                         1 => ("openai", self.openai_key.clone()),
@@ -17940,12 +18479,14 @@ impl TyphooNApp {
                         let _ = self.broker_tx.send(BrokerCmd::AiChat {
                             provider: provider.into(),
                             api_key: key,
-                            message: prompt,
-                            history: self.ai_chat_history.clone(),
+                            message: first_turn,
+                            history: Vec::new(), // fresh chain — packet is in the system prompt
+                            system: Some(packet),
+                            model: Some(self.ai_model.clone()),
                         });
                         self.log.push_back(LogEntry::info(format!(
-                            "AI investigation dispatched: {} ({} symbols, {} backend)",
-                            syms.join(", "), syms.len(), provider
+                            "AI investigation dispatched: {} ({} symbols, {} backend, {})",
+                            syms.join(", "), syms.len(), provider, self.ai_model
                         )));
                     }
                 }
@@ -17960,17 +18501,44 @@ impl TyphooNApp {
                 }
                 match std::process::Command::new("which").arg("claude").output() {
                     Ok(out) if out.status.success() => {
-                        let prompt = self.investigate_symbols(&syms, &question);
+                        let packet = self.investigate_symbols(&syms, &question);
+                        // Store the packet so follow-ups in the Claude Code window still
+                        // have access to the same research context. `build_claude_prompt`
+                        // re-injects it on every Send.
+                        self.claude_code_packet = Some(packet.clone());
                         self.show_claude_code = true;
-                        self.claude_code_history.push((true, format!("[Research packet: {}]", syms.join(", "))));
+                        let first_user_turn = if question.is_empty() {
+                            format!(
+                                "Give me an overall read on {} — combine the research packet above with a live web search for recent news/sentiment.",
+                                syms.join(", ")
+                            )
+                        } else {
+                            question.clone()
+                        };
+                        self.claude_code_history.push((true, format!(
+                            "[Research packet loaded: {}] {}",
+                            syms.join(", "), first_user_turn
+                        )));
                         if self.claude_code_rx.is_none() {
+                            // Fresh session UUID — subsequent Sends in the window will --resume.
+                            let session_id = Self::new_uuid();
+                            self.claude_code_session_id = Some(session_id.clone());
+                            let model = self.claude_model.clone();
+                            let full_prompt = Self::build_claude_prompt(
+                                Some(&packet),
+                                &self.claude_code_history,
+                                &first_user_turn,
+                            );
                             let (tx, rx) = std::sync::mpsc::channel();
                             self.claude_code_rx = Some(rx);
-                            let prompt_clone = prompt;
                             std::thread::spawn(move || {
                                 match std::process::Command::new("claude")
                                     .arg("--print")
-                                    .arg(&prompt_clone)
+                                    .arg("--model").arg(&model)
+                                    .arg("--allowed-tools").arg("WebSearch WebFetch Read Grep Glob Bash")
+                                    .arg("--permission-mode").arg("acceptEdits")
+                                    .arg("--session-id").arg(&session_id)
+                                    .arg(&full_prompt)
                                     .output()
                                 {
                                     Ok(output) => {
@@ -17989,8 +18557,8 @@ impl TyphooNApp {
                                 }
                             });
                             self.log.push_back(LogEntry::info(format!(
-                                "Claude Code investigation dispatched: {} ({} symbols)",
-                                syms.join(", "), syms.len()
+                                "Claude Code investigation dispatched: {} ({} symbols, {} model)",
+                                syms.join(", "), syms.len(), self.claude_model
                             )));
                         }
                     }
@@ -18009,15 +18577,36 @@ impl TyphooNApp {
                 }
                 match std::process::Command::new("which").arg("gemini").output() {
                     Ok(out) if out.status.success() => {
-                        let prompt = self.investigate_symbols(&syms, &question);
+                        let packet = self.investigate_symbols(&syms, &question);
+                        self.gemini_cli_packet = Some(packet.clone());
                         self.show_gemini_cli = true;
-                        self.gemini_cli_history.push((true, format!("[Research packet: {}]", syms.join(", "))));
+                        let first_user_turn = if question.is_empty() {
+                            format!(
+                                "Give me an overall read on {} — combine the research packet above with a live web search for recent news/sentiment.",
+                                syms.join(", ")
+                            )
+                        } else {
+                            question.clone()
+                        };
+                        self.gemini_cli_history.push((true, format!(
+                            "[Research packet loaded: {}] {}",
+                            syms.join(", "), first_user_turn
+                        )));
                         if self.gemini_cli_rx.is_none() {
+                            let model = self.gemini_model.clone();
+                            let full_prompt = Self::build_claude_prompt(
+                                Some(&packet),
+                                &self.gemini_cli_history,
+                                &first_user_turn,
+                            );
                             let (tx, rx) = std::sync::mpsc::channel();
                             self.gemini_cli_rx = Some(rx);
-                            let prompt_clone = prompt;
                             std::thread::spawn(move || {
-                                match std::process::Command::new("gemini").arg(&prompt_clone).output() {
+                                match std::process::Command::new("gemini")
+                                    .arg("--model").arg(&model)
+                                    .arg("--prompt").arg(&full_prompt)
+                                    .output()
+                                {
                                     Ok(output) => {
                                         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                                         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -18030,8 +18619,8 @@ impl TyphooNApp {
                                 }
                             });
                             self.log.push_back(LogEntry::info(format!(
-                                "Gemini CLI investigation dispatched: {} ({} symbols)",
-                                syms.join(", "), syms.len()
+                                "Gemini CLI investigation dispatched: {} ({} symbols, {})",
+                                syms.join(", "), syms.len(), self.gemini_model
                             )));
                         }
                     }
@@ -22752,13 +23341,15 @@ impl TyphooNApp {
                 });
         }
 
-        // AI Chat (Anthropic Claude / OpenAI GPT)
+        // AI Chat (Anthropic Claude / OpenAI GPT / …)
         if self.show_ai_chat {
             egui::Window::new("AI Assistant")
                 .open(&mut self.show_ai_chat)
-                .resizable(true).default_size([500.0, 450.0])
+                .resizable(true).default_size([560.0, 520.0])
+                .min_width(460.0).min_height(300.0)
+                .constrain(true)
                 .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label("Provider:");
                         ui.radio_value(&mut self.ai_provider, 0, "Claude");
                         ui.radio_value(&mut self.ai_provider, 1, "GPT");
@@ -22768,9 +23359,52 @@ impl TyphooNApp {
                         ui.radio_value(&mut self.ai_provider, 5, "Perplexity");
                         ui.radio_value(&mut self.ai_provider, 6, "Local");
                     });
+                    ui.horizontal(|ui| {
+                        ui.label("Model:");
+                        let (cb_id, options): (&str, &[(&str, &str)]) = match self.ai_provider {
+                            0 => ("ai_model_claude", &[
+                                ("claude-opus-4-5", "opus 4.5 (max effort)"),
+                                ("claude-sonnet-4-5", "sonnet 4.5 (balanced)"),
+                                ("claude-haiku-4-5", "haiku 4.5 (fast)"),
+                            ]),
+                            1 => ("ai_model_openai", &[
+                                ("gpt-4o", "gpt-4o"),
+                                ("gpt-4o-mini", "gpt-4o-mini"),
+                                ("o1-preview", "o1-preview"),
+                            ]),
+                            2 => ("ai_model_gemini", &[
+                                ("gemini-2.5-pro", "gemini-2.5-pro"),
+                                ("gemini-2.5-flash", "gemini-2.5-flash"),
+                                ("gemini-2.0-flash", "gemini-2.0-flash"),
+                            ]),
+                            3 => ("ai_model_grok", &[("grok-3", "grok-3"), ("grok-3-mini", "grok-3-mini")]),
+                            4 => ("ai_model_mistral", &[("mistral-large-latest", "mistral-large"), ("mistral-small-latest", "mistral-small")]),
+                            5 => ("ai_model_perplexity", &[("sonar-pro", "sonar-pro"), ("sonar", "sonar")]),
+                            _ => ("ai_model_local", &[("llama3.2", "llama3.2"), ("qwen2.5:32b", "qwen2.5:32b")]),
+                        };
+                        if self.ai_model.is_empty() || !options.iter().any(|(v, _)| *v == self.ai_model) {
+                            self.ai_model = options[0].0.to_string();
+                        }
+                        egui::ComboBox::from_id_salt(cb_id)
+                            .selected_text(self.ai_model.as_str())
+                            .show_ui(ui, |ui| {
+                                for (value, label) in options {
+                                    ui.selectable_value(&mut self.ai_model, value.to_string(), *label);
+                                }
+                            });
+                        if self.ai_chat_packet.is_some() {
+                            ui.label(egui::RichText::new("[packet loaded]").small().color(UP));
+                        }
+                    });
                     ui.separator();
-                    // Chat history
-                    egui::ScrollArea::vertical().auto_shrink(false).max_height(300.0).stick_to_bottom(true).show(ui, |ui| {
+                    let scroll_h = (ui.available_height() - 60.0).max(120.0);
+                    egui::ScrollArea::vertical().auto_shrink(false).max_height(scroll_h).stick_to_bottom(true).show(ui, |ui| {
+                        if self.ai_chat_history.is_empty() {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(40.0);
+                                ui.label(egui::RichText::new("Ask the hosted AI provider — pick model above.").color(AXIS_TEXT));
+                            });
+                        }
                         for (is_user, msg) in &self.ai_chat_history {
                             let (align, color, prefix) = if *is_user {
                                 (egui::Align::RIGHT, egui::Color32::from_rgb(80, 140, 255), "You")
@@ -22798,7 +23432,7 @@ impl TyphooNApp {
                                 3 => ("grok", self.xai_key.clone()),
                                 4 => ("mistral", self.mistral_key.clone()),
                                 5 => ("perplexity", self.perplexity_key.clone()),
-                                6 => ("local", "http://localhost:11434".to_string()), // Ollama default
+                                6 => ("local", "http://localhost:11434".to_string()),
                                 _ => ("openai", self.openai_key.clone()),
                             };
                             if key.is_empty() && self.ai_provider != 6 {
@@ -22807,6 +23441,8 @@ impl TyphooNApp {
                                 let _ = self.broker_tx.send(BrokerCmd::AiChat {
                                     provider: provider.into(), api_key: key,
                                     message: msg, history: self.ai_chat_history.clone(),
+                                    system: self.ai_chat_packet.clone(),
+                                    model: Some(self.ai_model.clone()),
                                 });
                             }
                             self.ai_chat_input.clear();
@@ -22826,11 +23462,32 @@ impl TyphooNApp {
         if self.show_claude_code {
             egui::Window::new("Claude Code")
                 .open(&mut self.show_claude_code)
-                .resizable(true).default_size([550.0, 450.0])
+                .resizable(true).default_size([620.0, 520.0])
+                .min_width(420.0).min_height(280.0)
+                .constrain(true)
                 .show(ctx, |ui| {
-                    ui.label(egui::RichText::new("Claude Code CLI — uses your local subscription").small().color(AXIS_TEXT));
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Claude Code CLI — local subscription").small().color(AXIS_TEXT));
+                        ui.separator();
+                        ui.label("Model:");
+                        egui::ComboBox::from_id_salt("claude_model_picker")
+                            .selected_text(self.claude_model.as_str())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.claude_model, "opus".to_string(), "opus (max effort)");
+                                ui.selectable_value(&mut self.claude_model, "sonnet".to_string(), "sonnet (balanced)");
+                                ui.selectable_value(&mut self.claude_model, "haiku".to_string(), "haiku (fast)");
+                            });
+                        if self.claude_code_packet.is_some() {
+                            ui.label(egui::RichText::new("[packet loaded]").small().color(UP));
+                        }
+                        if self.claude_code_session_id.is_some() {
+                            ui.label(egui::RichText::new("[session continued]").small().color(AXIS_TEXT));
+                        }
+                    });
                     ui.separator();
-                    egui::ScrollArea::vertical().auto_shrink(false).max_height(340.0).stick_to_bottom(true).show(ui, |ui| {
+                    // Reserve ~60px for input row + separator so scroll fills the window.
+                    let scroll_h = (ui.available_height() - 60.0).max(120.0);
+                    egui::ScrollArea::vertical().auto_shrink(false).max_height(scroll_h).stick_to_bottom(true).show(ui, |ui| {
                         if self.claude_code_history.is_empty() {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(40.0);
@@ -22868,44 +23525,41 @@ impl TyphooNApp {
                             self.claude_code_input.clear();
                             self.claude_code_history.push((true, msg.clone()));
 
-                            // Intercept Claude Code built-in slash commands that only work
-                            // in interactive mode (`claude --print "/status"` would return
-                            // "Unknown skill: status" because --print treats /foo as a skill
-                            // invocation). Real user-invocable skills still pass through.
                             let lower = msg.to_lowercase();
                             let builtin_reply: Option<String> = match lower.as_str() {
                                 "/clear" => {
-                                    // Drop both the user message we just pushed and all prior history.
-                                    // Leave a single info line so the user sees the clear took effect.
                                     self.claude_code_history.clear();
                                     self.claude_code_history.push((false, "(chat history cleared)".to_string()));
-                                    None // handled entirely — skip subprocess
+                                    self.claude_code_session_id = None;
+                                    None
                                 }
                                 "/help" => Some(
                                     "Local chat help:\n\
                                      • Type any prompt and press Enter to ask Claude.\n\
-                                     • /clear — clear the chat history\n\
+                                     • /clear — clear the chat history and session\n\
                                      • /status — show local chat status\n\
                                      • /help — this message\n\
                                      \n\
-                                     Note: Claude Code's interactive slash commands (/model, /cost, \
-                                     /config, /login, etc.) only work in an interactive terminal — \
-                                     they can't be invoked through this embedded `claude --print` chat. \
-                                     User-invocable skills like /commit do pass through.".to_string()
+                                     The research packet and conversation history are injected \
+                                     into every prompt so Claude can answer follow-ups without \
+                                     losing context.".to_string()
                                 ),
                                 "/status" => {
                                     let count = self.claude_code_history.iter().filter(|(u, _)| *u).count();
+                                    let has_pkt = if self.claude_code_packet.is_some() { "yes" } else { "no" };
+                                    let sess = self.claude_code_session_id.as_deref().unwrap_or("(new)");
                                     Some(format!(
                                         "Local chat status:\n\
-                                         • Backend: `claude --print` subprocess (local CLI, your subscription)\n\
-                                         • Messages sent this session: {count}\n\
-                                         • Interactive slash commands (/model, /cost, /config) are unavailable \
-                                         in --print mode. Run `claude` in a terminal for those."
+                                         • Backend: `claude --print` subprocess\n\
+                                         • Model: {}\n\
+                                         • Research packet loaded: {has_pkt}\n\
+                                         • Messages this session: {count}\n\
+                                         • Session id: {sess}\n\
+                                         • Allowed tools: WebSearch, WebFetch, Read, Grep, Glob, Bash",
+                                         self.claude_model
                                     ))
                                 }
                                 _ => {
-                                    // Warn early for other known interactive-only commands so
-                                    // users don't wait on a subprocess that'll just error out.
                                     const INTERACTIVE_ONLY: &[&str] = &[
                                         "/model", "/cost", "/config", "/login", "/logout",
                                         "/permissions", "/theme", "/mcp", "/ide", "/exit",
@@ -22918,30 +23572,48 @@ impl TyphooNApp {
                                              a real terminal instead."
                                         ))
                                     } else {
-                                        None // fall through to subprocess
+                                        None
                                     }
                                 }
                             };
 
                             if let Some(reply) = builtin_reply {
                                 self.claude_code_history.push((false, reply));
-                                // Do not set claude_code_rx — no subprocess was spawned.
                                 return;
                             }
-                            // /clear handled above with no reply; still skip subprocess.
                             if lower == "/clear" {
                                 return;
                             }
 
-                            // Spawn claude CLI on background thread
+                            // Build full prompt: research packet + transcript + new msg.
+                            let full_prompt = Self::build_claude_prompt(
+                                self.claude_code_packet.as_deref(),
+                                &self.claude_code_history,
+                                &msg,
+                            );
+                            let model = self.claude_model.clone();
+                            // Reuse per-window session UUID so Claude CLI resumes the same thread.
+                            if self.claude_code_session_id.is_none() {
+                                self.claude_code_session_id = Some(Self::new_uuid());
+                            }
+                            let session_id = self.claude_code_session_id.clone().unwrap();
+                            let is_first = self.claude_code_history.iter().filter(|(u, _)| *u).count() <= 1;
+
                             let (tx, rx) = std::sync::mpsc::channel();
                             self.claude_code_rx = Some(rx);
                             std::thread::spawn(move || {
-                                match std::process::Command::new("claude")
-                                    .arg("--print")
-                                    .arg(&msg)
-                                    .output()
-                                {
+                                let mut cmd = std::process::Command::new("claude");
+                                cmd.arg("--print")
+                                    .arg("--model").arg(&model)
+                                    .arg("--allowed-tools").arg("WebSearch WebFetch Read Grep Glob Bash")
+                                    .arg("--permission-mode").arg("acceptEdits");
+                                if is_first {
+                                    cmd.arg("--session-id").arg(&session_id);
+                                } else {
+                                    cmd.arg("--resume").arg(&session_id);
+                                }
+                                cmd.arg(&full_prompt);
+                                match cmd.output() {
                                     Ok(output) => {
                                         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                                         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -22974,14 +23646,26 @@ impl TyphooNApp {
         if self.show_gemini_cli {
             egui::Window::new("Gemini CLI")
                 .open(&mut self.show_gemini_cli)
-                .resizable(true).default_size([550.0, 450.0])
-                .min_width(360.0).min_height(240.0)
+                .resizable(true).default_size([620.0, 520.0])
+                .min_width(420.0).min_height(280.0)
                 .constrain(true)
                 .show(ctx, |ui| {
-                    ui.label(egui::RichText::new("Gemini CLI — uses your local gemini binary").small().color(AXIS_TEXT));
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Gemini CLI — local binary").small().color(AXIS_TEXT));
+                        ui.separator();
+                        ui.label("Model:");
+                        egui::ComboBox::from_id_salt("gemini_model_picker")
+                            .selected_text(self.gemini_model.as_str())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.gemini_model, "gemini-2.5-pro".to_string(), "gemini-2.5-pro (max)");
+                                ui.selectable_value(&mut self.gemini_model, "gemini-2.5-flash".to_string(), "gemini-2.5-flash (fast)");
+                                ui.selectable_value(&mut self.gemini_model, "gemini-2.0-flash".to_string(), "gemini-2.0-flash");
+                            });
+                        if self.gemini_cli_packet.is_some() {
+                            ui.label(egui::RichText::new("[packet loaded]").small().color(UP));
+                        }
+                    });
                     ui.separator();
-                    // Reserve ~60px for the input row + separator at the bottom so the scroll
-                    // area fills whatever vertical space remains in the window.
                     let scroll_h = (ui.available_height() - 60.0).max(120.0);
                     egui::ScrollArea::vertical().auto_shrink(false).max_height(scroll_h).stick_to_bottom(true).show(ui, |ui| {
                         if self.gemini_cli_history.is_empty() {
@@ -23015,10 +23699,20 @@ impl TyphooNApp {
                             let msg = self.gemini_cli_input.trim().to_string();
                             self.gemini_cli_input.clear();
                             self.gemini_cli_history.push((true, msg.clone()));
+                            let full_prompt = Self::build_claude_prompt(
+                                self.gemini_cli_packet.as_deref(),
+                                &self.gemini_cli_history,
+                                &msg,
+                            );
+                            let model = self.gemini_model.clone();
                             let (tx, rx) = std::sync::mpsc::channel();
                             self.gemini_cli_rx = Some(rx);
                             std::thread::spawn(move || {
-                                match std::process::Command::new("gemini").arg(&msg).output() {
+                                match std::process::Command::new("gemini")
+                                    .arg("--model").arg(&model)
+                                    .arg("--prompt").arg(&full_prompt)
+                                    .output()
+                                {
                                     Ok(output) => {
                                         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                                         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -25952,6 +26646,394 @@ impl TyphooNApp {
                     }
                 });
             self.show_cot = open;
+        }
+
+        // ── ADR-111 Round 4 windows ──────────────────────────────────
+
+        // SPLT — Stock Split History
+        if self.show_splits {
+            if self.splits_symbol.is_empty() { self.splits_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_splits;
+            egui::Window::new("SPLT — Stock Split History")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([540.0, 380.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.splits_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.splits_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.splits_symbol.to_uppercase();
+                                    if let Ok(Some(rows)) = typhoon_engine::core::research::get_stock_splits(&conn, &sym_u) {
+                                        self.splits_list = rows;
+                                        self.splits_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        let have_key = !self.fmp_key.is_empty();
+                        if ui.add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            let sym = self.splits_symbol.to_uppercase();
+                            self.splits_loading = true;
+                            self.splits_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::FetchStockSplits { symbol: sym, fmp_key: self.fmp_key.clone() });
+                        }
+                        if self.fmp_key.is_empty() {
+                            ui.label(egui::RichText::new("(add FMP key in Settings)").color(AXIS_TEXT).small());
+                        }
+                        if self.splits_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    if self.splits_list.is_empty() {
+                        ui.label(egui::RichText::new("No split history — click Load Cached or Fetch.").color(AXIS_TEXT).small());
+                    } else {
+                        ui.label(egui::RichText::new(format!("{} split events", self.splits_list.len())).strong());
+                        ui.separator();
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                            egui::Grid::new("splt_grid").striped(true).num_columns(4).spacing([20.0, 4.0]).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Date").strong());
+                                ui.label(egui::RichText::new("Label").strong());
+                                ui.label(egui::RichText::new("Ratio").strong());
+                                ui.label(egui::RichText::new("From → To").strong());
+                                ui.end_row();
+                                for s in self.splits_list.iter() {
+                                    ui.label(egui::RichText::new(&s.date).monospace().small());
+                                    ui.label(egui::RichText::new(&s.label).monospace().strong().color(UP));
+                                    let ratio = if s.denominator > 0.0 { s.numerator / s.denominator } else { 0.0 };
+                                    ui.label(egui::RichText::new(format!("{:.3}x", ratio)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.0} → {:.0}", s.denominator, s.numerator)).color(AXIS_TEXT).small());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_splits = open;
+        }
+
+        // ETF — ETF Holdings (Constituents)
+        if self.show_etf_holdings {
+            if self.etf_symbol.is_empty() { self.etf_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_etf_holdings;
+            egui::Window::new("ETF — Fund Holdings")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([820.0, 540.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("ETF:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.etf_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.etf_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.etf_symbol.to_uppercase();
+                                    if let Ok(Some(rows)) = typhoon_engine::core::research::get_etf_holdings(&conn, &sym_u) {
+                                        self.etf_holdings = rows;
+                                        self.etf_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        let have_key = !self.fmp_key.is_empty();
+                        if ui.add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            let sym = self.etf_symbol.to_uppercase();
+                            self.etf_loading = true;
+                            self.etf_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::FetchEtfHoldings { symbol: sym, fmp_key: self.fmp_key.clone() });
+                        }
+                        if self.fmp_key.is_empty() {
+                            ui.label(egui::RichText::new("(add FMP key in Settings)").color(AXIS_TEXT).small());
+                        }
+                        if self.etf_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    if self.etf_holdings.is_empty() {
+                        ui.label(egui::RichText::new("No ETF holdings — click Load Cached or Fetch. Pass an ETF ticker (SPY, QQQ, IWM, VTI, …).").color(AXIS_TEXT).small());
+                    } else {
+                        let total_weight: f64 = self.etf_holdings.iter().map(|h| h.weight_pct).sum();
+                        let total_value: f64 = self.etf_holdings.iter().map(|h| h.market_value).sum();
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(format!("{} holdings", self.etf_holdings.len())).strong());
+                            ui.label(egui::RichText::new(format!("(sum weight: {:.2}%, AUM: ${:.1}B)", total_weight, total_value / 1e9)).color(AXIS_TEXT).small());
+                        });
+                        ui.separator();
+                        let fmt_money = |v: f64| -> String {
+                            if v.abs() >= 1e9 { format!("${:.2}B", v / 1e9) }
+                            else if v.abs() >= 1e6 { format!("${:.1}M", v / 1e6) }
+                            else if v.abs() >= 1e3 { format!("${:.0}K", v / 1e3) }
+                            else { format!("${:.0}", v) }
+                        };
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                            egui::Grid::new("etf_grid").striped(true).num_columns(5).spacing([14.0, 3.0]).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Symbol").strong());
+                                ui.label(egui::RichText::new("Name").strong());
+                                ui.label(egui::RichText::new("Weight %").strong());
+                                ui.label(egui::RichText::new("Shares").strong());
+                                ui.label(egui::RichText::new("Market Value").strong());
+                                ui.end_row();
+                                for h in self.etf_holdings.iter().take(500) {
+                                    ui.label(egui::RichText::new(&h.symbol).monospace().strong());
+                                    let short_name: String = h.name.chars().take(40).collect();
+                                    ui.label(egui::RichText::new(short_name).small());
+                                    ui.label(egui::RichText::new(format!("{:.2}%", h.weight_pct)).color(UP).monospace());
+                                    ui.label(egui::RichText::new(format!("{:.0}", h.shares)).monospace().small());
+                                    ui.label(egui::RichText::new(fmt_money(h.market_value)).monospace().small());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_etf_holdings = open;
+        }
+
+        // ANR — Analyst Recommendations + Consensus Price Target
+        if self.show_analyst_recs {
+            if self.anr_symbol.is_empty() { self.anr_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_analyst_recs;
+            egui::Window::new("ANR — Analyst Recommendations")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([700.0, 460.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.anr_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.anr_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.anr_symbol.to_uppercase();
+                                    if let Ok(Some(rows)) = typhoon_engine::core::research::get_analyst_recs(&conn, &sym_u) {
+                                        self.analyst_recs = rows;
+                                    }
+                                    if let Ok(Some(pt)) = typhoon_engine::core::research::get_price_target(&conn, &sym_u) {
+                                        self.price_target = pt;
+                                    }
+                                    self.anr_symbol = sym_u;
+                                }
+                            }
+                        }
+                        let have_key = !self.finnhub_key.is_empty();
+                        if ui.add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            let sym = self.anr_symbol.to_uppercase();
+                            self.anr_loading = true;
+                            self.anr_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::FetchAnalystRecs { symbol: sym.clone(), finnhub_key: self.finnhub_key.clone() });
+                            let _ = self.broker_tx.send(BrokerCmd::FetchPriceTarget { symbol: sym, finnhub_key: self.finnhub_key.clone() });
+                        }
+                        if self.finnhub_key.is_empty() {
+                            ui.label(egui::RichText::new("(add Finnhub key in Settings)").color(AXIS_TEXT).small());
+                        }
+                        if self.anr_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    // Price target header
+                    if self.price_target.num_analysts > 0 {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Price Target:").strong());
+                            ui.label(egui::RichText::new(format!("Mean ${:.2}", self.price_target.target_mean)).color(UP).monospace().strong());
+                            ui.label(egui::RichText::new(format!("Median ${:.2}", self.price_target.target_median)).monospace());
+                            ui.label(egui::RichText::new(format!("Low ${:.2}", self.price_target.target_low)).color(DOWN).monospace().small());
+                            ui.label(egui::RichText::new(format!("High ${:.2}", self.price_target.target_high)).color(UP).monospace().small());
+                            ui.label(egui::RichText::new(format!("n={}", self.price_target.num_analysts)).color(AXIS_TEXT).small());
+                            if !self.price_target.last_updated.is_empty() {
+                                ui.label(egui::RichText::new(format!("({})", self.price_target.last_updated)).color(AXIS_TEXT).small());
+                            }
+                        });
+                        ui.separator();
+                    }
+                    if self.analyst_recs.is_empty() {
+                        ui.label(egui::RichText::new("No recommendation history — click Load Cached or Fetch.").color(AXIS_TEXT).small());
+                    } else {
+                        ui.label(egui::RichText::new(format!("{} monthly snapshots", self.analyst_recs.len())).strong());
+                        ui.separator();
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                            egui::Grid::new("anr_grid").striped(true).num_columns(7).spacing([14.0, 3.0]).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Period").strong());
+                                ui.label(egui::RichText::new("Str Buy").strong());
+                                ui.label(egui::RichText::new("Buy").strong());
+                                ui.label(egui::RichText::new("Hold").strong());
+                                ui.label(egui::RichText::new("Sell").strong());
+                                ui.label(egui::RichText::new("Str Sell").strong());
+                                ui.label(egui::RichText::new("Score").strong());
+                                ui.end_row();
+                                for r in self.analyst_recs.iter() {
+                                    ui.label(egui::RichText::new(&r.period).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{}", r.strong_buy)).color(UP).monospace().strong());
+                                    ui.label(egui::RichText::new(format!("{}", r.buy)).color(UP).monospace());
+                                    ui.label(egui::RichText::new(format!("{}", r.hold)).monospace());
+                                    ui.label(egui::RichText::new(format!("{}", r.sell)).color(DOWN).monospace());
+                                    ui.label(egui::RichText::new(format!("{}", r.strong_sell)).color(DOWN).monospace().strong());
+                                    let total = (r.strong_buy + r.buy + r.hold + r.sell + r.strong_sell) as f64;
+                                    let score = if total > 0.0 {
+                                        (r.strong_buy as f64 * 5.0 + r.buy as f64 * 4.0 + r.hold as f64 * 3.0 + r.sell as f64 * 2.0 + r.strong_sell as f64) / total
+                                    } else { 0.0 };
+                                    let score_col = if score >= 4.0 { UP } else if score <= 2.0 { DOWN } else { AXIS_TEXT };
+                                    ui.label(egui::RichText::new(format!("{:.2}", score)).color(score_col).monospace().strong());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_analyst_recs = open;
+        }
+
+        // ESG — Environmental / Social / Governance Scores
+        if self.show_esg {
+            if self.esg_symbol.is_empty() { self.esg_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_esg;
+            egui::Window::new("ESG — Environmental / Social / Governance")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([620.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.esg_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.esg_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.esg_symbol.to_uppercase();
+                                    if let Ok(Some(rows)) = typhoon_engine::core::research::get_esg(&conn, &sym_u) {
+                                        self.esg_rows = rows;
+                                        self.esg_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        let have_key = !self.fmp_key.is_empty();
+                        if ui.add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            let sym = self.esg_symbol.to_uppercase();
+                            self.esg_loading = true;
+                            self.esg_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::FetchEsgScores { symbol: sym, fmp_key: self.fmp_key.clone() });
+                        }
+                        if self.fmp_key.is_empty() {
+                            ui.label(egui::RichText::new("(add FMP key in Settings)").color(AXIS_TEXT).small());
+                        }
+                        if self.esg_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    if self.esg_rows.is_empty() {
+                        ui.label(egui::RichText::new("No ESG data — click Load Cached or Fetch.").color(AXIS_TEXT).small());
+                    } else {
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                            egui::Grid::new("esg_grid").striped(true).num_columns(5).spacing([20.0, 4.0]).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Year").strong());
+                                ui.label(egui::RichText::new("Environmental").strong());
+                                ui.label(egui::RichText::new("Social").strong());
+                                ui.label(egui::RichText::new("Governance").strong());
+                                ui.label(egui::RichText::new("Overall").strong());
+                                ui.end_row();
+                                let score_color = |s: f64| -> egui::Color32 {
+                                    if s >= 70.0 { UP } else if s >= 50.0 { AXIS_TEXT } else { DOWN }
+                                };
+                                for e in self.esg_rows.iter() {
+                                    ui.label(egui::RichText::new(format!("{}", e.year)).monospace().strong());
+                                    ui.label(egui::RichText::new(format!("{:.1}", e.environmental_score)).color(score_color(e.environmental_score)).monospace());
+                                    ui.label(egui::RichText::new(format!("{:.1}", e.social_score)).color(score_color(e.social_score)).monospace());
+                                    ui.label(egui::RichText::new(format!("{:.1}", e.governance_score)).color(score_color(e.governance_score)).monospace());
+                                    ui.label(egui::RichText::new(format!("{:.1}", e.esg_score)).color(score_color(e.esg_score)).monospace().strong());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_esg = open;
+        }
+
+        // MEMB — Index Members (Constituents)
+        if self.show_index_members {
+            if self.index_code.is_empty() { self.index_code = "SP500".to_string(); }
+            let mut open = self.show_index_members;
+            egui::Window::new("MEMB — Index Constituents")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([880.0, 560.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Index:").color(AXIS_TEXT));
+                        for code in ["SP500", "NDX", "DJIA"] {
+                            if ui.selectable_label(self.index_code.eq_ignore_ascii_case(code), code).clicked() {
+                                self.index_code = code.to_string();
+                            }
+                        }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(rows)) = typhoon_engine::core::research::get_index_members(&conn, &self.index_code) {
+                                        self.index_members = rows;
+                                    }
+                                }
+                            }
+                        }
+                        let have_key = !self.fmp_key.is_empty();
+                        if ui.add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            self.memb_loading = true;
+                            let _ = self.broker_tx.send(BrokerCmd::FetchIndexMembers { index_code: self.index_code.clone(), fmp_key: self.fmp_key.clone() });
+                        }
+                        if self.fmp_key.is_empty() {
+                            ui.label(egui::RichText::new("(add FMP key in Settings)").color(AXIS_TEXT).small());
+                        }
+                        if self.memb_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                        ui.label(egui::RichText::new("Filter:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.memb_filter).desired_width(180.0).hint_text("sector / symbol"));
+                    });
+                    ui.separator();
+                    if self.index_members.is_empty() {
+                        ui.label(egui::RichText::new("No constituents — click Load Cached or Fetch.").color(AXIS_TEXT).small());
+                    } else {
+                        let filter = self.memb_filter.to_uppercase();
+                        let filtered: Vec<&typhoon_engine::core::research::IndexMember> = self.index_members.iter()
+                            .filter(|m| filter.is_empty()
+                                || m.symbol.to_uppercase().contains(&filter)
+                                || m.sector.to_uppercase().contains(&filter)
+                                || m.name.to_uppercase().contains(&filter))
+                            .collect();
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(format!("{} of {} members", filtered.len(), self.index_members.len())).strong());
+                        });
+                        ui.separator();
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                            egui::Grid::new("memb_grid").striped(true).num_columns(5).spacing([14.0, 3.0]).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Symbol").strong());
+                                ui.label(egui::RichText::new("Name").strong());
+                                ui.label(egui::RichText::new("Sector").strong());
+                                ui.label(egui::RichText::new("HQ").strong());
+                                ui.label(egui::RichText::new("Added").strong());
+                                ui.end_row();
+                                for m in filtered.iter().take(600) {
+                                    ui.label(egui::RichText::new(&m.symbol).monospace().strong());
+                                    let short_name: String = m.name.chars().take(36).collect();
+                                    ui.label(egui::RichText::new(short_name).small());
+                                    ui.label(egui::RichText::new(&m.sector).color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new(&m.headquarters).color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new(&m.date_added).monospace().small());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_index_members = open;
         }
 
         // GY — Treasury Yield Curve
@@ -32835,6 +33917,77 @@ impl eframe::App for TyphooNApp {
                     self.cot_reports = rows;
                     self.cot_loading = false;
                     self.cot_last_fetch = Some(std::time::Instant::now());
+                }
+                BrokerMsg::StockSplitsMsg(sym, rows) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.splits_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.splits_list = rows.clone();
+                        self.splits_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_stock_splits(&conn, &sym_u, &rows);
+                        }
+                    }
+                }
+                BrokerMsg::EtfHoldingsMsg(sym, rows) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.etf_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.etf_holdings = rows.clone();
+                        self.etf_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_etf_holdings(&conn, &sym_u, &rows);
+                        }
+                    }
+                }
+                BrokerMsg::AnalystRecsMsg(sym, rows) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.anr_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.analyst_recs = rows.clone();
+                        self.anr_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_analyst_recs(&conn, &sym_u, &rows);
+                        }
+                    }
+                }
+                BrokerMsg::PriceTargetMsg(sym, pt) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.anr_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.price_target = pt.clone();
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_price_target(&conn, &sym_u, &pt);
+                        }
+                    }
+                }
+                BrokerMsg::EsgScoresMsg(sym, rows) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.esg_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.esg_rows = rows.clone();
+                        self.esg_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_esg(&conn, &sym_u, &rows);
+                        }
+                    }
+                }
+                BrokerMsg::IndexMembersMsg(index_code, rows) => {
+                    let code_u = index_code.to_uppercase();
+                    if self.index_code.eq_ignore_ascii_case(&code_u) {
+                        self.index_members = rows.clone();
+                        self.memb_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_index_members(&conn, &code_u, &rows);
+                        }
+                    }
                 }
                 BrokerMsg::NewsArticlesLoaded { symbol, articles } => {
                     self.news_loading = false;

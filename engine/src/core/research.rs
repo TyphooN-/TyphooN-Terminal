@@ -295,6 +295,75 @@ pub struct CotReport {
     pub noncomm_net_change: f64,
 }
 
+// ── ADR-111 Godel Parity Round 4 types ─────────────────────────────────────
+
+/// SPLT — one historical stock split event.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StockSplit {
+    pub date: String,              // YYYY-MM-DD
+    pub label: String,             // "2:1" | "3:2" etc.
+    pub numerator: f64,             // new shares
+    pub denominator: f64,           // old shares
+}
+
+/// ETF — one constituent holding of an exchange-traded fund.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EtfHolding {
+    pub symbol: String,             // held company ticker
+    pub name: String,               // held company name
+    pub weight_pct: f64,            // % of ETF AUM
+    pub shares: f64,
+    pub market_value: f64,
+    pub updated: String,            // as-of date
+}
+
+/// ANR — analyst recommendation bucket trend for a single period.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AnalystRecommendation {
+    pub period: String,             // YYYY-MM-DD (end of reporting month)
+    pub strong_buy: i32,
+    pub buy: i32,
+    pub hold: i32,
+    pub sell: i32,
+    pub strong_sell: i32,
+}
+
+/// ANR — consensus price target snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PriceTarget {
+    pub symbol: String,
+    pub target_high: f64,
+    pub target_low: f64,
+    pub target_mean: f64,
+    pub target_median: f64,
+    pub last_updated: String,       // YYYY-MM-DD
+    pub num_analysts: i32,
+}
+
+/// ESG — environmental / social / governance risk score.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EsgScore {
+    pub symbol: String,
+    pub environmental_score: f64,
+    pub social_score: f64,
+    pub governance_score: f64,
+    pub esg_score: f64,             // weighted composite
+    pub year: i32,
+}
+
+/// MEMB — one member company of an equity index.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexMember {
+    pub index: String,              // "SP500" | "NDX" | "DJIA"
+    pub symbol: String,
+    pub name: String,
+    pub sector: String,
+    pub sub_sector: String,
+    pub headquarters: String,
+    pub date_added: String,         // YYYY-MM-DD when admitted to index
+}
+
+
 /// Hardcoded commodity-futures universe for the GLCO dashboard.
 /// Yahoo continuous-futures tickers, which are free via /v7/finance/quote.
 pub const COMMODITIES_UNIVERSE: &[(&str, &str, &str)] = &[
@@ -1076,6 +1145,42 @@ pub async fn scrape_and_cache_symbol(
             Err(e) => cb(&format!("research/financials {} failed: {}", sym, e)),
         }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+        // ADR-111: stock split history (FMP).
+        match fetch_fmp_stock_splits(client, &sym, fmp_key).await {
+            Ok(rows) => {
+                if !rows.is_empty() {
+                    let _ = upsert_stock_splits(conn, &sym, &rows);
+                    cb(&format!("research/splits: {} cached ({} rows)", sym, rows.len()));
+                }
+            }
+            Err(e) => cb(&format!("research/splits {} failed: {}", sym, e)),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+        // ADR-111: ETF holdings (FMP). No-op for non-ETF tickers (empty result).
+        match fetch_fmp_etf_holdings(client, &sym, fmp_key).await {
+            Ok(rows) => {
+                if !rows.is_empty() {
+                    let _ = upsert_etf_holdings(conn, &sym, &rows);
+                    cb(&format!("research/etf: {} cached ({} holdings)", sym, rows.len()));
+                }
+            }
+            Err(e) => cb(&format!("research/etf {} failed: {}", sym, e)),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+        // ADR-111: ESG scores (FMP).
+        match fetch_fmp_esg(client, &sym, fmp_key).await {
+            Ok(rows) => {
+                if !rows.is_empty() {
+                    let _ = upsert_esg(conn, &sym, &rows);
+                    cb(&format!("research/esg: {} cached ({} years)", sym, rows.len()));
+                }
+            }
+            Err(e) => cb(&format!("research/esg {} failed: {}", sym, e)),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     }
 
     // ADR-110: Finnhub executives (separate from FMP block; needs Finnhub key).
@@ -1088,6 +1193,30 @@ pub async fn scrape_and_cache_symbol(
                 }
             }
             Err(e) => cb(&format!("research/executives {} failed: {}", sym, e)),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+        // ADR-111: analyst recommendation trends (Finnhub).
+        match fetch_finnhub_recommendations(client, &sym, finnhub_key).await {
+            Ok(rows) => {
+                if !rows.is_empty() {
+                    let _ = upsert_analyst_recs(conn, &sym, &rows);
+                    cb(&format!("research/recs: {} cached ({} rows)", sym, rows.len()));
+                }
+            }
+            Err(e) => cb(&format!("research/recs {} failed: {}", sym, e)),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+        // ADR-111: consensus price target (Finnhub).
+        match fetch_finnhub_price_target(client, &sym, finnhub_key).await {
+            Ok(pt) => {
+                if pt.num_analysts > 0 || pt.target_mean > 0.0 {
+                    let _ = upsert_price_target(conn, &sym, &pt);
+                    cb(&format!("research/target: {} cached (n={})", sym, pt.num_analysts));
+                }
+            }
+            Err(e) => cb(&format!("research/target {} failed: {}", sym, e)),
         }
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     }
@@ -1495,6 +1624,195 @@ pub async fn fetch_cftc_cot(
     Ok(rows)
 }
 
+// ── ADR-111 fetchers ───────────────────────────────────────────────────────
+
+/// FMP /historical-price-full/stock_split/{symbol} — historical stock splits.
+pub async fn fetch_fmp_stock_splits(
+    client: &reqwest::Client,
+    symbol: &str,
+    fmp_key: &str,
+) -> Result<Vec<StockSplit>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v3/historical-price-full/stock_split/{}?apikey={}",
+        symbol, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP splits failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP splits: HTTP {}", resp.status()));
+    }
+    let v: serde_json::Value = resp.json().await
+        .map_err(|e| format!("FMP splits parse: {e}"))?;
+    let mut rows = Vec::new();
+    if let Some(arr) = v["historical"].as_array() {
+        for e in arr {
+            let num = e["numerator"].as_f64().unwrap_or(0.0);
+            let den = e["denominator"].as_f64().unwrap_or(0.0);
+            let label = e["label"].as_str().map(|s| s.to_string())
+                .unwrap_or_else(|| if num > 0.0 && den > 0.0 { format!("{}:{}", num, den) } else { String::new() });
+            rows.push(StockSplit {
+                date: e["date"].as_str().unwrap_or("").to_string(),
+                label,
+                numerator: num,
+                denominator: den,
+            });
+        }
+    }
+    Ok(rows)
+}
+
+/// FMP /etf-holder/{symbol} — up to 1000 constituent holdings of an ETF.
+pub async fn fetch_fmp_etf_holdings(
+    client: &reqwest::Client,
+    symbol: &str,
+    fmp_key: &str,
+) -> Result<Vec<EtfHolding>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v3/etf-holder/{}?apikey={}",
+        symbol, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP etf-holder failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP etf-holder: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("FMP etf-holder parse: {e}"))?;
+    let rows = arr.into_iter().map(|e| EtfHolding {
+        symbol: e["asset"].as_str().unwrap_or("").to_string(),
+        name: e["name"].as_str().unwrap_or("").to_string(),
+        weight_pct: e["weightPercentage"].as_f64().unwrap_or(0.0),
+        shares: e["sharesNumber"].as_f64().unwrap_or(0.0),
+        market_value: e["marketValue"].as_f64().unwrap_or(0.0),
+        updated: e["updated"].as_str().unwrap_or("").to_string(),
+    }).collect();
+    Ok(rows)
+}
+
+/// Finnhub /stock/recommendation — last ~12 months of monthly buy/hold/sell bucket counts.
+pub async fn fetch_finnhub_recommendations(
+    client: &reqwest::Client,
+    symbol: &str,
+    token: &str,
+) -> Result<Vec<AnalystRecommendation>, String> {
+    if token.is_empty() { return Err("Finnhub API key required".into()); }
+    let resp = client
+        .get("https://finnhub.io/api/v1/stock/recommendation")
+        .query(&[("symbol", symbol), ("token", token)])
+        .send().await
+        .map_err(|e| format!("Finnhub recommendations failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Finnhub recommendations: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("Finnhub recommendations parse: {e}"))?;
+    let rows = arr.into_iter().map(|e| AnalystRecommendation {
+        period: e["period"].as_str().unwrap_or("").to_string(),
+        strong_buy: e["strongBuy"].as_i64().unwrap_or(0) as i32,
+        buy: e["buy"].as_i64().unwrap_or(0) as i32,
+        hold: e["hold"].as_i64().unwrap_or(0) as i32,
+        sell: e["sell"].as_i64().unwrap_or(0) as i32,
+        strong_sell: e["strongSell"].as_i64().unwrap_or(0) as i32,
+    }).collect();
+    Ok(rows)
+}
+
+/// Finnhub /stock/price-target — consensus high/low/mean target snapshot.
+pub async fn fetch_finnhub_price_target(
+    client: &reqwest::Client,
+    symbol: &str,
+    token: &str,
+) -> Result<PriceTarget, String> {
+    if token.is_empty() { return Err("Finnhub API key required".into()); }
+    let resp = client
+        .get("https://finnhub.io/api/v1/stock/price-target")
+        .query(&[("symbol", symbol), ("token", token)])
+        .send().await
+        .map_err(|e| format!("Finnhub price-target failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Finnhub price-target: HTTP {}", resp.status()));
+    }
+    let v: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Finnhub price-target parse: {e}"))?;
+    Ok(PriceTarget {
+        symbol: symbol.to_uppercase(),
+        target_high: v["targetHigh"].as_f64().unwrap_or(0.0),
+        target_low: v["targetLow"].as_f64().unwrap_or(0.0),
+        target_mean: v["targetMean"].as_f64().unwrap_or(0.0),
+        target_median: v["targetMedian"].as_f64().unwrap_or(0.0),
+        last_updated: v["lastUpdated"].as_str().unwrap_or("").chars().take(10).collect(),
+        num_analysts: v["numberOfAnalysts"].as_i64().unwrap_or(0) as i32,
+    })
+}
+
+/// FMP /esg-environmental-social-governance-data?symbol={sym} — historical ESG score rows.
+pub async fn fetch_fmp_esg(
+    client: &reqwest::Client,
+    symbol: &str,
+    fmp_key: &str,
+) -> Result<Vec<EsgScore>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v4/esg-environmental-social-governance-data?symbol={}&apikey={}",
+        symbol, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP esg failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP esg: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("FMP esg parse: {e}"))?;
+    let rows = arr.into_iter().map(|e| EsgScore {
+        symbol: e["symbol"].as_str().unwrap_or(symbol).to_uppercase(),
+        environmental_score: e["environmentalScore"].as_f64().unwrap_or(0.0),
+        social_score: e["socialScore"].as_f64().unwrap_or(0.0),
+        governance_score: e["governanceScore"].as_f64().unwrap_or(0.0),
+        esg_score: e["ESGScore"].as_f64().unwrap_or(0.0),
+        year: e["year"].as_i64().unwrap_or(0) as i32,
+    }).collect();
+    Ok(rows)
+}
+
+/// FMP index constituent endpoint (/sp500_constituent, /nasdaq_constituent, /dowjones_constituent).
+/// `index_code` accepts "SP500" | "NDX" | "DJIA"; mapped to the right FMP path.
+pub async fn fetch_fmp_index_members(
+    client: &reqwest::Client,
+    index_code: &str,
+    fmp_key: &str,
+) -> Result<Vec<IndexMember>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let (path, idx_label) = match index_code.to_uppercase().as_str() {
+        "SP500" | "SPX" | "S&P500" => ("sp500_constituent", "SP500"),
+        "NDX" | "NASDAQ" | "NDX100" => ("nasdaq_constituent", "NDX"),
+        "DJIA" | "DOW" | "INDU" => ("dowjones_constituent", "DJIA"),
+        other => return Err(format!("Unknown index code: {}", other)),
+    };
+    let url = format!(
+        "https://financialmodelingprep.com/api/v3/{}?apikey={}",
+        path, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP index members failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP index members: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("FMP index members parse: {e}"))?;
+    let rows = arr.into_iter().map(|e| IndexMember {
+        index: idx_label.to_string(),
+        symbol: e["symbol"].as_str().unwrap_or("").to_uppercase(),
+        name: e["name"].as_str().unwrap_or("").to_string(),
+        sector: e["sector"].as_str().unwrap_or("").to_string(),
+        sub_sector: e["subSector"].as_str().unwrap_or("").to_string(),
+        headquarters: e["headQuarter"].as_str().unwrap_or("").to_string(),
+        date_added: e["dateFirstAdded"].as_str().unwrap_or("").to_string(),
+    }).collect();
+    Ok(rows)
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -1654,6 +1972,194 @@ pub fn get_executives(conn: &Connection, symbol: &str) -> Result<Option<Vec<Exec
         .map_err(|e| format!("prepare get_executives: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_executives: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_executives: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+// ── ADR-111 SQLite schema + helpers ────────────────────────────────────────
+
+pub fn create_research_tables_v4(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_stock_splits (
+            symbol TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_etf_holdings (
+            symbol TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_analyst_recs (
+            symbol TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_price_target (
+            symbol TEXT PRIMARY KEY,
+            target_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_esg (
+            symbol TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_index_members (
+            index_code TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_stock_splits_updated ON research_stock_splits(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_etf_holdings_updated ON research_etf_holdings(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_analyst_recs_updated ON research_analyst_recs(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_price_target_updated ON research_price_target(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_esg_updated ON research_esg(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_index_members_updated ON research_index_members(updated_at);"
+    ).map_err(|e| format!("create research_v4 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_stock_splits(conn: &Connection, symbol: &str, rows: &[StockSplit]) -> Result<(), String> {
+    let _ = create_research_tables_v4(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("splits json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_stock_splits(symbol, rows_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert stock_splits: {e}"))?;
+    Ok(())
+}
+
+pub fn get_stock_splits(conn: &Connection, symbol: &str) -> Result<Option<Vec<StockSplit>>, String> {
+    let _ = create_research_tables_v4(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_stock_splits WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_splits: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_splits: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_splits: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_etf_holdings(conn: &Connection, symbol: &str, rows: &[EtfHolding]) -> Result<(), String> {
+    let _ = create_research_tables_v4(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("etf holdings json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_etf_holdings(symbol, rows_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert etf holdings: {e}"))?;
+    Ok(())
+}
+
+pub fn get_etf_holdings(conn: &Connection, symbol: &str) -> Result<Option<Vec<EtfHolding>>, String> {
+    let _ = create_research_tables_v4(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_etf_holdings WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_etf_holdings: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_etf_holdings: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_etf_holdings: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_analyst_recs(conn: &Connection, symbol: &str, rows: &[AnalystRecommendation]) -> Result<(), String> {
+    let _ = create_research_tables_v4(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("analyst recs json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_analyst_recs(symbol, rows_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert analyst_recs: {e}"))?;
+    Ok(())
+}
+
+pub fn get_analyst_recs(conn: &Connection, symbol: &str) -> Result<Option<Vec<AnalystRecommendation>>, String> {
+    let _ = create_research_tables_v4(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_analyst_recs WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_analyst_recs: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_analyst_recs: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_analyst_recs: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_price_target(conn: &Connection, symbol: &str, pt: &PriceTarget) -> Result<(), String> {
+    let _ = create_research_tables_v4(conn);
+    let json = serde_json::to_string(pt).map_err(|e| format!("price target json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_price_target(symbol, target_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET target_json=excluded.target_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert price_target: {e}"))?;
+    Ok(())
+}
+
+pub fn get_price_target(conn: &Connection, symbol: &str) -> Result<Option<PriceTarget>, String> {
+    let _ = create_research_tables_v4(conn);
+    let mut stmt = conn.prepare("SELECT target_json FROM research_price_target WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_price_target: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_price_target: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_price_target: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_esg(conn: &Connection, symbol: &str, rows: &[EsgScore]) -> Result<(), String> {
+    let _ = create_research_tables_v4(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("esg json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_esg(symbol, rows_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert esg: {e}"))?;
+    Ok(())
+}
+
+pub fn get_esg(conn: &Connection, symbol: &str) -> Result<Option<Vec<EsgScore>>, String> {
+    let _ = create_research_tables_v4(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_esg WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_esg: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_esg: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_esg: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_index_members(conn: &Connection, index_code: &str, rows: &[IndexMember]) -> Result<(), String> {
+    let _ = create_research_tables_v4(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("index members json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_index_members(index_code, rows_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(index_code) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![index_code.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert index_members: {e}"))?;
+    Ok(())
+}
+
+pub fn get_index_members(conn: &Connection, index_code: &str) -> Result<Option<Vec<IndexMember>>, String> {
+    let _ = create_research_tables_v4(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_index_members WHERE index_code = ?1")
+        .map_err(|e| format!("prepare get_index_members: {e}"))?;
+    let mut r = stmt.query(params![index_code.to_uppercase()]).map_err(|e| format!("query get_index_members: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_index_members: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else {
@@ -1907,4 +2413,160 @@ mod tests {
         assert!((r.noncomm_net - 75_000.0).abs() < 1e-9);
         assert!(r.noncomm_net_change > 0.0);
     }
+
+    // ── ADR-111 ─────────────────────────────────────────────────────────
+
+    fn open_mem_conn_v4() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v4(&c).unwrap();
+        c
+    }
+
+    #[test]
+    fn stock_split_default_is_empty() {
+        let s = StockSplit::default();
+        assert!(s.date.is_empty());
+        assert!(s.label.is_empty());
+        assert_eq!(s.numerator, 0.0);
+        assert_eq!(s.denominator, 0.0);
+    }
+
+    #[test]
+    fn stock_split_roundtrip() {
+        let c = open_mem_conn_v4();
+        let rows = vec![
+            StockSplit { date: "2020-08-31".into(), label: "4:1".into(), numerator: 4.0, denominator: 1.0 },
+            StockSplit { date: "2014-06-09".into(), label: "7:1".into(), numerator: 7.0, denominator: 1.0 },
+        ];
+        upsert_stock_splits(&c, "AAPL", &rows).unwrap();
+        let got = get_stock_splits(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].label, "4:1");
+        assert!((got[1].numerator - 7.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn etf_holding_roundtrip() {
+        let c = open_mem_conn_v4();
+        let rows = vec![
+            EtfHolding {
+                symbol: "AAPL".into(), name: "Apple Inc.".into(),
+                weight_pct: 7.21, shares: 176_000_000.0, market_value: 34_500_000_000.0,
+                updated: "2024-06-30".into(),
+            },
+            EtfHolding {
+                symbol: "MSFT".into(), name: "Microsoft Corp.".into(),
+                weight_pct: 6.87, shares: 83_000_000.0, market_value: 32_900_000_000.0,
+                updated: "2024-06-30".into(),
+            },
+        ];
+        upsert_etf_holdings(&c, "SPY", &rows).unwrap();
+        let got = get_etf_holdings(&c, "spy").unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].symbol, "AAPL");
+        assert!((got[1].weight_pct - 6.87).abs() < 1e-9);
+    }
+
+    #[test]
+    fn analyst_rec_roundtrip() {
+        let c = open_mem_conn_v4();
+        let rows = vec![
+            AnalystRecommendation {
+                period: "2026-04-01".into(),
+                strong_buy: 15, buy: 12, hold: 8, sell: 1, strong_sell: 0,
+            },
+            AnalystRecommendation {
+                period: "2026-03-01".into(),
+                strong_buy: 14, buy: 13, hold: 9, sell: 1, strong_sell: 0,
+            },
+        ];
+        upsert_analyst_recs(&c, "AAPL", &rows).unwrap();
+        let got = get_analyst_recs(&c, "AAPL").unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].strong_buy, 15);
+        assert_eq!(got[1].hold, 9);
+    }
+
+    #[test]
+    fn price_target_default_is_empty() {
+        let p = PriceTarget::default();
+        assert!(p.symbol.is_empty());
+        assert_eq!(p.target_mean, 0.0);
+        assert_eq!(p.num_analysts, 0);
+    }
+
+    #[test]
+    fn price_target_roundtrip() {
+        let c = open_mem_conn_v4();
+        let pt = PriceTarget {
+            symbol: "NVDA".into(),
+            target_high: 220.0, target_low: 140.0,
+            target_mean: 185.50, target_median: 190.0,
+            last_updated: "2026-04-10".into(),
+            num_analysts: 45,
+        };
+        upsert_price_target(&c, "NVDA", &pt).unwrap();
+        let got = get_price_target(&c, "nvda").unwrap().unwrap();
+        assert_eq!(got.num_analysts, 45);
+        assert!((got.target_mean - 185.50).abs() < 1e-9);
+    }
+
+    #[test]
+    fn price_target_upsert_replaces() {
+        let c = open_mem_conn_v4();
+        upsert_price_target(&c, "T", &PriceTarget {
+            symbol: "T".into(), target_mean: 20.0, num_analysts: 10, ..Default::default()
+        }).unwrap();
+        upsert_price_target(&c, "T", &PriceTarget {
+            symbol: "T".into(), target_mean: 22.5, num_analysts: 12, ..Default::default()
+        }).unwrap();
+        let got = get_price_target(&c, "T").unwrap().unwrap();
+        assert_eq!(got.num_analysts, 12);
+        assert!((got.target_mean - 22.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn esg_roundtrip() {
+        let c = open_mem_conn_v4();
+        let rows = vec![
+            EsgScore {
+                symbol: "AAPL".into(),
+                environmental_score: 78.5, social_score: 71.2, governance_score: 82.3,
+                esg_score: 77.3, year: 2024,
+            },
+            EsgScore {
+                symbol: "AAPL".into(),
+                environmental_score: 76.0, social_score: 70.0, governance_score: 80.5,
+                esg_score: 75.5, year: 2023,
+            },
+        ];
+        upsert_esg(&c, "AAPL", &rows).unwrap();
+        let got = get_esg(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].year, 2024);
+        assert!((got[0].esg_score - 77.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn index_member_roundtrip() {
+        let c = open_mem_conn_v4();
+        let rows = vec![
+            IndexMember {
+                index: "SP500".into(), symbol: "AAPL".into(), name: "Apple Inc.".into(),
+                sector: "Information Technology".into(), sub_sector: "Technology Hardware".into(),
+                headquarters: "Cupertino, CA".into(), date_added: "1982-11-30".into(),
+            },
+            IndexMember {
+                index: "SP500".into(), symbol: "MSFT".into(), name: "Microsoft Corp.".into(),
+                sector: "Information Technology".into(), sub_sector: "Software".into(),
+                headquarters: "Redmond, WA".into(), date_added: "1994-06-01".into(),
+            },
+        ];
+        upsert_index_members(&c, "SP500", &rows).unwrap();
+        let got = get_index_members(&c, "sp500").unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].symbol, "AAPL");
+        assert_eq!(got[1].sector, "Information Technology");
+    }
+
 }

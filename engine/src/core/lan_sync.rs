@@ -136,6 +136,13 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_rating_changes",
     "research_financials",
     "research_executives",
+    // ── ADR-111 Round 4 ─────────────────────────────
+    "research_stock_splits",
+    "research_etf_holdings",
+    "research_analyst_recs",
+    "research_price_target",
+    "research_esg",
+    "research_index_members",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -334,6 +341,48 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_stock_splits" => Some(
+            "CREATE TABLE IF NOT EXISTS research_stock_splits (
+                symbol TEXT PRIMARY KEY,
+                rows_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_etf_holdings" => Some(
+            "CREATE TABLE IF NOT EXISTS research_etf_holdings (
+                symbol TEXT PRIMARY KEY,
+                rows_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_analyst_recs" => Some(
+            "CREATE TABLE IF NOT EXISTS research_analyst_recs (
+                symbol TEXT PRIMARY KEY,
+                rows_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_price_target" => Some(
+            "CREATE TABLE IF NOT EXISTS research_price_target (
+                symbol TEXT PRIMARY KEY,
+                target_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_esg" => Some(
+            "CREATE TABLE IF NOT EXISTS research_esg (
+                symbol TEXT PRIMARY KEY,
+                rows_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_index_members" => Some(
+            "CREATE TABLE IF NOT EXISTS research_index_members (
+                index_code TEXT PRIMARY KEY,
+                rows_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -357,6 +406,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_rating_changes" => Some("updated_at"),
         "research_financials" => Some("updated_at"),
         "research_executives" => Some("updated_at"),
+        "research_stock_splits" => Some("updated_at"),
+        "research_etf_holdings" => Some("updated_at"),
+        "research_analyst_recs" => Some("updated_at"),
+        "research_price_target" => Some("updated_at"),
+        "research_esg" => Some("updated_at"),
+        "research_index_members" => Some("updated_at"),
         _ => None,
     }
 }

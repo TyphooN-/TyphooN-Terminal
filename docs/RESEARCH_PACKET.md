@@ -3,16 +3,21 @@
 The **research packet** is the markdown-formatted context block TyphooN assembles
 whenever the user asks an AI model about one or more trading symbols. It is the
 single payload that crosses the wire from the terminal to every supported AI
-backend — Claude, GPT, Gemini, Grok, Mistral, Perplexity, and local Ollama.
+backend — Claude (API + CLI), GPT, Gemini (API + CLI), Grok, Mistral, Perplexity,
+and local Ollama / LM Studio.
 
-The packet exists so the LLM never has to call out to the internet, invent
-numbers, or guess at stale training data. Every field is pulled from the
+The packet exists so the LLM starts with a complete TyphooN-native view of the
+ticker before it reaches for its own tools. Every field is pulled from the
 terminal's own SQLite cache or in-memory broker state, snapped at the moment
 the user issues the command, and dropped into a markdown document the model
-reads verbatim. What you see in the packet is what the model sees — no hidden
-tools, no retrieval, no post-hoc injection.
+reads verbatim. What you see in the packet is what the model sees.
 
-> Source of truth: `native/src/app.rs::investigate_symbols()` (lines 15427-15679)
+Unlike earlier versions, the packet now **combines** with live web search
+performed by Claude / Gemini CLIs (or the hosted provider's search tool) —
+the system prompt explicitly instructs the model to cross-reference the packet
+with real-time news, prices, and sentiment when the question calls for it.
+
+> Source of truth: `native/src/app.rs::investigate_symbols()`
 
 ---
 
@@ -25,9 +30,9 @@ delivered to the model.
 
 | Command | Transport | Destination |
 |---|---|---|
-| `ASKAI SYM[,SYM] [question]` | HTTP `POST` via `BrokerCmd::AiChat` | Currently-selected AI provider (Settings → AI Provider) |
-| `ASKCLAUDE SYM[,SYM] [question]` | `claude --print <prompt>` subprocess | Anthropic's `claude` CLI (must be on `$PATH`) |
-| `ASKGEMINI SYM[,SYM] [question]` | `gemini <prompt>` subprocess | Google's `gemini` CLI (must be on `$PATH`) |
+| `ASKAI SYM[,SYM] [question]` | HTTP `POST` via `BrokerCmd::AiChat` | Currently-selected AI provider (AI Assistant window) |
+| `ASKCLAUDE SYM[,SYM] [question]` | `claude --print` subprocess | Anthropic's `claude` CLI (must be on `$PATH`) |
+| `ASKGEMINI SYM[,SYM] [question]` | `gemini --prompt` subprocess | Google's `gemini` CLI (must be on `$PATH`) |
 
 Argument parsing contract: the first whitespace-separated token is the
 comma-separated symbol list; everything after the first whitespace is the
@@ -43,8 +48,6 @@ ASKAI CC what is the debt load?             → packet for CC, custom question
 ASKCLAUDE AAPL,MSFT,NVDA write me a memo    → 3-symbol packet to the Claude CLI
 ```
 
-Handlers: `native/src/app.rs:17770` (ASKAI), `:17806` (ASKCLAUDE), `:17855` (ASKGEMINI).
-
 ---
 
 ## Packet Layout
@@ -57,7 +60,7 @@ The packet is a single UTF-8 markdown string with one **header block**, one
 
 ```markdown
 # TyphooN Terminal Research Packet
-Scope: <broker scope label> | Generated: 2026-04-13T14:22:07Z
+Scope: <broker scope label> | Generated: 2026-04-14T14:22:07Z
 Symbols: CC, NCLH
 ```
 
@@ -70,7 +73,7 @@ Symbols: CC, NCLH
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**seven sub-blocks**, each of which is skipped silently when its data source
+**sixteen sub-blocks**, each of which is skipped silently when its data source
 is empty.
 
 #### 2.1 Company header + description
@@ -96,92 +99,38 @@ Every later sub-block continues to emit as long as its own source has data.
 
 #### 2.2 Valuation & Risk table
 
-A 20-row markdown table pulled from the same `Fundamentals` row:
-
-| Metric | Value |
-|---|---|
-| Market Cap | … |
-| Enterprise Value | … |
-| MCap/EV % | … |
-| Total Debt | … |
-| Cash & Equivalents | … |
-| Stock Price | … |
-| P/E (trailing) | … |
-| Forward P/E | … |
-| PEG | … |
-| P/B | … |
-| P/S | … |
-| EV/EBITDA | … |
-| Profit Margin | … |
-| Operating Margin | … |
-| ROE | … |
-| ROA | … |
-| Beta | … |
-| Short Ratio | … |
-| Short % of Float | … |
-| Dividend Yield | … |
-| Next Earnings | … |
+A 20-row markdown table pulled from the same `Fundamentals` row: Market Cap,
+Enterprise Value, MCap/EV %, Total Debt, Cash & Equivalents, Stock Price, P/E,
+Forward P/E, PEG, P/B, P/S, EV/EBITDA, Profit Margin, Operating Margin, ROE,
+ROA, Beta, Short Ratio, Short % of Float, Dividend Yield, Next Earnings.
 
 Formatters: money values use `format_large_number` (`1.23B`, `456.7M`),
 ratios use 2-decimal fixed, missing values render as `—`.
 
 #### 2.3 Quarterly financials
 
-```markdown
-### Last 4 Quarterly Financials
-| Period | Revenue | Net Income | FCF | Gross Profit | Op Income | EPS |
-```
-
-Pulled from SQLite via
-`typhoon_engine::core::fundamentals::get_quarterly_financials(&conn, sym)`.
-Capped at **4 quarters** — most recent first.
+Pulled from SQLite via `fundamentals::get_quarterly_financials`. Capped at
+**4 quarters** — most recent first. Columns: Period / Revenue / Net Income /
+FCF / Gross Profit / Op Income / EPS.
 
 #### 2.4 Top institutional holders
 
-```markdown
-### Top 5 Institutional Holders
-| Holder | Shares | % Held | Value |
-```
-
 Pulled from SQLite via `get_institutional_holders`. Capped at **5 rows**.
+Columns: Holder / Shares / % Held / Value.
 
 #### 2.5 Recent SEC filings
 
-```markdown
-### Recent SEC Filings (N)
-| Date | Form | Category | Summary |
-```
-
-Filtered from `self.bg.sec_filings` by ticker (case-insensitive). Capped at
-**10 filings**. Each summary is truncated to **120 characters** to keep row
-lengths predictable for LLM tokenization.
+Filtered from `self.bg.sec_filings` by ticker. Capped at **10 filings**.
+Each summary is truncated to **120 characters** to keep row lengths
+predictable for LLM tokenization.
 
 #### 2.6 Insider activity
 
-```markdown
-### Insider Activity
-- 14 transactions on file (3 buys, 11 sells)
-- Buy aggregate: 1.2M | Sell aggregate: 8.7M | Net: -7.5M
-| Date | Insider | Title | Type | Shares | Value |
-```
-
-Pulled from `self.bg.insider_trades` (a `HashMap<String, Vec<InsiderTrade>>`).
-Emits two aggregate lines — total counts and buy/sell/net dollar values —
-followed by the **5 most recent trades**. "Buys" and "sells" are detected by
-SEC form 4 transaction codes `P`/`S` plus loose substring match on the
-transaction-type string.
+Pulled from `self.bg.insider_trades`. Emits two aggregate lines — total
+counts and buy/sell/net dollar values — followed by the **5 most recent
+trades**. Form-4 transaction codes `P` and `S` are treated as buy and sell.
 
 #### 2.7 Price & volatility
-
-```markdown
-### Price & Volatility (D1 bars, n=252)
-- Last close: **24.3100**
-- 20d return: +3.82%
-- 60d return: -12.41%
-- 252d return: +47.15%
-- ATR(14): 0.7834 (3.22% of price)
-- VaR 95% (1 lot): $123.45 (2.17% of ask)
-```
 
 Source: daily OHLCV bars from the bar cache. Key probed in this order:
 
@@ -189,26 +138,76 @@ Source: daily OHLCV bars from the bar cache. Key probed in this order:
 2. `mt5:{sym}:1Day`    — MT5 raw
 3. `alpaca:{sym}:1Day` — Alpaca daily bars
 
-The first key with **≥20 bars** wins. If none qualifies:
+The first key with **≥20 bars** wins. Emitted metrics: last close, 20d / 60d /
+252d returns, ATR(14) (Wilder-smoothed), VaR 95% (from
+`typhoon_engine::core::var::compute_var_from_closes`).
 
-```markdown
-_No D1 bar data in cache — price/volatility stats unavailable. Run MT5SYNC or BARDATA to populate._
-```
+#### 2.8 Recent news
 
-Calculations:
+New in ADR-111 — pulled from the multi-source news pipeline (ADR-107) via
+`typhoon_engine::core::news::get_news_by_symbol`. Capped at **8 articles**.
+Columns: Date / Source / Sentiment / Headline.
 
-- **Returns** — simple close-to-close at 20, 60, 252 sessions (rendered as
-  `—` when the series is shorter than the lookback)
-- **ATR(14)** — Wilder-smoothed true range on the final 14 sessions
-- **VaR 95%** — `typhoon_engine::core::var::compute_var_from_closes(&closes, 0.95)`,
-  expressed as both dollar amount and ratio to ask price
+Sentiment is whatever the upstream provider supplied (Marketaux, AlphaVantage,
+FMP, Finnhub) — if empty it renders as `—`. The model is explicitly told to
+augment this with a live web search in the system prompt.
 
-#### 2.8 Sector peer comparison
+#### 2.9 Dividend history (DVD)
 
-```markdown
-### Sector Peer Comparison (Consumer Cyclical — 42 peers)
-| Metric | This Symbol | Sector Median |
-```
+Pulled from `research::get_dividends`. Capped at **6 rows**. Columns:
+Ex-Date / Pay Date / Amount / Label. Source: ADR-109 DVD Godel window.
+
+#### 2.10 Forward earnings estimates (EEB)
+
+Pulled from `research::get_earnings_estimates`. Capped at **4 future
+periods**. Columns: Period / EPS Avg / EPS Lo/Hi / Rev Avg / Analyst counts.
+Source: ADR-109 EEB window.
+
+#### 2.11 Analyst rating changes (UPDG)
+
+Pulled from `research::get_rating_changes`. Capped at **6 most recent
+changes**. Columns: Date / Firm / Action / From → To / Price Target.
+Source: ADR-109 UPDG window.
+
+#### 2.12 Annual financial statements trend (FA)
+
+Pulled from `research::get_financials`. Three sub-tables, each capped at
+**4 annual periods**:
+
+- Income statement trend: FY / Revenue / Gross / Op Inc / Net Inc / EPS
+- Cash flow trend: FY / CFO / Capex / FCF / Div Paid / Buybacks
+- Balance sheet trend: FY / Total Assets / Net Debt / Total Equity
+
+Source: ADR-110 FA window.
+
+#### 2.13 Management (MGMT)
+
+Pulled from `research::get_executives`. Capped at **6 executives**. Emits
+the total compensation across all listed officers in the section header,
+then a table of Name / Position / Since / Compensation. Source: ADR-110 MGMT
+window.
+
+#### 2.14 Stock split history (SPLT)
+
+Pulled from `research::get_stock_splits`. Capped at **4 most recent splits**.
+Columns: Date / Ratio. Source: ADR-111 SPLT window.
+
+#### 2.15 Analyst consensus (ANR)
+
+Combines `research::get_price_target` and `research::get_analyst_recs` into
+a single block:
+
+- Price target line: mean / median / range across all contributing analysts
+- Rating breakdown line (latest period): Strong Buy / Buy / Hold / Sell / Strong Sell
+
+Source: ADR-111 ANR window.
+
+#### 2.16 ESG score
+
+Pulled from `research::get_esg`. Shows latest-year environmental, social,
+governance, and composite scores. Source: ADR-111 ESG window.
+
+#### 2.17 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -232,41 +231,52 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 > risk profile, and (6) a neutral-to-directional takeaway. Flag any data
 > gaps you'd want filled in to refine the view.
 
-The "Using only the data above" framing is deliberate — it discourages the
-model from hallucinating numbers that aren't in the packet.
-
 ---
 
 ## Size caps (hard limits in the builder)
 
 | Field | Cap | Why |
 |---|---|---|
-| Company description | 800 chars | Some 10-K-sourced descriptions run thousands of chars |
+| Company description | 800 chars | Some 10-K descriptions run thousands of chars |
 | SEC filing summary | 120 chars | Keeps table rows readable |
 | Quarterly financials | 4 rows | Model only needs a trajectory, not a decade |
 | Institutional holders | 5 rows | Top-5 captures >50% of float for most names |
 | Recent SEC filings | 10 rows | Covers last ~2 years for an active issuer |
 | Insider trades | 5 rows | Aggregate values already cover the summary |
-| Daily bars required for stats | ≥20 | Needed for min 20d return and ATR warm-up |
+| Recent news | 8 articles | Matches the news window's top slice |
+| Dividend history | 6 rows | Multi-year cadence visible in 6 |
+| Earnings estimates | 4 periods | Forward 1Y coverage |
+| Rating changes | 6 rows | Recent analyst rotation |
+| Annual statements (I/B/C) | 4 periods each | 4-year trajectory |
+| Management | 6 execs | Named officers typically ≤6 |
+| Stock splits | 4 rows | Historical splits rarely exceed 4 |
+| Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols and the per-symbol density. In practice a single S&P 500 symbol
-produces a packet around **3-6 KB**; a 10-symbol basket lands near **30-60
-KB**.
+symbols. A single S&P 500 symbol now produces a packet around **6-12 KB**
+(up from 3-6 KB before the ADR-111 expansion); a 10-symbol basket lands
+near **60-120 KB**.
 
 ---
 
 ## AI provider wire formats
 
-The packet is delivered to seven backends via two different code paths.
+The packet is delivered via two code paths: HTTP (hosted APIs) or subprocess
+(local CLIs).
 
-### HTTP path (ASKAI)
+### HTTP path (ASKAI → AI Assistant window)
 
-`BrokerCmd::AiChat` handler at `native/src/app.rs:11530`. The packet becomes
-the final `user` message appended to the current chat history. The
-`max_tokens` response budget is **1024** for every provider.
+`BrokerCmd::AiChat` now takes `system: Option<String>` and
+`model: Option<String>` fields. The research packet is **injected as the
+system prompt** — not as a user turn — along with a trading-assistant
+preamble that explicitly asks the model to combine the packet with live web
+search for news / sentiment / prices.
 
-**Anthropic** (native API format — not OpenAI-compatible):
+The AI Assistant window shows a `[packet loaded]` indicator when a packet
+is in scope, and a model picker ComboBox that resets to the provider default
+when the provider changes.
+
+**Anthropic** (native API format, `system` is a top-level field):
 
 ```http
 POST https://api.anthropic.com/v1/messages
@@ -275,23 +285,22 @@ anthropic-version: 2023-06-01
 content-type: application/json
 
 {
-  "model": "claude-sonnet-4-20250514",
-  "max_tokens": 1024,
-  "messages": [...history..., {"role": "user", "content": "<research packet>"}]
+  "model": "claude-opus-4-5",
+  "max_tokens": 4096,
+  "system": "<preamble + RESEARCH PACKET block>",
+  "messages": [...history..., {"role": "user", "content": "<latest turn>"}]
 }
 ```
 
-Response text is extracted from `content[0].text`.
+**OpenAI-compatible path** — used for the remaining six providers. The full
+system prompt (preamble + packet) is prepended as a `{"role":"system"}`
+message.
 
-**OpenAI-compatible path** — used for the remaining six providers. An extra
-system message is prepended: `"You are a trading assistant for TyphooN
-Terminal."`
-
-| Provider | URL | Model |
+| Provider | URL | Default Model |
 |---|---|---|
 | OpenAI | `https://api.openai.com/v1/chat/completions` | `gpt-4o` |
-| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | `gemini-2.5-flash` |
-| xAI / Grok | `https://api.x.ai/v1/chat/completions` | `grok-3-mini` |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | `gemini-2.5-pro` |
+| xAI / Grok | `https://api.x.ai/v1/chat/completions` | `grok-3` |
 | Mistral | `https://api.mistral.ai/v1/chat/completions` | `mistral-large-latest` |
 | Perplexity | `https://api.perplexity.ai/chat/completions` | `sonar-pro` |
 | Local (Ollama) | `http://localhost:11434/v1/chat/completions` | `llama3.2` |
@@ -299,47 +308,109 @@ Terminal."`
 
 Response text is extracted from `choices[0].message.content`. The local path
 sends no `Authorization` header; the other five send `Bearer <api_key>`.
+All providers use a **4096**-token response budget (up from 1024).
 
 ### Subprocess path (ASKCLAUDE / ASKGEMINI)
 
-No network hop from the terminal. The packet is spawned directly into the
-local CLI as a single command-line argument, and the process's stdout is
-captured as the response.
+No network hop from the terminal. The packet, conversation transcript, and
+latest user turn are rebuilt into a single prompt string via
+`Self::build_claude_prompt()` every time the user clicks Send — so
+follow-ups always see the full context without relying on fragile CLI state.
+
+**Claude Code CLI** (`ASKCLAUDE` / Claude Code chat window):
 
 ```sh
-claude --print "<research packet>"      # ASKCLAUDE
-gemini          "<research packet>"      # ASKGEMINI
+claude --print \
+       --model <opus|sonnet|haiku> \
+       --allowed-tools "WebSearch WebFetch Read Grep Glob Bash" \
+       --permission-mode acceptEdits \
+       --session-id <uuid>  # first call
+       # or
+       --resume <uuid>      # subsequent calls in the same window
+       "<full prompt string>"
+```
+
+- `--session-id` / `--resume` — each chat window holds a per-window v4 UUID
+  that is passed to `--session-id` on the first send and to `--resume` on
+  every subsequent send, so the CLI's own session state mirrors the
+  in-window transcript.
+- `--allowed-tools` — pre-grants `WebSearch` and `WebFetch` so live web
+  search works inside `--print` mode (where the CLI cannot show interactive
+  permission prompts). Read / Grep / Glob / Bash are added so the CLI can
+  introspect TyphooN's source when the user asks.
+- `--permission-mode acceptEdits` — silences the interactive edit
+  confirmation that would otherwise block non-TTY invocations.
+- `--model` — wired to the model picker in the chat window (default `opus`
+  for maximum effort).
+
+**Gemini CLI** (`ASKGEMINI` / Gemini CLI chat window):
+
+```sh
+gemini --model <gemini-2.5-pro|gemini-2.5-flash|gemini-2.0-flash> \
+       --prompt "<full prompt string>"
 ```
 
 Both handlers first run `which claude` / `which gemini`; if the binary is
-missing, the command logs an error and the packet is never built. The
+missing, the command logs an error and the packet is never built. Each
 subprocess runs on a dedicated `std::thread` so the UI stays responsive, and
-the reply is piped back via a `std::sync::mpsc::channel` into
-`self.claude_code_rx` / `self.gemini_cli_rx` and drained on the next UI
-frame into the respective chat window.
+the reply is piped back via a `std::sync::mpsc::channel` drained on the next
+UI frame into the respective chat window.
+
+### Prompt builder
+
+`native/src/app.rs::build_claude_prompt(packet, history, latest)` assembles
+the full prompt string for both subprocess paths:
+
+```
+=== RESEARCH PACKET ===
+<packet>
+=== END RESEARCH PACKET ===
+
+=== PRIOR CONVERSATION ===
+User: ...
+Assistant: ...
+=== END PRIOR CONVERSATION ===
+
+User: <latest turn>
+```
+
+Prior `[Research packet: SYM]` placeholder entries are filtered out of the
+transcript so the model doesn't see duplicated meta-labels.
+
+### Session continuity
+
+Each chat window (Claude Code, Gemini CLI, AI Assistant) stores the packet
+in its own `*_packet: Option<String>` field. Every Send rebuilds the prompt
+from the stored packet + the transcript + the new message, so the model
+never "forgets" what TyphooN handed it — even if the CLI itself would
+otherwise treat each `--print` invocation as a fresh conversation.
 
 ---
 
 ## Data sources referenced by the builder
-
-These are the in-memory / on-disk structures the builder reads to assemble
-the packet. None of them are populated by `investigate_symbols` itself — it
-is a pure read.
 
 | Source | Kind | Populated by |
 |---|---|---|
 | `self.bg.all_fundamentals` | `Vec<Fundamentals>` | EVSCRAPE / `FundamentalsScrape` |
 | `self.bg.sec_filings` | `Vec<SecFiling>` | SEC filings window / scraper (ADR-096) |
 | `self.bg.insider_trades` | `HashMap<String, Vec<InsiderTrade>>` | Insider trades fetcher |
-| `cache.get_quarterly_financials` | SQLite — `fundamentals_quarterly` | `fundamentals` module |
-| `cache.get_institutional_holders` | SQLite — `institutional_holders` | `fundamentals` module |
-| `cache.get_bars_raw` | SQLite — bar cache | MT5SYNC, BARDATA, chart loads |
+| `fundamentals::get_quarterly_financials` | SQLite `quarterly_financials` | `fundamentals` module |
+| `fundamentals::get_institutional_holders` | SQLite `institutional_holders` | `fundamentals` module |
+| `news::get_news_by_symbol` | SQLite `research_news` + FTS5 | ADR-107 news pipeline |
+| `research::get_dividends` | SQLite `research_dividends` | ADR-109 DVD window |
+| `research::get_earnings_estimates` | SQLite `research_earnings_estimates` | ADR-109 EEB window |
+| `research::get_rating_changes` | SQLite `research_rating_changes` | ADR-109 UPDG window |
+| `research::get_financials` | SQLite `research_financials` | ADR-110 FA window |
+| `research::get_executives` | SQLite `research_executives` | ADR-110 MGMT window |
+| `research::get_stock_splits` | SQLite `research_stock_splits` | ADR-111 SPLT window |
+| `research::get_analyst_recs` | SQLite `research_analyst_recs` | ADR-111 ANR window |
+| `research::get_price_target` | SQLite `research_price_target` | ADR-111 ANR window |
+| `research::get_esg` | SQLite `research_esg` | ADR-111 ESG window |
+| `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
-If a given source is empty, the corresponding sub-block is either omitted or
-replaced with a "Run X to populate" hint. This is by design — the AI should
-see exactly what TyphooN has on hand so it can flag data gaps in its reply
-rather than silently filling in blanks.
+If a given source is empty, the corresponding sub-block is silently omitted
+(or replaced with a "Run X to populate" hint for fundamentals and bars).
 
 ---
 
@@ -348,14 +419,15 @@ rather than silently filling in blanks.
 - **No symbols parsed** — the window opens, the terminal logs
   `Usage: ASKAI SYM1[,SYM2] [optional question]`, no packet is sent.
 - **Empty API key (HTTP path)** — the chat shows `Set API key in Settings
-  first.`; the `BrokerCmd::AiChat` is never dispatched. Exception: the
-  `local` provider has no key requirement.
+  first.`; the `BrokerCmd::AiChat` is never dispatched. The `local` provider
+  has no key requirement.
 - **CLI binary missing (subprocess path)** — the log shows
   `Claude Code CLI not found in PATH.` / `Gemini CLI not found in PATH.`.
 - **Concurrent CLI invocations** — while a previous ASKCLAUDE / ASKGEMINI is
-  still running (`claude_code_rx` / `gemini_cli_rx` still `Some`), a new
-  trigger is a no-op. The first reply must land (or the channel must drop)
-  before a second CLI call will fire.
+  still running, a new trigger is a no-op. The first reply must land before
+  a second CLI call will fire.
+- **Missing `--session-id` UUID** — if for any reason `claude_code_session_id`
+  is empty, a fresh UUID is generated on the next Send.
 - **Empty bar cache** — price & volatility sub-block is replaced with a
   "run MT5SYNC or BARDATA" hint; everything else still emits.
 
@@ -363,10 +435,11 @@ rather than silently filling in blanks.
 
 ## Related
 
-- `native/src/app.rs::investigate_symbols()` — the builder (lines 15427-15679)
-- `native/src/app.rs::parse_ask_args()` — argument parser (lines 15681+)
-- `native/src/app.rs` — `BrokerCmd::AiChat` handler (line 11530)
-- `docs/API_KEYS.md` — free-tier provider keys (Anthropic, OpenAI, Gemini, …)
-- ADR-096 — SEC filing expansion (source for filing sub-block)
-- ADR-107 — Multi-source news ingest (companion context the AI does *not*
-  currently receive; candidate for a future packet field)
+- `native/src/app.rs::investigate_symbols()` — the builder
+- `native/src/app.rs::parse_ask_args()` — argument parser
+- `native/src/app.rs::build_claude_prompt()` — prompt assembler for subprocess paths
+- `native/src/app.rs::new_uuid()` — UUID v4 generator for session ids
+- `docs/API_KEYS.md` — free-tier provider keys
+- ADR-096 — SEC filing expansion
+- ADR-107 — Multi-source news ingest
+- ADR-108 / 109 / 110 / 111 — Godel parity research surfaces
