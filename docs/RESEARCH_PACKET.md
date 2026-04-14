@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**twenty-seven sub-blocks**, each of which is skipped silently when its data
+**thirty-two sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -324,7 +324,69 @@ security description. Sourced from the free OpenFIGI `/v3/mapping` endpoint
 (no API key required). Populated by running the `FIGI` command.
 Source: ADR-114 FIGI window.
 
-#### 2.27 Sector peer comparison
+#### 2.27 Historical return / risk (HRA — ADR-115)
+
+Pulled from `research::get_hra`. Two header lines giving annualized
+volatility, Sharpe, Sortino, Calmar, risk-free rate used, and the
+max-drawdown pair (peak-to-trough) — then a markdown table of rolling
+window returns (1D / 5D / 1M / 3M / 6M / YTD / 1Y / 3Y / 5Y / ITD) with
+Return / CAGR / N columns. Pure compute over cached daily bars from the
+`HP` window; no fetcher. Populated by running the `HRA` command.
+Source: ADR-115 HRA window.
+
+#### 2.28 Discounted Cash Flow fair value (DCF — ADR-115)
+
+Pulled from `research::get_dcf`. Four-line header with base TTM revenue /
+FCFF / margin / growth / terminal growth / WACC / tax rate, PV of explicit
+FCFF and terminal value separated, balance-sheet bridge (EV → equity value
+via −debt +cash), and bolded implied price — followed by a **projection
+year table** listing Revenue / EBIT / NOPAT / FCFF / PV FCFF for every
+explicit-forecast year. Terminal value is Gordon growth
+`TV = FCFF_N × (1+tg) / (WACC − tg)`; the block rejects configs where
+`tg ≥ WACC − 0.5%` with a caveat note. Pure compute over
+`fundamentals::get_quarterly_financials` (TTM roll-up) and `Fundamentals`
+(balance-sheet items). Discount rate defaults to cached WACC when
+available, 10% otherwise. Populated by running the `DCF` command.
+Source: ADR-115 DCF window.
+
+#### 2.29 Stock Valuation Model synthesis (SVM — ADR-115)
+
+Pulled from `research::get_svm`. Two header lines giving current price,
+fair-mid and upside %, plus low/high fair range — then a markdown table of
+implied prices from every available model (WACC cost of equity, DDM Gordon
+Growth, DCF FCFF, peer P/E × EPS, peer EV/EBITDA × EBITDA − debt + cash /
+shares, peer P/B × BVPS) with columns: Model / Implied / Upside /
+Confidence / Source. Triangulates DDM / DCF / peer multiples into a single
+multi-anchor fair-value view. Pure compute; consumes cached DDM, DCF,
+Fundamentals, and peer fundamentals. Populated by running the `SVM` command.
+Source: ADR-115 SVM window.
+
+#### 2.30 Options chain summary (OMON — ADR-115)
+
+Pulled from `research::get_options_chain`. Three header lines giving
+underlying price + cached expiration count, nearest-expiration DTE and
+call/put counts, and an aggregate line with put/call volume ratio,
+put/call open-interest ratio, ATM IV, and total call/put volume — followed
+by an **ATM-zone chain table** showing up to **11 strikes** (5 below and 5
+above the underlying, ATM in bold) with C Last / C IV / C Vol / C OI /
+P Last / P IV / P Vol / P OI columns. Deep out-of-the-money / deep
+in-the-money strikes stay in SQLite and the OMON window but are excluded
+from the packet to keep its size bounded. Source: Yahoo
+`/v7/finance/options/{SYMBOL}` (no API key required). Populated by running
+the `OMON` command. Source: ADR-115 OMON window.
+
+#### 2.31 Implied-vol rank / percentile (IVOL — ADR-115)
+
+Pulled from `research::get_ivol`. Single summary line with current ATM IV,
+52-week low / high, IV rank, IV percentile, and observation count; then a
+**recent trail line** listing the last **8 history points** (date = IV%)
+so the model can see whether IV is rising or falling into the snapshot
+date. Pure compute over an in-place IV history series built from prior
+OMON fetches (each compute appends today's ATM IV from the nearest-to-
+money contract on the nearest expiry). Populated by running the `IVOL`
+command after `OMON` has pulled the chain. Source: ADR-115 IVOL window.
+
+#### 2.32 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -379,14 +441,20 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | Gordon Growth DDM (ADR-114 DDM) | 2-3 lines | Single implied price + input lineage |
 | Relative valuation rows (ADR-114 RV) | ≤9 metrics | Matches Fundamentals getters with peer support |
 | FIGI identifiers (ADR-114 FIGI) | 3 rows | Most US names have ≤3 share classes |
+| HRA rolling windows (ADR-115 HRA) | ≤10 rows | Standard 1D–ITD ladder, one row each |
+| DCF projection years (ADR-115 DCF) | 3-15 rows | Matches user-tuned `projection_years` |
+| SVM model rows (ADR-115 SVM) | ≤6 rows | WACC / DDM / DCF / 3 peer-multiple rows |
+| OMON ATM-zone strikes (ADR-115 OMON) | 11 rows | 5 ITM + ATM + 5 OTM across both sides |
+| IVOL history trail (ADR-115 IVOL) | 8 points | Trend into today without dumping full 52w |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **10-19 KB**
-(up from 9-17 KB after ADR-113; ADR-114 added WCR global context and four
-new per-symbol blocks — BETA / DDM / RV / FIGI); a 10-symbol basket lands
-near **92-182 KB** (the global context is emitted only once, so multi-symbol
-overhead is still bounded by the per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **12-24 KB**
+(up from 10-19 KB after ADR-114; ADR-115 added five per-symbol blocks —
+HRA / DCF / SVM / OMON / IVOL — including DCF's projection-year table and
+OMON's ATM-zone chain table); a 10-symbol basket lands near **110-225 KB**
+(the global context is emitted only once, so multi-symbol overhead is still
+bounded by the per-symbol blocks).
 
 ---
 
@@ -551,6 +619,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_ddm` | SQLite `research_ddm` | ADR-114 DDM window |
 | `research::get_relative_valuation` | SQLite `research_relative_valuation` | ADR-114 RV window |
 | `research::get_figi` | SQLite `research_figi` | ADR-114 FIGI window |
+| `research::get_hra` | SQLite `research_hra` | ADR-115 HRA window |
+| `research::get_dcf` | SQLite `research_dcf` | ADR-115 DCF window |
+| `research::get_svm` | SQLite `research_svm` | ADR-115 SVM window |
+| `research::get_options_chain` | SQLite `research_options_chain` | ADR-115 OMON window |
+| `research::get_ivol` | SQLite `research_ivol` | ADR-115 IVOL window |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -587,4 +660,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 — Godel parity research surfaces

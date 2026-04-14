@@ -677,6 +677,157 @@ pub const COMMODITIES_UNIVERSE: &[(&str, &str, &str)] = &[
     ("GF=F", "Feeder Cattle","Livestock"),
 ];
 
+// ── ADR-115 Godel Parity Round 8 ─────────────────────────────────────────
+// HRA / DCF / SVM / OMON / IVOL surfaces.
+
+/// HRA — one rolling-period return row (e.g. 1M, 3M, 1Y, YTD).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HraWindow {
+    pub label: String,            // "1D" / "5D" / "1M" / "3M" / "6M" / "YTD" / "1Y" / "3Y" / "5Y" / "ITD"
+    pub trading_days: usize,      // 0 for YTD/ITD which span by date
+    pub return_pct: f64,          // simple return (pct)
+    pub cagr_pct: f64,            // annualized when trading_days > 252
+    pub n_observations: usize,
+}
+
+/// HRA — historical return + risk snapshot for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HraSnapshot {
+    pub symbol: String,
+    pub as_of: String,            // YYYY-MM-DD
+    pub last_close: f64,
+    pub windows: Vec<HraWindow>,
+    pub max_drawdown_pct: f64,    // ITD, negative number
+    pub drawdown_peak_date: String,
+    pub drawdown_trough_date: String,
+    pub volatility_annual_pct: f64, // stdev of daily log-returns × sqrt(252) × 100
+    pub sharpe_ratio: f64,        // (mean daily return - rf) / stdev, annualized
+    pub sortino_ratio: f64,       // same but downside deviation denominator
+    pub calmar_ratio: f64,        // CAGR / |max_drawdown|
+    pub risk_free_pct: f64,       // used in Sharpe/Sortino
+    pub note: String,
+}
+
+/// DCF — one projection year in the explicit forecast period.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DcfYear {
+    pub year: i32,                // calendar year or offset
+    pub revenue: f64,
+    pub ebit: f64,
+    pub nopat: f64,               // NOPAT = EBIT × (1 - t)
+    pub fcff: f64,                // free cash flow to firm
+    pub discount_factor: f64,
+    pub pv_fcff: f64,             // fcff × discount_factor
+}
+
+/// DCF — Discounted Cash Flow fair value snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DcfSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub method: String,           // "DCF on FCFF"
+    pub base_revenue: f64,
+    pub base_fcff: f64,
+    pub growth_pct: f64,          // explicit-period revenue growth
+    pub terminal_growth_pct: f64, // Gordon growth in perpetuity
+    pub wacc_pct: f64,            // discount rate
+    pub tax_rate_pct: f64,
+    pub fcff_margin_pct: f64,     // fcff / revenue applied to projections
+    pub projection_years: usize,
+    pub years: Vec<DcfYear>,
+    pub pv_sum: f64,              // Σ pv of explicit FCFF
+    pub terminal_value: f64,      // TV at end of explicit period
+    pub pv_terminal: f64,         // TV × final discount factor
+    pub enterprise_value: f64,    // pv_sum + pv_terminal
+    pub total_debt: f64,
+    pub cash_and_equivalents: f64,
+    pub equity_value: f64,        // EV - debt + cash
+    pub shares_outstanding: f64,
+    pub implied_price: f64,       // equity_value / shares
+    pub note: String,
+}
+
+/// SVM — one row in the multi-model fair-value triangulation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SvmModelRow {
+    pub model: String,            // "WACC cost of equity" / "DDM Gordon Growth" / "DCF FCFF" / "RV P/E median" / "RV EV/EBITDA median"
+    pub implied_price: f64,       // 0.0 if N/A
+    pub current_price: f64,
+    pub upside_pct: f64,          // (implied / current - 1) × 100
+    pub confidence: String,       // "high" / "medium" / "low" / "n/a"
+    pub source: String,           // short lineage
+}
+
+/// SVM — Stock Valuation Model summary for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SvmSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub current_price: f64,
+    pub rows: Vec<SvmModelRow>,
+    pub fair_low: f64,            // min of non-zero implied prices
+    pub fair_high: f64,           // max of non-zero implied prices
+    pub fair_mid: f64,            // simple mean of non-zero implied prices
+    pub upside_mid_pct: f64,      // (fair_mid / current - 1) × 100
+    pub note: String,
+}
+
+/// OMON — one options contract row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OptionContract {
+    pub contract_symbol: String,  // e.g. "AAPL240419C00150000"
+    pub option_type: String,      // "CALL" / "PUT"
+    pub strike: f64,
+    pub last_price: f64,
+    pub bid: f64,
+    pub ask: f64,
+    pub volume: f64,
+    pub open_interest: f64,
+    pub implied_volatility: f64,  // decimal (0.25 = 25%)
+    pub in_the_money: bool,
+}
+
+/// OMON — one expiration's call+put chain.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OptionExpiry {
+    pub expiration: String,       // YYYY-MM-DD
+    pub days_to_expiry: i64,
+    pub calls: Vec<OptionContract>,
+    pub puts: Vec<OptionContract>,
+}
+
+/// OMON — complete options-chain snapshot for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OptionsChainSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub underlying_price: f64,
+    pub expirations: Vec<OptionExpiry>,
+    pub note: String,
+}
+
+/// IVOL — one ATM IV observation over time (52-week history bucket).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IvolObservation {
+    pub date: String,             // YYYY-MM-DD
+    pub atm_iv_pct: f64,
+}
+
+/// IVOL — implied-volatility rank and percentile snapshot for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IvolSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub current_atm_iv_pct: f64,
+    pub iv_52w_low_pct: f64,
+    pub iv_52w_high_pct: f64,
+    pub iv_rank: f64,             // 0..100: (current - low) / (high - low) × 100
+    pub iv_percentile: f64,       // 0..100: % of days at or below current
+    pub observation_count: usize,
+    pub history: Vec<IvolObservation>,
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -2785,6 +2936,522 @@ pub async fn fetch_openfigi_identifiers(
     Ok(out)
 }
 
+// ── ADR-115 Round 8 — HRA compute (historical return + risk) ──────────────
+
+/// Compute an `HraSnapshot` from a chronologically-ordered slice of bars
+/// (oldest → newest). Returns periods are simple-return (close₀→closeₙ),
+/// annualized into CAGR for windows ≥ 252 trading days. Max drawdown is
+/// computed over the full available history; Sharpe/Sortino use daily
+/// log-returns annualized with the supplied risk-free rate.
+pub fn compute_hra_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars_oldest_first: &[HistoricalPriceRow],
+    risk_free_pct: f64,
+) -> HraSnapshot {
+    if bars_oldest_first.len() < 2 {
+        return HraSnapshot {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            note: "insufficient bar history (need ≥ 2 bars)".to_string(),
+            ..Default::default()
+        };
+    }
+    let n = bars_oldest_first.len();
+    let last_close = bars_oldest_first[n - 1].close;
+    let first_close = bars_oldest_first[0].close;
+
+    // Helper: return (pct) from a trading-day lookback (uses adjusted close
+    // when available so splits/dividends don't poison the return).
+    let px = |i: usize| -> f64 {
+        let b = &bars_oldest_first[i];
+        if b.adj_close > 0.0 { b.adj_close } else { b.close }
+    };
+    let last_px = px(n - 1);
+
+    let mut windows: Vec<HraWindow> = Vec::new();
+    let add_trading_window = |windows: &mut Vec<HraWindow>, label: &str, days: usize| {
+        if n <= days { return; }
+        let start = n - 1 - days;
+        let start_px = px(start);
+        if start_px <= 0.0 { return; }
+        let ret = (last_px / start_px - 1.0) * 100.0;
+        let cagr = if days >= 252 {
+            let years = days as f64 / 252.0;
+            ((last_px / start_px).powf(1.0 / years) - 1.0) * 100.0
+        } else { ret };
+        windows.push(HraWindow {
+            label: label.to_string(),
+            trading_days: days,
+            return_pct: ret,
+            cagr_pct: cagr,
+            n_observations: days,
+        });
+    };
+    add_trading_window(&mut windows, "1D",   1);
+    add_trading_window(&mut windows, "5D",   5);
+    add_trading_window(&mut windows, "1M",   21);
+    add_trading_window(&mut windows, "3M",   63);
+    add_trading_window(&mut windows, "6M",   126);
+    add_trading_window(&mut windows, "1Y",   252);
+    add_trading_window(&mut windows, "3Y",   756);
+    add_trading_window(&mut windows, "5Y",   1260);
+
+    // YTD: first bar whose date starts with current year.
+    let year_prefix = as_of.get(..4).unwrap_or("");
+    if !year_prefix.is_empty() {
+        if let Some(ytd_start) = bars_oldest_first.iter()
+            .position(|b| b.date.starts_with(year_prefix))
+        {
+            let start_px = px(ytd_start);
+            if start_px > 0.0 {
+                let ret = (last_px / start_px - 1.0) * 100.0;
+                windows.push(HraWindow {
+                    label: "YTD".to_string(),
+                    trading_days: 0,
+                    return_pct: ret,
+                    cagr_pct: ret,
+                    n_observations: n - ytd_start,
+                });
+            }
+        }
+    }
+
+    // ITD: full span.
+    if first_close > 0.0 {
+        let ret = (last_px / first_close - 1.0) * 100.0;
+        let years = (n as f64 / 252.0).max(1.0 / 252.0);
+        let cagr = ((last_px / first_close).powf(1.0 / years) - 1.0) * 100.0;
+        windows.push(HraWindow {
+            label: "ITD".to_string(),
+            trading_days: n - 1,
+            return_pct: ret,
+            cagr_pct: cagr,
+            n_observations: n,
+        });
+    }
+
+    // Max drawdown: walk forward tracking running peak.
+    let mut peak = px(0);
+    let mut peak_idx = 0usize;
+    let mut max_dd = 0.0f64;
+    let mut dd_peak_idx = 0usize;
+    let mut dd_trough_idx = 0usize;
+    for i in 1..n {
+        let p = px(i);
+        if p > peak { peak = p; peak_idx = i; }
+        if peak > 0.0 {
+            let dd = (p / peak - 1.0) * 100.0;
+            if dd < max_dd {
+                max_dd = dd;
+                dd_peak_idx = peak_idx;
+                dd_trough_idx = i;
+            }
+        }
+    }
+
+    // Daily log returns → annualized volatility and Sharpe/Sortino.
+    let mut log_rets: Vec<f64> = Vec::with_capacity(n.saturating_sub(1));
+    for i in 1..n {
+        let p0 = px(i - 1);
+        let p1 = px(i);
+        if p0 > 0.0 && p1 > 0.0 { log_rets.push((p1 / p0).ln()); }
+    }
+    let (vol_ann_pct, sharpe, sortino) = if log_rets.len() >= 20 {
+        let m = log_rets.iter().sum::<f64>() / log_rets.len() as f64;
+        let var = log_rets.iter().map(|r| (r - m).powi(2)).sum::<f64>() / log_rets.len() as f64;
+        let sd = var.sqrt();
+        let down: Vec<f64> = log_rets.iter().copied().filter(|r| *r < 0.0).collect();
+        let dsd = if down.is_empty() { sd } else {
+            let dm = down.iter().sum::<f64>() / down.len() as f64;
+            (down.iter().map(|r| (r - dm).powi(2)).sum::<f64>() / down.len() as f64).sqrt()
+        };
+        let rf_daily = (risk_free_pct / 100.0) / 252.0;
+        let sharpe = if sd > 1e-9 { (m - rf_daily) / sd * (252.0f64).sqrt() } else { 0.0 };
+        let sortino = if dsd > 1e-9 { (m - rf_daily) / dsd * (252.0f64).sqrt() } else { 0.0 };
+        (sd * (252.0f64).sqrt() * 100.0, sharpe, sortino)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+
+    let itd_cagr = windows.iter().find(|w| w.label == "ITD").map(|w| w.cagr_pct).unwrap_or(0.0);
+    let calmar = if max_dd.abs() > 1e-9 { itd_cagr / max_dd.abs() } else { 0.0 };
+
+    HraSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        last_close,
+        windows,
+        max_drawdown_pct: max_dd,
+        drawdown_peak_date: bars_oldest_first.get(dd_peak_idx).map(|b| b.date.clone()).unwrap_or_default(),
+        drawdown_trough_date: bars_oldest_first.get(dd_trough_idx).map(|b| b.date.clone()).unwrap_or_default(),
+        volatility_annual_pct: vol_ann_pct,
+        sharpe_ratio: sharpe,
+        sortino_ratio: sortino,
+        calmar_ratio: calmar,
+        risk_free_pct,
+        note: String::new(),
+    }
+}
+
+// ── ADR-115 Round 8 — DCF compute (Discounted Cash Flow, FCFF basis) ─────
+
+/// Compute a multi-year DCF fair-value snapshot on a free cash flow to firm
+/// (FCFF) basis. All inputs are already-cached values — this is pure compute.
+///
+/// Formula: EV = Σ(FCFFₜ / (1 + wacc)ᵗ) + TV / (1 + wacc)ⁿ
+/// where TV = FCFFₙ × (1 + terminal_g) / (wacc − terminal_g).
+/// Equity value = EV − debt + cash. Implied price = equity / shares.
+#[allow(clippy::too_many_arguments)]
+pub fn compute_dcf_snapshot(
+    symbol: &str,
+    as_of: &str,
+    base_revenue: f64,
+    base_fcff: f64,
+    growth_pct: f64,
+    terminal_growth_pct: f64,
+    wacc_pct: f64,
+    tax_rate_pct: f64,
+    projection_years: usize,
+    total_debt: f64,
+    cash_and_equivalents: f64,
+    shares_outstanding: f64,
+) -> DcfSnapshot {
+    let wacc = wacc_pct / 100.0;
+    let g    = growth_pct / 100.0;
+    let tg   = terminal_growth_pct / 100.0;
+
+    if wacc <= 0.0 || shares_outstanding <= 0.0 || base_fcff.abs() < 1e-6 {
+        return DcfSnapshot {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            method: "DCF on FCFF".to_string(),
+            base_revenue,
+            base_fcff,
+            growth_pct,
+            terminal_growth_pct,
+            wacc_pct,
+            tax_rate_pct,
+            projection_years,
+            shares_outstanding,
+            total_debt,
+            cash_and_equivalents,
+            note: "insufficient inputs (wacc, shares, or base fcff ≈ 0)".to_string(),
+            ..Default::default()
+        };
+    }
+    if tg + 0.005 >= wacc {
+        return DcfSnapshot {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            method: "DCF on FCFF".to_string(),
+            base_revenue,
+            base_fcff,
+            growth_pct,
+            terminal_growth_pct,
+            wacc_pct,
+            tax_rate_pct,
+            projection_years,
+            shares_outstanding,
+            total_debt,
+            cash_and_equivalents,
+            note: format!("terminal growth {:.2}% ≥ WACC {:.2}% — DCF degenerate", terminal_growth_pct, wacc_pct),
+            ..Default::default()
+        };
+    }
+
+    let fcff_margin_pct = if base_revenue > 0.0 { base_fcff / base_revenue * 100.0 } else { 0.0 };
+
+    let mut years: Vec<DcfYear> = Vec::with_capacity(projection_years);
+    let mut pv_sum = 0.0f64;
+    let mut last_fcff = base_fcff;
+    let mut last_revenue = base_revenue;
+    for t in 1..=projection_years {
+        last_revenue *= 1.0 + g;
+        last_fcff *= 1.0 + g;
+        let discount = (1.0 + wacc).powi(t as i32);
+        let df = 1.0 / discount;
+        let pv = last_fcff * df;
+        pv_sum += pv;
+        years.push(DcfYear {
+            year: t as i32,
+            revenue: last_revenue,
+            ebit: 0.0,
+            nopat: 0.0,
+            fcff: last_fcff,
+            discount_factor: df,
+            pv_fcff: pv,
+        });
+    }
+
+    let terminal_value = last_fcff * (1.0 + tg) / (wacc - tg);
+    let pv_terminal = terminal_value / (1.0 + wacc).powi(projection_years as i32);
+    let enterprise_value = pv_sum + pv_terminal;
+    let equity_value = enterprise_value - total_debt + cash_and_equivalents;
+    let implied_price = if shares_outstanding > 0.0 { equity_value / shares_outstanding } else { 0.0 };
+
+    DcfSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        method: "DCF on FCFF".to_string(),
+        base_revenue,
+        base_fcff,
+        growth_pct,
+        terminal_growth_pct,
+        wacc_pct,
+        tax_rate_pct,
+        fcff_margin_pct,
+        projection_years,
+        years,
+        pv_sum,
+        terminal_value,
+        pv_terminal,
+        enterprise_value,
+        total_debt,
+        cash_and_equivalents,
+        equity_value,
+        shares_outstanding,
+        implied_price,
+        note: String::new(),
+    }
+}
+
+// ── ADR-115 Round 8 — SVM compute (Stock Valuation Model triangulation) ──
+
+/// Build a multi-model fair-value triangulation from the caller's cached
+/// WACC / DDM / DCF / RV snapshots plus any peer-median multiples the
+/// caller has already computed. All inputs are optional — rows with no
+/// implied price are skipped.
+pub fn compute_svm_snapshot(
+    symbol: &str,
+    as_of: &str,
+    current_price: f64,
+    ddm: Option<&DdmSnapshot>,
+    dcf: Option<&DcfSnapshot>,
+    peer_pe_median: Option<(f64, f64)>,           // (peer_pe, subject eps)
+    peer_ev_ebitda_median: Option<(f64, f64, f64, f64, f64)>, // (peer_ev/ebitda, ebitda, debt, cash, shares)
+    peer_pbook_median: Option<(f64, f64)>,        // (peer_pb, book value per share)
+) -> SvmSnapshot {
+    let mut rows: Vec<SvmModelRow> = Vec::new();
+    let push = |rows: &mut Vec<SvmModelRow>, model: &str, implied: f64, source: String, confidence: &str| {
+        if implied <= 0.0 { return; }
+        let upside = if current_price > 0.0 { (implied / current_price - 1.0) * 100.0 } else { 0.0 };
+        rows.push(SvmModelRow {
+            model: model.to_string(),
+            implied_price: implied,
+            current_price,
+            upside_pct: upside,
+            confidence: confidence.to_string(),
+            source,
+        });
+    };
+
+    if let Some(d) = ddm {
+        if d.implied_price > 0.0 {
+            push(&mut rows, "DDM Gordon Growth", d.implied_price,
+                 format!("{} · g={:.2}% · r={:.2}%", d.method, d.implied_growth_pct, d.required_return_pct),
+                 "medium");
+        }
+    }
+    if let Some(d) = dcf {
+        if d.implied_price > 0.0 {
+            push(&mut rows, "DCF on FCFF", d.implied_price,
+                 format!("{} · WACC={:.2}% · g={:.2}% · TG={:.2}%", d.method, d.wacc_pct, d.growth_pct, d.terminal_growth_pct),
+                 "medium");
+        }
+    }
+    if let Some((peer_pe, eps)) = peer_pe_median {
+        if peer_pe > 0.0 && eps > 0.0 {
+            push(&mut rows, "RV peer P/E median", peer_pe * eps,
+                 format!("peer median P/E {:.2}× · EPS {:.2}", peer_pe, eps), "low");
+        }
+    }
+    if let Some((peer_evebitda, ebitda, debt, cash, shares)) = peer_ev_ebitda_median {
+        if peer_evebitda > 0.0 && ebitda > 0.0 && shares > 0.0 {
+            let ev_implied = peer_evebitda * ebitda;
+            let equity = ev_implied - debt + cash;
+            let implied = equity / shares;
+            push(&mut rows, "RV peer EV/EBITDA median", implied,
+                 format!("peer median EV/EBITDA {:.2}× · EBITDA {:.0}", peer_evebitda, ebitda), "low");
+        }
+    }
+    if let Some((peer_pb, bvps)) = peer_pbook_median {
+        if peer_pb > 0.0 && bvps > 0.0 {
+            push(&mut rows, "RV peer P/B median", peer_pb * bvps,
+                 format!("peer median P/B {:.2}× · BVPS {:.2}", peer_pb, bvps), "low");
+        }
+    }
+
+    let implied: Vec<f64> = rows.iter().map(|r| r.implied_price).collect();
+    let (fair_low, fair_high, fair_mid) = if implied.is_empty() {
+        (0.0, 0.0, 0.0)
+    } else {
+        let lo = implied.iter().cloned().fold(f64::INFINITY, f64::min);
+        let hi = implied.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let mid = implied.iter().sum::<f64>() / implied.len() as f64;
+        (lo, hi, mid)
+    };
+    let upside_mid = if current_price > 0.0 && fair_mid > 0.0 { (fair_mid / current_price - 1.0) * 100.0 } else { 0.0 };
+
+    let note = if rows.is_empty() {
+        "no valuation models available — run WACC/DDM/DCF/RV first".to_string()
+    } else {
+        String::new()
+    };
+
+    SvmSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        current_price,
+        rows,
+        fair_low,
+        fair_high,
+        fair_mid,
+        upside_mid_pct: upside_mid,
+        note,
+    }
+}
+
+// ── ADR-115 Round 8 — OMON fetch (Yahoo options chain) ───────────────────
+
+/// Fetch a Yahoo options chain for a symbol. Returns all expirations Yahoo
+/// is willing to give us in a single call (typically 1–12 weeklies + LEAPS).
+pub async fn fetch_yahoo_options_chain(
+    client: &reqwest::Client,
+    symbol: &str,
+) -> Result<OptionsChainSnapshot, String> {
+    let url = format!("https://query2.finance.yahoo.com/v7/finance/options/{}", symbol.to_uppercase());
+    let resp = client.get(&url)
+        .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1")
+        .send().await
+        .map_err(|e| format!("Yahoo options request: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Yahoo options: HTTP {}", resp.status()));
+    }
+    let v: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Yahoo options parse: {e}"))?;
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let result = v.pointer("/optionChain/result/0")
+        .ok_or_else(|| "Yahoo options: empty result".to_string())?;
+    let underlying_price = result.pointer("/quote/regularMarketPrice")
+        .and_then(|x| x.as_f64()).unwrap_or(0.0);
+
+    let expiration_dates: Vec<i64> = result.get("expirationDates")
+        .and_then(|x| x.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+        .unwrap_or_default();
+
+    // Yahoo only returns one expiration's chain per call when we don't pass
+    // &date=… — we take whatever came back in options[0].
+    let options = result.get("options").and_then(|x| x.as_array())
+        .and_then(|arr| arr.first())
+        .ok_or_else(|| "Yahoo options: options[0] missing".to_string())?;
+
+    let parse_contract = |c: &serde_json::Value, opt_type: &str, underlying: f64| -> OptionContract {
+        let strike = c.get("strike").and_then(|x| x.as_f64()).unwrap_or(0.0);
+        let itm = match opt_type {
+            "CALL" => underlying > strike,
+            _      => underlying < strike,
+        };
+        OptionContract {
+            contract_symbol: c.get("contractSymbol").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            option_type: opt_type.to_string(),
+            strike,
+            last_price: c.get("lastPrice").and_then(|x| x.as_f64()).unwrap_or(0.0),
+            bid: c.get("bid").and_then(|x| x.as_f64()).unwrap_or(0.0),
+            ask: c.get("ask").and_then(|x| x.as_f64()).unwrap_or(0.0),
+            volume: c.get("volume").and_then(|x| x.as_f64()).unwrap_or(0.0),
+            open_interest: c.get("openInterest").and_then(|x| x.as_f64()).unwrap_or(0.0),
+            implied_volatility: c.get("impliedVolatility").and_then(|x| x.as_f64()).unwrap_or(0.0),
+            in_the_money: itm,
+        }
+    };
+
+    let exp_ts = options.get("expirationDate").and_then(|x| x.as_i64()).unwrap_or(0);
+    let expiration = if exp_ts > 0 {
+        chrono::DateTime::<chrono::Utc>::from_timestamp(exp_ts, 0)
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_default()
+    } else { String::new() };
+    let now = chrono::Utc::now().timestamp();
+    let days_to_expiry = if exp_ts > now { (exp_ts - now) / 86400 } else { 0 };
+
+    let calls: Vec<OptionContract> = options.get("calls").and_then(|x| x.as_array())
+        .map(|arr| arr.iter().map(|c| parse_contract(c, "CALL", underlying_price)).collect())
+        .unwrap_or_default();
+    let puts: Vec<OptionContract> = options.get("puts").and_then(|x| x.as_array())
+        .map(|arr| arr.iter().map(|c| parse_contract(c, "PUT", underlying_price)).collect())
+        .unwrap_or_default();
+
+    let note = if expiration_dates.len() > 1 {
+        format!("Yahoo returned first of {} expirations; additional dates available",
+            expiration_dates.len())
+    } else { String::new() };
+
+    Ok(OptionsChainSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: today,
+        underlying_price,
+        expirations: vec![OptionExpiry { expiration, days_to_expiry, calls, puts }],
+        note,
+    })
+}
+
+// ── ADR-115 Round 8 — IVOL compute (IV Rank / IV Percentile) ─────────────
+
+/// Compute an `IvolSnapshot` from a 52-week history of ATM IV observations
+/// plus a current ATM IV reading. The caller is responsible for extracting
+/// the ATM IV from an `OptionsChainSnapshot` (or from any other source).
+///
+/// IV Rank: `(current − 52w low) / (52w high − 52w low) × 100`.
+/// IV Percentile: `% of history ≤ current`.
+pub fn compute_ivol_snapshot(
+    symbol: &str,
+    as_of: &str,
+    current_atm_iv_pct: f64,
+    history: &[IvolObservation],
+) -> IvolSnapshot {
+    if history.is_empty() {
+        return IvolSnapshot {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            current_atm_iv_pct,
+            iv_52w_low_pct: current_atm_iv_pct,
+            iv_52w_high_pct: current_atm_iv_pct,
+            iv_rank: 50.0,
+            iv_percentile: 50.0,
+            observation_count: 0,
+            history: Vec::new(),
+            note: "no IV history — rank/percentile are placeholders until history accumulates".to_string(),
+        };
+    }
+    let mut vals: Vec<f64> = history.iter().map(|o| o.atm_iv_pct).filter(|v| v.is_finite() && *v > 0.0).collect();
+    vals.push(current_atm_iv_pct);
+    vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let lo = vals.first().copied().unwrap_or(current_atm_iv_pct);
+    let hi = vals.last().copied().unwrap_or(current_atm_iv_pct);
+    let rank = if (hi - lo).abs() > 1e-9 {
+        ((current_atm_iv_pct - lo) / (hi - lo)) * 100.0
+    } else { 50.0 };
+    let le_count = vals.iter().filter(|v| **v <= current_atm_iv_pct).count();
+    let pct = (le_count as f64 / vals.len() as f64) * 100.0;
+
+    IvolSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        current_atm_iv_pct,
+        iv_52w_low_pct: lo,
+        iv_52w_high_pct: hi,
+        iv_rank: rank.clamp(0.0, 100.0),
+        iv_percentile: pct.clamp(0.0, 100.0),
+        observation_count: history.len(),
+        history: history.to_vec(),
+        note: if history.len() < 20 {
+            format!("only {} observations — rank stabilizes around 252", history.len())
+        } else { String::new() },
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -3581,6 +4248,154 @@ pub fn get_figi(conn: &Connection, symbol: &str) -> Result<Option<FigiSnapshot>,
     } else {
         Ok(None)
     }
+}
+
+// ── ADR-115 Round 8 schema: HRA / DCF / SVM / OMON / IVOL ────────────────
+
+pub fn create_research_tables_v8(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_hra (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_dcf (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_svm (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_options_chain (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_ivol (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_hra_updated            ON research_hra(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_dcf_updated            ON research_dcf(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_svm_updated            ON research_svm(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_options_chain_updated  ON research_options_chain(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_ivol_updated           ON research_ivol(updated_at);"
+    ).map_err(|e| format!("create research_v8 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_hra(conn: &Connection, symbol: &str, snap: &HraSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v8(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("hra json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_hra(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert hra: {e}"))?;
+    Ok(())
+}
+
+pub fn get_hra(conn: &Connection, symbol: &str) -> Result<Option<HraSnapshot>, String> {
+    let _ = create_research_tables_v8(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_hra WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_hra: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_hra: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_hra: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_dcf(conn: &Connection, symbol: &str, snap: &DcfSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v8(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("dcf json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_dcf(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert dcf: {e}"))?;
+    Ok(())
+}
+
+pub fn get_dcf(conn: &Connection, symbol: &str) -> Result<Option<DcfSnapshot>, String> {
+    let _ = create_research_tables_v8(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_dcf WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_dcf: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_dcf: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_dcf: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_svm(conn: &Connection, symbol: &str, snap: &SvmSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v8(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("svm json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_svm(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert svm: {e}"))?;
+    Ok(())
+}
+
+pub fn get_svm(conn: &Connection, symbol: &str) -> Result<Option<SvmSnapshot>, String> {
+    let _ = create_research_tables_v8(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_svm WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_svm: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_svm: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_svm: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_options_chain(conn: &Connection, symbol: &str, snap: &OptionsChainSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v8(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("options chain json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_options_chain(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert options chain: {e}"))?;
+    Ok(())
+}
+
+pub fn get_options_chain(conn: &Connection, symbol: &str) -> Result<Option<OptionsChainSnapshot>, String> {
+    let _ = create_research_tables_v8(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_options_chain WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_options_chain: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_options_chain: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_options_chain: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ivol(conn: &Connection, symbol: &str, snap: &IvolSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v8(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ivol json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ivol(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ivol: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ivol(conn: &Connection, symbol: &str) -> Result<Option<IvolSnapshot>, String> {
+    let _ = create_research_tables_v8(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ivol WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_ivol: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_ivol: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_ivol: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -4588,5 +5403,287 @@ mod tests {
         assert_eq!(got.symbol, "AAPL");
         assert_eq!(got.identifiers.len(), 1);
         assert_eq!(got.identifiers[0].figi, "BBG000B9XRY4");
+    }
+
+    // ── ADR-115 Round 8 tests ──────────────────────────────────────────
+
+    fn open_mem_conn_v8() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v8(&c).unwrap();
+        c
+    }
+
+    #[test]
+    fn hra_roundtrip() {
+        let c = open_mem_conn_v8();
+        let snap = HraSnapshot {
+            symbol: "AAPL".into(),
+            as_of: "2026-04-14".into(),
+            last_close: 190.0,
+            windows: vec![HraWindow { label: "1Y".into(), trading_days: 252, return_pct: 22.0, cagr_pct: 22.0, n_observations: 252 }],
+            max_drawdown_pct: -15.5,
+            drawdown_peak_date: "2025-10-01".into(),
+            drawdown_trough_date: "2025-12-15".into(),
+            volatility_annual_pct: 24.0,
+            sharpe_ratio: 1.1,
+            sortino_ratio: 1.4,
+            calmar_ratio: 1.4,
+            risk_free_pct: 4.5,
+            note: String::new(),
+        };
+        upsert_hra(&c, "AAPL", &snap).unwrap();
+        let got = get_hra(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.symbol, "AAPL");
+        assert_eq!(got.windows.len(), 1);
+        assert!((got.max_drawdown_pct - (-15.5)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn dcf_roundtrip() {
+        let c = open_mem_conn_v8();
+        let snap = DcfSnapshot {
+            symbol: "NVDA".into(),
+            as_of: "2026-04-14".into(),
+            method: "DCF on FCFF".into(),
+            base_revenue: 60_000.0,
+            base_fcff: 24_000.0,
+            growth_pct: 20.0,
+            terminal_growth_pct: 3.0,
+            wacc_pct: 9.0,
+            tax_rate_pct: 15.0,
+            fcff_margin_pct: 40.0,
+            projection_years: 5,
+            years: Vec::new(),
+            pv_sum: 100_000.0,
+            terminal_value: 500_000.0,
+            pv_terminal: 350_000.0,
+            enterprise_value: 450_000.0,
+            total_debt: 10_000.0,
+            cash_and_equivalents: 30_000.0,
+            equity_value: 470_000.0,
+            shares_outstanding: 2_500.0,
+            implied_price: 188.0,
+            note: String::new(),
+        };
+        upsert_dcf(&c, "NVDA", &snap).unwrap();
+        let got = get_dcf(&c, "nvda").unwrap().unwrap();
+        assert_eq!(got.symbol, "NVDA");
+        assert!((got.implied_price - 188.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn svm_roundtrip() {
+        let c = open_mem_conn_v8();
+        let snap = SvmSnapshot {
+            symbol: "MSFT".into(),
+            as_of: "2026-04-14".into(),
+            current_price: 420.0,
+            rows: vec![SvmModelRow {
+                model: "DCF on FCFF".into(),
+                implied_price: 450.0,
+                current_price: 420.0,
+                upside_pct: 7.14,
+                confidence: "medium".into(),
+                source: "test".into(),
+            }],
+            fair_low: 450.0, fair_high: 450.0, fair_mid: 450.0,
+            upside_mid_pct: 7.14,
+            note: String::new(),
+        };
+        upsert_svm(&c, "MSFT", &snap).unwrap();
+        let got = get_svm(&c, "msft").unwrap().unwrap();
+        assert_eq!(got.rows.len(), 1);
+        assert!((got.fair_mid - 450.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn options_chain_roundtrip() {
+        let c = open_mem_conn_v8();
+        let snap = OptionsChainSnapshot {
+            symbol: "SPY".into(),
+            as_of: "2026-04-14".into(),
+            underlying_price: 520.0,
+            expirations: vec![OptionExpiry {
+                expiration: "2026-05-16".into(),
+                days_to_expiry: 32,
+                calls: vec![OptionContract {
+                    contract_symbol: "SPY260516C00520000".into(),
+                    option_type: "CALL".into(),
+                    strike: 520.0,
+                    last_price: 8.5, bid: 8.4, ask: 8.6,
+                    volume: 1200.0, open_interest: 5000.0,
+                    implied_volatility: 0.18, in_the_money: false,
+                }],
+                puts: vec![],
+            }],
+            note: String::new(),
+        };
+        upsert_options_chain(&c, "SPY", &snap).unwrap();
+        let got = get_options_chain(&c, "spy").unwrap().unwrap();
+        assert_eq!(got.expirations.len(), 1);
+        assert_eq!(got.expirations[0].calls.len(), 1);
+        assert!((got.expirations[0].calls[0].strike - 520.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ivol_roundtrip() {
+        let c = open_mem_conn_v8();
+        let snap = IvolSnapshot {
+            symbol: "TSLA".into(),
+            as_of: "2026-04-14".into(),
+            current_atm_iv_pct: 55.0,
+            iv_52w_low_pct: 30.0,
+            iv_52w_high_pct: 80.0,
+            iv_rank: 50.0,
+            iv_percentile: 60.0,
+            observation_count: 100,
+            history: vec![IvolObservation { date: "2026-01-01".into(), atm_iv_pct: 40.0 }],
+            note: String::new(),
+        };
+        upsert_ivol(&c, "TSLA", &snap).unwrap();
+        let got = get_ivol(&c, "tsla").unwrap().unwrap();
+        assert!((got.iv_rank - 50.0).abs() < 1e-6);
+        assert_eq!(got.history.len(), 1);
+    }
+
+    #[test]
+    fn compute_hra_on_synthetic_uptrend() {
+        // 300 daily bars, +0.1% per day → terminal ~ 1.001^299.
+        let mut bars: Vec<HistoricalPriceRow> = Vec::new();
+        let mut px = 100.0;
+        for i in 0..300 {
+            let base_day = 1 + (i % 28);
+            let month    = 1 + ((i / 28) % 12);
+            let year     = 2024 + (i / (28 * 12));
+            bars.push(HistoricalPriceRow {
+                date: format!("{:04}-{:02}-{:02}", year, month, base_day),
+                open: px, high: px, low: px, close: px, adj_close: px,
+                volume: 1_000.0, change: 0.0, change_pct: 0.1,
+            });
+            px *= 1.001;
+        }
+        let snap = compute_hra_snapshot("TEST", "2026-04-14", &bars, 4.5);
+        assert_eq!(snap.symbol, "TEST");
+        // 1Y window present
+        assert!(snap.windows.iter().any(|w| w.label == "1Y"));
+        // ITD should be strongly positive
+        let itd = snap.windows.iter().find(|w| w.label == "ITD").unwrap();
+        assert!(itd.return_pct > 0.0);
+        // Monotonic uptrend → drawdown effectively zero (we accept very small
+        // rounding-scale negatives).
+        assert!(snap.max_drawdown_pct > -0.1, "expected near-zero drawdown on monotonic uptrend, got {}", snap.max_drawdown_pct);
+    }
+
+    #[test]
+    fn compute_hra_on_empty_bars_returns_note() {
+        let snap = compute_hra_snapshot("EMPTY", "2026-04-14", &[], 4.5);
+        assert!(!snap.note.is_empty());
+        assert_eq!(snap.windows.len(), 0);
+    }
+
+    #[test]
+    fn compute_hra_drawdown_detects_peak_and_trough() {
+        // 50 bars that rise to 150 at day 20, then fall to 100 by day 40, then
+        // recover to 130 at day 49. Max DD is from peak 150 to trough 100.
+        let mut bars: Vec<HistoricalPriceRow> = Vec::new();
+        let mut push = |i: usize, close: f64| {
+            let base_day = 1 + (i % 28);
+            let month    = 1 + ((i / 28) % 12);
+            let year     = 2024 + (i / (28 * 12));
+            bars.push(HistoricalPriceRow {
+                date: format!("{:04}-{:02}-{:02}", year, month, base_day),
+                open: close, high: close, low: close, close, adj_close: close,
+                volume: 1_000.0, change: 0.0, change_pct: 0.0,
+            });
+        };
+        for i in 0..20 { push(i, 100.0 + (i as f64 * 2.5)); } // 100 → 147.5
+        push(20, 150.0);                                      // peak
+        for i in 21..=40 { push(i, 150.0 - ((i - 20) as f64 * 2.5)); } // 150 → 100
+        for i in 41..50 { push(i, 100.0 + ((i - 40) as f64 * 3.333)); } // 100 → 130
+        let snap = compute_hra_snapshot("X", "2026-04-14", &bars, 0.0);
+        // Peak-to-trough 150→100 = -33.33%
+        assert!(snap.max_drawdown_pct < -32.0 && snap.max_drawdown_pct > -34.0,
+            "expected ~-33% drawdown, got {:.2}", snap.max_drawdown_pct);
+    }
+
+    #[test]
+    fn compute_dcf_basic() {
+        let snap = compute_dcf_snapshot("NVDA", "2026-04-14",
+            /*revenue*/ 60_000.0, /*fcff*/ 24_000.0,
+            /*g*/ 20.0, /*tg*/ 3.0, /*wacc*/ 9.0, /*tax*/ 15.0,
+            /*years*/ 5, /*debt*/ 10_000.0, /*cash*/ 30_000.0,
+            /*shares*/ 2_500.0);
+        assert_eq!(snap.years.len(), 5);
+        assert!(snap.enterprise_value > 0.0);
+        assert!(snap.implied_price > 0.0);
+        // Each projection year's fcff should compound
+        assert!(snap.years[4].fcff > snap.years[0].fcff);
+    }
+
+    #[test]
+    fn compute_dcf_rejects_terminal_growth_above_wacc() {
+        let snap = compute_dcf_snapshot("X", "2026-04-14", 100.0, 40.0, 5.0, 15.0, 8.0, 20.0, 5, 10.0, 5.0, 100.0);
+        assert!(!snap.note.is_empty());
+        assert_eq!(snap.implied_price, 0.0);
+    }
+
+    #[test]
+    fn compute_svm_triangulates_multiple_models() {
+        let ddm = DdmSnapshot {
+            symbol: "XYZ".into(), as_of: "2026-04-14".into(),
+            annual_dividend: 3.0, implied_growth_pct: 4.0, required_return_pct: 10.0,
+            growth_source: "test".into(), return_source: "test".into(),
+            implied_price: 52.0, method: "Gordon Growth".into(), note: String::new(),
+        };
+        let dcf = DcfSnapshot {
+            symbol: "XYZ".into(), as_of: "2026-04-14".into(), method: "DCF on FCFF".into(),
+            base_revenue: 100.0, base_fcff: 20.0, growth_pct: 5.0, terminal_growth_pct: 2.0,
+            wacc_pct: 10.0, tax_rate_pct: 20.0, fcff_margin_pct: 20.0, projection_years: 5,
+            years: Vec::new(), pv_sum: 0.0, terminal_value: 0.0, pv_terminal: 0.0,
+            enterprise_value: 0.0, total_debt: 0.0, cash_and_equivalents: 0.0,
+            equity_value: 0.0, shares_outstanding: 1.0, implied_price: 58.0, note: String::new(),
+        };
+        let snap = compute_svm_snapshot(
+            "XYZ", "2026-04-14", /*current*/ 50.0,
+            Some(&ddm), Some(&dcf),
+            Some((12.0, 4.5)),              // P/E × EPS → 54
+            Some((10.0, 10.0, 5.0, 2.0, 1.0)), // EV/EBITDA 10 × 10 → EV 100 - 5 + 2 = 97 / 1 shares = 97
+            Some((1.2, 45.0)),              // P/B × BVPS → 54
+        );
+        assert!(snap.rows.len() >= 4, "expected ≥4 triangulation rows, got {}", snap.rows.len());
+        assert!(snap.fair_low > 0.0);
+        assert!(snap.fair_mid >= snap.fair_low);
+        assert!(snap.fair_high >= snap.fair_mid);
+        assert!(snap.upside_mid_pct > 0.0, "at $50 current vs mid, upside should be positive");
+    }
+
+    #[test]
+    fn compute_svm_with_no_models_emits_note() {
+        let snap = compute_svm_snapshot("X", "2026-04-14", 50.0, None, None, None, None, None);
+        assert!(snap.rows.is_empty());
+        assert!(!snap.note.is_empty());
+    }
+
+    #[test]
+    fn compute_ivol_rank_and_percentile() {
+        let history: Vec<IvolObservation> = (0..100)
+            .map(|i| IvolObservation { date: format!("2025-{:03}", i), atm_iv_pct: 20.0 + (i as f64 * 0.3) })
+            .collect();
+        // History spans 20% → 49.7%; current = 40%.
+        let snap = compute_ivol_snapshot("TEST", "2026-04-14", 40.0, &history);
+        // Rank: (40 - 20) / (49.7 - 20) × 100 ≈ 67
+        assert!(snap.iv_rank > 50.0 && snap.iv_rank < 80.0,
+            "expected rank 50-80, got {:.2}", snap.iv_rank);
+        // Percentile: ~67% of observations ≤ 40
+        assert!(snap.iv_percentile > 50.0 && snap.iv_percentile < 80.0,
+            "expected percentile 50-80, got {:.2}", snap.iv_percentile);
+    }
+
+    #[test]
+    fn compute_ivol_with_no_history_uses_placeholder() {
+        let snap = compute_ivol_snapshot("NEW", "2026-04-14", 25.0, &[]);
+        assert!(!snap.note.is_empty());
+        assert!((snap.iv_52w_low_pct - 25.0).abs() < 1e-6);
+        assert!((snap.iv_52w_high_pct - 25.0).abs() < 1e-6);
     }
 }

@@ -160,6 +160,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_ddm",
     "research_relative_valuation",
     "research_figi",
+    // ── ADR-115 Round 8 ─────────────────────────────
+    "research_hra",
+    "research_dcf",
+    "research_svm",
+    "research_options_chain",
+    "research_ivol",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -500,6 +506,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-115 Round 8 ─────────────────────────────
+        "research_hra" => Some(
+            "CREATE TABLE IF NOT EXISTS research_hra (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_dcf" => Some(
+            "CREATE TABLE IF NOT EXISTS research_dcf (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_svm" => Some(
+            "CREATE TABLE IF NOT EXISTS research_svm (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_options_chain" => Some(
+            "CREATE TABLE IF NOT EXISTS research_options_chain (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_ivol" => Some(
+            "CREATE TABLE IF NOT EXISTS research_ivol (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -543,6 +585,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_ddm" => Some("updated_at"),
         "research_relative_valuation" => Some("updated_at"),
         "research_figi" => Some("updated_at"),
+        "research_hra" => Some("updated_at"),
+        "research_dcf" => Some("updated_at"),
+        "research_svm" => Some("updated_at"),
+        "research_options_chain" => Some("updated_at"),
+        "research_ivol" => Some("updated_at"),
         _ => None,
     }
 }
