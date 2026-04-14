@@ -98,11 +98,19 @@ Pulled from `research::get_sector_performance`. Up/down aggregate counts plus
 one line per S&P sector (sorted high-to-low on change %). Sourced from FMP's
 `/v3/sector-performance` endpoint. Populated by running the `INDU` command.
 
+#### Global.4 World Currency Rates (WCR — ADR-114)
+
+Pulled from `research::get_currency_rates`. One header line (total pairs +
+strengthening / weakening counts) then one summary line per region (Majors /
+Crosses / EM) listing up to **8 pairs** with price and change %. Source:
+Yahoo Finance `/v7/finance/quote` (no API key required). Universe defined
+in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
+
 ### 3. Per-symbol section
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**twenty-three sub-blocks**, each of which is skipped silently when its data
+**twenty-seven sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -279,7 +287,44 @@ mix (equity/debt weights and absolute market-cap / debt figures). Skipped
 silently when the WACC snapshot has not been computed (run the `WACC`
 command to populate). Source: ADR-113 WACC window.
 
-#### 2.23 Sector peer comparison
+#### 2.23 Rolling beta vs SPY (BETA — ADR-114)
+
+Pulled from `research::get_beta`. Markdown table of rolling-window β
+observations (typically 1Y / 3Y / 5Y) with columns: Window / β / α (ann) /
+R² / Corr / N. Computed via OLS on log-returns against SPY with date
+intersection to guarantee matching observations. Populated by running the
+`BETA` command, which fetches 5Y history for the symbol and SPY and computes
+all windows in one shot. Source: ADR-114 BETA window.
+
+#### 2.24 Gordon Growth DDM (DDM — ADR-114)
+
+Pulled from `research::get_ddm`. Single summary line showing trailing annual
+dividend (D0), implied growth g (from dividend CAGR), required return r
+(ideally from WACC's cost of equity), and a bolded implied price line when
+r > g. When r ≤ g, the block reports the caveat rather than a price.
+Method: `P = D1 / (r - g)` where `D1 = D0 × (1 + g)`. Populated by running
+the `DDM` command after dividend history is cached via the `DVD` window.
+Source: ADR-114 DDM window.
+
+#### 2.25 Relative valuation matrix (RV — ADR-114)
+
+Pulled from `research::get_relative_valuation`. Markdown table of
+peer-Z-score rows for P/E, Forward P/E, P/B, P/S, EV/EBITDA, Profit Margin,
+ROE, Beta, and Dividend Yield. Columns: Metric / Value / Peer Median / Z /
+Percentile. Peers are the symbol's sector peers from `research::get_peers`
+(ADR-109 PEERS surface), and each metric is only emitted when there are ≥3
+non-null peer values. Populated by running the `RV` command after peers
+and fundamentals are cached. Source: ADR-114 RV window.
+
+#### 2.26 Instrument identifiers (FIGI — ADR-114)
+
+Pulled from `research::get_figi`. Up to **3 identifiers** per symbol, each
+on its own line listing ticker, FIGI, share-class FIGI, exchange code, and
+security description. Sourced from the free OpenFIGI `/v3/mapping` endpoint
+(no API key required). Populated by running the `FIGI` command.
+Source: ADR-114 FIGI window.
+
+#### 2.27 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -329,13 +374,19 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | World equity indices (ADR-113 WEI) | 12 rows | 12 indices cover Americas/EMEA/Asia regimes |
 | Market movers (ADR-113 MOV) | 6 symbols × 3 lists | Leadership/laggards without flooding packet |
 | WACC snapshot (ADR-113 WACC) | 3 lines | Derived metric — compact summary is enough |
+| FX pairs per region (ADR-114 WCR) | 8 pairs × 3 regions | Majors / crosses / EM without flooding |
+| Rolling beta windows (ADR-114 BETA) | typically 3 rows | 1Y / 3Y / 5Y covers both recent and structural |
+| Gordon Growth DDM (ADR-114 DDM) | 2-3 lines | Single implied price + input lineage |
+| Relative valuation rows (ADR-114 RV) | ≤9 metrics | Matches Fundamentals getters with peer support |
+| FIGI identifiers (ADR-114 FIGI) | 3 rows | Most US names have ≤3 share classes |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **9-17 KB**
-(up from 8-16 KB after ADR-112; ADR-113 added WEI/MOV/INDU global context
-and a per-symbol WACC block); a 10-symbol basket lands near **82-162 KB**
-(the global context is emitted only once, so multi-symbol overhead is small).
+symbols. A single S&P 500 symbol now produces a packet around **10-19 KB**
+(up from 9-17 KB after ADR-113; ADR-114 added WCR global context and four
+new per-symbol blocks — BETA / DDM / RV / FIGI); a 10-symbol basket lands
+near **92-182 KB** (the global context is emitted only once, so multi-symbol
+overhead is still bounded by the per-symbol blocks).
 
 ---
 
@@ -491,6 +542,15 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_shares_float` | SQLite `research_shares_float` | ADR-112 FLOAT window |
 | `research::get_historical_price` | SQLite `research_historical_price` | ADR-112 HP window |
 | `research::get_earnings_surprises` | SQLite `research_earnings_surprise` | ADR-112 EPS window |
+| `research::get_wacc` | SQLite `research_wacc` | ADR-113 WACC window |
+| `research::get_world_indices` | SQLite `research_world_indices` | ADR-113 WEI window |
+| `research::get_market_movers` | SQLite `research_market_movers` | ADR-113 MOV window |
+| `research::get_sector_performance` | SQLite `research_sector_performance` | ADR-113 INDU window |
+| `research::get_currency_rates` | SQLite `research_currency_rates` | ADR-114 WCR window |
+| `research::get_beta` | SQLite `research_beta` | ADR-114 BETA window |
+| `research::get_ddm` | SQLite `research_ddm` | ADR-114 DDM window |
+| `research::get_relative_valuation` | SQLite `research_relative_valuation` | ADR-114 RV window |
+| `research::get_figi` | SQLite `research_figi` | ADR-114 FIGI window |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -527,4 +587,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 — Godel parity research surfaces

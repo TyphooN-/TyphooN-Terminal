@@ -9860,6 +9860,27 @@ enum BrokerCmd {
     /// `risk_free_pct` is passed in so the broker avoids touching non-Send state —
     /// the main thread sources the latest 10Y yield from its in-memory cache.
     FetchWaccSnapshot { symbol: String, fmp_key: String, risk_free_pct: f64 },
+    // ── ADR-114 Godel Parity Round 7 ──
+    /// Yahoo batch-quote the FX majors universe (no key).
+    FetchCurrencyRates,
+    /// FMP historical price fetch for (symbol, SPY) + OLS beta regression. The
+    /// broker handler fetches both histories and computes the rolling windows.
+    FetchBetaSnapshot { symbol: String, fmp_key: String },
+    /// Pure compute — read cached DVD + WACC, produce a Gordon Growth DDM
+    /// snapshot. `required_return_pct` and `return_source` are sourced by the
+    /// main thread from the in-memory WACC state (with a 10% fallback).
+    ComputeDdmSnapshot { symbol: String, required_return_pct: f64, return_source: String },
+    /// Pure compute — read peer fundamentals from the in-memory cache (handed
+    /// in as JSON by the main thread so the handler stays Send-safe) and
+    /// produce a relative valuation snapshot.
+    ComputeRelativeValuation {
+        symbol: String,
+        sector: String,
+        self_json: String,
+        peers_json: String,
+    },
+    /// POST to OpenFIGI — free instrument identifier mapping service.
+    FetchFigiIdentifiers { symbol: String },
     /// Fetch multi-source news for a symbol (GDELT + Yahoo RSS + SEC + Marketaux + AV + FMP),
     /// cache results in SQLite, and return the cached set.
     FetchNewsMulti {
@@ -10023,6 +10044,17 @@ enum BrokerMsg {
     SectorPerformanceMsg(Vec<typhoon_engine::core::research::SectorPerformance>),
     /// WACC (weighted-average cost of capital) snapshot for a symbol.
     WaccSnapshotMsg(String, typhoon_engine::core::research::WaccSnapshot),
+    // ── ADR-114 ──
+    /// World currency rates bundle (FX majors + crosses + EM).
+    CurrencyRatesMsg(Vec<typhoon_engine::core::research::CurrencyRate>),
+    /// Rolling beta snapshot (1Y/3Y/5Y vs SPY) for a symbol.
+    BetaSnapshotMsg(String, typhoon_engine::core::research::BetaSnapshot),
+    /// Gordon Growth dividend-discount-model snapshot for a symbol.
+    DdmSnapshotMsg(String, typhoon_engine::core::research::DdmSnapshot),
+    /// Relative-valuation peer matrix for a symbol.
+    RelativeValuationMsg(String, typhoon_engine::core::research::RelativeValuation),
+    /// OpenFIGI identifier mapping for a symbol.
+    FigiSnapshotMsg(String, typhoon_engine::core::research::FigiSnapshot),
     /// Multi-source news articles loaded (from cache + fresh fetch) for a symbol.
     NewsArticlesLoaded {
         symbol: String,
@@ -10914,6 +10946,39 @@ pub struct TyphooNApp {
     wacc_symbol: String,
     wacc_snapshot: typhoon_engine::core::research::WaccSnapshot,
     wacc_loading: bool,
+
+    // ── ADR-114 Godel Parity Round 7 ──────────────────────────────────
+    /// WCR — world currency rates (FX majors + crosses + EM), Yahoo-sourced
+    /// single-row snapshot. Separate state from the legacy FOREX_MATRIX
+    /// dashboard which is broker-sourced.
+    show_wcr: bool,
+    wcr_rates: Vec<typhoon_engine::core::research::CurrencyRate>,
+    wcr_loading: bool,
+    wcr_region_filter: String, // "" | "Majors" | "Crosses" | "EM"
+
+    /// BETA — rolling beta history vs SPY (1Y/3Y/5Y windows).
+    show_beta: bool,
+    beta_symbol: String,
+    beta_snapshot: typhoon_engine::core::research::BetaSnapshot,
+    beta_loading: bool,
+
+    /// DDM — Gordon Growth dividend-discount-model snapshot.
+    show_ddm: bool,
+    ddm_symbol: String,
+    ddm_snapshot: typhoon_engine::core::research::DdmSnapshot,
+    ddm_loading: bool,
+
+    /// RV — relative valuation peer matrix (zero-fetch, pure compute).
+    show_rv: bool,
+    rv_symbol: String,
+    rv_snapshot: typhoon_engine::core::research::RelativeValuation,
+    rv_loading: bool,
+
+    /// FIGI — OpenFIGI identifier mapping.
+    show_figi: bool,
+    figi_symbol: String,
+    figi_snapshot: typhoon_engine::core::research::FigiSnapshot,
+    figi_loading: bool,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -12641,6 +12706,114 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 total_debt, interest_expense, effective_tax_rate_pct,
                             );
                             let _ = msg_tx.send(BrokerMsg::WaccSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    // ── ADR-114 Round 7 handlers ──
+                    BrokerCmd::FetchCurrencyRates => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_currency_rates(&client).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::CurrencyRatesMsg(rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("WCR: {e}"))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchBetaSnapshot { symbol, fmp_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(30))
+                                .build().unwrap_or_default();
+                            // Fetch 5 years of bars for both the symbol and SPY.
+                            let sym_bars = match research::fetch_fmp_historical_price(&client, &symbol, &fmp_key, 1300).await {
+                                Ok(rows) => rows,
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("BETA {symbol} bars: {e}"))); return; }
+                            };
+                            let mkt_bars = match research::fetch_fmp_historical_price(&client, "SPY", &fmp_key, 1300).await {
+                                Ok(rows) => rows,
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("BETA SPY bars: {e}"))); return; }
+                            };
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let snap = research::compute_beta_snapshot(&symbol, "SPY", &today, &sym_bars, &mkt_bars);
+                            let _ = msg_tx.send(BrokerMsg::BetaSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeDdmSnapshot { symbol, required_return_pct, return_source } => {
+                        // Pure compute: read cached dividends on the broker thread, call the
+                        // compute function, emit a snapshot. Kept on an async task for uniformity
+                        // with other research handlers.
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let mut divs: Vec<research::DividendRecord> = Vec::new();
+                            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(d)) = research::get_dividends(&conn, &symbol) {
+                                        divs = d;
+                                    }
+                                }
+                            }
+                            let snap = research::compute_ddm_snapshot(
+                                &symbol, &today, &divs, required_return_pct, &return_source,
+                            );
+                            let _ = msg_tx.send(BrokerMsg::DdmSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeRelativeValuation { symbol, sector, self_json, peers_json } => {
+                        use typhoon_engine::core::research;
+                        use typhoon_engine::core::fundamentals::Fundamentals;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let self_fund: Fundamentals = serde_json::from_str(&self_json).unwrap_or_default();
+                            let peers: Vec<Fundamentals> = serde_json::from_str(&peers_json).unwrap_or_default();
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let collect = |g: fn(&Fundamentals) -> Option<f64>| -> Vec<f64> {
+                                peers.iter().filter_map(g).collect()
+                            };
+                            let inputs = vec![
+                                research::RvMetricInput { metric: "P/E",        value: self_fund.pe_ratio,              peer_values: collect(|f| f.pe_ratio) },
+                                research::RvMetricInput { metric: "Fwd P/E",    value: self_fund.forward_pe,            peer_values: collect(|f| f.forward_pe) },
+                                research::RvMetricInput { metric: "P/B",        value: self_fund.price_to_book,         peer_values: collect(|f| f.price_to_book) },
+                                research::RvMetricInput { metric: "P/S",        value: self_fund.price_to_sales,        peer_values: collect(|f| f.price_to_sales) },
+                                research::RvMetricInput { metric: "EV/EBITDA",  value: self_fund.ev_to_ebitda,          peer_values: collect(|f| f.ev_to_ebitda) },
+                                research::RvMetricInput { metric: "Profit %",   value: self_fund.profit_margin,         peer_values: collect(|f| f.profit_margin) },
+                                research::RvMetricInput { metric: "ROE",        value: self_fund.roe,                   peer_values: collect(|f| f.roe) },
+                                research::RvMetricInput { metric: "Beta",       value: self_fund.beta,                  peer_values: collect(|f| f.beta) },
+                                research::RvMetricInput { metric: "Div Yield",  value: self_fund.dividend_yield,        peer_values: collect(|f| f.dividend_yield) },
+                            ];
+                            let rv = research::compute_relative_valuation(&symbol, &sector, &today, &inputs);
+                            let _ = msg_tx.send(BrokerMsg::RelativeValuationMsg(symbol, rv));
+                        });
+                    }
+                    BrokerCmd::FetchFigiIdentifiers { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_openfigi_identifiers(&client, &symbol).await {
+                                Ok(ids) => {
+                                    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                                    let snap = research::FigiSnapshot {
+                                        symbol: symbol.to_uppercase(),
+                                        as_of: today,
+                                        identifiers: ids,
+                                    };
+                                    let _ = msg_tx.send(BrokerMsg::FigiSnapshotMsg(symbol, snap));
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("FIGI: {e}"))); }
+                            }
                         });
                     }
                     BrokerCmd::FetchNewsMulti { symbol, marketaux_key, alpha_vantage_key, fmp_key } => {
@@ -14914,6 +15087,27 @@ When the question touches recent news, sentiment, or prices, combine the researc
             wacc_symbol: String::new(),
             wacc_snapshot: typhoon_engine::core::research::WaccSnapshot::default(),
             wacc_loading: false,
+            // ── ADR-114 Round 7 defaults ──
+            show_wcr: false,
+            wcr_rates: Vec::new(),
+            wcr_loading: false,
+            wcr_region_filter: String::new(),
+            show_beta: false,
+            beta_symbol: String::new(),
+            beta_snapshot: typhoon_engine::core::research::BetaSnapshot::default(),
+            beta_loading: false,
+            show_ddm: false,
+            ddm_symbol: String::new(),
+            ddm_snapshot: typhoon_engine::core::research::DdmSnapshot::default(),
+            ddm_loading: false,
+            show_rv: false,
+            rv_symbol: String::new(),
+            rv_snapshot: typhoon_engine::core::research::RelativeValuation::default(),
+            rv_loading: false,
+            show_figi: false,
+            figi_symbol: String::new(),
+            figi_snapshot: typhoon_engine::core::research::FigiSnapshot::default(),
+            figi_loading: false,
             bottom_tab: BottomTab::Log,
             log,
             log_filter: LogFilter::All,
@@ -16144,6 +16338,27 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         let _ = writeln!(p);
                     }
                 }
+
+                // ADR-114 Round 7 — WCR world currency rates (FX regime)
+                if let Ok(Some(rates)) = rx::get_currency_rates(&conn) {
+                    if !rates.is_empty() {
+                        let up = rates.iter().filter(|r| r.change_pct > 0.0).count();
+                        let down = rates.iter().filter(|r| r.change_pct < 0.0).count();
+                        let _ = writeln!(p, "### World Currency Rates");
+                        let _ = writeln!(p, "- {} pairs · {} strengthening vs quote · {} weakening",
+                            rates.len(), up, down);
+                        let mut by_region: std::collections::BTreeMap<&str, Vec<&typhoon_engine::core::research::CurrencyRate>> =
+                            std::collections::BTreeMap::new();
+                        for r in rates.iter() { by_region.entry(r.region.as_str()).or_default().push(r); }
+                        for (region, group) in by_region.iter() {
+                            let s: Vec<String> = group.iter().take(8)
+                                .map(|r| format!("{} {:.4} ({:+.2}%)", r.display, r.price, r.change_pct))
+                                .collect();
+                            let _ = writeln!(p, "- **{}** — {}", region, s.join(", "));
+                        }
+                        let _ = writeln!(p);
+                    }
+                }
             }
         }
 
@@ -16617,6 +16832,67 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = writeln!(p, "- Capital mix — equity {:.1}% ({}) · debt {:.1}% ({})",
                                 w.equity_weight * 100.0, fmt_money(w.market_cap),
                                 w.debt_weight * 100.0, fmt_money(w.total_debt));
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // ADR-114 Round 7 — BETA rolling history (1Y / 3Y / 5Y vs SPY)
+                    if let Ok(Some(b)) = rx::get_beta(&conn, &sym_upper) {
+                        if !b.windows.is_empty() {
+                            let _ = writeln!(p, "### Rolling Beta vs {} (as of {})", b.market_ticker, b.as_of);
+                            let _ = writeln!(p, "| Window | β | α (ann) | R² | Corr | N |");
+                            let _ = writeln!(p, "|---|---|---|---|---|---|");
+                            for w in b.windows.iter() {
+                                let _ = writeln!(p, "| {} | {:.3} | {:+.2}% | {:.3} | {:.3} | {} |",
+                                    w.window_label, w.beta, w.alpha_pct, w.r_squared, w.correlation, w.n_observations);
+                            }
+                            if !b.note.is_empty() { let _ = writeln!(p, "- Note: {}", b.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // ADR-114 Round 7 — DDM Gordon Growth fair value
+                    if let Ok(Some(d)) = rx::get_ddm(&conn, &sym_upper) {
+                        if d.annual_dividend > 0.0 || d.implied_price > 0.0 {
+                            let _ = writeln!(p, "### Gordon Growth DDM (as of {})", d.as_of);
+                            let _ = writeln!(p, "- Trailing D0 ${:.4} · implied g {:.2}% ({}) · required r {:.2}% ({})",
+                                d.annual_dividend, d.implied_growth_pct, d.growth_source,
+                                d.required_return_pct, d.return_source);
+                            if d.implied_price > 0.0 {
+                                let _ = writeln!(p, "- **Implied price ${:.2}** (method: {})", d.implied_price, d.method);
+                            } else if !d.note.is_empty() {
+                                let _ = writeln!(p, "- Caveat: {}", d.note);
+                            }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // ADR-114 Round 7 — RV relative-valuation matrix (peer Z-scores)
+                    if let Ok(Some(rv)) = rx::get_relative_valuation(&conn, &sym_upper) {
+                        if !rv.rows.is_empty() {
+                            let _ = writeln!(p, "### Relative Valuation vs Sector Peers (n={}, as of {})", rv.peer_count, rv.as_of);
+                            let _ = writeln!(p, "| Metric | Value | Peer Median | Z | Percentile |");
+                            let _ = writeln!(p, "|---|---|---|---|---|");
+                            for r in rv.rows.iter() {
+                                let _ = writeln!(p, "| {} | {:.2} | {:.2} | {:+.2} | {:.0}% |",
+                                    r.metric, r.value, r.peer_median, r.z_score, r.percentile);
+                            }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // ADR-114 Round 7 — FIGI instrument identifiers
+                    if let Ok(Some(f)) = rx::get_figi(&conn, &sym_upper) {
+                        if !f.identifiers.is_empty() {
+                            let _ = writeln!(p, "### Instrument Identifiers (OpenFIGI, as of {})", f.as_of);
+                            for id in f.identifiers.iter().take(3) {
+                                let _ = writeln!(p, "- **{}** — FIGI {} · share-class {} · {} · {}",
+                                    id.ticker,
+                                    if id.figi.is_empty() { "—".into() } else { id.figi.clone() },
+                                    if id.share_class_figi.is_empty() { "—".into() } else { id.share_class_figi.clone() },
+                                    if id.exch_code.is_empty() { "—".into() } else { id.exch_code.clone() },
+                                    if id.security_description.is_empty() { id.name.clone() } else { id.security_description.clone() });
+                            }
                             let _ = writeln!(p);
                         }
                     }
@@ -17709,6 +17985,98 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         symbol: self.wacc_symbol.to_uppercase(),
                         fmp_key: self.fmp_key.clone(),
                         risk_free_pct: rf,
+                    });
+                }
+            }
+            // ── ADR-114 Round 7 palette entries ──
+            "WCR" | "CURRENCY" | "CURRENCIES" | "FX_RATES" => {
+                self.show_wcr = true;
+                if self.wcr_rates.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(rows)) = typhoon_engine::core::research::get_currency_rates(&conn) {
+                                self.wcr_rates = rows;
+                            }
+                        }
+                    }
+                }
+                self.wcr_loading = true;
+                let _ = self.broker_tx.send(BrokerCmd::FetchCurrencyRates);
+            }
+            "BETA" | "ROLLING_BETA" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.beta_symbol = sym; }
+                self.show_beta = true;
+                if self.beta_snapshot.symbol.is_empty() && !self.beta_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_beta(&conn, &self.beta_symbol) {
+                                self.beta_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+                if !self.fmp_key.is_empty() && !self.beta_symbol.is_empty() {
+                    self.beta_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchBetaSnapshot {
+                        symbol: self.beta_symbol.to_uppercase(),
+                        fmp_key: self.fmp_key.clone(),
+                    });
+                }
+            }
+            "DDM" | "GORDON_GROWTH" | "DIVIDEND_DISCOUNT" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.ddm_symbol = sym; }
+                self.show_ddm = true;
+                if self.ddm_snapshot.symbol.is_empty() && !self.ddm_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_ddm(&conn, &self.ddm_symbol) {
+                                self.ddm_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "RV" | "RELATIVE_VALUATION" | "PEER_VALUATION" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.rv_symbol = sym; }
+                self.show_rv = true;
+                if self.rv_snapshot.symbol.is_empty() && !self.rv_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(rv)) = typhoon_engine::core::research::get_relative_valuation(&conn, &self.rv_symbol) {
+                                self.rv_snapshot = rv;
+                            }
+                        }
+                    }
+                }
+            }
+            "FIGI" | "OPENFIGI" | "IDENTIFIERS" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.figi_symbol = sym; }
+                self.show_figi = true;
+                if self.figi_snapshot.identifiers.is_empty() && !self.figi_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_figi(&conn, &self.figi_symbol) {
+                                self.figi_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+                if !self.figi_symbol.is_empty() {
+                    self.figi_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchFigiIdentifiers {
+                        symbol: self.figi_symbol.to_uppercase(),
                     });
                 }
             }
@@ -28511,6 +28879,391 @@ When the question touches recent news, sentiment, or prices, combine the researc
             self.show_wacc = open;
         }
 
+        // ── ADR-114 Godel Parity Round 7 ──
+        // WCR — World Currency Rates (FX majors + crosses + EM via Yahoo /v7)
+        if self.show_wcr {
+            let mut open = self.show_wcr;
+            egui::Window::new("WCR — World Currency Rates")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([620.0, 480.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            self.wcr_loading = true;
+                            let _ = self.broker_tx.send(BrokerCmd::FetchCurrencyRates);
+                        }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(rows)) = typhoon_engine::core::research::get_currency_rates(&conn) {
+                                        self.wcr_rates = rows;
+                                    }
+                                }
+                            }
+                        }
+                        ui.separator();
+                        ui.label(egui::RichText::new("Region:").color(AXIS_TEXT));
+                        egui::ComboBox::from_id_salt("wcr_region_filter")
+                            .selected_text(if self.wcr_region_filter.is_empty() { "All".to_string() } else { self.wcr_region_filter.clone() })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.wcr_region_filter, String::new(), "All");
+                                ui.selectable_value(&mut self.wcr_region_filter, "Majors".into(), "Majors");
+                                ui.selectable_value(&mut self.wcr_region_filter, "Crosses".into(), "Crosses");
+                                ui.selectable_value(&mut self.wcr_region_filter, "EM".into(), "EM");
+                            });
+                        if self.wcr_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    if self.wcr_rates.is_empty() {
+                        ui.label(egui::RichText::new("No data — click Fetch to pull Yahoo FX quotes.").color(AXIS_TEXT).small());
+                    } else {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            egui::Grid::new("wcr_grid").striped(true).num_columns(5).min_col_width(80.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Pair").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Region").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Price").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Change").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("%").color(AXIS_TEXT).small().strong());
+                                ui.end_row();
+                                for r in &self.wcr_rates {
+                                    if !self.wcr_region_filter.is_empty() && r.region != self.wcr_region_filter { continue; }
+                                    let color = if r.change_pct > 0.0 { UP } else if r.change_pct < 0.0 { DOWN } else { AXIS_TEXT };
+                                    ui.label(egui::RichText::new(&r.display).small().monospace().strong());
+                                    ui.label(egui::RichText::new(&r.region).color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new(format!("{:.4}", r.price)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:+.4}", r.change)).color(color).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:+.2}%", r.change_pct)).color(color).small().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_wcr = open;
+        }
+
+        // BETA — rolling beta history (1Y/3Y/5Y vs SPY)
+        if self.show_beta {
+            if self.beta_symbol.is_empty() { self.beta_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_beta;
+            egui::Window::new("BETA — Rolling Beta vs SPY")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([520.0, 360.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.beta_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.beta_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.beta_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_beta(&conn, &sym_u) {
+                                        self.beta_snapshot = snap;
+                                        self.beta_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        let have_key = !self.fmp_key.is_empty();
+                        if ui.add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            let sym = self.beta_symbol.to_uppercase();
+                            self.beta_loading = true;
+                            self.beta_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::FetchBetaSnapshot {
+                                symbol: sym, fmp_key: self.fmp_key.clone(),
+                            });
+                        }
+                        if self.fmp_key.is_empty() {
+                            ui.label(egui::RichText::new("(add FMP key in Settings)").color(AXIS_TEXT).small());
+                        }
+                        if self.beta_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.beta_snapshot;
+                    if snap.symbol.is_empty() || snap.windows.is_empty() {
+                        ui.label(egui::RichText::new("No data — click Fetch to pull 5Y history for symbol + SPY.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        ui.label(egui::RichText::new(format!("{} vs {} — as of {}", snap.symbol, snap.market_ticker, snap.as_of))
+                            .strong().color(AXIS_TEXT));
+                        ui.separator();
+                        egui::Grid::new("beta_grid").striped(true).num_columns(6).min_col_width(70.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Window").color(AXIS_TEXT).small().strong());
+                            ui.label(egui::RichText::new("β").color(AXIS_TEXT).small().strong());
+                            ui.label(egui::RichText::new("α (ann)").color(AXIS_TEXT).small().strong());
+                            ui.label(egui::RichText::new("R²").color(AXIS_TEXT).small().strong());
+                            ui.label(egui::RichText::new("Corr").color(AXIS_TEXT).small().strong());
+                            ui.label(egui::RichText::new("N").color(AXIS_TEXT).small().strong());
+                            ui.end_row();
+                            for w in &snap.windows {
+                                ui.label(egui::RichText::new(&w.window_label).small().monospace().strong());
+                                ui.label(egui::RichText::new(format!("{:.3}", w.beta)).small().monospace());
+                                ui.label(egui::RichText::new(format!("{:+.2}%", w.alpha_pct)).small().monospace());
+                                ui.label(egui::RichText::new(format!("{:.3}", w.r_squared)).small().monospace());
+                                ui.label(egui::RichText::new(format!("{:.3}", w.correlation)).small().monospace());
+                                ui.label(egui::RichText::new(format!("{}", w.n_observations)).small().monospace());
+                                ui.end_row();
+                            }
+                        });
+                        if !snap.note.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new(&snap.note).color(AXIS_TEXT).small().italics());
+                        }
+                    }
+                });
+            self.show_beta = open;
+        }
+
+        // DDM — Gordon Growth Dividend Discount Model
+        if self.show_ddm {
+            if self.ddm_symbol.is_empty() { self.ddm_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_ddm;
+            egui::Window::new("DDM — Gordon Growth Dividend Discount")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([540.0, 420.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.ddm_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.ddm_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.ddm_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_ddm(&conn, &sym_u) {
+                                        self.ddm_snapshot = snap;
+                                        self.ddm_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.ddm_symbol.to_uppercase();
+                            self.ddm_loading = true;
+                            self.ddm_symbol = sym.clone();
+                            let wacc_snap = &self.wacc_snapshot;
+                            let (r, src) = if wacc_snap.symbol.eq_ignore_ascii_case(&sym) && wacc_snap.wacc_pct > 0.0 {
+                                (wacc_snap.cost_of_equity_pct, format!("Cost of equity {:.2}% (from WACC)", wacc_snap.cost_of_equity_pct))
+                            } else {
+                                (10.0, "default required return 10.0%".to_string())
+                            };
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeDdmSnapshot {
+                                symbol: sym, required_return_pct: r, return_source: src,
+                            });
+                        }
+                        if self.ddm_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.ddm_snapshot;
+                    if snap.symbol.is_empty() {
+                        ui.label(egui::RichText::new("No data — click Compute (needs dividend history cached via DVD).")
+                            .color(AXIS_TEXT).small());
+                        ui.label(egui::RichText::new("Tip: run WACC first for this symbol to use Re as required return.")
+                            .color(AXIS_TEXT).small());
+                    } else {
+                        let color = if snap.implied_price > 0.0 { UP } else { DOWN };
+                        ui.label(egui::RichText::new(format!("{} — implied price ${:.2}", snap.symbol, snap.implied_price))
+                            .strong().size(16.0).color(color));
+                        ui.label(egui::RichText::new(format!("as of {} ({})", snap.as_of, snap.method)).color(AXIS_TEXT).small());
+                        ui.separator();
+                        egui::Grid::new("ddm_grid").striped(true).num_columns(2).min_col_width(200.0).show(ui, |ui| {
+                            let row = |ui: &mut egui::Ui, k: &str, v: String| {
+                                ui.label(egui::RichText::new(k).color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(v).small().monospace().strong());
+                                ui.end_row();
+                            };
+                            row(ui, "Trailing annual dividend (D0)", format!("${:.4}", snap.annual_dividend));
+                            row(ui, "Implied growth (g)",            format!("{:.2}%", snap.implied_growth_pct));
+                            row(ui, "Required return (r)",           format!("{:.2}%", snap.required_return_pct));
+                            row(ui, "Growth source",                  snap.growth_source.clone());
+                            row(ui, "Return source",                  snap.return_source.clone());
+                            row(ui, "D1 = D0 × (1 + g)",             format!("${:.4}", snap.annual_dividend * (1.0 + snap.implied_growth_pct / 100.0)));
+                            row(ui, "Implied price (D1 / (r − g))",  format!("${:.2}", snap.implied_price));
+                        });
+                        if !snap.note.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small().italics());
+                        }
+                    }
+                });
+            self.show_ddm = open;
+        }
+
+        // RV — Relative Valuation (peer matrix)
+        if self.show_rv {
+            if self.rv_symbol.is_empty() { self.rv_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_rv;
+            egui::Window::new("RV — Relative Valuation Matrix")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 420.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.rv_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.rv_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.rv_symbol.to_uppercase();
+                                    if let Ok(Some(rv)) = typhoon_engine::core::research::get_relative_valuation(&conn, &sym_u) {
+                                        self.rv_snapshot = rv;
+                                        self.rv_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.rv_symbol.to_uppercase();
+                            self.rv_loading = true;
+                            self.rv_symbol = sym.clone();
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(self_fund)) = typhoon_engine::core::fundamentals::get_fundamentals(&conn, &sym) {
+                                        let sector = self_fund.sector.clone();
+                                        let self_json = serde_json::to_string(&self_fund).unwrap_or_default();
+                                        let peer_syms = typhoon_engine::core::research::get_peers(&conn, &sym)
+                                            .unwrap_or(None).unwrap_or_default();
+                                        let mut peers_list: Vec<typhoon_engine::core::fundamentals::Fundamentals> = Vec::new();
+                                        for p in &peer_syms {
+                                            if p.eq_ignore_ascii_case(&sym) { continue; }
+                                            if let Ok(Some(pf)) = typhoon_engine::core::fundamentals::get_fundamentals(&conn, p) {
+                                                peers_list.push(pf);
+                                            }
+                                        }
+                                        let peers_json = serde_json::to_string(&peers_list).unwrap_or_default();
+                                        let _ = self.broker_tx.send(BrokerCmd::ComputeRelativeValuation {
+                                            symbol: sym, sector, self_json, peers_json,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        if self.rv_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let rv = &self.rv_snapshot;
+                    if rv.symbol.is_empty() || rv.rows.is_empty() {
+                        ui.label(egui::RichText::new("No data — run DES/PEERS for this symbol + sector peers, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                    } else {
+                        ui.label(egui::RichText::new(format!("{} — sector {} — {} peers — as of {}",
+                            rv.symbol, rv.sector, rv.peer_count, rv.as_of)).strong().color(AXIS_TEXT));
+                        ui.separator();
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            egui::Grid::new("rv_grid").striped(true).num_columns(7).min_col_width(70.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Metric").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Value").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Peer median").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Peer low").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Peer high").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Z").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Percentile").color(AXIS_TEXT).small().strong());
+                                ui.end_row();
+                                for r in &rv.rows {
+                                    let z_color = if r.z_score.abs() > 1.5 { DOWN } else if r.z_score.abs() > 0.5 { AXIS_TEXT } else { UP };
+                                    ui.label(egui::RichText::new(&r.metric).small().monospace().strong());
+                                    ui.label(egui::RichText::new(format!("{:.2}", r.value)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.2}", r.peer_median)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.2}", r.peer_low)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.2}", r.peer_high)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:+.2}", r.z_score)).color(z_color).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.0}%", r.percentile)).small().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_rv = open;
+        }
+
+        // FIGI — OpenFIGI instrument identifier lookup
+        if self.show_figi {
+            if self.figi_symbol.is_empty() { self.figi_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_figi;
+            egui::Window::new("FIGI — OpenFIGI Instrument Identifiers")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([620.0, 380.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Ticker:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.figi_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.figi_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.figi_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_figi(&conn, &sym_u) {
+                                        self.figi_snapshot = snap;
+                                        self.figi_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Lookup").fill(BTN_MG)).clicked() {
+                            let sym = self.figi_symbol.to_uppercase();
+                            self.figi_loading = true;
+                            self.figi_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::FetchFigiIdentifiers { symbol: sym });
+                        }
+                        if self.figi_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.figi_snapshot;
+                    if snap.symbol.is_empty() || snap.identifiers.is_empty() {
+                        ui.label(egui::RichText::new("No data — click Lookup to query OpenFIGI (free, no auth required).")
+                            .color(AXIS_TEXT).small());
+                    } else {
+                        ui.label(egui::RichText::new(format!("{} — {} identifier(s) — as of {}",
+                            snap.symbol, snap.identifiers.len(), snap.as_of)).strong().color(AXIS_TEXT));
+                        ui.separator();
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            for (i, id) in snap.identifiers.iter().enumerate() {
+                                ui.label(egui::RichText::new(format!("#{}  {}  — {}", i + 1, id.ticker, id.name))
+                                    .strong().color(AXIS_TEXT));
+                                egui::Grid::new(format!("figi_grid_{}", i)).striped(true).num_columns(2).min_col_width(160.0).show(ui, |ui| {
+                                    let row = |ui: &mut egui::Ui, k: &str, v: &str| {
+                                        if v.is_empty() { return; }
+                                        ui.label(egui::RichText::new(k).color(AXIS_TEXT).small());
+                                        ui.label(egui::RichText::new(v).small().monospace());
+                                        ui.end_row();
+                                    };
+                                    row(ui, "FIGI", &id.figi);
+                                    row(ui, "Composite FIGI", &id.composite_figi);
+                                    row(ui, "Share-class FIGI", &id.share_class_figi);
+                                    row(ui, "Exchange", &id.exch_code);
+                                    row(ui, "Security type", &id.security_type);
+                                    row(ui, "Security type 2", &id.security_type_2);
+                                    row(ui, "Market sector", &id.market_sector);
+                                    row(ui, "Description", &id.security_description);
+                                });
+                                ui.separator();
+                            }
+                        });
+                    }
+                });
+            self.show_figi = open;
+        }
+
         // GY — Treasury Yield Curve
         if self.show_treasury_curve {
             let mut open = self.show_treasury_curve;
@@ -35561,6 +36314,65 @@ impl eframe::App for TyphooNApp {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let _ = typhoon_engine::core::research::upsert_wacc(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                // ── ADR-114 Godel Parity Round 7 ──
+                BrokerMsg::CurrencyRatesMsg(rows) => {
+                    self.wcr_rates = rows.clone();
+                    self.wcr_loading = false;
+                    self.log.push_back(LogEntry::info(format!("WCR: {} rates loaded", rows.len())));
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_currency_rates(&conn, &rows);
+                        }
+                    }
+                }
+                BrokerMsg::BetaSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.beta_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.beta_snapshot = snap.clone();
+                        self.beta_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_beta(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::DdmSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.ddm_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.ddm_snapshot = snap.clone();
+                        self.ddm_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_ddm(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::RelativeValuationMsg(sym, rv) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.rv_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.rv_snapshot = rv.clone();
+                        self.rv_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_relative_valuation(&conn, &sym_u, &rv);
+                        }
+                    }
+                }
+                BrokerMsg::FigiSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.figi_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.figi_snapshot = snap.clone();
+                        self.figi_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_figi(&conn, &sym_u, &snap);
                         }
                     }
                 }

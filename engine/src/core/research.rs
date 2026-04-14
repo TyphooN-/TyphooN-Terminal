@@ -518,6 +518,131 @@ pub const WORLD_INDICES_UNIVERSE: &[(&str, &str, &str)] = &[
 /// Default equity risk premium used in the WACC CAPM calc (Damodaran-style).
 pub const DEFAULT_EQUITY_RISK_PREMIUM_PCT: f64 = 5.0;
 
+// ── ADR-114 Godel Parity Round 7 ─────────────────────────────────────────
+// WCR / BETA / DDM / RV / FIGI surfaces.
+
+/// WCR — single currency-cross row for the World Currency Rates dashboard.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CurrencyRate {
+    pub ticker: String,       // Yahoo ticker, e.g. "EURUSD=X"
+    pub display: String,      // "EUR/USD"
+    pub base: String,         // "EUR"
+    pub quote: String,        // "USD"
+    pub region: String,       // "Majors" / "Crosses" / "EM"
+    pub price: f64,
+    pub change: f64,
+    pub change_pct: f64,
+}
+
+/// BETA — one rolling-window beta observation (e.g. 1Y/3Y/5Y).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BetaWindow {
+    pub window_label: String,  // "1Y" / "3Y" / "5Y"
+    pub window_days: usize,    // trading-day window (252 / 756 / 1260)
+    pub beta: f64,             // cov(r_s, r_m) / var(r_m)
+    pub alpha_pct: f64,        // annualized intercept
+    pub r_squared: f64,
+    pub n_observations: usize,
+    pub correlation: f64,
+}
+
+/// BETA — per-symbol beta history snapshot (vs SPY) cached in SQLite.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BetaSnapshot {
+    pub symbol: String,
+    pub market_ticker: String, // "SPY"
+    pub as_of: String,         // YYYY-MM-DD
+    pub windows: Vec<BetaWindow>,
+    pub note: String,          // any caveats (insufficient data, etc.)
+}
+
+/// DDM — Gordon Growth (two-stage optional) dividend discount model snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DdmSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub annual_dividend: f64,       // trailing 4-quarter dividend $
+    pub implied_growth_pct: f64,    // inferred from historical dividend CAGR
+    pub required_return_pct: f64,   // from WACC or cost of equity
+    pub growth_source: String,      // "dividend CAGR 5Y" etc.
+    pub return_source: String,      // "WACC 10.25%" etc.
+    pub implied_price: f64,         // D1 / (r - g) — 0.0 when r <= g
+    pub method: String,             // "Gordon Growth"
+    pub note: String,               // any caveats
+}
+
+/// RV — one metric row in the relative-valuation peer matrix.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RvMetricRow {
+    pub metric: String,       // "P/E", "P/B", "EV/EBITDA", etc.
+    pub value: f64,           // subject symbol's value
+    pub peer_median: f64,
+    pub peer_low: f64,
+    pub peer_high: f64,
+    pub z_score: f64,         // (value - mean) / stdev
+    pub percentile: f64,      // 0..100 within peer set
+}
+
+/// RV — full relative-valuation snapshot for a symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RelativeValuation {
+    pub symbol: String,
+    pub sector: String,
+    pub as_of: String,
+    pub peer_count: usize,
+    pub rows: Vec<RvMetricRow>,
+}
+
+/// FIGI — one identifier mapping returned by OpenFIGI.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FigiIdentifier {
+    pub figi: String,              // share-class / instrument FIGI
+    pub name: String,
+    pub ticker: String,
+    pub exch_code: String,
+    pub composite_figi: String,
+    pub share_class_figi: String,
+    pub security_type: String,
+    pub security_type_2: String,
+    pub market_sector: String,
+    pub security_description: String,
+}
+
+/// FIGI — wrapper stored per-symbol in SQLite (list because a ticker can map
+/// to multiple share classes / exchanges).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FigiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub identifiers: Vec<FigiIdentifier>,
+}
+
+/// Hardcoded FX-majors universe for the WCR dashboard.
+/// Yahoo FX pair tickers — all free via /v7/finance/quote.
+pub const FX_MAJORS_UNIVERSE: &[(&str, &str, &str, &str, &str)] = &[
+    // ticker, display, base, quote, region
+    ("EURUSD=X", "EUR/USD", "EUR", "USD", "Majors"),
+    ("GBPUSD=X", "GBP/USD", "GBP", "USD", "Majors"),
+    ("USDJPY=X", "USD/JPY", "USD", "JPY", "Majors"),
+    ("USDCHF=X", "USD/CHF", "USD", "CHF", "Majors"),
+    ("AUDUSD=X", "AUD/USD", "AUD", "USD", "Majors"),
+    ("USDCAD=X", "USD/CAD", "USD", "CAD", "Majors"),
+    ("NZDUSD=X", "NZD/USD", "NZD", "USD", "Majors"),
+    // Common crosses
+    ("EURJPY=X", "EUR/JPY", "EUR", "JPY", "Crosses"),
+    ("EURGBP=X", "EUR/GBP", "EUR", "GBP", "Crosses"),
+    ("EURCHF=X", "EUR/CHF", "EUR", "CHF", "Crosses"),
+    ("GBPJPY=X", "GBP/JPY", "GBP", "JPY", "Crosses"),
+    ("AUDJPY=X", "AUD/JPY", "AUD", "JPY", "Crosses"),
+    ("CHFJPY=X", "CHF/JPY", "CHF", "JPY", "Crosses"),
+    // Emerging-market USD pairs
+    ("USDMXN=X", "USD/MXN", "USD", "MXN", "EM"),
+    ("USDZAR=X", "USD/ZAR", "USD", "ZAR", "EM"),
+    ("USDTRY=X", "USD/TRY", "USD", "TRY", "EM"),
+    ("USDBRL=X", "USD/BRL", "USD", "BRL", "EM"),
+    ("USDINR=X", "USD/INR", "USD", "INR", "EM"),
+    ("USDCNY=X", "USD/CNY", "USD", "CNY", "EM"),
+];
 
 /// Hardcoded commodity-futures universe for the GLCO dashboard.
 /// Yahoo continuous-futures tickers, which are free via /v7/finance/quote.
@@ -2296,6 +2421,370 @@ pub fn compute_wacc_snapshot(
     }
 }
 
+// ── ADR-114 Round 7 — WCR fetcher ─────────────────────────────────────────
+
+/// Fetch the hardcoded FX-majors universe through Yahoo and return the rows
+/// in the order declared by `FX_MAJORS_UNIVERSE`.
+pub async fn fetch_currency_rates(
+    client: &reqwest::Client,
+) -> Result<Vec<CurrencyRate>, String> {
+    let tickers: Vec<&str> = FX_MAJORS_UNIVERSE.iter().map(|(t, _, _, _, _)| *t).collect();
+    let quotes = fetch_yahoo_quotes(client, &tickers).await?;
+
+    use std::collections::HashMap;
+    let by_ticker: HashMap<String, (f64, f64, f64)> = quotes.into_iter()
+        .map(|(t, p, c, pct)| (t, (p, c, pct)))
+        .collect();
+
+    let mut out = Vec::with_capacity(FX_MAJORS_UNIVERSE.len());
+    for (tk, display, base, quote, region) in FX_MAJORS_UNIVERSE.iter() {
+        let (price, change, change_pct) = by_ticker.get(*tk)
+            .copied()
+            .unwrap_or((0.0, 0.0, 0.0));
+        out.push(CurrencyRate {
+            ticker: (*tk).to_string(),
+            display: (*display).to_string(),
+            base: (*base).to_string(),
+            quote: (*quote).to_string(),
+            region: (*region).to_string(),
+            price,
+            change,
+            change_pct,
+        });
+    }
+    Ok(out)
+}
+
+// ── ADR-114 Round 7 — BETA compute ────────────────────────────────────────
+
+/// Compute an OLS regression of symbol log-returns on market log-returns.
+/// Returns (beta, alpha_per_period, r_squared, correlation, n).
+/// Pure function, no I/O. Daily returns expected; alpha is per-period
+/// (caller annualizes as needed).
+fn ols_regression(symbol_returns: &[f64], market_returns: &[f64]) -> (f64, f64, f64, f64, usize) {
+    let n = symbol_returns.len().min(market_returns.len());
+    if n < 10 { return (0.0, 0.0, 0.0, 0.0, n); }
+    let mean_s: f64 = symbol_returns.iter().take(n).sum::<f64>() / n as f64;
+    let mean_m: f64 = market_returns.iter().take(n).sum::<f64>() / n as f64;
+
+    let mut cov = 0.0_f64;
+    let mut var_m = 0.0_f64;
+    let mut var_s = 0.0_f64;
+    for i in 0..n {
+        let ds = symbol_returns[i] - mean_s;
+        let dm = market_returns[i] - mean_m;
+        cov += ds * dm;
+        var_m += dm * dm;
+        var_s += ds * ds;
+    }
+    if var_m <= 1e-12 { return (0.0, 0.0, 0.0, 0.0, n); }
+    let beta = cov / var_m;
+    let alpha = mean_s - beta * mean_m;
+
+    // R² (symbol variance explained by market) = β² · var_m / var_s
+    let r_squared = if var_s > 1e-12 { (beta * beta) * var_m / var_s } else { 0.0 };
+    let correlation = if var_m > 1e-12 && var_s > 1e-12 {
+        cov / (var_m.sqrt() * var_s.sqrt())
+    } else { 0.0 };
+
+    (beta, alpha, r_squared.clamp(0.0, 1.0), correlation, n)
+}
+
+/// Compute log-returns from a sequence of closes (newest-first or oldest-first
+/// both work — the function only cares about adjacent differences). Result is
+/// in the same order as the input (length = len - 1).
+fn log_returns(closes: &[f64]) -> Vec<f64> {
+    if closes.len() < 2 { return Vec::new(); }
+    closes.windows(2)
+        .map(|w| if w[0] > 0.0 && w[1] > 0.0 { (w[1] / w[0]).ln() } else { 0.0 })
+        .collect()
+}
+
+/// Compute a per-symbol beta snapshot against a market benchmark using
+/// cached FMP historical price rows for both series. Caller fetches the bars
+/// once (or reuses the HP cache) and hands them in. The bars must be sorted
+/// **newest-first** (FMP returns them that way by default).
+///
+/// We compute 1Y / 3Y / 5Y windows using the trailing N trading days.
+/// Windows that don't have enough overlapping data are skipped silently.
+pub fn compute_beta_snapshot(
+    symbol: &str,
+    market_ticker: &str,
+    as_of: &str,
+    sym_bars_newest_first: &[HistoricalPriceRow],
+    mkt_bars_newest_first: &[HistoricalPriceRow],
+) -> BetaSnapshot {
+    use std::collections::HashMap;
+    // Intersect by date to make returns directly comparable.
+    let mkt_by_date: HashMap<&str, f64> = mkt_bars_newest_first.iter()
+        .map(|b| (b.date.as_str(), b.close))
+        .collect();
+    let mut paired: Vec<(String, f64, f64)> = sym_bars_newest_first.iter()
+        .filter_map(|b| mkt_by_date.get(b.date.as_str())
+            .map(|m| (b.date.clone(), b.close, *m)))
+        .collect();
+    // Sort ascending by date so the log_returns helper produces chronological returns.
+    paired.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let sym_closes: Vec<f64> = paired.iter().map(|(_, s, _)| *s).collect();
+    let mkt_closes: Vec<f64> = paired.iter().map(|(_, _, m)| *m).collect();
+    let sym_rets = log_returns(&sym_closes);
+    let mkt_rets = log_returns(&mkt_closes);
+
+    let mut windows = Vec::new();
+    let mut note = String::new();
+
+    for (label, days) in [("1Y", 252usize), ("3Y", 756), ("5Y", 1260)] {
+        let n_available = sym_rets.len().min(mkt_rets.len());
+        if n_available == 0 {
+            continue;
+        }
+        // Use the most recent `days` returns (tail slice) — sym_rets/mkt_rets
+        // are ordered chronologically (oldest first, newest last).
+        let take = days.min(n_available);
+        let s_slice = &sym_rets[n_available - take..];
+        let m_slice = &mkt_rets[n_available - take..];
+        let (beta, alpha, r2, corr, n_obs) = ols_regression(s_slice, m_slice);
+        if n_obs < 20 {
+            if note.is_empty() && label == "1Y" {
+                note = format!("insufficient overlapping data (n={n_obs}) for stable beta");
+            }
+            continue;
+        }
+        windows.push(BetaWindow {
+            window_label: label.to_string(),
+            window_days: days,
+            beta,
+            alpha_pct: alpha * 252.0 * 100.0, // annualize daily alpha
+            r_squared: r2,
+            n_observations: n_obs,
+            correlation: corr,
+        });
+    }
+
+    BetaSnapshot {
+        symbol: symbol.to_uppercase(),
+        market_ticker: market_ticker.to_string(),
+        as_of: as_of.to_string(),
+        windows,
+        note,
+    }
+}
+
+// ── ADR-114 Round 7 — DDM compute ─────────────────────────────────────────
+
+/// Compute a Gordon Growth dividend-discount-model snapshot from cached
+/// dividend history and a required return (typically WACC or cost of equity).
+///
+/// Dividends are newest-first (matching `get_dividends`). Growth rate is
+/// inferred from the 5-year dividend CAGR when at least 5 annual dividends
+/// are available, with fallback to a clamped 3% assumption. If r ≤ g, the
+/// Gordon formula degenerates — we return implied_price = 0.0 with a note.
+pub fn compute_ddm_snapshot(
+    symbol: &str,
+    as_of: &str,
+    dividends_newest_first: &[DividendRecord],
+    required_return_pct: f64,
+    return_source: &str,
+) -> DdmSnapshot {
+    if dividends_newest_first.is_empty() {
+        return DdmSnapshot {
+            symbol: symbol.to_uppercase(),
+            as_of: as_of.to_string(),
+            method: "Gordon Growth".to_string(),
+            note: "no dividend history on file".to_string(),
+            ..Default::default()
+        };
+    }
+
+    // Trailing 4-quarter dividend ($ per share). We use adjusted_amount
+    // so split adjustments don't distort the growth rate.
+    let div_amount = |d: &DividendRecord| -> f64 {
+        if d.adjusted_amount > 0.0 { d.adjusted_amount } else { d.amount }
+    };
+    let annual_dividend: f64 = dividends_newest_first.iter()
+        .take(4)
+        .map(div_amount)
+        .sum();
+
+    // Infer growth: bucket dividends by ex-date year, then CAGR over 5 years
+    // if possible. Each bucket sums the quarterly payments for that year.
+    use std::collections::BTreeMap;
+    let mut by_year: BTreeMap<i32, f64> = BTreeMap::new();
+    for d in dividends_newest_first.iter() {
+        // ex_date like "2025-10-31" — parse the 4-digit prefix.
+        if let Some(year_str) = d.ex_date.get(..4) {
+            if let Ok(y) = year_str.parse::<i32>() {
+                *by_year.entry(y).or_insert(0.0) += div_amount(d);
+            }
+        }
+    }
+    let years_sorted: Vec<(i32, f64)> = by_year.into_iter().collect();
+    let (implied_growth_pct, growth_source) = if years_sorted.len() >= 6 {
+        // Use 5-year CAGR: years_sorted.last() vs years_sorted[len-6]
+        let end = years_sorted[years_sorted.len() - 2].1; // second-to-last (last might be partial)
+        let start_idx = years_sorted.len().saturating_sub(7);
+        let start = years_sorted[start_idx].1;
+        if start > 1e-9 && end > 1e-9 {
+            let n_years = (years_sorted.len() - 2 - start_idx) as f64;
+            let cagr = (end / start).powf(1.0 / n_years.max(1.0)) - 1.0;
+            (cagr.clamp(-0.20, 0.20) * 100.0, format!("{:.0}Y dividend CAGR", n_years))
+        } else {
+            (3.0, "fallback (insufficient history)".to_string())
+        }
+    } else if years_sorted.len() >= 3 {
+        // Short history: compare oldest full year to newest full year.
+        let end = years_sorted[years_sorted.len() - 2].1;
+        let start = years_sorted[0].1;
+        if start > 1e-9 && end > 1e-9 {
+            let n_years = (years_sorted.len() - 2) as f64;
+            let cagr = (end / start).powf(1.0 / n_years.max(1.0)) - 1.0;
+            (cagr.clamp(-0.20, 0.20) * 100.0, format!("{:.0}Y dividend CAGR", n_years))
+        } else {
+            (3.0, "fallback (short history)".to_string())
+        }
+    } else {
+        (3.0, "fallback (no growth history)".to_string())
+    };
+
+    // Gordon Growth: P = D1 / (r - g), where D1 = D0 * (1 + g).
+    let g = implied_growth_pct / 100.0;
+    let r = required_return_pct / 100.0;
+    let (implied_price, note) = if r > g + 0.005 && annual_dividend > 0.0 {
+        let d1 = annual_dividend * (1.0 + g);
+        (d1 / (r - g), String::new())
+    } else if annual_dividend <= 0.0 {
+        (0.0, "annual dividend is zero — Gordon Growth not applicable".to_string())
+    } else {
+        (0.0, format!(
+            "required return {:.2}% ≤ growth {:.2}% — Gordon formula diverges",
+            required_return_pct, implied_growth_pct))
+    };
+
+    DdmSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        annual_dividend,
+        implied_growth_pct,
+        required_return_pct,
+        growth_source,
+        return_source: return_source.to_string(),
+        implied_price,
+        method: "Gordon Growth".to_string(),
+        note,
+    }
+}
+
+// ── ADR-114 Round 7 — RV compute (relative valuation peer matrix) ─────────
+
+/// One input row for the relative-valuation calculator: a metric name plus
+/// the subject's value and a list of peer values. Caller builds this from
+/// cached fundamentals; the function is pure.
+pub struct RvMetricInput<'a> {
+    pub metric: &'a str,
+    pub value: Option<f64>,
+    pub peer_values: Vec<f64>,
+}
+
+/// Compute a `RelativeValuation` snapshot from a list of metric inputs.
+/// Skips metrics where the subject has no value or the peer set has fewer
+/// than 3 observations (same threshold the packet's sector-peer block uses).
+pub fn compute_relative_valuation(
+    symbol: &str,
+    sector: &str,
+    as_of: &str,
+    metrics: &[RvMetricInput<'_>],
+) -> RelativeValuation {
+    let mut rows = Vec::new();
+    let mut max_peer_count = 0;
+
+    for m in metrics {
+        let val = match m.value { Some(v) if v.is_finite() => v, _ => continue };
+        let mut peers: Vec<f64> = m.peer_values.iter().copied()
+            .filter(|x| x.is_finite())
+            .collect();
+        if peers.len() < 3 { continue; }
+        peers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let n = peers.len();
+        max_peer_count = max_peer_count.max(n);
+
+        let median = peers[n / 2];
+        let low = peers[0];
+        let high = peers[n - 1];
+        let mean = peers.iter().sum::<f64>() / n as f64;
+        let variance = peers.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64;
+        let stdev = variance.sqrt();
+        let z_score = if stdev > 1e-9 { (val - mean) / stdev } else { 0.0 };
+        let below = peers.iter().filter(|p| **p < val).count();
+        let percentile = (below as f64 / n as f64) * 100.0;
+
+        rows.push(RvMetricRow {
+            metric: m.metric.to_string(),
+            value: val,
+            peer_median: median,
+            peer_low: low,
+            peer_high: high,
+            z_score,
+            percentile,
+        });
+    }
+
+    RelativeValuation {
+        symbol: symbol.to_uppercase(),
+        sector: sector.to_string(),
+        as_of: as_of.to_string(),
+        peer_count: max_peer_count,
+        rows,
+    }
+}
+
+// ── ADR-114 Round 7 — FIGI (OpenFIGI) fetcher ─────────────────────────────
+
+/// Fetch OpenFIGI identifiers for a symbol. OpenFIGI is a free service run by
+/// Bloomberg — no API key required for reasonable volumes. We POST the
+/// ticker as an exchange-code lookup against US common-stock space.
+pub async fn fetch_openfigi_identifiers(
+    client: &reqwest::Client,
+    symbol: &str,
+) -> Result<Vec<FigiIdentifier>, String> {
+    let body = serde_json::json!([{
+        "idType": "TICKER",
+        "idValue": symbol.to_uppercase(),
+        "marketSecDes": "Equity"
+    }]);
+    let resp = client.post("https://api.openfigi.com/v3/mapping")
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send().await
+        .map_err(|e| format!("OpenFIGI request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("OpenFIGI: HTTP {}", resp.status()));
+    }
+    let v: serde_json::Value = resp.json().await
+        .map_err(|e| format!("OpenFIGI parse: {e}"))?;
+    let outer = v.as_array().ok_or_else(|| "OpenFIGI: expected array".to_string())?;
+    let mut out = Vec::new();
+    for entry in outer {
+        if let Some(data) = entry.get("data").and_then(|d| d.as_array()) {
+            for row in data {
+                out.push(FigiIdentifier {
+                    figi: row["figi"].as_str().unwrap_or("").to_string(),
+                    name: row["name"].as_str().unwrap_or("").to_string(),
+                    ticker: row["ticker"].as_str().unwrap_or("").to_string(),
+                    exch_code: row["exchCode"].as_str().unwrap_or("").to_string(),
+                    composite_figi: row["compositeFIGI"].as_str().unwrap_or("").to_string(),
+                    share_class_figi: row["shareClassFIGI"].as_str().unwrap_or("").to_string(),
+                    security_type: row["securityType"].as_str().unwrap_or("").to_string(),
+                    security_type_2: row["securityType2"].as_str().unwrap_or("").to_string(),
+                    market_sector: row["marketSector"].as_str().unwrap_or("").to_string(),
+                    security_description: row["securityDescription"].as_str().unwrap_or("").to_string(),
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -2929,6 +3418,164 @@ pub fn get_wacc(conn: &Connection, symbol: &str) -> Result<Option<WaccSnapshot>,
         .map_err(|e| format!("prepare get_wacc: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_wacc: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_wacc: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+// ── ADR-114 Round 7 SQLite schema + helpers ───────────────────────────────
+
+pub fn create_research_tables_v7(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_currency_rates (
+            snapshot_key TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_beta (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_ddm (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_relative_valuation (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_figi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_currency_rates_updated ON research_currency_rates(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_beta_updated ON research_beta(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_ddm_updated ON research_ddm(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_relative_valuation_updated ON research_relative_valuation(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_figi_updated ON research_figi(updated_at);"
+    ).map_err(|e| format!("create research_v7 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_currency_rates(conn: &Connection, rows: &[CurrencyRate]) -> Result<(), String> {
+    let _ = create_research_tables_v7(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("wcr json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_currency_rates(snapshot_key, rows_json, updated_at) VALUES ('latest',?1,?2)
+         ON CONFLICT(snapshot_key) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![json, now_ts()],
+    ).map_err(|e| format!("upsert wcr: {e}"))?;
+    Ok(())
+}
+
+pub fn get_currency_rates(conn: &Connection) -> Result<Option<Vec<CurrencyRate>>, String> {
+    let _ = create_research_tables_v7(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_currency_rates WHERE snapshot_key='latest'")
+        .map_err(|e| format!("prepare get_wcr: {e}"))?;
+    let mut r = stmt.query([]).map_err(|e| format!("query get_wcr: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_wcr: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_beta(conn: &Connection, symbol: &str, snap: &BetaSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v7(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("beta json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_beta(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert beta: {e}"))?;
+    Ok(())
+}
+
+pub fn get_beta(conn: &Connection, symbol: &str) -> Result<Option<BetaSnapshot>, String> {
+    let _ = create_research_tables_v7(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_beta WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_beta: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_beta: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_beta: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_ddm(conn: &Connection, symbol: &str, snap: &DdmSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v7(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ddm json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ddm(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ddm: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ddm(conn: &Connection, symbol: &str) -> Result<Option<DdmSnapshot>, String> {
+    let _ = create_research_tables_v7(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ddm WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_ddm: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_ddm: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_ddm: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_relative_valuation(conn: &Connection, symbol: &str, snap: &RelativeValuation) -> Result<(), String> {
+    let _ = create_research_tables_v7(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("rv json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_relative_valuation(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert rv: {e}"))?;
+    Ok(())
+}
+
+pub fn get_relative_valuation(conn: &Connection, symbol: &str) -> Result<Option<RelativeValuation>, String> {
+    let _ = create_research_tables_v7(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_relative_valuation WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_rv: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_rv: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_rv: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_figi(conn: &Connection, symbol: &str, snap: &FigiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v7(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("figi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_figi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert figi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_figi(conn: &Connection, symbol: &str) -> Result<Option<FigiSnapshot>, String> {
+    let _ = create_research_tables_v7(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_figi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_figi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_figi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_figi: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else {
@@ -3676,5 +4323,270 @@ mod tests {
         assert_eq!(m.symbol, "AAPL");
         assert!((m.change_pct - 1.15).abs() < 1e-9);
         assert!((m.volume - 45_000_000.0).abs() < 1.0);
+    }
+
+    // ── ADR-114 Round 7 ─────────────────────────────────────────────────
+
+    fn open_mem_conn_v7() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v7(&c).unwrap();
+        c
+    }
+
+    #[test]
+    fn fx_majors_universe_has_regions() {
+        let regions: std::collections::HashSet<&str> =
+            FX_MAJORS_UNIVERSE.iter().map(|(_, _, _, _, r)| *r).collect();
+        assert!(regions.contains("Majors"));
+        assert!(regions.contains("Crosses"));
+        assert!(regions.contains("EM"));
+    }
+
+    #[test]
+    fn fx_majors_universe_has_eurusd_and_usdjpy() {
+        let tickers: std::collections::HashSet<&str> =
+            FX_MAJORS_UNIVERSE.iter().map(|(t, _, _, _, _)| *t).collect();
+        assert!(tickers.contains("EURUSD=X"));
+        assert!(tickers.contains("USDJPY=X"));
+        assert!(tickers.contains("USDMXN=X"));
+    }
+
+    #[test]
+    fn currency_rates_roundtrip() {
+        let c = open_mem_conn_v7();
+        let rows = vec![
+            CurrencyRate {
+                ticker: "EURUSD=X".into(), display: "EUR/USD".into(),
+                base: "EUR".into(), quote: "USD".into(), region: "Majors".into(),
+                price: 1.0850, change: 0.0020, change_pct: 0.18,
+            },
+            CurrencyRate {
+                ticker: "USDJPY=X".into(), display: "USD/JPY".into(),
+                base: "USD".into(), quote: "JPY".into(), region: "Majors".into(),
+                price: 151.25, change: -0.35, change_pct: -0.23,
+            },
+        ];
+        upsert_currency_rates(&c, &rows).unwrap();
+        let got = get_currency_rates(&c).unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].display, "EUR/USD");
+        assert!(got[1].change < 0.0);
+    }
+
+    #[test]
+    fn ols_regression_perfect_correlation() {
+        // If s_i == 2 * m_i exactly, beta should be exactly 2.0, R² = 1.
+        let m: Vec<f64> = vec![0.01, -0.005, 0.02, -0.01, 0.015, 0.008, -0.003, 0.012, 0.005, -0.007, 0.018, -0.002];
+        let s: Vec<f64> = m.iter().map(|x| 2.0 * x).collect();
+        let (beta, _alpha, r2, corr, n) = ols_regression(&s, &m);
+        assert!((beta - 2.0).abs() < 1e-9);
+        assert!((r2 - 1.0).abs() < 1e-9);
+        assert!((corr - 1.0).abs() < 1e-9);
+        assert_eq!(n, 12);
+    }
+
+    #[test]
+    fn compute_beta_snapshot_synthetic_2x_market() {
+        // Build symbol bars that exactly track 2× market moves. Expected β ≈ 2.0.
+        // Use 300 bars so the 1Y window (252) fits with headroom. FMP order is
+        // newest-first, so we build newest → oldest. Dates must be unique —
+        // we use a simple days-since-epoch counter so the join by date key
+        // does not collide.
+        let mut sym_bars: Vec<HistoricalPriceRow> = Vec::new();
+        let mut mkt_bars: Vec<HistoricalPriceRow> = Vec::new();
+        let mut sym_close = 100.0_f64;
+        let mut mkt_close = 400.0_f64;
+        for i in 0..300 {
+            let daily = 0.01 * ((i as f64 * 0.37).sin());
+            mkt_close *= 1.0 + daily;
+            sym_close *= 1.0 + 2.0 * daily;
+            // Fake-but-unique ISO date: walk calendar by 1-day increments from 2024-01-01.
+            let base_day = 1 + (i % 28); // 1..=28
+            let month = 1 + ((i / 28) % 12); // 1..=12
+            let year = 2024 + ((i / (28 * 12)) as i32);
+            let date = format!("{:04}-{:02}-{:02}", year, month, base_day);
+            sym_bars.push(HistoricalPriceRow {
+                date: date.clone(), open: sym_close, high: sym_close, low: sym_close,
+                close: sym_close, adj_close: sym_close, volume: 0.0, change: 0.0, change_pct: 0.0,
+            });
+            mkt_bars.push(HistoricalPriceRow {
+                date, open: mkt_close, high: mkt_close, low: mkt_close,
+                close: mkt_close, adj_close: mkt_close, volume: 0.0, change: 0.0, change_pct: 0.0,
+            });
+        }
+        // The loop already pushes in synthetic chronological order — we need
+        // FMP's newest-first orientation, so reverse.
+        sym_bars.reverse();
+        mkt_bars.reverse();
+        let snap = compute_beta_snapshot("TST", "SPY", "2026-04-14", &sym_bars, &mkt_bars);
+        assert!(!snap.windows.is_empty());
+        let w1y = snap.windows.iter().find(|w| w.window_label == "1Y").unwrap();
+        assert!((w1y.beta - 2.0).abs() < 0.01, "beta was {}", w1y.beta);
+        assert!(w1y.r_squared > 0.99);
+    }
+
+    #[test]
+    fn beta_snapshot_roundtrip() {
+        let c = open_mem_conn_v7();
+        let snap = BetaSnapshot {
+            symbol: "AAPL".into(),
+            market_ticker: "SPY".into(),
+            as_of: "2026-04-14".into(),
+            windows: vec![
+                BetaWindow { window_label: "1Y".into(), window_days: 252,
+                    beta: 1.18, alpha_pct: 2.4, r_squared: 0.67,
+                    n_observations: 252, correlation: 0.82 },
+                BetaWindow { window_label: "5Y".into(), window_days: 1260,
+                    beta: 1.23, alpha_pct: 4.1, r_squared: 0.71,
+                    n_observations: 1260, correlation: 0.84 },
+            ],
+            note: String::new(),
+        };
+        upsert_beta(&c, "AAPL", &snap).unwrap();
+        let got = get_beta(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.symbol, "AAPL");
+        assert_eq!(got.windows.len(), 2);
+        assert!((got.windows[0].beta - 1.18).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_ddm_basic_growth() {
+        // 10 years of dividends with 7% annual growth, required return 12% → finite price.
+        let mut divs: Vec<DividendRecord> = Vec::new();
+        let base = 1.00_f64;
+        for y in 2016..=2025 {
+            let growth = 1.07_f64.powi(y - 2016);
+            for q in 1..=4 {
+                divs.push(DividendRecord {
+                    ex_date: format!("{}-{:02}-15", y, 1 + (q - 1) * 3),
+                    pay_date: format!("{}-{:02}-28", y, 1 + (q - 1) * 3),
+                    record_date: String::new(), declaration_date: String::new(),
+                    amount: base * growth * 0.25,
+                    adjusted_amount: base * growth * 0.25,
+                    label: "Regular Cash".into(),
+                });
+            }
+        }
+        // Newest-first: sort descending by ex_date.
+        divs.sort_by(|a, b| b.ex_date.cmp(&a.ex_date));
+        let snap = compute_ddm_snapshot("AAA", "2026-04-14", &divs, 12.0, "WACC 12%");
+        assert!(snap.annual_dividend > 0.0);
+        assert!(snap.implied_growth_pct > 4.0 && snap.implied_growth_pct < 10.0,
+            "growth was {}", snap.implied_growth_pct);
+        assert!(snap.implied_price > 0.0);
+        assert!(snap.note.is_empty());
+    }
+
+    #[test]
+    fn compute_ddm_diverges_when_growth_exceeds_return() {
+        let divs = vec![
+            DividendRecord { ex_date: "2025-01-15".into(), amount: 1.0, adjusted_amount: 1.0, ..Default::default() },
+            DividendRecord { ex_date: "2024-01-15".into(), amount: 0.80, adjusted_amount: 0.80, ..Default::default() },
+            DividendRecord { ex_date: "2023-01-15".into(), amount: 0.60, adjusted_amount: 0.60, ..Default::default() },
+            DividendRecord { ex_date: "2022-01-15".into(), amount: 0.45, adjusted_amount: 0.45, ..Default::default() },
+        ];
+        // Ask for very low required return — Gordon must diverge.
+        let snap = compute_ddm_snapshot("BBB", "2026-04-14", &divs, 2.0, "manual");
+        assert_eq!(snap.implied_price, 0.0);
+        assert!(!snap.note.is_empty());
+    }
+
+    #[test]
+    fn ddm_roundtrip() {
+        let c = open_mem_conn_v7();
+        let snap = DdmSnapshot {
+            symbol: "KO".into(),
+            as_of: "2026-04-14".into(),
+            annual_dividend: 1.92,
+            implied_growth_pct: 4.5,
+            required_return_pct: 8.0,
+            growth_source: "5Y dividend CAGR".into(),
+            return_source: "WACC 8.0%".into(),
+            implied_price: 57.34,
+            method: "Gordon Growth".into(),
+            note: String::new(),
+        };
+        upsert_ddm(&c, "KO", &snap).unwrap();
+        let got = get_ddm(&c, "ko").unwrap().unwrap();
+        assert_eq!(got.symbol, "KO");
+        assert!((got.implied_price - 57.34).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_relative_valuation_z_scores() {
+        let inputs = vec![
+            RvMetricInput {
+                metric: "P/E",
+                value: Some(30.0),
+                peer_values: vec![10.0, 15.0, 20.0, 25.0, 28.0, 35.0, 40.0],
+            },
+            RvMetricInput {
+                metric: "P/B",
+                value: None, // should skip
+                peer_values: vec![1.0, 2.0, 3.0, 4.0],
+            },
+            RvMetricInput {
+                metric: "EV/EBITDA",
+                value: Some(12.0),
+                peer_values: vec![8.0, 10.0], // <3 peers — should skip
+            },
+        ];
+        let rv = compute_relative_valuation("SUBJ", "Tech", "2026-04-14", &inputs);
+        assert_eq!(rv.rows.len(), 1);
+        let pe = &rv.rows[0];
+        assert_eq!(pe.metric, "P/E");
+        assert_eq!(pe.peer_low, 10.0);
+        assert_eq!(pe.peer_high, 40.0);
+        // 30 is higher than 5 of 7 peers → percentile ≈ 71.4
+        assert!(pe.percentile > 60.0 && pe.percentile < 80.0);
+        assert!(pe.z_score > 0.0); // above mean
+    }
+
+    #[test]
+    fn relative_valuation_roundtrip() {
+        let c = open_mem_conn_v7();
+        let rv = RelativeValuation {
+            symbol: "AAPL".into(),
+            sector: "Technology".into(),
+            as_of: "2026-04-14".into(),
+            peer_count: 8,
+            rows: vec![
+                RvMetricRow { metric: "P/E".into(), value: 32.0, peer_median: 28.0,
+                    peer_low: 12.0, peer_high: 60.0, z_score: 0.4, percentile: 62.5 },
+            ],
+        };
+        upsert_relative_valuation(&c, "AAPL", &rv).unwrap();
+        let got = get_relative_valuation(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.symbol, "AAPL");
+        assert_eq!(got.rows.len(), 1);
+        assert!((got.rows[0].value - 32.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn figi_roundtrip() {
+        let c = open_mem_conn_v7();
+        let snap = FigiSnapshot {
+            symbol: "AAPL".into(),
+            as_of: "2026-04-14".into(),
+            identifiers: vec![
+                FigiIdentifier {
+                    figi: "BBG000B9XRY4".into(),
+                    name: "APPLE INC".into(),
+                    ticker: "AAPL".into(),
+                    exch_code: "US".into(),
+                    composite_figi: "BBG000B9Y5X2".into(),
+                    share_class_figi: "BBG001S5N8V8".into(),
+                    security_type: "Common Stock".into(),
+                    security_type_2: "Common Stock".into(),
+                    market_sector: "Equity".into(),
+                    security_description: "AAPL".into(),
+                },
+            ],
+        };
+        upsert_figi(&c, "AAPL", &snap).unwrap();
+        let got = get_figi(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.symbol, "AAPL");
+        assert_eq!(got.identifiers.len(), 1);
+        assert_eq!(got.identifiers[0].figi, "BBG000B9XRY4");
     }
 }

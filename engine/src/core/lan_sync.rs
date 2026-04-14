@@ -154,6 +154,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_market_movers",
     "research_sector_performance",
     "research_wacc",
+    // ── ADR-114 Round 7 ─────────────────────────────
+    "research_currency_rates",
+    "research_beta",
+    "research_ddm",
+    "research_relative_valuation",
+    "research_figi",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -458,6 +464,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-114 Round 7 ─────────────────────────────
+        "research_currency_rates" => Some(
+            "CREATE TABLE IF NOT EXISTS research_currency_rates (
+                snapshot_key TEXT PRIMARY KEY,
+                rows_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_beta" => Some(
+            "CREATE TABLE IF NOT EXISTS research_beta (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_ddm" => Some(
+            "CREATE TABLE IF NOT EXISTS research_ddm (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_relative_valuation" => Some(
+            "CREATE TABLE IF NOT EXISTS research_relative_valuation (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_figi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_figi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -496,6 +538,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_market_movers" => Some("updated_at"),
         "research_sector_performance" => Some("updated_at"),
         "research_wacc" => Some("updated_at"),
+        "research_currency_rates" => Some("updated_at"),
+        "research_beta" => Some("updated_at"),
+        "research_ddm" => Some("updated_at"),
+        "research_relative_valuation" => Some("updated_at"),
+        "research_figi" => Some("updated_at"),
         _ => None,
     }
 }
