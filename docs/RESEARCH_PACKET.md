@@ -207,7 +207,41 @@ Source: ADR-111 ANR window.
 Pulled from `research::get_esg`. Shows latest-year environmental, social,
 governance, and composite scores. Source: ADR-111 ESG window.
 
-#### 2.17 Sector peer comparison
+#### 2.17 Insider flow (INS)
+
+Pulled from `research::get_insider_trades`. Aggregate summary line
+(`buys $X.XXM · sells $X.XXM · net $±X.XXM across N filings`) followed by
+up to **8 most recent Form 4 rows**: date, BUY/SELL tag, insider name,
+share count, price, dollar value, and transaction type code.
+Source: ADR-112 INS window.
+
+#### 2.18 Institutional holders (HDS)
+
+Pulled from `research::get_institutional_holders`. Total holder count +
+total shares in the section header, then up to **6 top holders** with
+QoQ Δ (millions of shares) and report date. Source: ADR-112 HDS window.
+
+#### 2.19 Shares float (FLOAT)
+
+Pulled from `research::get_shares_float`. Single-line snapshot:
+outstanding shares, float shares, free-float %, data source.
+Source: ADR-112 FLOAT window.
+
+#### 2.20 Recent price history (HP)
+
+Pulled from `research::get_historical_price`. Emits a markdown table of
+the **10 most recent daily bars**: Date / Open / High / Low / Close /
+Volume / Change %. Analysts use this for quick audit trails when they
+don't need to open the chart. Source: ADR-112 HP window.
+
+#### 2.21 EPS surprise history (EPS)
+
+Pulled from `research::get_earnings_surprises`. Aggregate summary line
+(quarters tracked, beats, misses, 8-quarter rolling average surprise %)
+followed by up to **8 most recent quarters**: date, actual EPS,
+estimate EPS, surprise, surprise %. Source: ADR-112 EPS window.
+
+#### 2.22 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -240,9 +274,9 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | Company description | 800 chars | Some 10-K descriptions run thousands of chars |
 | SEC filing summary | 120 chars | Keeps table rows readable |
 | Quarterly financials | 4 rows | Model only needs a trajectory, not a decade |
-| Institutional holders | 5 rows | Top-5 captures >50% of float for most names |
+| Institutional holders (legacy fundamentals source) | 5 rows | Top-5 captures >50% of float for most names |
 | Recent SEC filings | 10 rows | Covers last ~2 years for an active issuer |
-| Insider trades | 5 rows | Aggregate values already cover the summary |
+| Insider trades (legacy SEC source) | 5 rows | Aggregate values already cover the summary |
 | Recent news | 8 articles | Matches the news window's top slice |
 | Dividend history | 6 rows | Multi-year cadence visible in 6 |
 | Earnings estimates | 4 periods | Forward 1Y coverage |
@@ -250,12 +284,16 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | Annual statements (I/B/C) | 4 periods each | 4-year trajectory |
 | Management | 6 execs | Named officers typically ≤6 |
 | Stock splits | 4 rows | Historical splits rarely exceed 4 |
+| Insider flow — Form 4 (ADR-112 INS) | 8 rows | Last quarter-ish of filings covers sentiment |
+| Institutional top holders (ADR-112 HDS) | 6 rows | Top-6 concentration coverage |
+| Daily bars table (ADR-112 HP) | 10 rows | 2-week audit trail in the packet |
+| EPS surprise history (ADR-112 EPS) | 8 rows | 8-quarter beat/miss record |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **6-12 KB**
-(up from 3-6 KB before the ADR-111 expansion); a 10-symbol basket lands
-near **60-120 KB**.
+symbols. A single S&P 500 symbol now produces a packet around **8-16 KB**
+(up from 6-12 KB after ADR-111; ADR-112 added INS/HDS/FLOAT/HP/EPS blocks);
+a 10-symbol basket lands near **80-160 KB**.
 
 ---
 
@@ -406,6 +444,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_analyst_recs` | SQLite `research_analyst_recs` | ADR-111 ANR window |
 | `research::get_price_target` | SQLite `research_price_target` | ADR-111 ANR window |
 | `research::get_esg` | SQLite `research_esg` | ADR-111 ESG window |
+| `research::get_insider_trades` | SQLite `research_insider_trades` | ADR-112 INS window |
+| `research::get_institutional_holders` | SQLite `research_institutional_holders` | ADR-112 HDS window |
+| `research::get_shares_float` | SQLite `research_shares_float` | ADR-112 FLOAT window |
+| `research::get_historical_price` | SQLite `research_historical_price` | ADR-112 HP window |
+| `research::get_earnings_surprises` | SQLite `research_earnings_surprise` | ADR-112 EPS window |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 

@@ -143,6 +143,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_price_target",
     "research_esg",
     "research_index_members",
+    // ── ADR-112 Round 5 ─────────────────────────────
+    "research_insider_trades",
+    "research_institutional_holders",
+    "research_shares_float",
+    "research_historical_price",
+    "research_earnings_surprise",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -383,6 +389,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_insider_trades" => Some(
+            "CREATE TABLE IF NOT EXISTS research_insider_trades (
+                symbol TEXT PRIMARY KEY,
+                rows_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_institutional_holders" => Some(
+            "CREATE TABLE IF NOT EXISTS research_institutional_holders (
+                symbol TEXT PRIMARY KEY,
+                rows_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_shares_float" => Some(
+            "CREATE TABLE IF NOT EXISTS research_shares_float (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_historical_price" => Some(
+            "CREATE TABLE IF NOT EXISTS research_historical_price (
+                symbol TEXT PRIMARY KEY,
+                rows_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_earnings_surprise" => Some(
+            "CREATE TABLE IF NOT EXISTS research_earnings_surprise (
+                symbol TEXT PRIMARY KEY,
+                rows_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -412,6 +453,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_price_target" => Some("updated_at"),
         "research_esg" => Some("updated_at"),
         "research_index_members" => Some("updated_at"),
+        "research_insider_trades" => Some("updated_at"),
+        "research_institutional_holders" => Some("updated_at"),
+        "research_shares_float" => Some("updated_at"),
+        "research_historical_price" => Some("updated_at"),
+        "research_earnings_surprise" => Some("updated_at"),
         _ => None,
     }
 }

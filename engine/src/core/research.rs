@@ -363,6 +363,68 @@ pub struct IndexMember {
     pub date_added: String,         // YYYY-MM-DD when admitted to index
 }
 
+// ── ADR-112 Godel Parity Round 5 ─────────────────────────────────────────
+
+/// INS — one insider trade filing (Form 4 row).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InsiderTrade {
+    pub filing_date: String,        // YYYY-MM-DD when filed with SEC
+    pub transaction_date: String,   // YYYY-MM-DD of the trade itself
+    pub reporting_name: String,     // insider who filed
+    pub transaction_type: String,   // "P-Purchase", "S-Sale", "M-Exempt", "A-Award", etc.
+    pub acquisition_disposition: String, // "A" (acquired) or "D" (disposed)
+    pub shares: f64,                // securitiesTransacted
+    pub price: f64,                 // per-share price
+    pub value_usd: f64,             // shares * price (derived)
+    pub shares_owned_after: f64,    // securitiesOwned post-trade
+    pub link: String,               // SEC EDGAR filing URL
+}
+
+/// HDS — one institutional holder row (13F-derived).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InstitutionalHolder {
+    pub holder: String,             // fund / manager name
+    pub shares: f64,                // shares held
+    pub date_reported: String,      // 13F as-of date
+    pub change: f64,                // delta shares vs prior quarter
+}
+
+/// FLOAT — shares float breakdown snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SharesFloat {
+    pub symbol: String,
+    pub date: String,               // YYYY-MM-DD snapshot date
+    pub free_float_pct: f64,        // % of outstanding that is free-float
+    pub float_shares: f64,          // absolute free float
+    pub outstanding_shares: f64,    // total shares outstanding
+    pub source: String,             // data provider
+}
+
+/// HP — one OHLCV daily bar for historical price table.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HistoricalPriceRow {
+    pub date: String,               // YYYY-MM-DD
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub adj_close: f64,
+    pub volume: f64,
+    pub change: f64,                // close - open (USD)
+    pub change_pct: f64,            // % change (close vs prior close)
+}
+
+/// EPS — one earnings surprise row (actual vs estimate).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EarningsSurprise {
+    pub date: String,               // report date YYYY-MM-DD
+    pub symbol: String,
+    pub eps_actual: f64,
+    pub eps_estimate: f64,
+    pub surprise: f64,              // actual - estimate
+    pub surprise_pct: f64,          // (actual - estimate) / |estimate| * 100
+}
+
 
 /// Hardcoded commodity-futures universe for the GLCO dashboard.
 /// Yahoo continuous-futures tickers, which are free via /v7/finance/quote.
@@ -1813,6 +1875,176 @@ pub async fn fetch_fmp_index_members(
     Ok(rows)
 }
 
+// ── ADR-112 Round 5 fetchers ───────────────────────────────────────────────
+
+/// FMP /v4/insider-trading — SEC Form 4 insider trade rows (default page=0, up to 100 rows).
+pub async fn fetch_fmp_insider_trades(
+    client: &reqwest::Client,
+    symbol: &str,
+    fmp_key: &str,
+) -> Result<Vec<InsiderTrade>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v4/insider-trading?symbol={}&page=0&apikey={}",
+        symbol, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP insider failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP insider: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("FMP insider parse: {e}"))?;
+    let rows = arr.into_iter().map(|e| {
+        let shares = e["securitiesTransacted"].as_f64().unwrap_or(0.0);
+        let price = e["price"].as_f64().unwrap_or(0.0);
+        InsiderTrade {
+            filing_date: e["filingDate"].as_str().unwrap_or("").chars().take(10).collect(),
+            transaction_date: e["transactionDate"].as_str().unwrap_or("").chars().take(10).collect(),
+            reporting_name: e["reportingName"].as_str().unwrap_or("").to_string(),
+            transaction_type: e["transactionType"].as_str().unwrap_or("").to_string(),
+            acquisition_disposition: e["acquistionOrDisposition"].as_str().unwrap_or("").to_string(),
+            shares,
+            price,
+            value_usd: shares * price,
+            shares_owned_after: e["securitiesOwned"].as_f64().unwrap_or(0.0),
+            link: e["link"].as_str().unwrap_or("").to_string(),
+        }
+    }).collect();
+    Ok(rows)
+}
+
+/// FMP /v3/institutional-holder/{symbol} — 13F-derived top holders of a stock.
+pub async fn fetch_fmp_institutional_holders(
+    client: &reqwest::Client,
+    symbol: &str,
+    fmp_key: &str,
+) -> Result<Vec<InstitutionalHolder>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v3/institutional-holder/{}?apikey={}",
+        symbol, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP holders failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP holders: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("FMP holders parse: {e}"))?;
+    let rows = arr.into_iter().map(|e| InstitutionalHolder {
+        holder: e["holder"].as_str().unwrap_or("").to_string(),
+        shares: e["shares"].as_f64().unwrap_or(0.0),
+        date_reported: e["dateReported"].as_str().unwrap_or("").chars().take(10).collect(),
+        change: e["change"].as_f64().unwrap_or(0.0),
+    }).collect();
+    Ok(rows)
+}
+
+/// FMP /v4/shares_float?symbol=… — latest free-float / outstanding-shares snapshot.
+pub async fn fetch_fmp_shares_float(
+    client: &reqwest::Client,
+    symbol: &str,
+    fmp_key: &str,
+) -> Result<SharesFloat, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v4/shares_float?symbol={}&apikey={}",
+        symbol, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP shares_float failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP shares_float: HTTP {}", resp.status()));
+    }
+    let v: serde_json::Value = resp.json().await
+        .map_err(|e| format!("FMP shares_float parse: {e}"))?;
+    // Response is a 1-element array or a bare object — handle both.
+    let e = if let Some(first) = v.as_array().and_then(|a| a.first()) { first.clone() } else { v };
+    Ok(SharesFloat {
+        symbol: e["symbol"].as_str().unwrap_or(symbol).to_uppercase(),
+        date: e["date"].as_str().unwrap_or("").chars().take(10).collect(),
+        free_float_pct: e["freeFloat"].as_f64().unwrap_or(0.0),
+        float_shares: e["floatShares"].as_f64().unwrap_or(0.0),
+        outstanding_shares: e["outstandingShares"].as_f64().unwrap_or(0.0),
+        source: e["source"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+/// FMP /v3/historical-price-full/{symbol} — up to ~5 years of daily OHLCV.
+/// `limit` is applied client-side after parsing (FMP returns all history by default).
+pub async fn fetch_fmp_historical_price(
+    client: &reqwest::Client,
+    symbol: &str,
+    fmp_key: &str,
+    limit: usize,
+) -> Result<Vec<HistoricalPriceRow>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v3/historical-price-full/{}?apikey={}",
+        symbol, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP historical failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP historical: HTTP {}", resp.status()));
+    }
+    let v: serde_json::Value = resp.json().await
+        .map_err(|e| format!("FMP historical parse: {e}"))?;
+    let mut rows = Vec::new();
+    if let Some(arr) = v["historical"].as_array() {
+        for e in arr.iter().take(limit.max(1)) {
+            rows.push(HistoricalPriceRow {
+                date: e["date"].as_str().unwrap_or("").to_string(),
+                open: e["open"].as_f64().unwrap_or(0.0),
+                high: e["high"].as_f64().unwrap_or(0.0),
+                low: e["low"].as_f64().unwrap_or(0.0),
+                close: e["close"].as_f64().unwrap_or(0.0),
+                adj_close: e["adjClose"].as_f64().unwrap_or(0.0),
+                volume: e["volume"].as_f64().unwrap_or(0.0),
+                change: e["change"].as_f64().unwrap_or(0.0),
+                change_pct: e["changePercent"].as_f64().unwrap_or(0.0),
+            });
+        }
+    }
+    Ok(rows)
+}
+
+/// FMP /v3/earning_surprise/{symbol} — quarterly actual-vs-estimate EPS history.
+pub async fn fetch_fmp_earnings_surprises(
+    client: &reqwest::Client,
+    symbol: &str,
+    fmp_key: &str,
+) -> Result<Vec<EarningsSurprise>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v3/earning_surprise/{}?apikey={}",
+        symbol, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP surprise failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP surprise: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("FMP surprise parse: {e}"))?;
+    let rows = arr.into_iter().map(|e| {
+        let actual = e["actualEarningResult"].as_f64().unwrap_or(0.0);
+        let est = e["estimatedEarning"].as_f64().unwrap_or(0.0);
+        let surprise = actual - est;
+        let surprise_pct = if est.abs() > 1e-9 { (surprise / est.abs()) * 100.0 } else { 0.0 };
+        EarningsSurprise {
+            date: e["date"].as_str().unwrap_or("").to_string(),
+            symbol: e["symbol"].as_str().unwrap_or(symbol).to_uppercase(),
+            eps_actual: actual,
+            eps_estimate: est,
+            surprise,
+            surprise_pct,
+        }
+    }).collect();
+    Ok(rows)
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -2167,7 +2399,166 @@ pub fn get_index_members(conn: &Connection, index_code: &str) -> Result<Option<V
     }
 }
 
+// ── ADR-112 Round 5 SQLite schema + helpers ────────────────────────────────
+
+pub fn create_research_tables_v5(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_insider_trades (
+            symbol TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_institutional_holders (
+            symbol TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_shares_float (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_historical_price (
+            symbol TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_earnings_surprise (
+            symbol TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_insider_trades_updated ON research_insider_trades(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_institutional_holders_updated ON research_institutional_holders(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_shares_float_updated ON research_shares_float(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_historical_price_updated ON research_historical_price(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_earnings_surprise_updated ON research_earnings_surprise(updated_at);"
+    ).map_err(|e| format!("create research_v5 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_insider_trades(conn: &Connection, symbol: &str, rows: &[InsiderTrade]) -> Result<(), String> {
+    let _ = create_research_tables_v5(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("insider json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_insider_trades(symbol, rows_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert insider: {e}"))?;
+    Ok(())
+}
+
+pub fn get_insider_trades(conn: &Connection, symbol: &str) -> Result<Option<Vec<InsiderTrade>>, String> {
+    let _ = create_research_tables_v5(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_insider_trades WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_insider: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_insider: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_insider: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_institutional_holders(conn: &Connection, symbol: &str, rows: &[InstitutionalHolder]) -> Result<(), String> {
+    let _ = create_research_tables_v5(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("holders json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_institutional_holders(symbol, rows_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert holders: {e}"))?;
+    Ok(())
+}
+
+pub fn get_institutional_holders(conn: &Connection, symbol: &str) -> Result<Option<Vec<InstitutionalHolder>>, String> {
+    let _ = create_research_tables_v5(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_institutional_holders WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_holders: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_holders: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_holders: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_shares_float(conn: &Connection, symbol: &str, snap: &SharesFloat) -> Result<(), String> {
+    let _ = create_research_tables_v5(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("float json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_shares_float(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert float: {e}"))?;
+    Ok(())
+}
+
+pub fn get_shares_float(conn: &Connection, symbol: &str) -> Result<Option<SharesFloat>, String> {
+    let _ = create_research_tables_v5(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_shares_float WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_float: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_float: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_float: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_historical_price(conn: &Connection, symbol: &str, rows: &[HistoricalPriceRow]) -> Result<(), String> {
+    let _ = create_research_tables_v5(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("hp json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_historical_price(symbol, rows_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert hp: {e}"))?;
+    Ok(())
+}
+
+pub fn get_historical_price(conn: &Connection, symbol: &str) -> Result<Option<Vec<HistoricalPriceRow>>, String> {
+    let _ = create_research_tables_v5(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_historical_price WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_hp: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_hp: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_hp: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_earnings_surprises(conn: &Connection, symbol: &str, rows: &[EarningsSurprise]) -> Result<(), String> {
+    let _ = create_research_tables_v5(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("surprise json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_earnings_surprise(symbol, rows_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert surprise: {e}"))?;
+    Ok(())
+}
+
+pub fn get_earnings_surprises(conn: &Connection, symbol: &str) -> Result<Option<Vec<EarningsSurprise>>, String> {
+    let _ = create_research_tables_v5(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_earnings_surprise WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_surprise: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_surprise: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_surprise: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
+
 
 #[cfg(test)]
 mod tests {
@@ -2567,6 +2958,178 @@ mod tests {
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].symbol, "AAPL");
         assert_eq!(got[1].sector, "Information Technology");
+    }
+
+    // ── ADR-112 Round 5 ─────────────────────────────────────────────────
+
+    fn open_mem_conn_v5() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v5(&c).unwrap();
+        c
+    }
+
+    #[test]
+    fn insider_trade_default_is_empty() {
+        let t = InsiderTrade::default();
+        assert!(t.reporting_name.is_empty());
+        assert_eq!(t.shares, 0.0);
+        assert_eq!(t.value_usd, 0.0);
+    }
+
+    #[test]
+    fn insider_trade_roundtrip() {
+        let c = open_mem_conn_v5();
+        let rows = vec![
+            InsiderTrade {
+                filing_date: "2026-03-10".into(),
+                transaction_date: "2026-03-08".into(),
+                reporting_name: "Musk, Elon".into(),
+                transaction_type: "S-Sale".into(),
+                acquisition_disposition: "D".into(),
+                shares: 150_000.0,
+                price: 245.60,
+                value_usd: 150_000.0 * 245.60,
+                shares_owned_after: 411_000_000.0,
+                link: "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001318605".into(),
+            },
+            InsiderTrade {
+                filing_date: "2026-02-11".into(),
+                transaction_date: "2026-02-10".into(),
+                reporting_name: "Taneja, Vaibhav".into(),
+                transaction_type: "P-Purchase".into(),
+                acquisition_disposition: "A".into(),
+                shares: 2_500.0,
+                price: 180.00,
+                value_usd: 2_500.0 * 180.0,
+                shares_owned_after: 42_000.0,
+                link: "".into(),
+            },
+        ];
+        upsert_insider_trades(&c, "TSLA", &rows).unwrap();
+        let got = get_insider_trades(&c, "tsla").unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].transaction_type, "S-Sale");
+        assert_eq!(got[1].acquisition_disposition, "A");
+        assert!((got[0].value_usd - 150_000.0 * 245.60).abs() < 1e-6);
+    }
+
+    #[test]
+    fn institutional_holder_roundtrip() {
+        let c = open_mem_conn_v5();
+        let rows = vec![
+            InstitutionalHolder {
+                holder: "Vanguard Group Inc.".into(),
+                shares: 1_200_000_000.0,
+                date_reported: "2025-12-31".into(),
+                change: 12_000_000.0,
+            },
+            InstitutionalHolder {
+                holder: "BlackRock Inc.".into(),
+                shares: 1_050_000_000.0,
+                date_reported: "2025-12-31".into(),
+                change: -4_500_000.0,
+            },
+        ];
+        upsert_institutional_holders(&c, "AAPL", &rows).unwrap();
+        let got = get_institutional_holders(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].holder, "Vanguard Group Inc.");
+        assert!(got[1].change < 0.0);
+    }
+
+    #[test]
+    fn shares_float_default_is_empty() {
+        let f = SharesFloat::default();
+        assert!(f.symbol.is_empty());
+        assert_eq!(f.free_float_pct, 0.0);
+        assert_eq!(f.outstanding_shares, 0.0);
+    }
+
+    #[test]
+    fn shares_float_roundtrip() {
+        let c = open_mem_conn_v5();
+        let snap = SharesFloat {
+            symbol: "NVDA".into(),
+            date: "2026-04-01".into(),
+            free_float_pct: 95.8,
+            float_shares: 23_500_000_000.0,
+            outstanding_shares: 24_530_000_000.0,
+            source: "FMP".into(),
+        };
+        upsert_shares_float(&c, "NVDA", &snap).unwrap();
+        let got = get_shares_float(&c, "nvda").unwrap().unwrap();
+        assert_eq!(got.symbol, "NVDA");
+        assert!((got.free_float_pct - 95.8).abs() < 1e-9);
+        assert!((got.outstanding_shares - 24_530_000_000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn historical_price_roundtrip() {
+        let c = open_mem_conn_v5();
+        let rows = vec![
+            HistoricalPriceRow {
+                date: "2026-04-13".into(),
+                open: 180.0, high: 183.5, low: 179.2, close: 182.9,
+                adj_close: 182.9, volume: 48_500_000.0,
+                change: 2.9, change_pct: 1.61,
+            },
+            HistoricalPriceRow {
+                date: "2026-04-12".into(),
+                open: 178.1, high: 180.4, low: 177.8, close: 180.0,
+                adj_close: 180.0, volume: 42_100_000.0,
+                change: 1.9, change_pct: 1.07,
+            },
+        ];
+        upsert_historical_price(&c, "AAPL", &rows).unwrap();
+        let got = get_historical_price(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].date, "2026-04-13");
+        assert!((got[0].change_pct - 1.61).abs() < 1e-9);
+    }
+
+    #[test]
+    fn earnings_surprise_roundtrip() {
+        let c = open_mem_conn_v5();
+        let rows = vec![
+            EarningsSurprise {
+                date: "2026-02-01".into(),
+                symbol: "AAPL".into(),
+                eps_actual: 2.18,
+                eps_estimate: 2.11,
+                surprise: 0.07,
+                surprise_pct: (0.07 / 2.11) * 100.0,
+            },
+            EarningsSurprise {
+                date: "2025-11-01".into(),
+                symbol: "AAPL".into(),
+                eps_actual: 1.64,
+                eps_estimate: 1.60,
+                surprise: 0.04,
+                surprise_pct: (0.04 / 1.60) * 100.0,
+            },
+        ];
+        upsert_earnings_surprises(&c, "AAPL", &rows).unwrap();
+        let got = get_earnings_surprises(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(got[0].surprise > 0.0);
+        assert!((got[0].surprise_pct - (0.07 / 2.11) * 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn earnings_surprise_upsert_replaces() {
+        let c = open_mem_conn_v5();
+        upsert_earnings_surprises(&c, "T", &[
+            EarningsSurprise { date: "2025-10-01".into(), symbol: "T".into(),
+                eps_actual: 0.55, eps_estimate: 0.58, surprise: -0.03, surprise_pct: -5.17 }
+        ]).unwrap();
+        upsert_earnings_surprises(&c, "T", &[
+            EarningsSurprise { date: "2026-01-01".into(), symbol: "T".into(),
+                eps_actual: 0.60, eps_estimate: 0.57, surprise: 0.03, surprise_pct: 5.26 }
+        ]).unwrap();
+        let got = get_earnings_surprises(&c, "T").unwrap().unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].date, "2026-01-01");
+        assert!(got[0].surprise > 0.0);
     }
 
 }
