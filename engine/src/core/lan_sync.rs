@@ -134,6 +134,8 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_dividends",
     "research_earnings_estimates",
     "research_rating_changes",
+    "research_financials",
+    "research_executives",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -318,6 +320,20 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_financials" => Some(
+            "CREATE TABLE IF NOT EXISTS research_financials (
+                symbol TEXT PRIMARY KEY,
+                bundle_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_executives" => Some(
+            "CREATE TABLE IF NOT EXISTS research_executives (
+                symbol TEXT PRIMARY KEY,
+                rows_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -339,6 +355,8 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_dividends" => Some("updated_at"),
         "research_earnings_estimates" => Some("updated_at"),
         "research_rating_changes" => Some("updated_at"),
+        "research_financials" => Some("updated_at"),
+        "research_executives" => Some("updated_at"),
         _ => None,
     }
 }

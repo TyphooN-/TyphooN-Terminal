@@ -173,6 +173,128 @@ pub const TREASURY_TENORS: &[(&str, &str)] = &[
     ("^TYX", "30Y"),
 ];
 
+// ── ADR-110 Godel Parity Round 3 types ─────────────────────────────────────
+
+/// FA — one fiscal period of an Income Statement.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IncomeStatement {
+    pub date: String,                  // period end YYYY-MM-DD
+    pub period: String,                // "FY" | "Q1" | "Q2" | "Q3" | "Q4"
+    pub revenue: f64,
+    pub cost_of_revenue: f64,
+    pub gross_profit: f64,
+    pub research_and_development: f64,
+    pub selling_general_admin: f64,
+    pub operating_expenses: f64,
+    pub operating_income: f64,
+    pub interest_expense: f64,
+    pub ebitda: f64,
+    pub income_before_tax: f64,
+    pub income_tax_expense: f64,
+    pub net_income: f64,
+    pub eps: f64,
+    pub eps_diluted: f64,
+    pub weighted_shares_out: f64,
+}
+
+/// FA — one fiscal period of a Balance Sheet.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BalanceSheet {
+    pub date: String,
+    pub period: String,
+    pub cash_and_equiv: f64,
+    pub short_term_investments: f64,
+    pub net_receivables: f64,
+    pub inventory: f64,
+    pub total_current_assets: f64,
+    pub property_plant_equipment: f64,
+    pub goodwill: f64,
+    pub intangible_assets: f64,
+    pub long_term_investments: f64,
+    pub total_non_current_assets: f64,
+    pub total_assets: f64,
+    pub accounts_payable: f64,
+    pub short_term_debt: f64,
+    pub total_current_liabilities: f64,
+    pub long_term_debt: f64,
+    pub total_non_current_liabilities: f64,
+    pub total_liabilities: f64,
+    pub common_stock: f64,
+    pub retained_earnings: f64,
+    pub total_equity: f64,
+    pub total_debt: f64,
+    pub net_debt: f64,
+}
+
+/// FA — one fiscal period of a Cash Flow Statement.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CashFlowStatement {
+    pub date: String,
+    pub period: String,
+    pub net_income: f64,
+    pub depreciation_amortization: f64,
+    pub stock_based_comp: f64,
+    pub change_working_capital: f64,
+    pub cash_from_operations: f64,
+    pub capex: f64,
+    pub acquisitions: f64,
+    pub investments_purchases: f64,
+    pub cash_from_investing: f64,
+    pub debt_repayment: f64,
+    pub dividends_paid: f64,
+    pub stock_repurchases: f64,
+    pub cash_from_financing: f64,
+    pub net_change_cash: f64,
+    pub free_cash_flow: f64,
+}
+
+/// FA — combined bundle of all 3 statements × (annual/quarterly) for a symbol.
+/// Serialized as a single JSON blob in research_financials so one SQL row covers the whole view.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FinancialStatements {
+    pub income_annual: Vec<IncomeStatement>,
+    pub income_quarterly: Vec<IncomeStatement>,
+    pub balance_annual: Vec<BalanceSheet>,
+    pub balance_quarterly: Vec<BalanceSheet>,
+    pub cashflow_annual: Vec<CashFlowStatement>,
+    pub cashflow_quarterly: Vec<CashFlowStatement>,
+}
+
+/// MGMT — one company officer / executive.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Executive {
+    pub name: String,
+    pub position: String,
+    pub age: i32,
+    pub sex: String,
+    pub since: String,      // year joined role (string to handle Finnhub "N/A")
+    pub compensation: f64,  // USD total comp for the year
+    pub year: i32,          // comp reporting year
+}
+
+/// COT — one CFTC Commitment of Traders weekly row (legacy futures).
+/// Global snapshot, not per-symbol. Not persisted (weekly refresh is fast, staleness meaningless).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CotReport {
+    pub market_name: String,       // e.g. "GOLD - COMMODITY EXCHANGE INC."
+    pub market_code: String,       // CFTC contract market code
+    pub report_date: String,       // YYYY-MM-DD
+    pub open_interest: f64,
+    // Non-commercial (large speculators)
+    pub noncomm_long: f64,
+    pub noncomm_short: f64,
+    pub noncomm_spreads: f64,
+    // Commercial (producers / hedgers)
+    pub comm_long: f64,
+    pub comm_short: f64,
+    // Non-reportable (small traders)
+    pub nonrept_long: f64,
+    pub nonrept_short: f64,
+    // Derived: non-commercial net + week-over-week change
+    pub noncomm_net: f64,
+    pub noncomm_net_change: f64,
+}
+
 /// Hardcoded commodity-futures universe for the GLCO dashboard.
 /// Yahoo continuous-futures tickers, which are free via /v7/finance/quote.
 pub const COMMODITIES_UNIVERSE: &[(&str, &str, &str)] = &[
@@ -936,6 +1058,38 @@ pub async fn scrape_and_cache_symbol(
             Err(e) => cb(&format!("research/ratings {} failed: {}", sym, e)),
         }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+        // ADR-110: full FA bundle (6 FMP calls, internal 400ms sleeps).
+        match fetch_fmp_financial_bundle(client, &sym, fmp_key).await {
+            Ok(bundle) => {
+                let any = !bundle.income_annual.is_empty()
+                    || !bundle.income_quarterly.is_empty()
+                    || !bundle.balance_annual.is_empty()
+                    || !bundle.balance_quarterly.is_empty()
+                    || !bundle.cashflow_annual.is_empty()
+                    || !bundle.cashflow_quarterly.is_empty();
+                if any {
+                    let _ = upsert_financials(conn, &sym, &bundle);
+                    cb(&format!("research/financials: {} cached", sym));
+                }
+            }
+            Err(e) => cb(&format!("research/financials {} failed: {}", sym, e)),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    }
+
+    // ADR-110: Finnhub executives (separate from FMP block; needs Finnhub key).
+    if !finnhub_key.is_empty() {
+        match fetch_finnhub_executives(client, &sym, finnhub_key).await {
+            Ok(rows) => {
+                if !rows.is_empty() {
+                    let _ = upsert_executives(conn, &sym, &rows);
+                    cb(&format!("research/executives: {} cached ({} rows)", sym, rows.len()));
+                }
+            }
+            Err(e) => cb(&format!("research/executives {} failed: {}", sym, e)),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     }
 
     Ok(())
@@ -1073,6 +1227,274 @@ pub async fn fetch_treasury_yields(
     Ok(out)
 }
 
+// ── ADR-110 fetchers ───────────────────────────────────────────────────────
+
+/// Parse a Socrata numeric field that arrives as either a JSON number or a string.
+fn socrata_f64(v: &serde_json::Value) -> f64 {
+    v.as_f64()
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        .unwrap_or(0.0)
+}
+
+/// FMP /income-statement/{symbol} — up to 20 historical periods. `period` = "annual" or "quarter".
+pub async fn fetch_fmp_income_statement(
+    client: &reqwest::Client,
+    symbol: &str,
+    period: &str,
+    fmp_key: &str,
+) -> Result<Vec<IncomeStatement>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v3/income-statement/{}?period={}&limit=20&apikey={}",
+        symbol, period, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP income failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP income: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("FMP income parse: {e}"))?;
+    let rows = arr.into_iter().map(|e| IncomeStatement {
+        date: e["date"].as_str().unwrap_or("").to_string(),
+        period: e["period"].as_str().unwrap_or("").to_string(),
+        revenue: e["revenue"].as_f64().unwrap_or(0.0),
+        cost_of_revenue: e["costOfRevenue"].as_f64().unwrap_or(0.0),
+        gross_profit: e["grossProfit"].as_f64().unwrap_or(0.0),
+        research_and_development: e["researchAndDevelopmentExpenses"].as_f64().unwrap_or(0.0),
+        selling_general_admin: e["sellingGeneralAndAdministrativeExpenses"].as_f64().unwrap_or(0.0),
+        operating_expenses: e["operatingExpenses"].as_f64().unwrap_or(0.0),
+        operating_income: e["operatingIncome"].as_f64().unwrap_or(0.0),
+        interest_expense: e["interestExpense"].as_f64().unwrap_or(0.0),
+        ebitda: e["ebitda"].as_f64().unwrap_or(0.0),
+        income_before_tax: e["incomeBeforeTax"].as_f64().unwrap_or(0.0),
+        income_tax_expense: e["incomeTaxExpense"].as_f64().unwrap_or(0.0),
+        net_income: e["netIncome"].as_f64().unwrap_or(0.0),
+        eps: e["eps"].as_f64().unwrap_or(0.0),
+        eps_diluted: e["epsdiluted"].as_f64().unwrap_or(0.0),
+        weighted_shares_out: e["weightedAverageShsOut"].as_f64().unwrap_or(0.0),
+    }).collect();
+    Ok(rows)
+}
+
+/// FMP /balance-sheet-statement/{symbol} — up to 20 historical periods.
+pub async fn fetch_fmp_balance_sheet(
+    client: &reqwest::Client,
+    symbol: &str,
+    period: &str,
+    fmp_key: &str,
+) -> Result<Vec<BalanceSheet>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v3/balance-sheet-statement/{}?period={}&limit=20&apikey={}",
+        symbol, period, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP balance failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP balance: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("FMP balance parse: {e}"))?;
+    let rows = arr.into_iter().map(|e| BalanceSheet {
+        date: e["date"].as_str().unwrap_or("").to_string(),
+        period: e["period"].as_str().unwrap_or("").to_string(),
+        cash_and_equiv: e["cashAndCashEquivalents"].as_f64().unwrap_or(0.0),
+        short_term_investments: e["shortTermInvestments"].as_f64().unwrap_or(0.0),
+        net_receivables: e["netReceivables"].as_f64().unwrap_or(0.0),
+        inventory: e["inventory"].as_f64().unwrap_or(0.0),
+        total_current_assets: e["totalCurrentAssets"].as_f64().unwrap_or(0.0),
+        property_plant_equipment: e["propertyPlantEquipmentNet"].as_f64().unwrap_or(0.0),
+        goodwill: e["goodwill"].as_f64().unwrap_or(0.0),
+        intangible_assets: e["intangibleAssets"].as_f64().unwrap_or(0.0),
+        long_term_investments: e["longTermInvestments"].as_f64().unwrap_or(0.0),
+        total_non_current_assets: e["totalNonCurrentAssets"].as_f64().unwrap_or(0.0),
+        total_assets: e["totalAssets"].as_f64().unwrap_or(0.0),
+        accounts_payable: e["accountPayables"].as_f64().unwrap_or(0.0),
+        short_term_debt: e["shortTermDebt"].as_f64().unwrap_or(0.0),
+        total_current_liabilities: e["totalCurrentLiabilities"].as_f64().unwrap_or(0.0),
+        long_term_debt: e["longTermDebt"].as_f64().unwrap_or(0.0),
+        total_non_current_liabilities: e["totalNonCurrentLiabilities"].as_f64().unwrap_or(0.0),
+        total_liabilities: e["totalLiabilities"].as_f64().unwrap_or(0.0),
+        common_stock: e["commonStock"].as_f64().unwrap_or(0.0),
+        retained_earnings: e["retainedEarnings"].as_f64().unwrap_or(0.0),
+        total_equity: e["totalStockholdersEquity"].as_f64().unwrap_or(0.0),
+        total_debt: e["totalDebt"].as_f64().unwrap_or(0.0),
+        net_debt: e["netDebt"].as_f64().unwrap_or(0.0),
+    }).collect();
+    Ok(rows)
+}
+
+/// FMP /cash-flow-statement/{symbol} — up to 20 historical periods.
+pub async fn fetch_fmp_cash_flow(
+    client: &reqwest::Client,
+    symbol: &str,
+    period: &str,
+    fmp_key: &str,
+) -> Result<Vec<CashFlowStatement>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v3/cash-flow-statement/{}?period={}&limit=20&apikey={}",
+        symbol, period, fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP cash flow failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP cash flow: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("FMP cash flow parse: {e}"))?;
+    let rows = arr.into_iter().map(|e| CashFlowStatement {
+        date: e["date"].as_str().unwrap_or("").to_string(),
+        period: e["period"].as_str().unwrap_or("").to_string(),
+        net_income: e["netIncome"].as_f64().unwrap_or(0.0),
+        depreciation_amortization: e["depreciationAndAmortization"].as_f64().unwrap_or(0.0),
+        stock_based_comp: e["stockBasedCompensation"].as_f64().unwrap_or(0.0),
+        change_working_capital: e["changeInWorkingCapital"].as_f64().unwrap_or(0.0),
+        cash_from_operations: e["operatingCashFlow"].as_f64().unwrap_or(0.0),
+        capex: e["capitalExpenditure"].as_f64().unwrap_or(0.0),
+        acquisitions: e["acquisitionsNet"].as_f64().unwrap_or(0.0),
+        investments_purchases: e["purchasesOfInvestments"].as_f64().unwrap_or(0.0),
+        cash_from_investing: e["netCashUsedForInvestingActivites"].as_f64().unwrap_or(0.0),
+        debt_repayment: e["debtRepayment"].as_f64().unwrap_or(0.0),
+        dividends_paid: e["dividendsPaid"].as_f64().unwrap_or(0.0),
+        stock_repurchases: e["commonStockRepurchased"].as_f64().unwrap_or(0.0),
+        cash_from_financing: e["netCashUsedProvidedByFinancingActivities"].as_f64().unwrap_or(0.0),
+        net_change_cash: e["netChangeInCash"].as_f64().unwrap_or(0.0),
+        free_cash_flow: e["freeCashFlow"].as_f64().unwrap_or(0.0),
+    }).collect();
+    Ok(rows)
+}
+
+/// Convenience: fetch the full FA bundle (all 3 statements × annual+quarterly) in one call.
+/// 6 FMP calls, 400 ms between each = ~2.4 s per symbol.
+pub async fn fetch_fmp_financial_bundle(
+    client: &reqwest::Client,
+    symbol: &str,
+    fmp_key: &str,
+) -> Result<FinancialStatements, String> {
+    let mut bundle = FinancialStatements::default();
+    bundle.income_annual = fetch_fmp_income_statement(client, symbol, "annual", fmp_key).await.unwrap_or_default();
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    bundle.income_quarterly = fetch_fmp_income_statement(client, symbol, "quarter", fmp_key).await.unwrap_or_default();
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    bundle.balance_annual = fetch_fmp_balance_sheet(client, symbol, "annual", fmp_key).await.unwrap_or_default();
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    bundle.balance_quarterly = fetch_fmp_balance_sheet(client, symbol, "quarter", fmp_key).await.unwrap_or_default();
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    bundle.cashflow_annual = fetch_fmp_cash_flow(client, symbol, "annual", fmp_key).await.unwrap_or_default();
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    bundle.cashflow_quarterly = fetch_fmp_cash_flow(client, symbol, "quarter", fmp_key).await.unwrap_or_default();
+    Ok(bundle)
+}
+
+/// Finnhub /stock/executive — company officers with compensation.
+pub async fn fetch_finnhub_executives(
+    client: &reqwest::Client,
+    symbol: &str,
+    token: &str,
+) -> Result<Vec<Executive>, String> {
+    if token.is_empty() { return Err("Finnhub API key required".into()); }
+    let resp = client
+        .get("https://finnhub.io/api/v1/stock/executive")
+        .query(&[("symbol", symbol), ("token", token)])
+        .send().await
+        .map_err(|e| format!("Finnhub executives failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Finnhub executives: HTTP {}", resp.status()));
+    }
+    let v: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Finnhub executives parse: {e}"))?;
+    let mut rows = Vec::new();
+    if let Some(arr) = v["executive"].as_array() {
+        for e in arr {
+            rows.push(Executive {
+                name: e["name"].as_str().unwrap_or("").to_string(),
+                position: e["position"].as_str().unwrap_or("").to_string(),
+                age: e["age"].as_i64().unwrap_or(0) as i32,
+                sex: e["sex"].as_str().unwrap_or("").to_string(),
+                since: e["since"].as_str().unwrap_or("").to_string(),
+                compensation: e["compensation"].as_f64().unwrap_or(0.0),
+                year: e["year"].as_i64().unwrap_or(0) as i32,
+            });
+        }
+    }
+    Ok(rows)
+}
+
+/// CFTC Socrata — Commitments of Traders, Legacy Futures combined.
+/// Public JSON endpoint, no API key. Returns one row per market for the most recent report date.
+/// WoW change in non-commercial net is computed from the prior week found in the same payload.
+pub async fn fetch_cftc_cot(
+    client: &reqwest::Client,
+) -> Result<Vec<CotReport>, String> {
+    // Legacy futures-only combined. Ordered by report date descending so the first rows
+    // define the latest week, subsequent rows include the prior week for WoW delta.
+    let url = "https://publicreporting.cftc.gov/resource/6dca-aqww.json?\
+               $limit=2000&$order=report_date_as_yyyy_mm_dd DESC";
+    let resp = client.get(url)
+        .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1")
+        .send().await
+        .map_err(|e| format!("CFTC COT failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("CFTC COT: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("CFTC COT parse: {e}"))?;
+    if arr.is_empty() { return Ok(vec![]); }
+
+    // Latest report date is the max date seen in the payload (rows come sorted DESC but be safe).
+    let latest_date = arr.iter()
+        .filter_map(|e| e["report_date_as_yyyy_mm_dd"].as_str())
+        .map(|s| s.chars().take(10).collect::<String>())
+        .max()
+        .unwrap_or_default();
+    if latest_date.is_empty() { return Ok(vec![]); }
+
+    // For each market, remember the first (latest) non-commercial net and the first *prior-week* net.
+    use std::collections::HashMap;
+    let mut prior: HashMap<String, f64> = HashMap::new();
+    for e in arr.iter() {
+        let market = e["market_and_exchange_names"].as_str().unwrap_or("").to_string();
+        if market.is_empty() { continue; }
+        let date: String = e["report_date_as_yyyy_mm_dd"].as_str().unwrap_or("").chars().take(10).collect();
+        if date == latest_date { continue; }
+        let nc_net = socrata_f64(&e["noncomm_positions_long_all"]) - socrata_f64(&e["noncomm_positions_short_all"]);
+        prior.entry(market).or_insert(nc_net);
+    }
+
+    // Build the latest-week rows.
+    let mut rows = Vec::new();
+    for e in arr.iter() {
+        let date: String = e["report_date_as_yyyy_mm_dd"].as_str().unwrap_or("").chars().take(10).collect();
+        if date != latest_date { continue; }
+        let market = e["market_and_exchange_names"].as_str().unwrap_or("").to_string();
+        if market.is_empty() { continue; }
+        let nc_long = socrata_f64(&e["noncomm_positions_long_all"]);
+        let nc_short = socrata_f64(&e["noncomm_positions_short_all"]);
+        let net = nc_long - nc_short;
+        let prev = prior.get(&market).copied().unwrap_or(net);
+        rows.push(CotReport {
+            market_name: market,
+            market_code: e["cftc_contract_market_code"].as_str().unwrap_or("").to_string(),
+            report_date: date,
+            open_interest: socrata_f64(&e["open_interest_all"]),
+            noncomm_long: nc_long,
+            noncomm_short: nc_short,
+            // Socrata column name intentionally has the typo from the CFTC source feed.
+            noncomm_spreads: socrata_f64(&e["noncomm_postions_spread_all"]),
+            comm_long: socrata_f64(&e["comm_positions_long_all"]),
+            comm_short: socrata_f64(&e["comm_positions_short_all"]),
+            nonrept_long: socrata_f64(&e["nonrept_positions_long_all"]),
+            nonrept_short: socrata_f64(&e["nonrept_positions_short_all"]),
+            noncomm_net: net,
+            noncomm_net_change: net - prev,
+        });
+    }
+    rows.sort_by(|a, b| a.market_name.cmp(&b.market_name));
+    Ok(rows)
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -1164,6 +1586,74 @@ pub fn get_rating_changes(conn: &Connection, symbol: &str) -> Result<Option<Vec<
         .map_err(|e| format!("prepare get_rating_changes: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_rating_changes: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_rating_changes: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+// ── ADR-110 SQLite schema + helpers ────────────────────────────────────────
+
+pub fn create_research_tables_v3(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_financials (
+            symbol TEXT PRIMARY KEY,
+            bundle_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_executives (
+            symbol TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_financials_updated ON research_financials(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_executives_updated ON research_executives(updated_at);"
+    ).map_err(|e| format!("create research_v3 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_financials(conn: &Connection, symbol: &str, bundle: &FinancialStatements) -> Result<(), String> {
+    let _ = create_research_tables_v3(conn);
+    let json = serde_json::to_string(bundle).map_err(|e| format!("financials json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_financials(symbol, bundle_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET bundle_json=excluded.bundle_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert financials: {e}"))?;
+    Ok(())
+}
+
+pub fn get_financials(conn: &Connection, symbol: &str) -> Result<Option<FinancialStatements>, String> {
+    let _ = create_research_tables_v3(conn);
+    let mut stmt = conn.prepare("SELECT bundle_json FROM research_financials WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_financials: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_financials: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_financials: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_executives(conn: &Connection, symbol: &str, rows: &[Executive]) -> Result<(), String> {
+    let _ = create_research_tables_v3(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("executives json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_executives(symbol, rows_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert executives: {e}"))?;
+    Ok(())
+}
+
+pub fn get_executives(conn: &Connection, symbol: &str) -> Result<Option<Vec<Executive>>, String> {
+    let _ = create_research_tables_v3(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_executives WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_executives: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_executives: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_executives: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else {
@@ -1308,5 +1798,113 @@ mod tests {
         ]).unwrap();
         let rows = get_dividends(&c, "IBM").unwrap().unwrap();
         assert_eq!(rows.len(), 2);
+    }
+
+    // ── ADR-110 ─────────────────────────────────────────────────────────
+
+    fn open_mem_conn_v3() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v3(&c).unwrap();
+        c
+    }
+
+    #[test]
+    fn financials_bundle_default_is_empty() {
+        let b = FinancialStatements::default();
+        assert!(b.income_annual.is_empty());
+        assert!(b.income_quarterly.is_empty());
+        assert!(b.balance_annual.is_empty());
+        assert!(b.balance_quarterly.is_empty());
+        assert!(b.cashflow_annual.is_empty());
+        assert!(b.cashflow_quarterly.is_empty());
+    }
+
+    #[test]
+    fn financials_bundle_roundtrip() {
+        let c = open_mem_conn_v3();
+        let mut b = FinancialStatements::default();
+        b.income_annual.push(IncomeStatement {
+            date: "2024-09-30".into(), period: "FY".into(),
+            revenue: 400_000_000_000.0, net_income: 97_000_000_000.0,
+            ebitda: 135_000_000_000.0, eps: 6.12, eps_diluted: 6.08,
+            ..Default::default()
+        });
+        b.balance_quarterly.push(BalanceSheet {
+            date: "2024-06-30".into(), period: "Q3".into(),
+            total_assets: 350_000_000_000.0, total_liabilities: 270_000_000_000.0,
+            total_equity: 80_000_000_000.0, total_debt: 110_000_000_000.0,
+            ..Default::default()
+        });
+        b.cashflow_annual.push(CashFlowStatement {
+            date: "2024-09-30".into(), period: "FY".into(),
+            cash_from_operations: 118_000_000_000.0, capex: -11_000_000_000.0,
+            free_cash_flow: 107_000_000_000.0,
+            ..Default::default()
+        });
+        upsert_financials(&c, "AAPL", &b).unwrap();
+        let got = get_financials(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.income_annual.len(), 1);
+        assert_eq!(got.balance_quarterly.len(), 1);
+        assert_eq!(got.cashflow_annual.len(), 1);
+        assert!((got.income_annual[0].eps - 6.12).abs() < 1e-9);
+        assert!((got.cashflow_annual[0].free_cash_flow - 107_000_000_000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn financials_upsert_replaces() {
+        let c = open_mem_conn_v3();
+        let mut b1 = FinancialStatements::default();
+        b1.income_annual.push(IncomeStatement { date: "2023-09-30".into(), revenue: 1.0, ..Default::default() });
+        upsert_financials(&c, "T", &b1).unwrap();
+        let mut b2 = FinancialStatements::default();
+        b2.income_annual.push(IncomeStatement { date: "2024-09-30".into(), revenue: 2.0, ..Default::default() });
+        b2.income_annual.push(IncomeStatement { date: "2023-09-30".into(), revenue: 1.0, ..Default::default() });
+        upsert_financials(&c, "T", &b2).unwrap();
+        let got = get_financials(&c, "T").unwrap().unwrap();
+        assert_eq!(got.income_annual.len(), 2);
+    }
+
+    #[test]
+    fn executive_roundtrip() {
+        let c = open_mem_conn_v3();
+        let rows = vec![
+            Executive {
+                name: "Tim Cook".into(), position: "CEO".into(),
+                age: 64, sex: "M".into(), since: "2011".into(),
+                compensation: 74_600_000.0, year: 2023,
+            },
+            Executive {
+                name: "Luca Maestri".into(), position: "CFO".into(),
+                age: 60, sex: "M".into(), since: "2014".into(),
+                compensation: 27_100_000.0, year: 2023,
+            },
+        ];
+        upsert_executives(&c, "AAPL", &rows).unwrap();
+        let got = get_executives(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].name, "Tim Cook");
+        assert!((got[1].compensation - 27_100_000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn cot_report_default_is_empty() {
+        let r = CotReport::default();
+        assert!(r.market_name.is_empty());
+        assert_eq!(r.open_interest, 0.0);
+        assert_eq!(r.noncomm_net, 0.0);
+        assert_eq!(r.noncomm_net_change, 0.0);
+    }
+
+    #[test]
+    fn cot_report_net_math() {
+        // Derived invariant used by the UI's coloring / direction signal.
+        let r = CotReport {
+            noncomm_long: 120_000.0, noncomm_short: 45_000.0,
+            noncomm_net: 120_000.0 - 45_000.0,
+            noncomm_net_change: 5_000.0,
+            ..Default::default()
+        };
+        assert!((r.noncomm_net - 75_000.0).abs() < 1e-9);
+        assert!(r.noncomm_net_change > 0.0);
     }
 }
