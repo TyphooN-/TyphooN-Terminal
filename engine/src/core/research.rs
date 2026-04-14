@@ -425,6 +425,99 @@ pub struct EarningsSurprise {
     pub surprise_pct: f64,          // (actual - estimate) / |estimate| * 100
 }
 
+// ── ADR-113 Godel Parity Round 6 ─────────────────────────────────────────
+
+/// WEI — one global equity index quote row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WorldIndex {
+    pub ticker: String,             // Yahoo ticker e.g. "^GSPC"
+    pub display: String,            // human name "S&P 500"
+    pub region: String,             // "Americas" | "Europe" | "Asia-Pacific"
+    pub price: f64,
+    pub change: f64,
+    pub change_pct: f64,
+}
+
+/// MOV — one row inside a market movers list (gainers/losers/actives).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MarketMover {
+    pub symbol: String,
+    pub name: String,
+    pub price: f64,
+    pub change: f64,
+    pub change_pct: f64,
+    pub volume: f64,
+}
+
+/// MOV — bundle of three mover groups: top gainers, top losers, most active.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MarketMovers {
+    pub gainers: Vec<MarketMover>,
+    pub losers: Vec<MarketMover>,
+    pub actives: Vec<MarketMover>,
+}
+
+/// INDU — one sector performance row (intraday % change of a GICS sector ETF).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SectorPerformance {
+    pub sector: String,             // "Technology", "Energy", …
+    pub change_pct: f64,            // % change (absolute, e.g. 1.23 = +1.23 %)
+}
+
+/// WACC — derived weighted-average cost of capital snapshot.
+/// Built from FMP profile/key-metrics + cached GY 10Y yield (risk-free rate)
+/// using the standard CAPM cost-of-equity and after-tax cost-of-debt formulas.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WaccSnapshot {
+    pub symbol: String,
+    pub as_of: String,              // YYYY-MM-DD snapshot date (usually "today")
+    pub beta: f64,                  // equity beta from FMP profile
+    pub risk_free_pct: f64,         // 10Y Treasury yield %
+    pub equity_risk_premium_pct: f64, // assumed ERP (5.0 % default)
+    pub cost_of_equity_pct: f64,    // Rf + β × ERP
+    pub pre_tax_cost_of_debt_pct: f64, // interest expense / total debt × 100
+    pub tax_rate_pct: f64,          // effective tax rate %
+    pub after_tax_cost_of_debt_pct: f64, // pre-tax × (1 - tax_rate)
+    pub market_cap: f64,            // equity market value (USD)
+    pub total_debt: f64,            // book debt (USD, proxy for market debt)
+    pub equity_weight: f64,         // E / (E+D)  (0..1)
+    pub debt_weight: f64,           // D / (E+D)  (0..1)
+    pub wacc_pct: f64,              // we * Re + wd * Rd_after_tax
+}
+
+/// Hardcoded global equity index universe for the WEI dashboard.
+/// Yahoo index tickers — all free via /v7/finance/quote.
+pub const WORLD_INDICES_UNIVERSE: &[(&str, &str, &str)] = &[
+    // Americas
+    ("^GSPC",  "S&P 500",              "Americas"),
+    ("^DJI",   "Dow Jones",            "Americas"),
+    ("^IXIC",  "Nasdaq Composite",     "Americas"),
+    ("^RUT",   "Russell 2000",         "Americas"),
+    ("^GSPTSE","S&P/TSX Composite",    "Americas"),
+    ("^BVSP",  "Ibovespa",             "Americas"),
+    ("^MXX",   "IPC Mexico",           "Americas"),
+    // Europe / Middle East / Africa
+    ("^FTSE",  "FTSE 100",             "EMEA"),
+    ("^GDAXI", "DAX",                  "EMEA"),
+    ("^FCHI",  "CAC 40",               "EMEA"),
+    ("^STOXX50E","Euro Stoxx 50",      "EMEA"),
+    ("^IBEX",  "IBEX 35",              "EMEA"),
+    ("FTSEMIB.MI","FTSE MIB",          "EMEA"),
+    ("^AEX",   "AEX",                  "EMEA"),
+    ("^SSMI",  "SMI",                  "EMEA"),
+    // Asia-Pacific
+    ("^N225",  "Nikkei 225",           "Asia-Pacific"),
+    ("^HSI",   "Hang Seng",            "Asia-Pacific"),
+    ("000001.SS","Shanghai Composite", "Asia-Pacific"),
+    ("^AXJO",  "S&P/ASX 200",          "Asia-Pacific"),
+    ("^KS11",  "KOSPI",                "Asia-Pacific"),
+    ("^TWII",  "TSEC (Taiwan)",        "Asia-Pacific"),
+    ("^BSESN", "BSE SENSEX",           "Asia-Pacific"),
+];
+
+/// Default equity risk premium used in the WACC CAPM calc (Damodaran-style).
+pub const DEFAULT_EQUITY_RISK_PREMIUM_PCT: f64 = 5.0;
+
 
 /// Hardcoded commodity-futures universe for the GLCO dashboard.
 /// Yahoo continuous-futures tickers, which are free via /v7/finance/quote.
@@ -2045,6 +2138,164 @@ pub async fn fetch_fmp_earnings_surprises(
     Ok(rows)
 }
 
+// ── ADR-113 Round 6 fetchers ───────────────────────────────────────────────
+
+/// Yahoo batch-quote the WORLD_INDICES_UNIVERSE tickers for the WEI dashboard.
+/// Returns rows in the universe's declared order so the UI grouping stays stable.
+pub async fn fetch_world_indices(
+    client: &reqwest::Client,
+) -> Result<Vec<WorldIndex>, String> {
+    let tickers: Vec<&str> = WORLD_INDICES_UNIVERSE.iter().map(|(t, _, _)| *t).collect();
+    let quotes = fetch_yahoo_quotes(client, &tickers).await?;
+    let mut by_sym: std::collections::HashMap<String, (f64, f64, f64)> =
+        std::collections::HashMap::new();
+    for (sym, price, change, pct) in quotes {
+        by_sym.insert(sym, (price, change, pct));
+    }
+    let rows: Vec<WorldIndex> = WORLD_INDICES_UNIVERSE.iter().map(|(t, d, r)| {
+        let (price, change, pct) = by_sym.get(*t).cloned().unwrap_or((0.0, 0.0, 0.0));
+        WorldIndex {
+            ticker: (*t).to_string(),
+            display: (*d).to_string(),
+            region: (*r).to_string(),
+            price,
+            change,
+            change_pct: pct,
+        }
+    }).collect();
+    Ok(rows)
+}
+
+/// Helper — parse a single FMP mover row into MarketMover.
+fn parse_fmp_mover(e: &serde_json::Value) -> MarketMover {
+    let price = e["price"].as_f64().unwrap_or(0.0);
+    let change = e["change"].as_f64()
+        .or_else(|| e["changes"].as_f64())
+        .unwrap_or(0.0);
+    // FMP often returns "changesPercentage" as a string like "-5.60%"
+    let change_pct = e["changesPercentage"].as_f64()
+        .or_else(|| e["changesPercentage"].as_str().map(|s| {
+            s.trim_matches(|c: char| c == '%' || c.is_whitespace()).parse::<f64>().unwrap_or(0.0)
+        }))
+        .unwrap_or(0.0);
+    MarketMover {
+        symbol: e["symbol"].as_str().unwrap_or("").to_string(),
+        name: e["name"].as_str().unwrap_or("").to_string(),
+        price,
+        change,
+        change_pct,
+        volume: e["volume"].as_f64().unwrap_or(0.0),
+    }
+}
+
+/// FMP /v3/stock_market/{gainers|losers|actives} — bundled into one MarketMovers.
+pub async fn fetch_fmp_market_movers(
+    client: &reqwest::Client,
+    fmp_key: &str,
+) -> Result<MarketMovers, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let mut out = MarketMovers::default();
+    for (bucket, field) in [("gainers", 0), ("losers", 1), ("actives", 2)] {
+        let url = format!(
+            "https://financialmodelingprep.com/api/v3/stock_market/{}?apikey={}",
+            bucket, fmp_key
+        );
+        let resp = client.get(&url).send().await
+            .map_err(|e| format!("FMP {} failed: {}", bucket, e))?;
+        if !resp.status().is_success() {
+            return Err(format!("FMP {}: HTTP {}", bucket, resp.status()));
+        }
+        let arr: Vec<serde_json::Value> = resp.json().await
+            .map_err(|e| format!("FMP {} parse: {}", bucket, e))?;
+        let rows: Vec<MarketMover> = arr.iter().map(parse_fmp_mover).collect();
+        match field {
+            0 => out.gainers = rows,
+            1 => out.losers = rows,
+            _ => out.actives = rows,
+        }
+    }
+    Ok(out)
+}
+
+/// FMP /v3/sector-performance — intraday performance for all GICS sectors.
+pub async fn fetch_fmp_sector_performance(
+    client: &reqwest::Client,
+    fmp_key: &str,
+) -> Result<Vec<SectorPerformance>, String> {
+    if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    let url = format!(
+        "https://financialmodelingprep.com/api/v3/sector-performance?apikey={}",
+        fmp_key
+    );
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("FMP sector-performance failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("FMP sector-performance: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("FMP sector-performance parse: {e}"))?;
+    let rows: Vec<SectorPerformance> = arr.into_iter().map(|e| {
+        let sector = e["sector"].as_str().unwrap_or("").to_string();
+        // FMP returns "changesPercentage" as a "1.23%" string.
+        let pct_raw = e["changesPercentage"].as_str().unwrap_or("0");
+        let change_pct = pct_raw
+            .trim_matches(|c: char| c == '%' || c.is_whitespace())
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        SectorPerformance { sector, change_pct }
+    }).collect();
+    Ok(rows)
+}
+
+/// Build a WACC snapshot by combining FMP profile (beta + market cap) with the
+/// latest cached FA income/balance data (interest expense, total debt, tax rate)
+/// and a caller-supplied risk-free rate (typically 10Y Treasury yield %).
+///
+/// This is a pure derivation: it does NOT hit the network.  Callers should
+/// fetch the inputs first (profile, financials, yield curve) then pass them in.
+pub fn compute_wacc_snapshot(
+    symbol: &str,
+    as_of: &str,
+    beta: f64,
+    market_cap: f64,
+    risk_free_pct: f64,
+    total_debt: f64,
+    interest_expense: f64,
+    effective_tax_rate_pct: f64,
+) -> WaccSnapshot {
+    let erp = DEFAULT_EQUITY_RISK_PREMIUM_PCT;
+    let cost_of_equity_pct = risk_free_pct + beta * erp;
+
+    let pre_tax_cost_of_debt_pct = if total_debt.abs() > 1e-6 {
+        (interest_expense.abs() / total_debt) * 100.0
+    } else { 0.0 };
+
+    let tax_rate_pct = effective_tax_rate_pct.clamp(0.0, 60.0);
+    let after_tax_cost_of_debt_pct = pre_tax_cost_of_debt_pct * (1.0 - tax_rate_pct / 100.0);
+
+    let total_cap = market_cap + total_debt;
+    let equity_weight = if total_cap > 1e-6 { market_cap / total_cap } else { 1.0 };
+    let debt_weight = 1.0 - equity_weight;
+    let wacc_pct = equity_weight * cost_of_equity_pct + debt_weight * after_tax_cost_of_debt_pct;
+
+    WaccSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: as_of.to_string(),
+        beta,
+        risk_free_pct,
+        equity_risk_premium_pct: erp,
+        cost_of_equity_pct,
+        pre_tax_cost_of_debt_pct,
+        tax_rate_pct,
+        after_tax_cost_of_debt_pct,
+        market_cap,
+        total_debt,
+        equity_weight,
+        debt_weight,
+        wacc_pct,
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -2550,6 +2801,134 @@ pub fn get_earnings_surprises(conn: &Connection, symbol: &str) -> Result<Option<
         .map_err(|e| format!("prepare get_surprise: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_surprise: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_surprise: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+// ── ADR-113 Round 6 SQLite schema + helpers ────────────────────────────────
+
+pub fn create_research_tables_v6(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_world_indices (
+            snapshot_key TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_market_movers (
+            snapshot_key TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_sector_performance (
+            snapshot_key TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_wacc (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_world_indices_updated ON research_world_indices(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_market_movers_updated ON research_market_movers(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_sector_performance_updated ON research_sector_performance(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_wacc_updated ON research_wacc(updated_at);"
+    ).map_err(|e| format!("create research_v6 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_world_indices(conn: &Connection, rows: &[WorldIndex]) -> Result<(), String> {
+    let _ = create_research_tables_v6(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("wei json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_world_indices(snapshot_key, rows_json, updated_at) VALUES ('latest',?1,?2)
+         ON CONFLICT(snapshot_key) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![json, now_ts()],
+    ).map_err(|e| format!("upsert wei: {e}"))?;
+    Ok(())
+}
+
+pub fn get_world_indices(conn: &Connection) -> Result<Option<Vec<WorldIndex>>, String> {
+    let _ = create_research_tables_v6(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_world_indices WHERE snapshot_key='latest'")
+        .map_err(|e| format!("prepare get_wei: {e}"))?;
+    let mut r = stmt.query([]).map_err(|e| format!("query get_wei: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_wei: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_market_movers(conn: &Connection, movers: &MarketMovers) -> Result<(), String> {
+    let _ = create_research_tables_v6(conn);
+    let json = serde_json::to_string(movers).map_err(|e| format!("mov json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_market_movers(snapshot_key, snapshot_json, updated_at) VALUES ('latest',?1,?2)
+         ON CONFLICT(snapshot_key) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![json, now_ts()],
+    ).map_err(|e| format!("upsert mov: {e}"))?;
+    Ok(())
+}
+
+pub fn get_market_movers(conn: &Connection) -> Result<Option<MarketMovers>, String> {
+    let _ = create_research_tables_v6(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_market_movers WHERE snapshot_key='latest'")
+        .map_err(|e| format!("prepare get_mov: {e}"))?;
+    let mut r = stmt.query([]).map_err(|e| format!("query get_mov: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_mov: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_sector_performance(conn: &Connection, rows: &[SectorPerformance]) -> Result<(), String> {
+    let _ = create_research_tables_v6(conn);
+    let json = serde_json::to_string(rows).map_err(|e| format!("indu json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_sector_performance(snapshot_key, rows_json, updated_at) VALUES ('latest',?1,?2)
+         ON CONFLICT(snapshot_key) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![json, now_ts()],
+    ).map_err(|e| format!("upsert indu: {e}"))?;
+    Ok(())
+}
+
+pub fn get_sector_performance(conn: &Connection) -> Result<Option<Vec<SectorPerformance>>, String> {
+    let _ = create_research_tables_v6(conn);
+    let mut stmt = conn.prepare("SELECT rows_json FROM research_sector_performance WHERE snapshot_key='latest'")
+        .map_err(|e| format!("prepare get_indu: {e}"))?;
+    let mut r = stmt.query([]).map_err(|e| format!("query get_indu: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_indu: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_wacc(conn: &Connection, symbol: &str, snap: &WaccSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v6(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("wacc json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_wacc(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert wacc: {e}"))?;
+    Ok(())
+}
+
+pub fn get_wacc(conn: &Connection, symbol: &str) -> Result<Option<WaccSnapshot>, String> {
+    let _ = create_research_tables_v6(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_wacc WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_wacc: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_wacc: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_wacc: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else {
@@ -3132,4 +3511,170 @@ mod tests {
         assert!(got[0].surprise > 0.0);
     }
 
+    // ── ADR-113 Round 6 ─────────────────────────────────────────────────
+
+    fn open_mem_conn_v6() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v6(&c).unwrap();
+        c
+    }
+
+    #[test]
+    fn world_indices_universe_has_all_regions() {
+        let regions: std::collections::HashSet<&str> =
+            WORLD_INDICES_UNIVERSE.iter().map(|(_, _, r)| *r).collect();
+        assert!(regions.contains("Americas"));
+        assert!(regions.contains("EMEA"));
+        assert!(regions.contains("Asia-Pacific"));
+    }
+
+    #[test]
+    fn world_indices_universe_has_sp500_and_nikkei() {
+        let tickers: std::collections::HashSet<&str> =
+            WORLD_INDICES_UNIVERSE.iter().map(|(t, _, _)| *t).collect();
+        assert!(tickers.contains("^GSPC"));
+        assert!(tickers.contains("^N225"));
+        assert!(tickers.contains("^FTSE"));
+    }
+
+    #[test]
+    fn world_indices_roundtrip() {
+        let c = open_mem_conn_v6();
+        let rows = vec![
+            WorldIndex { ticker: "^GSPC".into(), display: "S&P 500".into(), region: "Americas".into(),
+                price: 5200.0, change: 12.5, change_pct: 0.24 },
+            WorldIndex { ticker: "^N225".into(), display: "Nikkei 225".into(), region: "Asia-Pacific".into(),
+                price: 39_800.0, change: -150.0, change_pct: -0.38 },
+        ];
+        upsert_world_indices(&c, &rows).unwrap();
+        let got = get_world_indices(&c).unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].ticker, "^GSPC");
+        assert!(got[1].change < 0.0);
+    }
+
+    #[test]
+    fn world_indices_upsert_replaces() {
+        let c = open_mem_conn_v6();
+        upsert_world_indices(&c, &[
+            WorldIndex { ticker: "^GSPC".into(), price: 5000.0, ..Default::default() },
+        ]).unwrap();
+        upsert_world_indices(&c, &[
+            WorldIndex { ticker: "^GSPC".into(), price: 5300.0, ..Default::default() },
+            WorldIndex { ticker: "^DJI".into(), price: 42_000.0, ..Default::default() },
+        ]).unwrap();
+        let got = get_world_indices(&c).unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert!((got[0].price - 5300.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn market_movers_roundtrip() {
+        let c = open_mem_conn_v6();
+        let movers = MarketMovers {
+            gainers: vec![
+                MarketMover { symbol: "AAA".into(), name: "Alpha Inc.".into(),
+                    price: 12.5, change: 2.1, change_pct: 20.19, volume: 1_200_000.0 },
+            ],
+            losers: vec![
+                MarketMover { symbol: "ZZZ".into(), name: "Omega Corp.".into(),
+                    price: 4.8, change: -1.1, change_pct: -18.64, volume: 900_000.0 },
+            ],
+            actives: vec![
+                MarketMover { symbol: "TSLA".into(), name: "Tesla Inc.".into(),
+                    price: 190.25, change: 1.15, change_pct: 0.61, volume: 120_000_000.0 },
+            ],
+        };
+        upsert_market_movers(&c, &movers).unwrap();
+        let got = get_market_movers(&c).unwrap().unwrap();
+        assert_eq!(got.gainers.len(), 1);
+        assert_eq!(got.losers.len(), 1);
+        assert_eq!(got.actives.len(), 1);
+        assert_eq!(got.gainers[0].symbol, "AAA");
+        assert!(got.losers[0].change_pct < 0.0);
+        assert_eq!(got.actives[0].symbol, "TSLA");
+    }
+
+    #[test]
+    fn sector_performance_roundtrip() {
+        let c = open_mem_conn_v6();
+        let rows = vec![
+            SectorPerformance { sector: "Technology".into(),      change_pct: 1.23 },
+            SectorPerformance { sector: "Energy".into(),          change_pct: -0.45 },
+            SectorPerformance { sector: "Financial Services".into(), change_pct: 0.78 },
+        ];
+        upsert_sector_performance(&c, &rows).unwrap();
+        let got = get_sector_performance(&c).unwrap().unwrap();
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].sector, "Technology");
+        assert!(got[1].change_pct < 0.0);
+    }
+
+    #[test]
+    fn wacc_compute_basic_calc() {
+        let s = compute_wacc_snapshot(
+            "AAPL", "2026-04-14",
+            1.20,              // beta
+            3_000_000_000_000.0, // market cap (3T)
+            4.50,              // Rf %
+            100_000_000_000.0, // total debt (100B)
+            5_000_000_000.0,  // interest expense (5B)
+            16.0,              // effective tax rate %
+        );
+        // Cost of equity = 4.5 + 1.20 * 5.0 = 10.5 %
+        assert!((s.cost_of_equity_pct - 10.5).abs() < 1e-6);
+        // Pre-tax cost of debt = (5B / 100B) * 100 = 5.0 %
+        assert!((s.pre_tax_cost_of_debt_pct - 5.0).abs() < 1e-6);
+        // After-tax = 5.0 * (1 - 0.16) = 4.2 %
+        assert!((s.after_tax_cost_of_debt_pct - 4.2).abs() < 1e-6);
+        // Weights: E=3T / (3T+100B) ≈ 0.9677, D ≈ 0.0323
+        assert!((s.equity_weight - 3000.0/3100.0).abs() < 1e-6);
+        // WACC ≈ 0.9677*10.5 + 0.0323*4.2 ≈ 10.296
+        let expected = (3000.0/3100.0)*10.5 + (100.0/3100.0)*4.2;
+        assert!((s.wacc_pct - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn wacc_handles_zero_debt() {
+        let s = compute_wacc_snapshot(
+            "NVDA", "2026-04-14",
+            1.80,   // beta
+            2_500_000_000_000.0, // market cap
+            4.30,   // Rf
+            0.0,    // no debt
+            0.0,    // no interest expense
+            12.0,   // tax
+        );
+        assert_eq!(s.pre_tax_cost_of_debt_pct, 0.0);
+        assert_eq!(s.debt_weight, 0.0);
+        assert!((s.equity_weight - 1.0).abs() < 1e-9);
+        // WACC == Re when all equity
+        assert!((s.wacc_pct - s.cost_of_equity_pct).abs() < 1e-9);
+    }
+
+    #[test]
+    fn wacc_roundtrip() {
+        let c = open_mem_conn_v6();
+        let snap = compute_wacc_snapshot("AAPL", "2026-04-14",
+            1.20, 3_000_000_000_000.0, 4.50,
+            100_000_000_000.0, 5_000_000_000.0, 16.0);
+        upsert_wacc(&c, "AAPL", &snap).unwrap();
+        let got = get_wacc(&c, "aapl").unwrap().unwrap();
+        assert_eq!(got.symbol, "AAPL");
+        assert!((got.wacc_pct - snap.wacc_pct).abs() < 1e-9);
+        assert!((got.beta - 1.20).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fmp_mover_parses_string_percentage() {
+        // FMP sometimes returns changesPercentage as "1.23%" (string), sometimes as f64.
+        let v: serde_json::Value = serde_json::from_str(r#"{
+            "symbol":"AAPL","name":"Apple","price":185.5,"change":2.1,
+            "changesPercentage":"1.15%","volume":45000000
+        }"#).unwrap();
+        let m = parse_fmp_mover(&v);
+        assert_eq!(m.symbol, "AAPL");
+        assert!((m.change_pct - 1.15).abs() < 1e-9);
+        assert!((m.volume - 45_000_000.0).abs() < 1.0);
+    }
 }

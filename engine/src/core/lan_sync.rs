@@ -149,6 +149,11 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_shares_float",
     "research_historical_price",
     "research_earnings_surprise",
+    // ── ADR-113 Round 6 ─────────────────────────────
+    "research_world_indices",
+    "research_market_movers",
+    "research_sector_performance",
+    "research_wacc",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -424,6 +429,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-113 Round 6 ─────────────────────────────
+        "research_world_indices" => Some(
+            "CREATE TABLE IF NOT EXISTS research_world_indices (
+                snapshot_key TEXT PRIMARY KEY,
+                rows_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_market_movers" => Some(
+            "CREATE TABLE IF NOT EXISTS research_market_movers (
+                snapshot_key TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_sector_performance" => Some(
+            "CREATE TABLE IF NOT EXISTS research_sector_performance (
+                snapshot_key TEXT PRIMARY KEY,
+                rows_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_wacc" => Some(
+            "CREATE TABLE IF NOT EXISTS research_wacc (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -458,6 +492,10 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_shares_float" => Some("updated_at"),
         "research_historical_price" => Some("updated_at"),
         "research_earnings_surprise" => Some("updated_at"),
+        "research_world_indices" => Some("updated_at"),
+        "research_market_movers" => Some("updated_at"),
+        "research_sector_performance" => Some("updated_at"),
+        "research_wacc" => Some("updated_at"),
         _ => None,
     }
 }

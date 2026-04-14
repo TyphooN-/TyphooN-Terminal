@@ -69,12 +69,41 @@ Symbols: CC, NCLH
 - **Generated** is a UTC ISO-8601 timestamp taken at packet-build time.
 - **Symbols** is the joined list the user passed.
 
-### 2. Per-symbol section
+### 2. Global Market Context (ADR-113)
+
+Emitted **once** at the top of the packet, before any per-symbol section.
+Gives the model a regime-level view of risk-on/off, leadership/laggards, and
+sector rotation at packet-build time. Entire section is skipped silently if
+none of its three sources are cached.
+
+#### Global.1 World Equity Indices (WEI)
+
+Pulled from `research::get_world_indices`. Advancing/declining count line
+followed by up to **12 indices** as a markdown table: region, ticker, name,
+last, change %. Universe defined in `WORLD_INDICES_UNIVERSE` — spans 22
+Americas / EMEA / Asia-Pacific indices sourced from Yahoo Finance (no API
+key required). Populated by running the `WEI` command.
+
+#### Global.2 Market Movers — US (MOV)
+
+Pulled from `research::get_market_movers`. Three single-line aggregate
+summaries for top gainers / losers / most active — each a comma-separated
+list of up to **6 symbols** with their change %. Sourced from FMP's
+`/v3/stock_market/{gainers,losers,actives}` endpoints. Populated by running
+the `MOV` command.
+
+#### Global.3 Sector Performance (INDU)
+
+Pulled from `research::get_sector_performance`. Up/down aggregate counts plus
+one line per S&P sector (sorted high-to-low on change %). Sourced from FMP's
+`/v3/sector-performance` endpoint. Populated by running the `INDU` command.
+
+### 3. Per-symbol section
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**sixteen sub-blocks**, each of which is skipped silently when its data source
-is empty.
+**twenty-three sub-blocks**, each of which is skipped silently when its data
+source is empty.
 
 #### 2.1 Company header + description
 
@@ -241,14 +270,23 @@ Pulled from `research::get_earnings_surprises`. Aggregate summary line
 followed by up to **8 most recent quarters**: date, actual EPS,
 estimate EPS, surprise, surprise %. Source: ADR-112 EPS window.
 
-#### 2.22 Sector peer comparison
+#### 2.22 WACC snapshot (WACC — ADR-113)
+
+Pulled from `research::get_wacc`. Three-line summary giving the CAPM-derived
+cost of capital for the symbol: cost of equity + after-tax cost of debt +
+weighted-average, then input lineage (β, Rf, ERP, tax rate), then capital
+mix (equity/debt weights and absolute market-cap / debt figures). Skipped
+silently when the WACC snapshot has not been computed (run the `WACC`
+command to populate). Source: ADR-113 WACC window.
+
+#### 2.23 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
 this symbol's P/E, Forward P/E, P/B, P/S, EV/EBITDA, Profit Margin, ROE,
 Beta, Short % of Float, and Dividend Yield against the sector median.
 
-### 3. Closing question
+### 4. Closing question
 
 ```markdown
 ---
@@ -288,12 +326,16 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | Institutional top holders (ADR-112 HDS) | 6 rows | Top-6 concentration coverage |
 | Daily bars table (ADR-112 HP) | 10 rows | 2-week audit trail in the packet |
 | EPS surprise history (ADR-112 EPS) | 8 rows | 8-quarter beat/miss record |
+| World equity indices (ADR-113 WEI) | 12 rows | 12 indices cover Americas/EMEA/Asia regimes |
+| Market movers (ADR-113 MOV) | 6 symbols × 3 lists | Leadership/laggards without flooding packet |
+| WACC snapshot (ADR-113 WACC) | 3 lines | Derived metric — compact summary is enough |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **8-16 KB**
-(up from 6-12 KB after ADR-111; ADR-112 added INS/HDS/FLOAT/HP/EPS blocks);
-a 10-symbol basket lands near **80-160 KB**.
+symbols. A single S&P 500 symbol now produces a packet around **9-17 KB**
+(up from 8-16 KB after ADR-112; ADR-113 added WEI/MOV/INDU global context
+and a per-symbol WACC block); a 10-symbol basket lands near **82-162 KB**
+(the global context is emitted only once, so multi-symbol overhead is small).
 
 ---
 

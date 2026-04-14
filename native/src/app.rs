@@ -9849,6 +9849,17 @@ enum BrokerCmd {
     FetchHistoricalPrice { symbol: String, fmp_key: String, limit: usize },
     /// FMP quarterly earnings surprises (actual vs estimate EPS) for a symbol.
     FetchEarningsSurprises { symbol: String, fmp_key: String },
+    // ── ADR-113 Godel Parity Round 6 ──
+    /// Yahoo batch-quote the global equity indices dashboard (no key).
+    FetchWorldIndices,
+    /// FMP market movers — top gainers/losers/most-active (single bundle).
+    FetchMarketMovers { fmp_key: String },
+    /// FMP intraday sector performance snapshot.
+    FetchSectorPerformance { fmp_key: String },
+    /// FMP profile + key metrics for a symbol, combined into a WACC snapshot.
+    /// `risk_free_pct` is passed in so the broker avoids touching non-Send state —
+    /// the main thread sources the latest 10Y yield from its in-memory cache.
+    FetchWaccSnapshot { symbol: String, fmp_key: String, risk_free_pct: f64 },
     /// Fetch multi-source news for a symbol (GDELT + Yahoo RSS + SEC + Marketaux + AV + FMP),
     /// cache results in SQLite, and return the cached set.
     FetchNewsMulti {
@@ -10003,6 +10014,15 @@ enum BrokerMsg {
     HistoricalPriceMsg(String, Vec<typhoon_engine::core::research::HistoricalPriceRow>),
     /// Earnings surprise rows (quarterly EPS actual vs estimate) for a symbol.
     EarningsSurpriseMsg(String, Vec<typhoon_engine::core::research::EarningsSurprise>),
+    // ── ADR-113 ──
+    /// World equity index quotes (global WEI dashboard).
+    WorldIndicesMsg(Vec<typhoon_engine::core::research::WorldIndex>),
+    /// Market movers bundle (gainers + losers + actives).
+    MarketMoversMsg(typhoon_engine::core::research::MarketMovers),
+    /// Sector performance snapshot (GICS sector ETF % change).
+    SectorPerformanceMsg(Vec<typhoon_engine::core::research::SectorPerformance>),
+    /// WACC (weighted-average cost of capital) snapshot for a symbol.
+    WaccSnapshotMsg(String, typhoon_engine::core::research::WaccSnapshot),
     /// Multi-source news articles loaded (from cache + fresh fetch) for a symbol.
     NewsArticlesLoaded {
         symbol: String,
@@ -10865,6 +10885,35 @@ pub struct TyphooNApp {
     eps_symbol: String,
     eps_surprises: Vec<typhoon_engine::core::research::EarningsSurprise>,
     eps_loading: bool,
+
+    // ── ADR-113 Godel Parity Round 6 ──────────────────────────────────
+    /// WEI — world equity indices dashboard (Yahoo index tickers, separate
+    /// from the legacy ETF-based "World Indices" dashboard above).
+    show_wei: bool,
+    wei_indices: Vec<typhoon_engine::core::research::WorldIndex>,
+    wei_loading: bool,
+    wei_region_filter: String, // "" | "Americas" | "EMEA" | "Asia-Pacific"
+
+    /// MOV — market movers (gainers / losers / actives).
+    show_market_movers: bool,
+    market_movers: typhoon_engine::core::research::MarketMovers,
+    mov_loading: bool,
+
+    /// INDU — sector performance snapshot.
+    show_sector_perf: bool,
+    sector_perf: Vec<typhoon_engine::core::research::SectorPerformance>,
+    indu_loading: bool,
+
+    /// CACS — corporate-actions calendar aggregator (UI-only, reuses cached
+    /// splits / dividends / earnings / IPO data).
+    show_cacs: bool,
+    cacs_symbol: String,
+
+    /// WACC — derived cost-of-capital snapshot (per symbol).
+    show_wacc: bool,
+    wacc_symbol: String,
+    wacc_snapshot: typhoon_engine::core::research::WaccSnapshot,
+    wacc_loading: bool,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -12473,6 +12522,125 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 Ok(rows) => { let _ = msg_tx.send(BrokerMsg::EarningsSurpriseMsg(symbol, rows)); }
                                 Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("EPS: {}", e))); }
                             }
+                        });
+                    }
+                    // ── ADR-113 Round 6 handlers ──
+                    BrokerCmd::FetchWorldIndices => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1")
+                                .timeout(std::time::Duration::from_secs(20))
+                                .build().unwrap_or_default();
+                            match research::fetch_world_indices(&client).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::WorldIndicesMsg(rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("WEI: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchMarketMovers { fmp_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(25))
+                                .build().unwrap_or_default();
+                            match research::fetch_fmp_market_movers(&client, &fmp_key).await {
+                                Ok(mov) => { let _ = msg_tx.send(BrokerMsg::MarketMoversMsg(mov)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("MOV: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchSectorPerformance { fmp_key } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(15))
+                                .build().unwrap_or_default();
+                            match research::fetch_fmp_sector_performance(&client, &fmp_key).await {
+                                Ok(rows) => { let _ = msg_tx.send(BrokerMsg::SectorPerformanceMsg(rows)); }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("INDU: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchWaccSnapshot { symbol, fmp_key, risk_free_pct } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .user_agent("TyphooN-Terminal/1.0")
+                                .timeout(std::time::Duration::from_secs(25))
+                                .build().unwrap_or_default();
+                            // Fetch profile (beta + market cap)
+                            let profile_url = format!(
+                                "https://financialmodelingprep.com/api/v3/profile/{}?apikey={}",
+                                symbol, fmp_key
+                            );
+                            let profile_resp = match client.get(&profile_url).send().await {
+                                Ok(r) => r,
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("WACC profile: {e}"))); return; }
+                            };
+                            let profile_arr: Vec<serde_json::Value> = match profile_resp.json().await {
+                                Ok(v) => v,
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("WACC profile parse: {e}"))); return; }
+                            };
+                            let profile = profile_arr.first().cloned().unwrap_or_default();
+                            let beta = profile["beta"].as_f64().unwrap_or(1.0);
+                            let market_cap = profile["mktCap"].as_f64().unwrap_or(0.0);
+                            // Fetch key metrics TTM (effective tax rate fallback)
+                            let km_url = format!(
+                                "https://financialmodelingprep.com/api/v3/key-metrics-ttm/{}?apikey={}",
+                                symbol, fmp_key
+                            );
+                            let km_arr: Vec<serde_json::Value> = match client.get(&km_url).send().await {
+                                Ok(r) => r.json().await.unwrap_or_default(),
+                                Err(_) => Vec::new(),
+                            };
+                            let km = km_arr.first().cloned().unwrap_or_default();
+                            // Fetch income statement for interest expense + tax
+                            let is_url = format!(
+                                "https://financialmodelingprep.com/api/v3/income-statement/{}?period=annual&limit=1&apikey={}",
+                                symbol, fmp_key
+                            );
+                            let is_arr: Vec<serde_json::Value> = match client.get(&is_url).send().await {
+                                Ok(r) => r.json().await.unwrap_or_default(),
+                                Err(_) => Vec::new(),
+                            };
+                            let is_row = is_arr.first().cloned().unwrap_or_default();
+                            let interest_expense = is_row["interestExpense"].as_f64().unwrap_or(0.0);
+                            let income_before_tax = is_row["incomeBeforeTax"].as_f64().unwrap_or(0.0);
+                            let income_tax = is_row["incomeTaxExpense"].as_f64().unwrap_or(0.0);
+                            let effective_tax_rate_pct = if income_before_tax.abs() > 1e-6 {
+                                (income_tax / income_before_tax) * 100.0
+                            } else {
+                                km["effectiveTaxRateTTM"].as_f64().unwrap_or(0.21) * 100.0
+                            };
+                            // Fetch balance sheet for total debt
+                            let bs_url = format!(
+                                "https://financialmodelingprep.com/api/v3/balance-sheet-statement/{}?period=annual&limit=1&apikey={}",
+                                symbol, fmp_key
+                            );
+                            let bs_arr: Vec<serde_json::Value> = match client.get(&bs_url).send().await {
+                                Ok(r) => r.json().await.unwrap_or_default(),
+                                Err(_) => Vec::new(),
+                            };
+                            let bs_row = bs_arr.first().cloned().unwrap_or_default();
+                            let total_debt = bs_row["totalDebt"].as_f64()
+                                .unwrap_or_else(|| {
+                                    let lt = bs_row["longTermDebt"].as_f64().unwrap_or(0.0);
+                                    let st = bs_row["shortTermDebt"].as_f64().unwrap_or(0.0);
+                                    lt + st
+                                });
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let snap = research::compute_wacc_snapshot(
+                                &symbol, &today, beta, market_cap, risk_free_pct,
+                                total_debt, interest_expense, effective_tax_rate_pct,
+                            );
+                            let _ = msg_tx.send(BrokerMsg::WaccSnapshotMsg(symbol, snap));
                         });
                     }
                     BrokerCmd::FetchNewsMulti { symbol, marketaux_key, alpha_vantage_key, fmp_key } => {
@@ -14729,6 +14897,23 @@ When the question touches recent news, sentiment, or prices, combine the researc
             eps_symbol: String::new(),
             eps_surprises: Vec::new(),
             eps_loading: false,
+            // ── ADR-113 Round 6 defaults ──
+            show_wei: false,
+            wei_indices: Vec::new(),
+            wei_loading: false,
+            wei_region_filter: String::new(),
+            show_market_movers: false,
+            market_movers: typhoon_engine::core::research::MarketMovers::default(),
+            mov_loading: false,
+            show_sector_perf: false,
+            sector_perf: Vec::new(),
+            indu_loading: false,
+            show_cacs: false,
+            cacs_symbol: String::new(),
+            show_wacc: false,
+            wacc_symbol: String::new(),
+            wacc_snapshot: typhoon_engine::core::research::WaccSnapshot::default(),
+            wacc_loading: false,
             bottom_tab: BottomTab::Log,
             log,
             log_filter: LogFilter::All,
@@ -15896,6 +16081,72 @@ When the question touches recent news, sentiment, or prices, combine the researc
         let _ = writeln!(p, "Symbols: {}", syms.join(", "));
         let _ = writeln!(p);
 
+        // ── ADR-113 Round 6 — global market context (not per-symbol) ─────────
+        // WEI / MOV / INDU give the model a snapshot of risk-on/off regime,
+        // leadership/laggards, and sector rotation at packet-generation time.
+        if let Some(ref cache) = self.cache {
+            if let Some(conn) = cache.try_connection() {
+                use typhoon_engine::core::research as rx;
+
+                // WEI — global equity indices
+                if let Ok(Some(rows)) = rx::get_world_indices(&conn) {
+                    if !rows.is_empty() {
+                        let advancing = rows.iter().filter(|r| r.change_pct > 0.0).count();
+                        let declining = rows.iter().filter(|r| r.change_pct < 0.0).count();
+                        let _ = writeln!(p, "## Global Market Context");
+                        let _ = writeln!(p, "### World Equity Indices");
+                        let _ = writeln!(p, "- {} indices tracked · {} advancing · {} declining",
+                            rows.len(), advancing, declining);
+                        let _ = writeln!(p, "| Region | Ticker | Name | Last | Chg % |");
+                        let _ = writeln!(p, "|---|---|---|---|---|");
+                        for r in rows.iter().take(12) {
+                            let _ = writeln!(p, "| {} | {} | {} | {:.2} | {:+.2}% |",
+                                r.region, r.ticker, r.display, r.price, r.change_pct);
+                        }
+                        let _ = writeln!(p);
+                    }
+                }
+
+                // MOV — market movers (top gainers / losers / actives, concise)
+                if let Ok(Some(mov)) = rx::get_market_movers(&conn) {
+                    if !mov.gainers.is_empty() || !mov.losers.is_empty() || !mov.actives.is_empty() {
+                        let _ = writeln!(p, "### Market Movers (US)");
+                        let render = |label: &str, rows: &[typhoon_engine::core::research::MarketMover]| {
+                            let mut s = String::new();
+                            if !rows.is_empty() {
+                                let _ = writeln!(s, "- **{}** — {}", label,
+                                    rows.iter().take(6)
+                                        .map(|m| format!("{} {:+.2}%", m.symbol, m.change_pct))
+                                        .collect::<Vec<_>>().join(", "));
+                            }
+                            s
+                        };
+                        p.push_str(&render("Top Gainers", &mov.gainers));
+                        p.push_str(&render("Top Losers", &mov.losers));
+                        p.push_str(&render("Most Active", &mov.actives));
+                        let _ = writeln!(p);
+                    }
+                }
+
+                // INDU — sector performance (latest daily snapshot)
+                if let Ok(Some(sec)) = rx::get_sector_performance(&conn) {
+                    if !sec.is_empty() {
+                        let mut sorted = sec.clone();
+                        sorted.sort_by(|a, b| b.change_pct.partial_cmp(&a.change_pct)
+                            .unwrap_or(std::cmp::Ordering::Equal));
+                        let up = sorted.iter().filter(|s| s.change_pct > 0.0).count();
+                        let down = sorted.iter().filter(|s| s.change_pct < 0.0).count();
+                        let _ = writeln!(p, "### Sector Performance");
+                        let _ = writeln!(p, "- {} sectors · {} up · {} down", sorted.len(), up, down);
+                        for s in sorted.iter() {
+                            let _ = writeln!(p, "- {} {:+.2}%", s.sector, s.change_pct);
+                        }
+                        let _ = writeln!(p);
+                    }
+                }
+            }
+        }
+
         // Per-symbol section
         for sym_raw in syms {
             let sym_upper = sym_raw.to_uppercase();
@@ -16351,6 +16602,21 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 let _ = writeln!(p, "- {} · actual ${:.2} · est ${:.2} · {:+.2} ({:+.2}%)",
                                     s.date, s.eps_actual, s.eps_estimate, s.surprise, s.surprise_pct);
                             }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // ADR-113 Round 6 — WACC snapshot (CAPM-derived cost of capital)
+                    if let Ok(Some(w)) = rx::get_wacc(&conn, &sym_upper) {
+                        if w.wacc_pct > 0.0 {
+                            let _ = writeln!(p, "### WACC Snapshot (CAPM, as of {})", w.as_of);
+                            let _ = writeln!(p, "- Cost of equity (Re) {:.2}% · after-tax cost of debt {:.2}% · **WACC {:.2}%**",
+                                w.cost_of_equity_pct, w.after_tax_cost_of_debt_pct, w.wacc_pct);
+                            let _ = writeln!(p, "- Inputs — β {:.3} · Rf {:.2}% · ERP {:.2}% · tax {:.2}%",
+                                w.beta, w.risk_free_pct, w.equity_risk_premium_pct, w.tax_rate_pct);
+                            let _ = writeln!(p, "- Capital mix — equity {:.1}% ({}) · debt {:.1}% ({})",
+                                w.equity_weight * 100.0, fmt_money(w.market_cap),
+                                w.debt_weight * 100.0, fmt_money(w.total_debt));
                             let _ = writeln!(p);
                         }
                     }
@@ -17347,6 +17613,102 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     let _ = self.broker_tx.send(BrokerCmd::FetchEarningsSurprises {
                         symbol: self.eps_symbol.to_uppercase(),
                         fmp_key: self.fmp_key.clone(),
+                    });
+                }
+            }
+            // ── ADR-113 Round 6 palette entries ──
+            // (intentionally omits "INDICES" to preserve the legacy ETF dashboard below)
+            "WEI" | "GLOBAL_INDICES" => {
+                self.show_wei = true;
+                // Load cached snapshot first for instant display.
+                if self.wei_indices.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(rows)) = typhoon_engine::core::research::get_world_indices(&conn) {
+                                self.wei_indices = rows;
+                            }
+                        }
+                    }
+                }
+                // Then kick a fresh fetch (Yahoo, no API key).
+                self.wei_loading = true;
+                let _ = self.broker_tx.send(BrokerCmd::FetchWorldIndices);
+            }
+            // (intentionally omits "MOVERS" to preserve the legacy broker top-movers arm below)
+            "MOV" | "GAINERS" | "LOSERS" | "ACTIVES" => {
+                self.show_market_movers = true;
+                if self.market_movers.gainers.is_empty()
+                    && self.market_movers.losers.is_empty()
+                    && self.market_movers.actives.is_empty()
+                {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(mov)) = typhoon_engine::core::research::get_market_movers(&conn) {
+                                self.market_movers = mov;
+                            }
+                        }
+                    }
+                }
+                if !self.fmp_key.is_empty() {
+                    self.mov_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchMarketMovers {
+                        fmp_key: self.fmp_key.clone(),
+                    });
+                }
+            }
+            "INDU" | "SECTOR" | "SECTORS" | "SECTOR_PERFORMANCE" => {
+                self.show_sector_perf = true;
+                if self.sector_perf.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(rows)) = typhoon_engine::core::research::get_sector_performance(&conn) {
+                                self.sector_perf = rows;
+                            }
+                        }
+                    }
+                }
+                if !self.fmp_key.is_empty() {
+                    self.indu_loading = true;
+                    let _ = self.broker_tx.send(BrokerCmd::FetchSectorPerformance {
+                        fmp_key: self.fmp_key.clone(),
+                    });
+                }
+            }
+            "CACS" | "CORP_ACTIONS" | "CORPORATE_ACTIONS" | "ACTIONS" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.cacs_symbol = sym; }
+                self.show_cacs = true;
+                // No fetcher — the window aggregates cached splits/dividends/earnings/IPOs.
+            }
+            "WACC" | "COST_OF_CAPITAL" | "CAPM" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.wacc_symbol = sym; }
+                self.show_wacc = true;
+                if self.wacc_snapshot.symbol.is_empty() && !self.wacc_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_wacc(&conn, &self.wacc_symbol) {
+                                self.wacc_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+                if !self.fmp_key.is_empty() && !self.wacc_symbol.is_empty() {
+                    self.wacc_loading = true;
+                    // Pass the latest 10Y yield we know about (in-memory);
+                    // fall back to 4.5 % if the GY window hasn't been fetched.
+                    let rf = self.treasury_yields.iter()
+                        .find(|y| y.tenor == "10Y")
+                        .map(|y| y.yield_pct)
+                        .unwrap_or(4.5);
+                    let _ = self.broker_tx.send(BrokerCmd::FetchWaccSnapshot {
+                        symbol: self.wacc_symbol.to_uppercase(),
+                        fmp_key: self.fmp_key.clone(),
+                        risk_free_pct: rf,
                     });
                 }
             }
@@ -27733,6 +28095,422 @@ When the question touches recent news, sentiment, or prices, combine the researc
             self.show_eps_surprise = open;
         }
 
+        // ── ADR-113 Round 6 windows ──────────────────────────────────
+
+        // WEI — Global Equity Indices
+        if self.show_wei {
+            let mut open = self.show_wei;
+            egui::Window::new("WEI — Global Equity Indices")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([720.0, 520.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            self.wei_loading = true;
+                            let _ = self.broker_tx.send(BrokerCmd::FetchWorldIndices);
+                        }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(rows)) = typhoon_engine::core::research::get_world_indices(&conn) {
+                                        self.wei_indices = rows;
+                                    }
+                                }
+                            }
+                        }
+                        ui.label(egui::RichText::new("Region:").color(AXIS_TEXT));
+                        egui::ComboBox::from_id_salt("wei_region_filter")
+                            .selected_text(if self.wei_region_filter.is_empty() { "All".to_string() }
+                                           else { self.wei_region_filter.clone() })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.wei_region_filter, String::new(), "All");
+                                ui.selectable_value(&mut self.wei_region_filter, "Americas".into(), "Americas");
+                                ui.selectable_value(&mut self.wei_region_filter, "EMEA".into(), "EMEA");
+                                ui.selectable_value(&mut self.wei_region_filter, "Asia-Pacific".into(), "Asia-Pacific");
+                            });
+                        if self.wei_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    if self.wei_indices.is_empty() {
+                        ui.label(egui::RichText::new("No data — click Fetch to batch-quote global indices from Yahoo.").color(AXIS_TEXT).small());
+                    } else {
+                        // Aggregates
+                        let filt = self.wei_region_filter.clone();
+                        let filtered: Vec<_> = self.wei_indices.iter()
+                            .filter(|r| filt.is_empty() || r.region == filt)
+                            .collect();
+                        let up = filtered.iter().filter(|r| r.change_pct > 0.0).count();
+                        let down = filtered.iter().filter(|r| r.change_pct < 0.0).count();
+                        ui.label(egui::RichText::new(format!(
+                            "{} indices · {} advancing · {} declining",
+                            filtered.len(), up, down,
+                        )).color(AXIS_TEXT).small());
+                        ui.separator();
+                        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                            egui::Grid::new("wei_grid").striped(true).num_columns(5)
+                                .min_col_width(80.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Region").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Ticker").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Name").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Last").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Chg %").color(AXIS_TEXT).small().strong());
+                                ui.end_row();
+                                for r in filtered.iter() {
+                                    let col = if r.change_pct > 0.0 { UP }
+                                              else if r.change_pct < 0.0 { DOWN }
+                                              else { AXIS_TEXT };
+                                    ui.label(egui::RichText::new(&r.region).small().color(AXIS_TEXT));
+                                    ui.label(egui::RichText::new(&r.ticker).small().monospace());
+                                    ui.label(egui::RichText::new(&r.display).small());
+                                    ui.label(egui::RichText::new(format!("{:.2}", r.price)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:+.2}%", r.change_pct)).color(col).small().strong().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_wei = open;
+        }
+
+        // MOV — Market Movers
+        if self.show_market_movers {
+            let mut open = self.show_market_movers;
+            egui::Window::new("MOV — Market Movers")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([860.0, 540.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        let have_key = !self.fmp_key.is_empty();
+                        if ui.add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            self.mov_loading = true;
+                            let _ = self.broker_tx.send(BrokerCmd::FetchMarketMovers {
+                                fmp_key: self.fmp_key.clone(),
+                            });
+                        }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(mov)) = typhoon_engine::core::research::get_market_movers(&conn) {
+                                        self.market_movers = mov;
+                                    }
+                                }
+                            }
+                        }
+                        if self.fmp_key.is_empty() {
+                            ui.label(egui::RichText::new("(add FMP key in Settings)").color(AXIS_TEXT).small());
+                        }
+                        if self.mov_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let render_col = |ui: &mut egui::Ui, title: &str, rows: &[typhoon_engine::core::research::MarketMover]| {
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(title).strong());
+                            egui::ScrollArea::vertical().id_salt(title).max_height(460.0).show(ui, |ui| {
+                                egui::Grid::new(format!("mov_{}_grid", title)).striped(true).num_columns(4).show(ui, |ui| {
+                                    ui.label(egui::RichText::new("Sym").color(AXIS_TEXT).small().strong());
+                                    ui.label(egui::RichText::new("Last").color(AXIS_TEXT).small().strong());
+                                    ui.label(egui::RichText::new("Chg %").color(AXIS_TEXT).small().strong());
+                                    ui.label(egui::RichText::new("Vol").color(AXIS_TEXT).small().strong());
+                                    ui.end_row();
+                                    for m in rows.iter().take(25) {
+                                        let col = if m.change_pct > 0.0 { UP }
+                                                  else if m.change_pct < 0.0 { DOWN }
+                                                  else { AXIS_TEXT };
+                                        ui.label(egui::RichText::new(&m.symbol).small().monospace().strong());
+                                        ui.label(egui::RichText::new(format!("{:.2}", m.price)).small().monospace());
+                                        ui.label(egui::RichText::new(format!("{:+.2}%", m.change_pct)).color(col).small().monospace().strong());
+                                        ui.label(egui::RichText::new(format!("{:.1}M", m.volume / 1e6)).small().monospace().color(AXIS_TEXT));
+                                        ui.end_row();
+                                    }
+                                });
+                            });
+                        });
+                    };
+                    ui.horizontal(|ui| {
+                        render_col(ui, "Top Gainers",  &self.market_movers.gainers);
+                        ui.separator();
+                        render_col(ui, "Top Losers",   &self.market_movers.losers);
+                        ui.separator();
+                        render_col(ui, "Most Active",  &self.market_movers.actives);
+                    });
+                });
+            self.show_market_movers = open;
+        }
+
+        // INDU — Sector Performance heatmap
+        if self.show_sector_perf {
+            let mut open = self.show_sector_perf;
+            egui::Window::new("INDU — Sector Performance")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([520.0, 420.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        let have_key = !self.fmp_key.is_empty();
+                        if ui.add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            self.indu_loading = true;
+                            let _ = self.broker_tx.send(BrokerCmd::FetchSectorPerformance {
+                                fmp_key: self.fmp_key.clone(),
+                            });
+                        }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(rows)) = typhoon_engine::core::research::get_sector_performance(&conn) {
+                                        self.sector_perf = rows;
+                                    }
+                                }
+                            }
+                        }
+                        if self.fmp_key.is_empty() {
+                            ui.label(egui::RichText::new("(add FMP key in Settings)").color(AXIS_TEXT).small());
+                        }
+                        if self.indu_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    if self.sector_perf.is_empty() {
+                        ui.label(egui::RichText::new("No data — click Fetch to pull FMP sector-performance.").color(AXIS_TEXT).small());
+                    } else {
+                        // Sort descending by pct for heatmap feel
+                        let mut rows: Vec<&typhoon_engine::core::research::SectorPerformance> = self.sector_perf.iter().collect();
+                        rows.sort_by(|a, b| b.change_pct.partial_cmp(&a.change_pct).unwrap_or(std::cmp::Ordering::Equal));
+                        let up = rows.iter().filter(|r| r.change_pct > 0.0).count();
+                        let down = rows.iter().filter(|r| r.change_pct < 0.0).count();
+                        let avg: f64 = if rows.is_empty() { 0.0 }
+                                        else { rows.iter().map(|r| r.change_pct).sum::<f64>() / rows.len() as f64 };
+                        ui.label(egui::RichText::new(format!(
+                            "{} sectors · {} up · {} down · avg {:+.2}%",
+                            rows.len(), up, down, avg
+                        )).color(AXIS_TEXT).small());
+                        ui.separator();
+                        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                            egui::Grid::new("indu_grid").striped(true).num_columns(3).min_col_width(140.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Sector").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Chg %").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Bar").color(AXIS_TEXT).small().strong());
+                                ui.end_row();
+                                let max_abs = rows.iter().map(|r| r.change_pct.abs()).fold(0.0_f64, f64::max).max(0.1);
+                                for r in rows.iter() {
+                                    let col = if r.change_pct > 0.0 { UP }
+                                              else if r.change_pct < 0.0 { DOWN }
+                                              else { AXIS_TEXT };
+                                    ui.label(egui::RichText::new(&r.sector).small().strong());
+                                    ui.label(egui::RichText::new(format!("{:+.2}%", r.change_pct)).color(col).small().monospace().strong());
+                                    let width = (r.change_pct.abs() / max_abs * 30.0).round() as usize;
+                                    let bar = if r.change_pct >= 0.0 {
+                                        format!("▌{}", "█".repeat(width))
+                                    } else {
+                                        format!("{}▐", "█".repeat(width))
+                                    };
+                                    ui.label(egui::RichText::new(bar).color(col).monospace().small());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            self.show_sector_perf = open;
+        }
+
+        // CACS — Corporate Actions Calendar (UI-only aggregator)
+        if self.show_cacs {
+            let mut open = self.show_cacs;
+            egui::Window::new("CACS — Corporate Actions")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([760.0, 520.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.cacs_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.cacs_symbol = chart_sym_research.clone(); }
+                        ui.label(egui::RichText::new("Aggregates cached Splits / Dividends / Earnings / IPO data.")
+                            .color(AXIS_TEXT).small());
+                    });
+                    ui.separator();
+                    let sym_u = self.cacs_symbol.to_uppercase();
+                    if sym_u.is_empty() {
+                        ui.label(egui::RichText::new("Enter a symbol to view its aggregated corporate actions timeline.")
+                            .color(AXIS_TEXT).small());
+                    } else if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            use typhoon_engine::core::research as rx;
+                            #[derive(Clone)]
+                            struct Event { date: String, kind: &'static str, detail: String }
+                            let mut events: Vec<Event> = Vec::new();
+                            if let Ok(Some(splits)) = rx::get_stock_splits(&conn, &sym_u) {
+                                for s in splits.iter() {
+                                    events.push(Event {
+                                        date: s.date.clone(), kind: "SPLIT",
+                                        detail: if s.label.is_empty() { format!("{}:{}", s.numerator, s.denominator) }
+                                                else { s.label.clone() },
+                                    });
+                                }
+                            }
+                            if let Ok(Some(divs)) = rx::get_dividends(&conn, &sym_u) {
+                                for d in divs.iter() {
+                                    events.push(Event {
+                                        date: d.ex_date.clone(), kind: "DIV",
+                                        detail: format!("${:.4} · {}", d.amount,
+                                            if d.label.is_empty() { "Regular".to_string() } else { d.label.clone() }),
+                                    });
+                                }
+                            }
+                            if let Ok(Some(surprises)) = rx::get_earnings_surprises(&conn, &sym_u) {
+                                for s in surprises.iter() {
+                                    events.push(Event {
+                                        date: s.date.clone(), kind: "EARN",
+                                        detail: format!("actual ${:.2} · est ${:.2} · {:+.2}%",
+                                            s.eps_actual, s.eps_estimate, s.surprise_pct),
+                                    });
+                                }
+                            }
+                            if let Ok(Some(ipos)) = rx::get_ipo_calendar(&conn) {
+                                for ev in ipos.iter().filter(|e| e.symbol.eq_ignore_ascii_case(&sym_u)) {
+                                    events.push(Event {
+                                        date: ev.date.clone(), kind: "IPO",
+                                        detail: format!("{} @ {} ({} sh)", ev.exchange, ev.price_range, ev.shares),
+                                    });
+                                }
+                            }
+                            events.sort_by(|a, b| b.date.cmp(&a.date));
+                            ui.label(egui::RichText::new(format!("{} events across all action types", events.len()))
+                                .color(AXIS_TEXT).small());
+                            ui.separator();
+                            if events.is_empty() {
+                                ui.label(egui::RichText::new(format!("No cached corporate actions for {}. Run SPLT / DVD / EPS / IPO first.", sym_u))
+                                    .color(AXIS_TEXT).small());
+                            } else {
+                                egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                                    egui::Grid::new("cacs_grid").striped(true).num_columns(3).min_col_width(100.0).show(ui, |ui| {
+                                        ui.label(egui::RichText::new("Date").color(AXIS_TEXT).small().strong());
+                                        ui.label(egui::RichText::new("Type").color(AXIS_TEXT).small().strong());
+                                        ui.label(egui::RichText::new("Detail").color(AXIS_TEXT).small().strong());
+                                        ui.end_row();
+                                        for ev in events.iter() {
+                                            let col = match ev.kind {
+                                                "SPLIT" => egui::Color32::from_rgb(150, 200, 255),
+                                                "DIV"   => UP,
+                                                "EARN"  => egui::Color32::from_rgb(255, 200, 100),
+                                                "IPO"   => egui::Color32::from_rgb(200, 150, 255),
+                                                _       => AXIS_TEXT,
+                                            };
+                                            ui.label(egui::RichText::new(&ev.date).small().monospace());
+                                            ui.label(egui::RichText::new(ev.kind).color(col).small().strong().monospace());
+                                            ui.label(egui::RichText::new(&ev.detail).small());
+                                            ui.end_row();
+                                        }
+                                    });
+                                });
+                            }
+                        }
+                    } else {
+                        ui.label(egui::RichText::new("Cache not available.").color(AXIS_TEXT).small());
+                    }
+                });
+            self.show_cacs = open;
+        }
+
+        // WACC — Cost of Capital snapshot
+        if self.show_wacc {
+            if self.wacc_symbol.is_empty() { self.wacc_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_wacc;
+            egui::Window::new("WACC — Cost of Capital (CAPM)")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([560.0, 480.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.wacc_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.wacc_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.wacc_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_wacc(&conn, &sym_u) {
+                                        self.wacc_snapshot = snap;
+                                        self.wacc_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        let have_key = !self.fmp_key.is_empty();
+                        if ui.add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                            let sym = self.wacc_symbol.to_uppercase();
+                            self.wacc_loading = true;
+                            self.wacc_symbol = sym.clone();
+                            let rf = self.treasury_yields.iter()
+                                .find(|y| y.tenor == "10Y")
+                                .map(|y| y.yield_pct)
+                                .unwrap_or(4.5);
+                            let _ = self.broker_tx.send(BrokerCmd::FetchWaccSnapshot {
+                                symbol: sym, fmp_key: self.fmp_key.clone(), risk_free_pct: rf,
+                            });
+                        }
+                        if self.fmp_key.is_empty() {
+                            ui.label(egui::RichText::new("(add FMP key in Settings)").color(AXIS_TEXT).small());
+                        }
+                        if self.wacc_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.wacc_snapshot;
+                    if snap.symbol.is_empty() {
+                        ui.label(egui::RichText::new("No data — click Fetch to pull FMP profile + balance sheet.")
+                            .color(AXIS_TEXT).small());
+                        ui.label(egui::RichText::new("Tip: run GY first to cache the latest 10Y Treasury yield as your risk-free rate.")
+                            .color(AXIS_TEXT).small());
+                    } else {
+                        let fmt_money = |v: f64| -> String {
+                            if v >= 1e12 { format!("${:.2}T", v / 1e12) }
+                            else if v >= 1e9 { format!("${:.2}B", v / 1e9) }
+                            else if v >= 1e6 { format!("${:.1}M", v / 1e6) }
+                            else { format!("${:.0}", v) }
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — WACC {:.2}%",
+                            snap.symbol, snap.wacc_pct,
+                        )).strong().size(16.0).color(if snap.wacc_pct > 0.0 { UP } else { AXIS_TEXT }));
+                        ui.label(egui::RichText::new(format!("as of {}", snap.as_of)).color(AXIS_TEXT).small());
+                        ui.separator();
+                        egui::Grid::new("wacc_grid").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            let row = |ui: &mut egui::Ui, k: &str, v: String| {
+                                ui.label(egui::RichText::new(k).color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(v).small().monospace().strong());
+                                ui.end_row();
+                            };
+                            row(ui, "Beta (β)",                    format!("{:.3}", snap.beta));
+                            row(ui, "Risk-free rate (Rf, 10Y)",    format!("{:.2}%", snap.risk_free_pct));
+                            row(ui, "Equity risk premium (ERP)",   format!("{:.2}%", snap.equity_risk_premium_pct));
+                            row(ui, "Cost of equity (Re = Rf + β·ERP)", format!("{:.2}%", snap.cost_of_equity_pct));
+                            row(ui, "Pre-tax cost of debt (Rd)",   format!("{:.2}%", snap.pre_tax_cost_of_debt_pct));
+                            row(ui, "Effective tax rate",          format!("{:.2}%", snap.tax_rate_pct));
+                            row(ui, "After-tax cost of debt",      format!("{:.2}%", snap.after_tax_cost_of_debt_pct));
+                            row(ui, "Market cap (E)",              fmt_money(snap.market_cap));
+                            row(ui, "Total debt (D)",              fmt_money(snap.total_debt));
+                            row(ui, "Equity weight (wE)",          format!("{:.1}%", snap.equity_weight * 100.0));
+                            row(ui, "Debt weight (wD)",            format!("{:.1}%", snap.debt_weight * 100.0));
+                            row(ui, "WACC",                        format!("{:.2}%", snap.wacc_pct));
+                        });
+                        ui.separator();
+                        ui.label(egui::RichText::new("CAPM formula: WACC = wE × (Rf + β × ERP) + wD × Rd × (1 - t)")
+                            .color(AXIS_TEXT).small().italics());
+                    }
+                });
+            self.show_wacc = open;
+        }
+
         // GY — Treasury Yield Curve
         if self.show_treasury_curve {
             let mut open = self.show_treasury_curve;
@@ -34743,6 +35521,46 @@ impl eframe::App for TyphooNApp {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let _ = typhoon_engine::core::research::upsert_earnings_surprises(&conn, &sym_u, &rows);
+                        }
+                    }
+                }
+                // ── ADR-113 Round 6 receive arms ──
+                BrokerMsg::WorldIndicesMsg(rows) => {
+                    self.wei_indices = rows.clone();
+                    self.wei_loading = false;
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_world_indices(&conn, &rows);
+                        }
+                    }
+                }
+                BrokerMsg::MarketMoversMsg(movers) => {
+                    self.market_movers = movers.clone();
+                    self.mov_loading = false;
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_market_movers(&conn, &movers);
+                        }
+                    }
+                }
+                BrokerMsg::SectorPerformanceMsg(rows) => {
+                    self.sector_perf = rows.clone();
+                    self.indu_loading = false;
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_sector_performance(&conn, &rows);
+                        }
+                    }
+                }
+                BrokerMsg::WaccSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.wacc_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.wacc_snapshot = snap.clone();
+                        self.wacc_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_wacc(&conn, &sym_u, &snap);
                         }
                     }
                 }
