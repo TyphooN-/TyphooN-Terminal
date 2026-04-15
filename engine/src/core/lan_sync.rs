@@ -232,6 +232,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_updgrank",
     "research_gy",
     "research_des",
+    // ── ADR-127 Round 20 ────────────────────────────
+    "research_dvdyieldrank",
+    "research_shrank",
+    "research_atrann",
+    "research_ddhist",
+    "research_priceperf",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -994,6 +1000,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_dvdyieldrank" => Some(
+            "CREATE TABLE IF NOT EXISTS research_dvdyieldrank (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_shrank" => Some(
+            "CREATE TABLE IF NOT EXISTS research_shrank (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_atrann" => Some(
+            "CREATE TABLE IF NOT EXISTS research_atrann (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_ddhist" => Some(
+            "CREATE TABLE IF NOT EXISTS research_ddhist (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_priceperf" => Some(
+            "CREATE TABLE IF NOT EXISTS research_priceperf (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -1092,6 +1133,16 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_fqmrank" => Some("updated_at"),
         "research_liqrank" => Some("updated_at"),
         "research_surpstk" => Some("updated_at"),
+        "research_dvdrank" => Some("updated_at"),
+        "research_earmrank" => Some("updated_at"),
+        "research_updgrank" => Some("updated_at"),
+        "research_gy" => Some("updated_at"),
+        "research_des" => Some("updated_at"),
+        "research_dvdyieldrank" => Some("updated_at"),
+        "research_shrank" => Some("updated_at"),
+        "research_atrann" => Some("updated_at"),
+        "research_ddhist" => Some("updated_at"),
+        "research_priceperf" => Some("updated_at"),
         _ => None,
     }
 }

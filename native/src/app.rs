@@ -10059,6 +10059,17 @@ enum BrokerCmd {
     ComputeGySnapshot { symbol: String },
     /// DES — Daily event streak stat (up/down/flat day distribution, longest runs).
     ComputeDesSnapshot { symbol: String },
+    // ── ADR-127 Round 20 ──
+    /// DVDYIELDRANK — Dividend yield rank vs sector peers (non-payers filtered).
+    ComputeDvdyieldrankSnapshot { symbol: String },
+    /// SHRANK — Short interest rank vs sector peers (risk-inverted).
+    ComputeShrankSnapshot { symbol: String },
+    /// ATRANN — Annualized Wilder ATR volatility regime.
+    ComputeAtrannSnapshot { symbol: String },
+    /// DDHIST — Drawdown history stat (max dd, longest dd, corrections, current dd).
+    ComputeDdhistSnapshot { symbol: String },
+    /// PRICEPERF — Multi-horizon price performance (1M/3M/6M/YTD/1Y returns).
+    ComputePriceperfSnapshot { symbol: String },
     /// Fetch multi-source news for a symbol (GDELT + Yahoo RSS + SEC + Marketaux + AV + FMP),
     /// cache results in SQLite, and return the cached set.
     FetchNewsMulti {
@@ -10365,6 +10376,17 @@ enum BrokerMsg {
     GySnapshotMsg(String, typhoon_engine::core::research::GapYearlySnapshot),
     /// DES — Daily event streak stat for a symbol.
     DesSnapshotMsg(String, typhoon_engine::core::research::DailyEventStreakSnapshot),
+    // ── ADR-127 ──
+    /// DVDYIELDRANK — Dividend yield rank vs sector peers snapshot for a symbol.
+    DvdyieldrankSnapshotMsg(String, typhoon_engine::core::research::DividendYieldRankSnapshot),
+    /// SHRANK — Short interest rank vs sector peers snapshot for a symbol.
+    ShrankSnapshotMsg(String, typhoon_engine::core::research::ShortInterestRankSnapshot),
+    /// ATRANN — Annualized ATR volatility regime snapshot for a symbol.
+    AtrannSnapshotMsg(String, typhoon_engine::core::research::AnnualizedAtrSnapshot),
+    /// DDHIST — Drawdown history snapshot for a symbol.
+    DdhistSnapshotMsg(String, typhoon_engine::core::research::DrawdownHistorySnapshot),
+    /// PRICEPERF — Multi-horizon price performance snapshot for a symbol.
+    PriceperfSnapshotMsg(String, typhoon_engine::core::research::PricePerformanceSnapshot),
     /// Multi-source news articles loaded (from cache + fresh fetch) for a symbol.
     NewsArticlesLoaded {
         symbol: String,
@@ -11668,6 +11690,36 @@ pub struct TyphooNApp {
     des_symbol: String,
     des_snapshot: typhoon_engine::core::research::DailyEventStreakSnapshot,
     des_loading: bool,
+
+    /// DVDYIELDRANK — Dividend yield rank vs sector peers.
+    show_dvdyieldrank: bool,
+    dvdyieldrank_symbol: String,
+    dvdyieldrank_snapshot: typhoon_engine::core::research::DividendYieldRankSnapshot,
+    dvdyieldrank_loading: bool,
+
+    /// SHRANK — Short interest rank vs sector peers (risk-inverted).
+    show_shrank: bool,
+    shrank_symbol: String,
+    shrank_snapshot: typhoon_engine::core::research::ShortInterestRankSnapshot,
+    shrank_loading: bool,
+
+    /// ATRANN — Annualized ATR volatility regime.
+    show_atrann: bool,
+    atrann_symbol: String,
+    atrann_snapshot: typhoon_engine::core::research::AnnualizedAtrSnapshot,
+    atrann_loading: bool,
+
+    /// DDHIST — Drawdown history.
+    show_ddhist: bool,
+    ddhist_symbol: String,
+    ddhist_snapshot: typhoon_engine::core::research::DrawdownHistorySnapshot,
+    ddhist_loading: bool,
+
+    /// PRICEPERF — Multi-horizon price performance.
+    show_priceperf: bool,
+    priceperf_symbol: String,
+    priceperf_snapshot: typhoon_engine::core::research::PricePerformanceSnapshot,
+    priceperf_loading: bool,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -14822,6 +14874,109 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::DesSnapshotMsg(symbol, snap));
                         });
                     }
+                    BrokerCmd::ComputeDvdyieldrankSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        use typhoon_engine::core::fundamentals;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let (subject_yield, peers, sector) = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    let fund = fundamentals::get_fundamentals(&conn, &symbol).ok().flatten();
+                                    let sector = fund.as_ref().map(|f| f.sector.clone()).unwrap_or_default();
+                                    let subj_y = fund.as_ref().and_then(|f| f.dividend_yield);
+                                    let mut peers: Vec<(String, Option<f64>)> = Vec::new();
+                                    if !sector.is_empty() {
+                                        let all = fundamentals::get_all_fundamentals(&conn).unwrap_or_default();
+                                        for p in all {
+                                            if p.symbol.to_uppercase() == symbol.to_uppercase() { continue; }
+                                            if p.sector == sector {
+                                                peers.push((p.symbol.clone(), p.dividend_yield));
+                                            }
+                                        }
+                                    }
+                                    (subj_y, peers, sector)
+                                } else { (None, Vec::new(), String::new()) }
+                            } else { (None, Vec::new(), String::new()) };
+                            let snap = research::compute_dvdyieldrank_snapshot(&symbol, &today, &sector, subject_yield, &peers);
+                            let _ = msg_tx.send(BrokerMsg::DvdyieldrankSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeShrankSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        use typhoon_engine::core::fundamentals;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let (subject_short, peers, sector) = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    let fund = fundamentals::get_fundamentals(&conn, &symbol).ok().flatten();
+                                    let sector = fund.as_ref().map(|f| f.sector.clone()).unwrap_or_default();
+                                    let subj_s = fund.as_ref().and_then(|f| f.short_percent_of_float);
+                                    let mut peers: Vec<(String, Option<f64>)> = Vec::new();
+                                    if !sector.is_empty() {
+                                        let all = fundamentals::get_all_fundamentals(&conn).unwrap_or_default();
+                                        for p in all {
+                                            if p.symbol.to_uppercase() == symbol.to_uppercase() { continue; }
+                                            if p.sector == sector {
+                                                peers.push((p.symbol.clone(), p.short_percent_of_float));
+                                            }
+                                        }
+                                    }
+                                    (subj_s, peers, sector)
+                                } else { (None, Vec::new(), String::new()) }
+                            } else { (None, Vec::new(), String::new()) };
+                            let snap = research::compute_shrank_snapshot(&symbol, &today, &sector, subject_short, &peers);
+                            let _ = msg_tx.send(BrokerMsg::ShrankSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeAtrannSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_atrann_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::AtrannSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeDdhistSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_ddhist_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::DdhistSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputePriceperfSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_priceperf_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::PriceperfSnapshotMsg(symbol, snap));
+                        });
+                    }
                     BrokerCmd::FetchNewsMulti { symbol, marketaux_key, alpha_vantage_key, fmp_key } => {
                         use typhoon_engine::core::news;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -17372,6 +17527,27 @@ When the question touches recent news, sentiment, or prices, combine the researc
             des_symbol: String::new(),
             des_snapshot: typhoon_engine::core::research::DailyEventStreakSnapshot::default(),
             des_loading: false,
+            // ── ADR-127 Round 20 defaults ──
+            show_dvdyieldrank: false,
+            dvdyieldrank_symbol: String::new(),
+            dvdyieldrank_snapshot: typhoon_engine::core::research::DividendYieldRankSnapshot::default(),
+            dvdyieldrank_loading: false,
+            show_shrank: false,
+            shrank_symbol: String::new(),
+            shrank_snapshot: typhoon_engine::core::research::ShortInterestRankSnapshot::default(),
+            shrank_loading: false,
+            show_atrann: false,
+            atrann_symbol: String::new(),
+            atrann_snapshot: typhoon_engine::core::research::AnnualizedAtrSnapshot::default(),
+            atrann_loading: false,
+            show_ddhist: false,
+            ddhist_symbol: String::new(),
+            ddhist_snapshot: typhoon_engine::core::research::DrawdownHistorySnapshot::default(),
+            ddhist_loading: false,
+            show_priceperf: false,
+            priceperf_symbol: String::new(),
+            priceperf_snapshot: typhoon_engine::core::research::PricePerformanceSnapshot::default(),
+            priceperf_loading: false,
             bottom_tab: BottomTab::Log,
             log,
             log_filter: LogFilter::All,
@@ -20286,6 +20462,69 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = writeln!(p);
                         }
                     }
+
+                    // ── ADR-127 Round 20 ──
+                    if let Ok(Some(dyr)) = rx::get_dvdyieldrank(&conn, &sym_upper) {
+                        if dyr.rank_label != "NO_DATA" && dyr.rank_label != "INSUFFICIENT_DATA" && !dyr.rank_label.is_empty() {
+                            let _ = writeln!(p, "### Dividend Yield Rank — DVDYIELDRANK ({}, as of {})", dyr.rank_label, dyr.as_of);
+                            let _ = writeln!(p, "- Yield {:.2}% · rank {}/{} · pct {:.0}",
+                                dyr.dividend_yield_pct, dyr.rank_position, dyr.peers_considered + 1, dyr.percentile_rank);
+                            let _ = writeln!(p, "- Sector {} median / p25 / p75 yield: {:.2}% / {:.2}% / {:.2}%",
+                                dyr.sector, dyr.sector_median_yield_pct, dyr.sector_p25_yield_pct, dyr.sector_p75_yield_pct);
+                            if !dyr.note.is_empty() { let _ = writeln!(p, "- Note: {}", dyr.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(sr)) = rx::get_shrank(&conn, &sym_upper) {
+                        if sr.rank_label != "NO_DATA" && sr.rank_label != "INSUFFICIENT_DATA" && !sr.rank_label.is_empty() {
+                            let _ = writeln!(p, "### Short Interest Rank — SHRANK ({}, as of {})", sr.rank_label, sr.as_of);
+                            let _ = writeln!(p, "- Short {:.2}% of float · rank {}/{} · pct {:.0} (risk-inverted: higher = safer)",
+                                sr.short_pct_of_float, sr.rank_position, sr.peers_considered + 1, sr.percentile_rank);
+                            let _ = writeln!(p, "- Sector {} median / p25 / p75 short: {:.2}% / {:.2}% / {:.2}%",
+                                sr.sector, sr.sector_median_short_pct, sr.sector_p25_short_pct, sr.sector_p75_short_pct);
+                            if !sr.note.is_empty() { let _ = writeln!(p, "- Note: {}", sr.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(at)) = rx::get_atrann(&conn, &sym_upper) {
+                        if at.regime_label != "INSUFFICIENT_DATA" && !at.regime_label.is_empty() {
+                            let _ = writeln!(p, "### Annualized ATR — ATRANN ({}, as of {})", at.regime_label, at.as_of);
+                            let _ = writeln!(p, "- {} bars · close {:.4} · ATR14 {:.4} ({:.2}%) · annualized {:.2}% (×√252)",
+                                at.bars_used, at.latest_close, at.atr14, at.atr14_pct, at.atr_annualized_pct);
+                            if !at.note.is_empty() { let _ = writeln!(p, "- Note: {}", at.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(dh)) = rx::get_ddhist(&conn, &sym_upper) {
+                        if dh.regime_label != "INSUFFICIENT_DATA" && !dh.regime_label.is_empty() {
+                            let _ = writeln!(p, "### Drawdown History — DDHIST ({}, as of {})", dh.regime_label, dh.as_of);
+                            let _ = writeln!(p, "- {} bars · max dd {:+.2}% · current dd {:+.2}%",
+                                dh.bars_used, dh.max_drawdown_pct, dh.current_drawdown_pct);
+                            if !dh.max_drawdown_peak_date.is_empty() && !dh.max_drawdown_trough_date.is_empty() {
+                                let _ = writeln!(p, "- Max dd peak {} → trough {} · longest drawdown {} sessions",
+                                    dh.max_drawdown_peak_date, dh.max_drawdown_trough_date, dh.longest_drawdown_days);
+                            }
+                            let _ = writeln!(p, "- Corrections ≥5% / ≥10%: {} / {}",
+                                dh.corrections_5pct, dh.corrections_10pct);
+                            if !dh.note.is_empty() { let _ = writeln!(p, "- Note: {}", dh.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(pp)) = rx::get_priceperf(&conn, &sym_upper) {
+                        if pp.trend_label != "INSUFFICIENT_DATA" && !pp.trend_label.is_empty() {
+                            let _ = writeln!(p, "### Price Performance — PRICEPERF ({}, as of {})", pp.trend_label, pp.as_of);
+                            let _ = writeln!(p, "- {} bars · close {:.4} · 1M {:+.2}% · 3M {:+.2}% · 6M {:+.2}%",
+                                pp.bars_used, pp.latest_close, pp.ret_1m_pct, pp.ret_3m_pct, pp.ret_6m_pct);
+                            let _ = writeln!(p, "- YTD {:+.2}% · 1Y {:+.2}%",
+                                pp.ret_ytd_pct, pp.ret_1y_pct);
+                            if !pp.note.is_empty() { let _ = writeln!(p, "- Note: {}", pp.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
                 }
             }
 
@@ -22438,6 +22677,86 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         if let Ok(conn) = cache.connection() {
                             if let Ok(Some(snap)) = typhoon_engine::core::research::get_des(&conn, &self.des_symbol) {
                                 self.des_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "DVDYIELDRANK" | "DVDY_RANK" | "DIVIDEND_YIELD_RANK" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.dvdyieldrank_symbol = sym; }
+                self.show_dvdyieldrank = true;
+                if self.dvdyieldrank_snapshot.symbol.is_empty() && !self.dvdyieldrank_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_dvdyieldrank(&conn, &self.dvdyieldrank_symbol) {
+                                self.dvdyieldrank_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "SHRANK" | "SHORT_RANK" | "SHORT_INT_RANK" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.shrank_symbol = sym; }
+                self.show_shrank = true;
+                if self.shrank_snapshot.symbol.is_empty() && !self.shrank_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_shrank(&conn, &self.shrank_symbol) {
+                                self.shrank_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "ATRANN" | "ATR_ANN" | "ANNUALIZED_ATR" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.atrann_symbol = sym; }
+                self.show_atrann = true;
+                if self.atrann_snapshot.symbol.is_empty() && !self.atrann_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_atrann(&conn, &self.atrann_symbol) {
+                                self.atrann_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "DDHIST" | "DD_HIST" | "DRAWDOWN_HIST" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.ddhist_symbol = sym; }
+                self.show_ddhist = true;
+                if self.ddhist_snapshot.symbol.is_empty() && !self.ddhist_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_ddhist(&conn, &self.ddhist_symbol) {
+                                self.ddhist_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "PRICEPERF" | "PRICE_PERF" | "MULTI_RETURN" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.priceperf_symbol = sym; }
+                self.show_priceperf = true;
+                if self.priceperf_snapshot.symbol.is_empty() && !self.priceperf_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_priceperf(&conn, &self.priceperf_symbol) {
+                                self.priceperf_snapshot = snap;
                             }
                         }
                     }
@@ -38983,6 +39302,398 @@ When the question touches recent news, sentiment, or prices, combine the researc
             self.show_des = open;
         }
 
+        // DVDYIELDRANK — Dividend Yield Rank vs Sector Peers
+        if self.show_dvdyieldrank {
+            if self.dvdyieldrank_symbol.is_empty() { self.dvdyieldrank_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_dvdyieldrank;
+            egui::Window::new("DVDYIELDRANK — Dividend Yield Rank")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.dvdyieldrank_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.dvdyieldrank_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.dvdyieldrank_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_dvdyieldrank(&conn, &sym_u) {
+                                        self.dvdyieldrank_snapshot = snap;
+                                        self.dvdyieldrank_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.dvdyieldrank_symbol.to_uppercase();
+                            self.dvdyieldrank_loading = true;
+                            self.dvdyieldrank_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeDvdyieldrankSnapshot { symbol: sym });
+                        }
+                        if self.dvdyieldrank_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.dvdyieldrank_snapshot;
+                    if snap.symbol.is_empty() || snap.rank_label == "INSUFFICIENT_DATA" || snap.rank_label == "NO_DATA" {
+                        ui.label(egui::RichText::new("No data — subject needs a positive dividend yield and ≥3 sector peers also paying dividends.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.rank_label.as_str() {
+                            "TOP_DECILE" | "TOP_QUARTILE" | "ABOVE_MEDIAN" => UP,
+                            "BELOW_MEDIAN" | "BOTTOM_QUARTILE" | "BOTTOM_DECILE" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — yield {:.2}% — pct {:.0} — rank {}/{} — sector {} — as of {}",
+                            snap.symbol, snap.rank_label, snap.dividend_yield_pct, snap.percentile_rank,
+                            snap.rank_position, snap.peers_considered + 1, snap.sector, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("dvdyieldrank_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Subject yield %").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.dividend_yield_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Sector median / p25 / p75 yield").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}% / {:.2}% / {:.2}%",
+                                snap.sector_median_yield_pct, snap.sector_p25_yield_pct, snap.sector_p75_yield_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Peers considered / with data").small().strong());
+                            ui.label(egui::RichText::new(format!("{} / {}", snap.peers_considered, snap.peers_with_data)).small().monospace());
+                            ui.end_row();
+                        });
+                        if !snap.note.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
+                        }
+                    }
+                });
+            self.show_dvdyieldrank = open;
+        }
+
+        // SHRANK — Short Interest Rank (risk-inverted)
+        if self.show_shrank {
+            if self.shrank_symbol.is_empty() { self.shrank_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_shrank;
+            egui::Window::new("SHRANK — Short Interest Rank")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.shrank_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.shrank_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.shrank_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_shrank(&conn, &sym_u) {
+                                        self.shrank_snapshot = snap;
+                                        self.shrank_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.shrank_symbol.to_uppercase();
+                            self.shrank_loading = true;
+                            self.shrank_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeShrankSnapshot { symbol: sym });
+                        }
+                        if self.shrank_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.shrank_snapshot;
+                    if snap.symbol.is_empty() || snap.rank_label == "INSUFFICIENT_DATA" || snap.rank_label == "NO_DATA" {
+                        ui.label(egui::RichText::new("No data — needs ≥3 sector peers with short_percent_of_float in Fundamentals.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        // Risk-inverted: SAFEST is green, RISKIEST is red.
+                        let color = match snap.rank_label.as_str() {
+                            "SAFEST_DECILE" | "SAFEST_QUARTILE" | "ABOVE_MEDIAN_SAFE" => UP,
+                            "BELOW_MEDIAN_RISKY" | "BOTTOM_QUARTILE_RISKY" | "RISKIEST_DECILE" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — short {:.2}% — pct {:.0} — rank {}/{} — sector {} — as of {}",
+                            snap.symbol, snap.rank_label, snap.short_pct_of_float, snap.percentile_rank,
+                            snap.rank_position, snap.peers_considered + 1, snap.sector, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("shrank_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Subject short % of float").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.short_pct_of_float)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Sector median / p25 / p75 short").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}% / {:.2}% / {:.2}%",
+                                snap.sector_median_short_pct, snap.sector_p25_short_pct, snap.sector_p75_short_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Peers considered / with data").small().strong());
+                            ui.label(egui::RichText::new(format!("{} / {}", snap.peers_considered, snap.peers_with_data)).small().monospace());
+                            ui.end_row();
+                        });
+                        if !snap.note.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
+                        }
+                    }
+                });
+            self.show_shrank = open;
+        }
+
+        // ATRANN — Annualized ATR Volatility Regime
+        if self.show_atrann {
+            if self.atrann_symbol.is_empty() { self.atrann_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_atrann;
+            egui::Window::new("ATRANN — Annualized ATR")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.atrann_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.atrann_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.atrann_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_atrann(&conn, &sym_u) {
+                                        self.atrann_snapshot = snap;
+                                        self.atrann_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.atrann_symbol.to_uppercase();
+                            self.atrann_loading = true;
+                            self.atrann_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeAtrannSnapshot { symbol: sym });
+                        }
+                        if self.atrann_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.atrann_snapshot;
+                    if snap.symbol.is_empty() || snap.regime_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — needs ≥15 cached daily bars for the subject.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.regime_label.as_str() {
+                            "LOW_VOL" => UP,
+                            "NORMAL_VOL" => AXIS_TEXT,
+                            "HIGH_VOL" | "EXTREME_VOL" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — ATR14 {:.4} ({:.2}%) — annualized {:.2}% — {} bars — as of {}",
+                            snap.symbol, snap.regime_label, snap.atr14, snap.atr14_pct,
+                            snap.atr_annualized_pct, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("atrann_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Latest close").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.latest_close)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("ATR14 (price units)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.atr14)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("ATR14 %").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.atr14_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Annualized (×√252)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.atr_annualized_pct)).small().monospace());
+                            ui.end_row();
+                        });
+                        if !snap.note.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
+                        }
+                    }
+                });
+            self.show_atrann = open;
+        }
+
+        // DDHIST — Drawdown History
+        if self.show_ddhist {
+            if self.ddhist_symbol.is_empty() { self.ddhist_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_ddhist;
+            egui::Window::new("DDHIST — Drawdown History")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.ddhist_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.ddhist_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.ddhist_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_ddhist(&conn, &sym_u) {
+                                        self.ddhist_snapshot = snap;
+                                        self.ddhist_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.ddhist_symbol.to_uppercase();
+                            self.ddhist_loading = true;
+                            self.ddhist_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeDdhistSnapshot { symbol: sym });
+                        }
+                        if self.ddhist_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.ddhist_snapshot;
+                    if snap.symbol.is_empty() || snap.regime_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — needs ≥20 cached daily bars for the subject.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.regime_label.as_str() {
+                            "RECOVERING" | "SHALLOW" => UP,
+                            "MEANINGFUL" => AXIS_TEXT,
+                            "SEVERE" | "CATASTROPHIC" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — max dd {:+.2}% — current dd {:+.2}% — {} bars — as of {}",
+                            snap.symbol, snap.regime_label, snap.max_drawdown_pct,
+                            snap.current_drawdown_pct, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("ddhist_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Max drawdown %").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.2}%", snap.max_drawdown_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Max dd peak / trough date").small().strong());
+                            ui.label(egui::RichText::new(format!("{} / {}",
+                                snap.max_drawdown_peak_date, snap.max_drawdown_trough_date)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Longest drawdown (sessions)").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.longest_drawdown_days)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Corrections ≥5% / ≥10%").small().strong());
+                            ui.label(egui::RichText::new(format!("{} / {}",
+                                snap.corrections_5pct, snap.corrections_10pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Current drawdown %").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.2}%", snap.current_drawdown_pct)).small().monospace());
+                            ui.end_row();
+                        });
+                        if !snap.note.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
+                        }
+                    }
+                });
+            self.show_ddhist = open;
+        }
+
+        // PRICEPERF — Multi-horizon Price Performance
+        if self.show_priceperf {
+            if self.priceperf_symbol.is_empty() { self.priceperf_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_priceperf;
+            egui::Window::new("PRICEPERF — Price Performance")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.priceperf_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.priceperf_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.priceperf_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_priceperf(&conn, &sym_u) {
+                                        self.priceperf_snapshot = snap;
+                                        self.priceperf_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.priceperf_symbol.to_uppercase();
+                            self.priceperf_loading = true;
+                            self.priceperf_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputePriceperfSnapshot { symbol: sym });
+                        }
+                        if self.priceperf_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.priceperf_snapshot;
+                    if snap.symbol.is_empty() || snap.trend_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — needs ≥2 cached daily bars (≥20 for trend label).")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.trend_label.as_str() {
+                            "STRONG_BULL" | "BULL" => UP,
+                            "NEUTRAL" => AXIS_TEXT,
+                            "BEAR" | "STRONG_BEAR" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — close {:.2} — 1Y {:+.2}% — YTD {:+.2}% — {} bars — as of {}",
+                            snap.symbol, snap.trend_label, snap.latest_close,
+                            snap.ret_1y_pct, snap.ret_ytd_pct, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("priceperf_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("1M / 3M / 6M return").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.2}% / {:+.2}% / {:+.2}%",
+                                snap.ret_1m_pct, snap.ret_3m_pct, snap.ret_6m_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("YTD / 1Y return").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.2}% / {:+.2}%",
+                                snap.ret_ytd_pct, snap.ret_1y_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Bars used").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.bars_used)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Latest close").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.latest_close)).small().monospace());
+                            ui.end_row();
+                        });
+                        if !snap.note.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
+                        }
+                    }
+                });
+            self.show_priceperf = open;
+        }
+
         // GY — Treasury Yield Curve
         if self.show_treasury_curve {
             let mut open = self.show_treasury_curve;
@@ -46820,6 +47531,66 @@ impl eframe::App for TyphooNApp {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let _ = typhoon_engine::core::research::upsert_des(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::DvdyieldrankSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.dvdyieldrank_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.dvdyieldrank_snapshot = snap.clone();
+                        self.dvdyieldrank_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_dvdyieldrank(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::ShrankSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.shrank_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.shrank_snapshot = snap.clone();
+                        self.shrank_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_shrank(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::AtrannSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.atrann_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.atrann_snapshot = snap.clone();
+                        self.atrann_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_atrann(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::DdhistSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.ddhist_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.ddhist_snapshot = snap.clone();
+                        self.ddhist_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_ddhist(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::PriceperfSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.priceperf_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.priceperf_snapshot = snap.clone();
+                        self.priceperf_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_priceperf(&conn, &sym_u, &snap);
                         }
                     }
                 }

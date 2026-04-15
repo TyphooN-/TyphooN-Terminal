@@ -2207,6 +2207,108 @@ pub struct DailyEventStreakSnapshot {
     pub note: String,
 }
 
+// ── ADR-127 Round 20 — yield/short rank + HP volatility/drawdown/returns ──
+
+/// DVDYIELDRANK — Dividend Yield Rank vs Sector Peers.
+/// Percentile rank of `Fundamentals.dividend_yield` within the same sector.
+/// Non-payers (`dividend_yield.is_none() || dividend_yield == 0.0`) are
+/// filtered out so the cohort captures dividend-paying names only.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DividendYieldRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub dividend_yield_pct: f64,      // subject's current dividend yield %
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_yield_pct: f64,
+    pub sector_p25_yield_pct: f64,
+    pub sector_p75_yield_pct: f64,
+    pub percentile_rank: f64,
+    pub rank_position: usize,
+    pub rank_label: String,           // standard decile ladder
+    pub note: String,
+}
+
+/// SHRANK — Short Interest Rank vs Sector Peers.
+/// Percentile rank of `Fundamentals.short_percent_of_float` within the same
+/// sector, risk-inverted so a *lower* short interest earns a *higher* (safer)
+/// rank. Names with no short interest data are filtered out.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ShortInterestRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub short_pct_of_float: f64,
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_short_pct: f64,
+    pub sector_p25_short_pct: f64,
+    pub sector_p75_short_pct: f64,
+    pub percentile_rank: f64,
+    pub rank_position: usize,
+    pub rank_label: String,           // risk-inverted: SAFEST_DECILE (lowest short) → RISKIEST_DECILE
+    pub note: String,
+}
+
+/// ATRANN — Annualized ATR (Volatility Regime).
+/// Pure symbol-local time-series stat over the cached HP daily bars. Computes
+/// the 14-period Average True Range (Wilder) on the most recent 253 sessions,
+/// annualizes via √252, and maps to a volatility regime label.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AnnualizedAtrSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,             // sessions in the window (<=253)
+    pub latest_close: f64,
+    pub atr14: f64,                   // 14-period Wilder ATR in price units
+    pub atr14_pct: f64,               // atr14 / latest_close × 100
+    pub atr_annualized_pct: f64,      // atr14_pct × √252
+    pub regime_label: String,         // "LOW_VOL" | "NORMAL_VOL" | "HIGH_VOL" | "EXTREME_VOL" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// DDHIST — Drawdown History.
+/// Pure symbol-local time-series stat over the same HP window. Tracks the
+/// maximum drawdown (deepest peak-to-trough decline), the longest drawdown
+/// duration (sessions from peak to recovery), the number of 5% corrections
+/// (local peaks followed by 5%+ declines), and the current drawdown from the
+/// running peak.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DrawdownHistorySnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub max_drawdown_pct: f64,        // deepest drawdown in the window (negative)
+    pub max_drawdown_peak_date: String,
+    pub max_drawdown_trough_date: String,
+    pub longest_drawdown_days: usize, // sessions from peak to recovery (or to end of window if unrecovered)
+    pub corrections_5pct: usize,      // count of local-peak-to-trough declines ≥5%
+    pub corrections_10pct: usize,     // count of local-peak-to-trough declines ≥10%
+    pub current_drawdown_pct: f64,    // latest close vs running peak (negative or 0)
+    pub regime_label: String,         // "RECOVERING" | "SHALLOW" | "MEANINGFUL" | "SEVERE" | "CATASTROPHIC" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// PRICEPERF — Multi-horizon Price Performance.
+/// Pure symbol-local time-series stat over the HP cache. Computes total
+/// returns at 1M (21 sessions), 3M (63), 6M (126), YTD (since Jan 1 of
+/// as_of's year), and 1Y (253) lookbacks.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PricePerformanceSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub latest_close: f64,
+    pub ret_1m_pct: f64,              // % change over trailing 21 sessions
+    pub ret_3m_pct: f64,
+    pub ret_6m_pct: f64,
+    pub ret_ytd_pct: f64,             // % change from first session of as_of's year
+    pub ret_1y_pct: f64,              // % change over trailing 253 sessions
+    pub trend_label: String,          // "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -11153,6 +11255,424 @@ pub fn compute_des_snapshot(
     }
 }
 
+// ── ADR-127 Round 20 compute fns ──────────────────────────────────────────
+
+/// DVDYIELDRANK compute: sector percentile rank of the subject's dividend
+/// yield. Non-payers (None or 0.0) are filtered so the cohort is
+/// dividend-paying names only. Needs ≥3 peers with yield data.
+pub fn compute_dvdyieldrank_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject_yield_pct: Option<f64>,
+    peers: &[(String, Option<f64>)],
+) -> DividendYieldRankSnapshot {
+    let sym = symbol.to_uppercase();
+    let subj = match subject_yield_pct {
+        Some(y) if y > 0.0 && y.is_finite() => y,
+        _ => {
+            return DividendYieldRankSnapshot {
+                symbol: sym,
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "subject has no dividend yield (non-payer or missing data)".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let peer_y: Vec<f64> = peers.iter()
+        .filter(|(s, _)| !s.eq_ignore_ascii_case(symbol))
+        .filter_map(|(_, y)| y.filter(|v| *v > 0.0 && v.is_finite()))
+        .collect();
+    let peers_considered = peers.iter().filter(|(s, _)| !s.eq_ignore_ascii_case(symbol)).count();
+    let peers_with_data = peer_y.len();
+    if peers_with_data < 3 {
+        return DividendYieldRankSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            dividend_yield_pct: subj,
+            peers_considered,
+            peers_with_data,
+            rank_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥3 dividend-paying sector peers, got {}", peers_with_data),
+            ..Default::default()
+        };
+    }
+    let mut sorted = peer_y.clone();
+    sorted.push(subj);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    let pct = percentile_rank_score(subj, &peer_y, true);
+    let better = peer_y.iter().filter(|&&p| p > subj).count();
+    let label = rank_label_for_percentile(pct);
+    DividendYieldRankSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        dividend_yield_pct: subj,
+        peers_considered,
+        peers_with_data,
+        sector_median_yield_pct: median,
+        sector_p25_yield_pct: p25,
+        sector_p75_yield_pct: p75,
+        percentile_rank: pct,
+        rank_position: better + 1,
+        rank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// SHRANK compute: sector percentile rank of short_percent_of_float,
+/// risk-inverted so a *lower* short interest earns a *higher* (safer) rank.
+pub fn compute_shrank_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject_short_pct: Option<f64>,
+    peers: &[(String, Option<f64>)],
+) -> ShortInterestRankSnapshot {
+    let sym = symbol.to_uppercase();
+    let subj = match subject_short_pct {
+        Some(s) if s.is_finite() && s >= 0.0 => s,
+        _ => {
+            return ShortInterestRankSnapshot {
+                symbol: sym,
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "subject missing short_percent_of_float".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let peer_s: Vec<f64> = peers.iter()
+        .filter(|(s, _)| !s.eq_ignore_ascii_case(symbol))
+        .filter_map(|(_, v)| v.filter(|x| x.is_finite() && *x >= 0.0))
+        .collect();
+    let peers_considered = peers.iter().filter(|(s, _)| !s.eq_ignore_ascii_case(symbol)).count();
+    let peers_with_data = peer_s.len();
+    if peers_with_data < 3 {
+        return ShortInterestRankSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            short_pct_of_float: subj,
+            peers_considered,
+            peers_with_data,
+            rank_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥3 sector peers with short data, got {}", peers_with_data),
+            ..Default::default()
+        };
+    }
+    let mut sorted = peer_s.clone();
+    sorted.push(subj);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    // Risk-inverted: lower short = safer = higher percentile
+    let pct = percentile_rank_score(subj, &peer_s, false);
+    // For risk surfaces, rank_position counts peers who are safer (lower short)
+    let safer = peer_s.iter().filter(|&&p| p < subj).count();
+    let label = risk_rank_label_for_percentile(pct);
+    ShortInterestRankSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        short_pct_of_float: subj,
+        peers_considered,
+        peers_with_data,
+        sector_median_short_pct: median,
+        sector_p25_short_pct: p25,
+        sector_p75_short_pct: p75,
+        percentile_rank: pct,
+        rank_position: safer + 1,
+        rank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// ATRANN compute: pure symbol-local 14-period Wilder ATR annualized, with
+/// volatility regime label. Uses the most recent 253 sessions from the HP
+/// cache, sorted oldest-first.
+pub fn compute_atrann_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> AnnualizedAtrSnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 15 {
+        return AnnualizedAtrSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: bars.len(),
+            regime_label: "INSUFFICIENT_DATA".into(),
+            note: "need ≥15 bars for 14-period ATR warmup".into(),
+            ..Default::default()
+        };
+    }
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let start = if sorted.len() > 253 { sorted.len() - 253 } else { 0 };
+    let window = &sorted[start..];
+    let bars_used = window.len();
+    // True range for each bar i (i>=1): max(high-low, |high-prev_close|, |low-prev_close|)
+    let mut trs: Vec<f64> = Vec::with_capacity(window.len());
+    for i in 1..window.len() {
+        let h = window[i].high;
+        let l = window[i].low;
+        let pc = window[i - 1].close;
+        if h <= 0.0 || l <= 0.0 || pc <= 0.0 { continue; }
+        let tr = (h - l).max((h - pc).abs()).max((l - pc).abs());
+        trs.push(tr);
+    }
+    if trs.len() < 14 {
+        return AnnualizedAtrSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used,
+            regime_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} usable TR bars after filtering", trs.len()),
+            ..Default::default()
+        };
+    }
+    // Wilder smoothing: seed = mean of first 14, then ATR_i = (prev_ATR × 13 + TR_i) / 14
+    let seed: f64 = trs[..14].iter().sum::<f64>() / 14.0;
+    let mut atr = seed;
+    for &tr in &trs[14..] {
+        atr = (atr * 13.0 + tr) / 14.0;
+    }
+    let latest_close = window.last().map(|r| r.close).unwrap_or(0.0);
+    let atr_pct = if latest_close > 0.0 { atr / latest_close * 100.0 } else { 0.0 };
+    let atr_ann = atr_pct * (252.0f64).sqrt();
+    let regime = if atr_ann < 15.0 {
+        "LOW_VOL"
+    } else if atr_ann < 30.0 {
+        "NORMAL_VOL"
+    } else if atr_ann < 60.0 {
+        "HIGH_VOL"
+    } else {
+        "EXTREME_VOL"
+    };
+    AnnualizedAtrSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used,
+        latest_close,
+        atr14: atr,
+        atr14_pct: atr_pct,
+        atr_annualized_pct: atr_ann,
+        regime_label: regime.into(),
+        note: String::new(),
+    }
+}
+
+/// DDHIST compute: pure symbol-local drawdown history stat. Scans the
+/// window for the deepest peak-to-trough, the longest peak-to-recovery
+/// duration, the count of 5% and 10% corrections, and the current drawdown.
+pub fn compute_ddhist_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> DrawdownHistorySnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 20 {
+        return DrawdownHistorySnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: bars.len(),
+            regime_label: "INSUFFICIENT_DATA".into(),
+            note: "need ≥20 bars".into(),
+            ..Default::default()
+        };
+    }
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let start = if sorted.len() > 253 { sorted.len() - 253 } else { 0 };
+    let window = &sorted[start..];
+    let bars_used = window.len();
+    let mut running_peak = window[0].close;
+    let mut running_peak_idx = 0usize;
+    let mut running_peak_date = window[0].date.clone();
+    let mut max_dd_pct = 0.0f64;
+    let mut max_dd_peak_date = String::new();
+    let mut max_dd_trough_date = String::new();
+    let mut longest_dd_days = 0usize;
+    let mut current_dd_start: Option<(usize, String)> = None; // (idx, date) of current peak
+    let mut corrections_5 = 0usize;
+    let mut corrections_10 = 0usize;
+    // Track per-correction state: a "correction" is a run from a local peak to a local trough with ≥5% or ≥10% decline.
+    let mut in_correction = false;
+    let mut correction_peak = window[0].close;
+    for (i, bar) in window.iter().enumerate() {
+        let c = bar.close;
+        if c <= 0.0 { continue; }
+        if c >= running_peak {
+            // Recovered — close the current drawdown bucket.
+            if let Some((peak_idx, _)) = &current_dd_start {
+                let duration = i - peak_idx;
+                if duration > longest_dd_days { longest_dd_days = duration; }
+            }
+            current_dd_start = None;
+            running_peak = c;
+            running_peak_idx = i;
+            running_peak_date = bar.date.clone();
+            // Close any open correction by measuring its depth.
+            if in_correction {
+                let depth = (c - correction_peak) / correction_peak * 100.0;
+                let abs_depth = -depth;  // positive number
+                if abs_depth >= 10.0 { corrections_10 += 1; }
+                if abs_depth >= 5.0 { corrections_5 += 1; }
+                in_correction = false;
+            }
+            correction_peak = c;
+        } else {
+            // In a drawdown.
+            if current_dd_start.is_none() {
+                current_dd_start = Some((running_peak_idx, running_peak_date.clone()));
+            }
+            let dd = (c - running_peak) / running_peak * 100.0;  // negative
+            if dd < max_dd_pct {
+                max_dd_pct = dd;
+                max_dd_peak_date = running_peak_date.clone();
+                max_dd_trough_date = bar.date.clone();
+            }
+            // Correction tracking: local-peak-to-trough.
+            if c < correction_peak {
+                in_correction = true;
+            }
+        }
+    }
+    // If we ended the window still in a drawdown, count its duration.
+    if let Some((peak_idx, _)) = &current_dd_start {
+        let duration = window.len().saturating_sub(*peak_idx);
+        if duration > longest_dd_days { longest_dd_days = duration; }
+    }
+    // Close any still-open correction (open means we ended the window below the local peak).
+    if in_correction {
+        let last = window.last().map(|r| r.close).unwrap_or(correction_peak);
+        let abs_depth = (correction_peak - last) / correction_peak * 100.0;
+        if abs_depth >= 10.0 { corrections_10 += 1; }
+        if abs_depth >= 5.0 { corrections_5 += 1; }
+    }
+    let latest = window.last().map(|r| r.close).unwrap_or(0.0);
+    let current_dd = if latest > 0.0 && running_peak > 0.0 {
+        (latest - running_peak) / running_peak * 100.0
+    } else { 0.0 };
+    let regime = if current_dd > -1.0 {
+        "RECOVERING"
+    } else if max_dd_pct > -10.0 {
+        "SHALLOW"
+    } else if max_dd_pct > -20.0 {
+        "MEANINGFUL"
+    } else if max_dd_pct > -35.0 {
+        "SEVERE"
+    } else {
+        "CATASTROPHIC"
+    };
+    DrawdownHistorySnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used,
+        max_drawdown_pct: max_dd_pct,
+        max_drawdown_peak_date: max_dd_peak_date,
+        max_drawdown_trough_date: max_dd_trough_date,
+        longest_drawdown_days: longest_dd_days,
+        corrections_5pct: corrections_5,
+        corrections_10pct: corrections_10,
+        current_drawdown_pct: current_dd,
+        regime_label: regime.into(),
+        note: String::new(),
+    }
+}
+
+/// PRICEPERF compute: multi-horizon total return stat. Computes returns
+/// over trailing 21, 63, 126, and 253 sessions plus YTD from the first
+/// session of as_of's calendar year.
+pub fn compute_priceperf_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> PricePerformanceSnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 2 {
+        return PricePerformanceSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: bars.len(),
+            trend_label: "INSUFFICIENT_DATA".into(),
+            note: "need ≥2 bars".into(),
+            ..Default::default()
+        };
+    }
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let bars_used = sorted.len();
+    let latest = sorted.last().unwrap();
+    let latest_close = latest.close;
+    if latest_close <= 0.0 {
+        return PricePerformanceSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used,
+            trend_label: "INSUFFICIENT_DATA".into(),
+            note: "latest close not positive".into(),
+            ..Default::default()
+        };
+    }
+    let ret_at = |offset: usize| -> f64 {
+        if sorted.len() > offset {
+            let past = sorted[sorted.len() - 1 - offset].close;
+            if past > 0.0 { (latest_close - past) / past * 100.0 } else { 0.0 }
+        } else { 0.0 }
+    };
+    let ret_1m = ret_at(21);
+    let ret_3m = ret_at(63);
+    let ret_6m = ret_at(126);
+    let ret_1y = ret_at(253);
+    // YTD: find first bar with date.year == latest.date.year
+    let year_prefix = latest.date.get(..4).unwrap_or("");
+    let ytd_ret = if !year_prefix.is_empty() {
+        let ytd_start = sorted.iter().find(|r| r.date.starts_with(year_prefix));
+        match ytd_start {
+            Some(start_bar) if start_bar.close > 0.0 => {
+                (latest_close - start_bar.close) / start_bar.close * 100.0
+            }
+            _ => 0.0,
+        }
+    } else { 0.0 };
+    let trend = if bars_used < 20 {
+        "INSUFFICIENT_DATA"
+    } else if ret_1y > 30.0 && ret_3m > 10.0 {
+        "STRONG_BULL"
+    } else if ret_1y > 10.0 || ret_3m > 5.0 {
+        "BULL"
+    } else if ret_1y < -30.0 && ret_3m < -10.0 {
+        "STRONG_BEAR"
+    } else if ret_1y < -10.0 || ret_3m < -5.0 {
+        "BEAR"
+    } else {
+        "NEUTRAL"
+    };
+    PricePerformanceSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used,
+        latest_close,
+        ret_1m_pct: ret_1m,
+        ret_3m_pct: ret_3m,
+        ret_6m_pct: ret_6m,
+        ret_ytd_pct: ytd_ret,
+        ret_1y_pct: ret_1y,
+        trend_label: trend.into(),
+        note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -13871,6 +14391,159 @@ pub fn get_des(conn: &Connection, symbol: &str) -> Result<Option<DailyEventStrea
         .map_err(|e| format!("prepare get_des: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_des: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_des: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-127 Round 20 schema + wrappers ────────────────────────────────────
+
+pub fn create_research_tables_v20(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v19(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_dvdyieldrank (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_dvdyieldrank_updated ON research_dvdyieldrank(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_shrank (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_shrank_updated ON research_shrank(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_atrann (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_atrann_updated ON research_atrann(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_ddhist (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ddhist_updated ON research_ddhist(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_priceperf (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_priceperf_updated ON research_priceperf(updated_at);",
+    ).map_err(|e| format!("create v20 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_dvdyieldrank(conn: &Connection, symbol: &str, snap: &DividendYieldRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v20(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("dvdyieldrank json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_dvdyieldrank(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert dvdyieldrank: {e}"))?;
+    Ok(())
+}
+
+pub fn get_dvdyieldrank(conn: &Connection, symbol: &str) -> Result<Option<DividendYieldRankSnapshot>, String> {
+    let _ = create_research_tables_v20(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_dvdyieldrank WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_dvdyieldrank: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_dvdyieldrank: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_dvdyieldrank: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_shrank(conn: &Connection, symbol: &str, snap: &ShortInterestRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v20(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("shrank json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_shrank(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert shrank: {e}"))?;
+    Ok(())
+}
+
+pub fn get_shrank(conn: &Connection, symbol: &str) -> Result<Option<ShortInterestRankSnapshot>, String> {
+    let _ = create_research_tables_v20(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_shrank WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_shrank: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_shrank: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_shrank: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_atrann(conn: &Connection, symbol: &str, snap: &AnnualizedAtrSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v20(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("atrann json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_atrann(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert atrann: {e}"))?;
+    Ok(())
+}
+
+pub fn get_atrann(conn: &Connection, symbol: &str) -> Result<Option<AnnualizedAtrSnapshot>, String> {
+    let _ = create_research_tables_v20(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_atrann WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_atrann: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_atrann: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_atrann: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ddhist(conn: &Connection, symbol: &str, snap: &DrawdownHistorySnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v20(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ddhist json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ddhist(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ddhist: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ddhist(conn: &Connection, symbol: &str) -> Result<Option<DrawdownHistorySnapshot>, String> {
+    let _ = create_research_tables_v20(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ddhist WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_ddhist: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_ddhist: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_ddhist: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_priceperf(conn: &Connection, symbol: &str, snap: &PricePerformanceSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v20(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("priceperf json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_priceperf(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert priceperf: {e}"))?;
+    Ok(())
+}
+
+pub fn get_priceperf(conn: &Connection, symbol: &str) -> Result<Option<PricePerformanceSnapshot>, String> {
+    let _ = create_research_tables_v20(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_priceperf WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_priceperf: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_priceperf: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_priceperf: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -18477,5 +19150,303 @@ mod tests {
         let bars = vec![mk_hp("2025-06-01", 100.0, 101.0, 99.0, 100.0)];
         let snap = compute_des_snapshot("AAA", "2026-04-15", &bars);
         assert_eq!(snap.streak_label, "INSUFFICIENT_DATA");
+    }
+
+    // ── ADR-127 Round 20 tests ────────────────────────────────────────────
+
+    #[test]
+    fn dvdyieldrank_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v20(&c).unwrap();
+        let snap = DividendYieldRankSnapshot {
+            symbol: "AAA".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Utilities".into(),
+            dividend_yield_pct: 4.5,
+            rank_label: "TOP_DECILE".into(),
+            ..Default::default()
+        };
+        upsert_dvdyieldrank(&c, "AAA", &snap).unwrap();
+        let got = get_dvdyieldrank(&c, "AAA").unwrap().unwrap();
+        assert_eq!(got.rank_label, "TOP_DECILE");
+        assert_eq!(got.dividend_yield_pct, 4.5);
+    }
+
+    #[test]
+    fn shrank_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v20(&c).unwrap();
+        let snap = ShortInterestRankSnapshot {
+            symbol: "AAA".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Tech".into(),
+            short_pct_of_float: 2.5,
+            rank_label: "SAFEST_DECILE".into(),
+            ..Default::default()
+        };
+        upsert_shrank(&c, "AAA", &snap).unwrap();
+        let got = get_shrank(&c, "AAA").unwrap().unwrap();
+        assert_eq!(got.rank_label, "SAFEST_DECILE");
+        assert_eq!(got.short_pct_of_float, 2.5);
+    }
+
+    #[test]
+    fn atrann_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v20(&c).unwrap();
+        let snap = AnnualizedAtrSnapshot {
+            symbol: "AAA".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            latest_close: 100.0,
+            atr14: 1.5,
+            atr14_pct: 1.5,
+            atr_annualized_pct: 23.8,
+            regime_label: "NORMAL_VOL".into(),
+            ..Default::default()
+        };
+        upsert_atrann(&c, "AAA", &snap).unwrap();
+        let got = get_atrann(&c, "AAA").unwrap().unwrap();
+        assert_eq!(got.regime_label, "NORMAL_VOL");
+        assert!((got.atr_annualized_pct - 23.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ddhist_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v20(&c).unwrap();
+        let snap = DrawdownHistorySnapshot {
+            symbol: "AAA".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            max_drawdown_pct: -12.0,
+            longest_drawdown_days: 45,
+            corrections_5pct: 3,
+            corrections_10pct: 1,
+            current_drawdown_pct: -2.0,
+            regime_label: "MEANINGFUL".into(),
+            ..Default::default()
+        };
+        upsert_ddhist(&c, "AAA", &snap).unwrap();
+        let got = get_ddhist(&c, "AAA").unwrap().unwrap();
+        assert_eq!(got.regime_label, "MEANINGFUL");
+        assert_eq!(got.corrections_5pct, 3);
+    }
+
+    #[test]
+    fn priceperf_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v20(&c).unwrap();
+        let snap = PricePerformanceSnapshot {
+            symbol: "AAA".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            latest_close: 120.0,
+            ret_1m_pct: 2.5,
+            ret_3m_pct: 8.0,
+            ret_6m_pct: 12.0,
+            ret_ytd_pct: 15.0,
+            ret_1y_pct: 20.0,
+            trend_label: "BULL".into(),
+            ..Default::default()
+        };
+        upsert_priceperf(&c, "AAA", &snap).unwrap();
+        let got = get_priceperf(&c, "AAA").unwrap().unwrap();
+        assert_eq!(got.trend_label, "BULL");
+        assert!((got.ret_1y_pct - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_dvdyieldrank_top_decile() {
+        let peers = vec![
+            ("BBB".to_string(), Some(1.5)),
+            ("CCC".to_string(), Some(2.0)),
+            ("DDD".to_string(), Some(2.5)),
+            ("EEE".to_string(), Some(1.0)),
+        ];
+        let snap = compute_dvdyieldrank_snapshot("AAA", "2026-04-15", "Utilities", Some(6.0), &peers);
+        assert!(snap.percentile_rank >= 90.0);
+        assert_eq!(snap.rank_label, "TOP_DECILE");
+        assert_eq!(snap.peers_with_data, 4);
+    }
+
+    #[test]
+    fn compute_dvdyieldrank_non_payer_filtered() {
+        let peers = vec![
+            ("BBB".to_string(), None),              // non-payer
+            ("CCC".to_string(), Some(0.0)),         // non-payer (zero yield)
+            ("DDD".to_string(), Some(3.0)),
+            ("EEE".to_string(), Some(4.0)),
+            ("FFF".to_string(), Some(2.0)),
+        ];
+        let snap = compute_dvdyieldrank_snapshot("AAA", "2026-04-15", "Utilities", Some(5.0), &peers);
+        assert_eq!(snap.peers_considered, 5);
+        assert_eq!(snap.peers_with_data, 3);
+        assert_ne!(snap.rank_label, "INSUFFICIENT_DATA");
+        assert_ne!(snap.rank_label, "NO_DATA");
+    }
+
+    #[test]
+    fn compute_dvdyieldrank_subject_non_payer() {
+        let peers = vec![
+            ("BBB".to_string(), Some(3.0)),
+            ("CCC".to_string(), Some(4.0)),
+            ("DDD".to_string(), Some(2.0)),
+        ];
+        let snap = compute_dvdyieldrank_snapshot("AAA", "2026-04-15", "Tech", Some(0.0), &peers);
+        assert_eq!(snap.rank_label, "NO_DATA");
+    }
+
+    #[test]
+    fn compute_shrank_safest_decile() {
+        // Subject has lowest short interest → risk-inverted top rank (SAFEST).
+        let peers = vec![
+            ("BBB".to_string(), Some(8.0)),
+            ("CCC".to_string(), Some(10.0)),
+            ("DDD".to_string(), Some(12.0)),
+            ("EEE".to_string(), Some(15.0)),
+        ];
+        let snap = compute_shrank_snapshot("AAA", "2026-04-15", "Tech", Some(1.0), &peers);
+        assert!(snap.percentile_rank >= 90.0);
+        assert_eq!(snap.rank_label, "SAFEST_DECILE");
+        assert_eq!(snap.short_pct_of_float, 1.0);
+    }
+
+    #[test]
+    fn compute_shrank_riskiest_decile() {
+        // Subject has highest short interest → risk-inverted bottom rank (RISKIEST).
+        // Need ≥10 peers so the floor 0.5/total*100 is strictly below 10.
+        let peers = vec![
+            ("BBB".to_string(), Some(2.0)),
+            ("CCC".to_string(), Some(3.0)),
+            ("DDD".to_string(), Some(4.0)),
+            ("EEE".to_string(), Some(5.0)),
+            ("FFF".to_string(), Some(6.0)),
+            ("GGG".to_string(), Some(7.0)),
+            ("HHH".to_string(), Some(8.0)),
+            ("III".to_string(), Some(9.0)),
+            ("JJJ".to_string(), Some(10.0)),
+            ("KKK".to_string(), Some(11.0)),
+        ];
+        let snap = compute_shrank_snapshot("AAA", "2026-04-15", "Tech", Some(25.0), &peers);
+        assert!(snap.percentile_rank < 10.0);
+        assert_eq!(snap.rank_label, "RISKIEST_DECILE");
+    }
+
+    #[test]
+    fn compute_shrank_insufficient() {
+        let peers = vec![
+            ("BBB".to_string(), None),
+            ("CCC".to_string(), Some(5.0)),
+        ];
+        let snap = compute_shrank_snapshot("AAA", "2026-04-15", "Tech", Some(3.0), &peers);
+        assert_eq!(snap.rank_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_atrann_low_vol() {
+        // 30 quiet bars (≤0.5% HL range) → LOW_VOL regime.
+        let mut bars = Vec::new();
+        for i in 0..30 {
+            let date = format!("2025-01-{:02}", i + 1);
+            bars.push(mk_hp(&date, 100.0, 100.3, 99.7, 100.0));
+        }
+        let snap = compute_atrann_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.regime_label, "LOW_VOL");
+        assert!(snap.atr_annualized_pct < 15.0);
+    }
+
+    #[test]
+    fn compute_atrann_high_vol() {
+        // 30 wild bars (5% HL range) → HIGH_VOL or EXTREME_VOL.
+        let mut bars = Vec::new();
+        for i in 0..30 {
+            let date = format!("2025-02-{:02}", i + 1);
+            bars.push(mk_hp(&date, 100.0, 103.0, 97.0, 100.0));
+        }
+        let snap = compute_atrann_snapshot("AAA", "2026-04-15", &bars);
+        assert!(snap.atr_annualized_pct > 30.0, "expected > 30% annualized, got {}", snap.atr_annualized_pct);
+        assert!(snap.regime_label == "HIGH_VOL" || snap.regime_label == "EXTREME_VOL");
+    }
+
+    #[test]
+    fn compute_atrann_insufficient() {
+        let bars = vec![mk_hp("2025-03-01", 100.0, 101.0, 99.0, 100.0)];
+        let snap = compute_atrann_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.regime_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_ddhist_shallow() {
+        // 30 quiet bars, max 3% dip → SHALLOW regime.
+        let mut bars = Vec::new();
+        for i in 0..30 {
+            let date = format!("2025-04-{:02}", i + 1);
+            let c = if (5..15).contains(&i) { 98.0 } else { 100.0 };
+            bars.push(mk_hp(&date, c, c + 0.5, c - 0.5, c));
+        }
+        let snap = compute_ddhist_snapshot("AAA", "2026-04-15", &bars);
+        assert!(snap.max_drawdown_pct > -5.0);
+        assert!(snap.regime_label == "SHALLOW" || snap.regime_label == "RECOVERING");
+    }
+
+    #[test]
+    fn compute_ddhist_severe() {
+        // Rise to peak, then 25% decline and partial recovery → SEVERE.
+        let mut bars = Vec::new();
+        for i in 0..20 {
+            let date = format!("2025-05-{:02}", i + 1);
+            bars.push(mk_hp(&date, 100.0, 101.0, 99.0, 100.0));
+        }
+        // Peak at 120
+        for i in 0..10 {
+            let date = format!("2025-06-{:02}", i + 1);
+            let c = 100.0 + (i as f64 + 1.0) * 2.0;
+            bars.push(mk_hp(&date, c, c + 0.5, c - 0.5, c));
+        }
+        // Crash down 25% to 90
+        for i in 0..10 {
+            let date = format!("2025-07-{:02}", i + 1);
+            let c = 120.0 - (i as f64 + 1.0) * 3.0;
+            bars.push(mk_hp(&date, c, c + 0.5, c - 0.5, c));
+        }
+        let snap = compute_ddhist_snapshot("AAA", "2026-04-15", &bars);
+        assert!(snap.max_drawdown_pct < -20.0, "expected < -20%, got {}", snap.max_drawdown_pct);
+        assert!(snap.regime_label == "SEVERE" || snap.regime_label == "CATASTROPHIC" || snap.regime_label == "MEANINGFUL");
+    }
+
+    #[test]
+    fn compute_priceperf_bull() {
+        // Sustained 25%+ rally over the window → BULL or STRONG_BULL.
+        let mut bars = Vec::new();
+        for i in 0..260 {
+            let date = format!("2025-{:02}-{:02}", (i / 20) + 1, (i % 20) + 1);
+            let c = 100.0 + i as f64 * 0.15;  // ~39% rise over window
+            bars.push(mk_hp(&date, c, c + 0.2, c - 0.2, c));
+        }
+        let snap = compute_priceperf_snapshot("AAA", "2026-04-15", &bars);
+        assert!(snap.ret_1y_pct > 10.0);
+        assert!(snap.trend_label == "BULL" || snap.trend_label == "STRONG_BULL");
+    }
+
+    #[test]
+    fn compute_priceperf_bear() {
+        // Sustained decline → BEAR or STRONG_BEAR.
+        let mut bars = Vec::new();
+        for i in 0..260 {
+            let date = format!("2025-{:02}-{:02}", (i / 20) + 1, (i % 20) + 1);
+            let c = 200.0 - i as f64 * 0.3;  // ~39% decline
+            bars.push(mk_hp(&date, c, c + 0.2, c - 0.2, c));
+        }
+        let snap = compute_priceperf_snapshot("AAA", "2026-04-15", &bars);
+        assert!(snap.ret_1y_pct < -10.0);
+        assert!(snap.trend_label == "BEAR" || snap.trend_label == "STRONG_BEAR");
+    }
+
+    #[test]
+    fn compute_priceperf_insufficient() {
+        let bars = vec![mk_hp("2025-06-01", 100.0, 101.0, 99.0, 100.0)];
+        let snap = compute_priceperf_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.trend_label, "INSUFFICIENT_DATA");
     }
 }

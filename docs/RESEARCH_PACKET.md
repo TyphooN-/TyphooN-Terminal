@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**eighty-seven sub-blocks**, each of which is skipped silently when its data
+**ninety-two sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -1127,7 +1127,75 @@ streaks, and avg up / down move %. Complements SURPSTK (earnings
 streak) with a price-action streak. Requires ≥20 HP bars to emit.
 Source: ADR-126 DES window.
 
-#### 2.87 Sector peer comparison
+#### 2.87 Dividend Yield Rank (DVDYIELDRANK — ADR-127)
+
+Pulled from `research::get_dvdyieldrank`. Sector-relative percentile
+rank of current dividend yield (`Fundamentals.dividend_yield`). Non-
+payers (None or 0.0) are filtered out on both subject and peer sides
+so the cohort captures dividend-paying names only. Header line gives
+the **rank_label** (TOP_DECILE / TOP_QUARTILE / ABOVE_MEDIAN /
+BELOW_MEDIAN / BOTTOM_QUARTILE / BOTTOM_DECILE / INSUFFICIENT_DATA /
+NO_DATA), subject yield, rank position, and sector. Body block reports
+sector median / p25 / p75 yields, peers considered, and peers with
+data. Companion to DVDRANK (which ranks dividend *growth*, not *yield*).
+Requires ≥3 sector peers paying dividends. Source: ADR-127
+DVDYIELDRANK window.
+
+#### 2.88 Short Interest Rank (SHRANK — ADR-127)
+
+Pulled from `research::get_shrank`. Sector-relative percentile rank of
+`Fundamentals.short_percent_of_float`, **risk-inverted** so a lower
+short interest earns a higher (safer) rank. Header line gives the
+**rank_label** (SAFEST_DECILE / SAFEST_QUARTILE / ABOVE_MEDIAN_SAFE /
+BELOW_MEDIAN_RISKY / BOTTOM_QUARTILE_RISKY / RISKIEST_DECILE /
+INSUFFICIENT_DATA / NO_DATA), subject short %, rank position, and
+sector. Body block reports sector median / p25 / p75 short % and
+peer counts. Replaces the originally-planned INSIDERCONC (which
+required a new Fundamentals field that doesn't exist in the cache).
+Requires ≥3 sector peers with short interest data. Source: ADR-127
+SHRANK window.
+
+#### 2.89 Annualized ATR (ATRANN — ADR-127)
+
+Pulled from `research::get_atrann`. Pure symbol-local time-series
+stat. Computes the 14-period Wilder Average True Range over the most
+recent 253 sessions of cached HP bars, expresses it as a percent of
+the latest close, and annualizes via √252. Header line gives the
+**regime_label** (LOW_VOL < 15% < NORMAL_VOL < 30% < HIGH_VOL < 60% <
+EXTREME_VOL / INSUFFICIENT_DATA), ATR14 absolute and %, annualized %,
+and bars used. Body block reports latest close, ATR14 in price units,
+ATR14 %, and annualized %. Complements IVOL (implied vol, ADR-115)
+with a realized-vol regime surface that works without options data.
+Requires ≥15 HP bars. Source: ADR-127 ATRANN window.
+
+#### 2.90 Drawdown History (DDHIST — ADR-127)
+
+Pulled from `research::get_ddhist`. Pure symbol-local time-series stat
+over the same 253-bar HP window. Tracks the deepest peak-to-trough
+drawdown with peak/trough dates, the longest drawdown duration in
+sessions, the count of 5% and 10% corrections (local-peak-to-trough
+declines), and the current drawdown from the running peak. Header
+line gives the **regime_label** (RECOVERING > -1% / SHALLOW > -10% /
+MEANINGFUL > -20% / SEVERE > -35% / CATASTROPHIC / INSUFFICIENT_DATA),
+max dd %, current dd %, and bars used. Body block reports max dd
+peak / trough dates, longest drawdown in sessions, corrections ≥5% /
+≥10%, and current dd %. Requires ≥20 HP bars. Source: ADR-127 DDHIST
+window.
+
+#### 2.91 Price Performance (PRICEPERF — ADR-127)
+
+Pulled from `research::get_priceperf`. Pure symbol-local time-series
+stat. Computes total returns at 1M (21 sessions), 3M (63), 6M (126),
+YTD (from the first bar of as_of's calendar year), and 1Y (253)
+lookbacks over cached HP bars. Header line gives the **trend_label**
+(STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR /
+INSUFFICIENT_DATA), latest close, 1Y return, YTD return, and bars
+used. Body block reports 1M / 3M / 6M returns, YTD / 1Y returns, bars
+used, and latest close. Trend label gates on `bars_used >= 20` so
+shallow histories emit INSUFFICIENT_DATA rather than noise. Source:
+ADR-127 PRICEPERF window.
+
+#### 2.92 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1243,21 +1311,26 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | Upgrade/downgrade rank fields (ADR-126 UPDGRANK) | 3 k/v rows | Subject net_90d + bias label + sector median/p25/p75 net + percentile + rank position |
 | Gap yearly fields (ADR-126 GY) | 5 k/v rows | 253-bar gap census: 2/5/10% gap bins up+down + largest up/down with date + avg |gap| + label |
 | Daily event streak fields (ADR-126 DES) | 4 k/v rows | 253-bar up/down/flat census + longest up/down streaks + current streak + up-day rate + avg up/down move |
+| Dividend yield rank fields (ADR-127 DVDYIELDRANK) | 3 k/v rows | Subject yield + sector median/p25/p75 yield + percentile + rank position (non-payers filtered) |
+| Short interest rank fields (ADR-127 SHRANK) | 3 k/v rows | Subject short % of float + sector median/p25/p75 short + risk-inverted percentile + rank position |
+| Annualized ATR fields (ADR-127 ATRANN) | 4 k/v rows | Latest close + ATR14 price units + ATR14 % + annualized % (×√252) + volatility regime label |
+| Drawdown history fields (ADR-127 DDHIST) | 5 k/v rows | Max drawdown % + peak/trough dates + longest drawdown days + 5%/10% correction counts + current drawdown |
+| Price performance fields (ADR-127 PRICEPERF) | 4 k/v rows | 1M/3M/6M/YTD/1Y returns + latest close + bars used + trend label (1Y/3M blend) |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **34-64 KB**
-(up from 32-61 KB after ADR-125; ADR-126 added five per-symbol blocks —
-DVDRANK / EARMRANK / UPDGRANK / GY / DES — covering three new
-sector-rank overlays on Round 12 factors (dividend growth CAGR,
-earnings momentum composite, and upgrade/downgrade net_90d) plus
-two new pure-time-series HP stats (Gap Yearly 253-bar gap census
-and Daily Event Streak up/down/flat distribution with longest
-streaks) — all pure compute over cached Round 7-18 snapshots and
-the existing HP cache with zero new API dependencies); a 10-symbol
-basket lands near **330-660 KB** (the global context is emitted only
-once, so multi-symbol overhead is still bounded by the per-symbol
-blocks).
+symbols. A single S&P 500 symbol now produces a packet around **36-68 KB**
+(up from 34-64 KB after ADR-126; ADR-127 added five per-symbol blocks —
+DVDYIELDRANK / SHRANK / ATRANN / DDHIST / PRICEPERF — covering two
+new sector-rank overlays on Fundamentals fields (current dividend
+yield and short_percent_of_float, the latter risk-inverted) and
+three new pure-time-series HP stats (14-period Wilder ATR
+annualized via √252, drawdown history with correction counts, and
+multi-horizon price performance) — all pure compute over existing
+Fundamentals and HP caches with zero new API dependencies); a
+10-symbol basket lands near **350-700 KB** (the global context is
+emitted only once, so multi-symbol overhead is still bounded by the
+per-symbol blocks).
 
 ---
 
@@ -1482,6 +1555,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_updgrank` | SQLite `research_updgrank` | ADR-126 UPDGRANK window (sector percentile rank of UPDM net_90d) |
 | `research::get_gy` | SQLite `research_gy` | ADR-126 GY window (253-bar gap yearly stat from cached HP bars) |
 | `research::get_des` | SQLite `research_des` | ADR-126 DES window (253-bar daily event streak stat from cached HP bars) |
+| `research::get_dvdyieldrank` | SQLite `research_dvdyieldrank` | ADR-127 DVDYIELDRANK window (sector percentile rank of dividend yield, non-payers filtered) |
+| `research::get_shrank` | SQLite `research_shrank` | ADR-127 SHRANK window (risk-inverted sector percentile rank of short_percent_of_float) |
+| `research::get_atrann` | SQLite `research_atrann` | ADR-127 ATRANN window (Wilder 14-period ATR annualized via √252 with volatility regime label) |
+| `research::get_ddhist` | SQLite `research_ddhist` | ADR-127 DDHIST window (253-bar drawdown history with max dd + longest dd + 5%/10% correction counts) |
+| `research::get_priceperf` | SQLite `research_priceperf` | ADR-127 PRICEPERF window (multi-horizon total returns: 1M/3M/6M/YTD/1Y with trend label) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -1518,4 +1596,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 — Godel parity research surfaces
