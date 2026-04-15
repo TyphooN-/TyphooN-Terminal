@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**one hundred and three sub-blocks**, each of which is skipped silently when its data
+**one hundred and eight sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -1332,7 +1332,95 @@ avg 60d and 252d range %, latest bar's range %, compression
 ratio, and the widest/narrowest range bars in the window.
 Source: ADR-129 DAYRANGE window.
 
-#### 2.102 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.102 Return Autocorrelation (AUTOCOR — ADR-131)
+
+Pulled from `research::get_autocor`. Pure symbol-local HP stat over
+the trailing 253-session window of log returns. Sample
+autocorrelation of returns at lags 1 / 5 / 10 / 20 characterizes
+serial dependence: lag-1 ACF > 0.15 → short-horizon momentum /
+trend continuation; lag-1 ACF < -0.15 → short-horizon mean
+reversion; |lag-1 ACF| < 0.05 → essentially random walk. The
+multi-lag view catches weekly (lag-5) and monthly (lag-20)
+seasonality that lag-1 alone would miss. Header gives
+**regime_label** (MEAN_REVERTING ≤-0.15 / NEUTRAL / MOMENTUM ≥0.15 /
+INSUFFICIENT_DATA). Body reports bars_used, mean log return, and
+the four lag ACFs. Complements RSTATS / TECH (which report return
+*level*) with a serial-dependence view that's the classical test
+for whether "yesterday predicts today." Source: ADR-131 AUTOCOR
+window.
+
+#### 2.103 Hurst Exponent (HURST — ADR-131)
+
+Pulled from `research::get_hurst`. Pure symbol-local HP stat.
+Hurst exponent via rescaled-range (R/S) analysis — the canonical
+long-memory / persistence statistic. R/S is computed at a family
+of scales `[8, 12, 16, 24, 32, 48, 64, 96, 128]` (filtered so
+each scale has ≥2 non-overlapping chunks), then H is the OLS
+slope of `log(R/S_avg)` vs `log(scale)`. H ∈ [0, 1]: H<0.5 →
+anti-persistent / mean-reverting, H≈0.5 → random walk / no
+long memory, H>0.5 → persistent / trending. Header gives
+**memory_label** (STRONG_MEAN_REVERT ≤0.35 / MEAN_REVERT ≤0.45 /
+RANDOM_WALK / PERSISTENT ≥0.55 / STRONG_PERSISTENT ≥0.65 /
+INSUFFICIENT_DATA). Body reports bars_used, H, scales fit,
+smallest/largest scale used. Complements AUTOCOR (which measures
+short-lag serial dependence) with a multi-scale persistence view
+— two surfaces can agree (both mean-reverting or both trending)
+or disagree (short-run momentum + long-run mean reversion is a
+classic fat-tailed regime). Source: ADR-131 HURST window.
+
+#### 2.104 Multi-Horizon Hit Rate (HITRATE — ADR-131)
+
+Pulled from `research::get_hitrate`. Pure symbol-local HP stat.
+Fraction of positive-return bars over the last 5 / 20 / 60 / 252
+bars. Complements RSTATS (which reports mean return level) with
+a frequency-of-winning view that doesn't care about magnitude.
+Bullish when **both** short-horizon windows (h5 + h20) clear
+55%; bearish when both sit below 45%. Also reports all-window
+up / down / flat day counts for context. Header gives **hit_label**
+(BEARISH / WEAK_BEARISH / NEUTRAL / WEAK_BULLISH / BULLISH /
+INSUFFICIENT_DATA) computed from the blend of h20 and h60. Body
+reports bars_used, up/down/flat counts, and the four window hit
+rates. Useful for distinguishing "wins small + often" names from
+"wins rarely but big" names — hit rate ≠ return sign.
+Source: ADR-131 HITRATE window.
+
+#### 2.105 Gain/Loss Asymmetry (GLASYM — ADR-131)
+
+Pulled from `research::get_glasym`. Pure symbol-local HP stat.
+Compares the typical *magnitude* of up-days vs down-days over
+the trailing 253-session window, independent of which side has
+more bars. `magnitude_ratio` = `avg_up_pct / avg_down_pct`: ratio
+> 1.15 → upside asymmetry (up days tend to be bigger than down
+days); < 0.85 → downside asymmetry (a crash-prone pattern).
+Complements HITRATE (which counts wins) and RETSKEW (third
+moment) with an average-magnitude view that's often easier to
+read than skewness on fat-tailed names. Also reports medians
+alongside means to show robustness to outliers. Header gives
+**asymmetry_label** (DOWNSIDE_HEAVY ≤0.7 / SLIGHT_DOWNSIDE /
+BALANCED / SLIGHT_UPSIDE / UPSIDE_HEAVY ≥1.3 / INSUFFICIENT_DATA).
+Body reports bars_used, avg/median up & down pct magnitudes,
+ratio, and the up/down day counts. Source: ADR-131 GLASYM window.
+
+#### 2.106 Up/Down Volume Ratio (VOLRATIO — ADR-131)
+
+Pulled from `research::get_volratio`. Pure symbol-local HP stat
+over the trailing 253-session window. Ratio of average up-day
+volume to average down-day volume: ratio > 1 means heavier
+volume on up-days → classic accumulation pattern; < 1 means
+heavier volume on down-days → distribution pattern. Header gives
+**flow_label** (DISTRIBUTION ≤0.75 / SLIGHT_DISTRIBUTION /
+NEUTRAL / SLIGHT_ACCUMULATION / ACCUMULATION ≥1.35 /
+INSUFFICIENT_DATA). Body reports bars_used, up/down day counts,
+ratio, avg/median up & down volume, and the single largest
+up-day and down-day volume bars in the window. Gracefully emits
+INSUFFICIENT_DATA when the HP cache was populated without volume
+(some MT5 symbols have the volume field at 0) — the first broker
+to populate volume on an LAN peer backfills the whole network.
+Complements RSTATS / AUTOCOR / DAYRANGE (all price-only) with
+the one volume-derived HP surface in the Round 23 bundle.
+Source: ADR-131 VOLRATIO window.
+
+#### 2.107 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -1348,7 +1436,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.103 Sector peer comparison
+#### 2.108 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1519,21 +1607,26 @@ Question section, not per-symbol.
 | Tail ratio fields (ADR-129 TAILR) | 4 k/v rows | Bars used + P95/P05 + 95/5 tail ratio + P99/P01 + 99/1 tail ratio + bias label |
 | Run length fields (ADR-129 RUNLEN) | 4 k/v rows | Bars used + avg up/down runs + run counts + longest up/down + signed current run + trend label |
 | Daily range fields (ADR-129 DAYRANGE) | 4 k/v rows | Bars used + avg 60d/252d range % + latest range + compression ratio + widest/narrowest + range label |
+| Return autocorrelation fields (ADR-131 AUTOCOR) | 3 k/v rows | Bars used + mean log return + ACF at lags 1/5/10/20 + regime label |
+| Hurst exponent fields (ADR-131 HURST) | 2 k/v rows | Bars used + H + scales used + min/max scale + memory label |
+| Hit rate fields (ADR-131 HITRATE) | 3 k/v rows | Bars used + up/down/flat days + hitrate 5d/20d/60d/252d + hit label |
+| Gain/loss asymmetry fields (ADR-131 GLASYM) | 3 k/v rows | Bars used + up/down day counts + avg/median up & down pct + ratio + asymmetry label |
+| Up/down volume ratio fields (ADR-131 VOLRATIO) | 4 k/v rows | Bars used + up/down day counts + avg/median up & down volume + ratio + max up/down volume + flow label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **40-78 KB**
-(up from 40-76 KB after ADR-129; ADR-130 adds one optional per-symbol
-block — INGESTED, capped at 15 articles × ~100 bytes/row ≈ ~1.5 KB
-per symbol when populated — plus a single ~600-byte Return Path
-footer at the tail of every packet regardless of scope; both layers
-reuse the existing `research_web_articles` SQLite bag and LAN sync
-path with zero new API dependencies); a 10-symbol basket lands
-near **390-795 KB** when every symbol has a fully populated ingest
-bag (the global context and the Return Path footer are each emitted
-exactly once, so multi-symbol overhead is still bounded by the
-per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **42-82 KB**
+(up from 40-78 KB after ADR-130; ADR-131 adds five optional per-symbol
+blocks — AUTOCOR / HURST / HITRATE / GLASYM / VOLRATIO — each
+measuring ~2-3 k/v rows and adding ~400-600 bytes when populated,
+for a typical +2 KB per symbol and +4 KB worst case; all five reuse
+the existing `research_historical_price` HP cache and the standard
+research-table LAN sync path with zero new API dependencies); a
+10-symbol basket now lands near **410-820 KB** when every symbol
+has a fully populated ingest bag (the global context and the Return
+Path footer are each emitted exactly once, so multi-symbol overhead
+is still bounded by the per-symbol blocks).
 
 ---
 
@@ -1773,6 +1866,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_tailr` | SQLite `research_tailr` | ADR-129 TAILR window (95/5 and 99/1 quantile tail ratios) |
 | `research::get_runlen` | SQLite `research_runlen` | ADR-129 RUNLEN window (up/down run length stats + signed current run) |
 | `research::get_dayrange` | SQLite `research_dayrange` | ADR-129 DAYRANGE window (60d vs 252d daily range compression ratio) |
+| `research::get_autocor` | SQLite `research_autocor` | ADR-131 AUTOCOR window (lag 1/5/10/20 return autocorrelation + momentum/mean-revert regime label) |
+| `research::get_hurst` | SQLite `research_hurst` | ADR-131 HURST window (Hurst exponent via R/S analysis with 5-way persistence label) |
+| `research::get_hitrate` | SQLite `research_hitrate` | ADR-131 HITRATE window (multi-horizon hit rate 5d/20d/60d/252d + up/down/flat counts + bias label) |
+| `research::get_glasym` | SQLite `research_glasym` | ADR-131 GLASYM window (gain/loss magnitude asymmetry ratio + up/down day medians) |
+| `research::get_volratio` | SQLite `research_volratio` | ADR-131 VOLRATIO window (up-day vs down-day volume ratio with accumulation/distribution label) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -1810,5 +1908,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)

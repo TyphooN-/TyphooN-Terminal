@@ -2519,6 +2519,129 @@ pub struct DailyRangeSnapshot {
     pub note: String,
 }
 
+// ── ADR-131 Godel Parity Round 23 (AUTOCOR / HURST / HITRATE / GLASYM / VOLRATIO) ──
+//
+// Five pure HP-local stat surfaces. All five compute over the
+// trailing 253-session window of the existing `research_historical_price`
+// cache and add zero new API dependencies. Each one fills a
+// conceptually distinct gap vs Godel:
+//
+//  * AUTOCOR  — serial correlation of returns at lags 1/5/10/20,
+//               the canonical momentum-vs-mean-reversion detector
+//  * HURST    — long-memory exponent via rescaled-range (R/S)
+//               analysis (H<0.5 mean-reverting, H≈0.5 random walk,
+//               H>0.5 persistent / trending)
+//  * HITRATE  — multi-horizon win rate: share of positive-return
+//               bars over 5d/20d/60d/252d windows
+//  * GLASYM   — gain/loss magnitude asymmetry: avg/median up-day
+//               size vs avg/median down-day size + magnitude ratio
+//  * VOLRATIO — accumulation/distribution hint from HP volume:
+//               avg volume on up-days vs down-days + regime label
+
+/// AUTOCOR — Autocorrelation of daily log returns at multiple lags.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Positive lag-1 ACF → momentum at the daily scale; negative → mean
+/// reversion; near-zero → random-walk-like. Including longer lags
+/// catches horizon-dependent regimes missed by lag-1 alone.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AutocorrelationSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,              // number of log returns used
+    pub lag1_acf: f64,                 // autocorrelation at lag 1
+    pub lag5_acf: f64,                 // autocorrelation at lag 5
+    pub lag10_acf: f64,                // autocorrelation at lag 10
+    pub lag20_acf: f64,                // autocorrelation at lag 20
+    pub mean_log_return: f64,
+    pub regime_label: String,          // "MEAN_REVERTING" | "NEUTRAL" | "MOMENTUM" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// HURST — Hurst exponent via rescaled-range (R/S) analysis.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// H ∈ [0,1]: H<0.5 anti-persistent / mean-reverting,
+/// H≈0.5 random walk, H>0.5 persistent / trending.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HurstSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub hurst_exponent: f64,
+    pub scales_used: usize,            // number of R/S scales fit
+    pub min_scale: usize,              // smallest chunk size
+    pub max_scale: usize,              // largest chunk size
+    pub memory_label: String,          // "STRONG_MEAN_REVERT" | "MEAN_REVERT" | "RANDOM_WALK" | "PERSISTENT" | "STRONG_PERSISTENT" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// HITRATE — Multi-horizon hit rate.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Fraction of positive-return bars at 5d / 20d / 60d / 252d sliding
+/// windows. Also reports the all-window share for context. Bullish
+/// when every short-horizon window is above 55%; bearish when every
+/// short-horizon window is below 45%.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HitRateSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub hitrate_5d: f64,               // positive share over last 5 bars
+    pub hitrate_20d: f64,              // positive share over last 20 bars
+    pub hitrate_60d: f64,              // positive share over last 60 bars
+    pub hitrate_252d: f64,             // positive share over last 252 bars
+    pub up_days: usize,
+    pub down_days: usize,
+    pub flat_days: usize,
+    pub hit_label: String,             // "BEARISH" | "WEAK_BEARISH" | "NEUTRAL" | "WEAK_BULLISH" | "BULLISH" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// GLASYM — Gain/loss asymmetry.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Compares the magnitude of up-days vs down-days, independent of
+/// count. Ratio > 1 → typical up-day bigger than typical down-day
+/// (upside asymmetry); < 1 → downside asymmetry. Complements RETSKEW
+/// (third-moment tail asymmetry) with an average-move view.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GainLossAsymmetrySnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub avg_up_pct: f64,               // mean |up-day return| (%)
+    pub avg_down_pct: f64,             // mean |down-day return| (%)
+    pub median_up_pct: f64,            // median |up-day return| (%)
+    pub median_down_pct: f64,          // median |down-day return| (%)
+    pub magnitude_ratio: f64,          // avg_up_pct / avg_down_pct
+    pub up_days: usize,
+    pub down_days: usize,
+    pub asymmetry_label: String,       // "DOWNSIDE_HEAVY" | "SLIGHT_DOWNSIDE" | "BALANCED" | "SLIGHT_UPSIDE" | "UPSIDE_HEAVY" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// VOLRATIO — Up-day volume vs down-day volume ratio.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Ratio > 1 → heavier volume on up-days than down-days
+/// (accumulation); < 1 → heavier volume on down-days (distribution).
+/// Uses the `volume` field of HP bars so it gracefully emits
+/// INSUFFICIENT_DATA when the cache was populated without volume.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VolumeRatioSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub avg_up_volume: f64,            // mean volume on up-days
+    pub avg_down_volume: f64,          // mean volume on down-days
+    pub median_up_volume: f64,
+    pub median_down_volume: f64,
+    pub up_down_volume_ratio: f64,     // avg_up_volume / avg_down_volume
+    pub max_up_volume: f64,            // largest single up-day volume in window
+    pub max_down_volume: f64,          // largest single down-day volume in window
+    pub up_days: usize,
+    pub down_days: usize,
+    pub flow_label: String,            // "DISTRIBUTION" | "SLIGHT_DISTRIBUTION" | "NEUTRAL" | "SLIGHT_ACCUMULATION" | "ACCUMULATION" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -12739,6 +12862,421 @@ pub fn compute_dayrange_snapshot(
     }
 }
 
+// ── ADR-131 Round 23 computes (AUTOCOR / HURST / HITRATE / GLASYM / VOLRATIO) ──
+
+/// Helper: autocorrelation of a return series at a given lag, computed
+/// via the standard estimator `sum((r_t - mean)(r_{t-k} - mean)) /
+/// sum((r_t - mean)^2)`. Returns 0.0 when the series is too short
+/// (<= lag) or the denominator is 0.
+fn acf_at_lag(rets: &[f64], lag: usize) -> f64 {
+    if lag == 0 || rets.len() <= lag {
+        return 0.0;
+    }
+    let n = rets.len() as f64;
+    let mean: f64 = rets.iter().sum::<f64>() / n;
+    let denom: f64 = rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>();
+    if denom <= f64::EPSILON {
+        return 0.0;
+    }
+    let num: f64 = (lag..rets.len())
+        .map(|t| (rets[t] - mean) * (rets[t - lag] - mean))
+        .sum();
+    num / denom
+}
+
+/// AUTOCOR compute: autocorrelation of log returns at lags 1/5/10/20.
+/// Labels from lag-1 ACF: strong mean-reversion, mean-reversion,
+/// neutral, momentum, strong momentum.
+pub fn compute_autocor_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> AutocorrelationSnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return AutocorrelationSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            regime_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} valid log returns", log_rets.len()),
+            ..Default::default()
+        };
+    }
+    let mean: f64 = log_rets.iter().sum::<f64>() / log_rets.len() as f64;
+    let lag1 = acf_at_lag(&log_rets, 1);
+    let lag5 = acf_at_lag(&log_rets, 5);
+    let lag10 = acf_at_lag(&log_rets, 10);
+    let lag20 = acf_at_lag(&log_rets, 20);
+    let regime_label = if lag1 <= -0.15 {
+        "STRONG_MEAN_REVERT"
+    } else if lag1 <= -0.05 {
+        "MEAN_REVERT"
+    } else if lag1 < 0.05 {
+        "NEUTRAL"
+    } else if lag1 < 0.15 {
+        "MOMENTUM"
+    } else {
+        "STRONG_MOMENTUM"
+    };
+    AutocorrelationSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: window.len(),
+        lag1_acf: lag1,
+        lag5_acf: lag5,
+        lag10_acf: lag10,
+        lag20_acf: lag20,
+        mean_log_return: mean,
+        regime_label: regime_label.into(),
+        note: String::new(),
+    }
+}
+
+/// HURST compute: Hurst exponent via rescaled-range analysis.
+/// Partitions the log return series into non-overlapping chunks of
+/// size `scale`, computes R/S (range of cumulative deviations divided
+/// by stdev) per chunk, averages across chunks, and regresses
+/// `log(R/S_avg)` against `log(scale)`. The slope is H.
+pub fn compute_hurst_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> HurstSnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 40 {
+        return HurstSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            memory_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} valid log returns", log_rets.len()),
+            ..Default::default()
+        };
+    }
+    // Build candidate scales: powers-of-two-ish, bounded so we always get
+    // at least 2 chunks per scale.
+    let n = log_rets.len();
+    let candidate_scales: Vec<usize> = [8, 12, 16, 24, 32, 48, 64, 96, 128]
+        .into_iter()
+        .filter(|&s| s <= n / 2)
+        .collect();
+    if candidate_scales.len() < 2 {
+        return HurstSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            memory_label: "INSUFFICIENT_DATA".into(),
+            note: "too few R/S scales".into(),
+            ..Default::default()
+        };
+    }
+
+    let mut xs: Vec<f64> = Vec::new();
+    let mut ys: Vec<f64> = Vec::new();
+    for &scale in &candidate_scales {
+        let num_chunks = n / scale;
+        if num_chunks == 0 {
+            continue;
+        }
+        let mut rs_vals: Vec<f64> = Vec::with_capacity(num_chunks);
+        for c in 0..num_chunks {
+            let start = c * scale;
+            let end = start + scale;
+            let slice = &log_rets[start..end];
+            let mean: f64 = slice.iter().sum::<f64>() / scale as f64;
+            // Cumulative deviations from the chunk mean.
+            let mut cum: Vec<f64> = Vec::with_capacity(scale);
+            let mut running = 0.0;
+            for r in slice {
+                running += r - mean;
+                cum.push(running);
+            }
+            let max_c = cum.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let min_c = cum.iter().cloned().fold(f64::INFINITY, f64::min);
+            let range = max_c - min_c;
+            let var: f64 = slice.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / scale as f64;
+            let sd = var.sqrt();
+            if sd > f64::EPSILON && range > 0.0 {
+                rs_vals.push(range / sd);
+            }
+        }
+        if rs_vals.is_empty() {
+            continue;
+        }
+        let avg_rs: f64 = rs_vals.iter().sum::<f64>() / rs_vals.len() as f64;
+        if avg_rs > 0.0 {
+            xs.push((scale as f64).ln());
+            ys.push(avg_rs.ln());
+        }
+    }
+    if xs.len() < 2 {
+        return HurstSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            memory_label: "INSUFFICIENT_DATA".into(),
+            note: "R/S regression had < 2 points".into(),
+            ..Default::default()
+        };
+    }
+    // OLS slope.
+    let np = xs.len() as f64;
+    let mean_x: f64 = xs.iter().sum::<f64>() / np;
+    let mean_y: f64 = ys.iter().sum::<f64>() / np;
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for i in 0..xs.len() {
+        let dx = xs[i] - mean_x;
+        num += dx * (ys[i] - mean_y);
+        den += dx * dx;
+    }
+    let h = if den > f64::EPSILON { num / den } else { 0.5 };
+    let label = if h < 0.35 {
+        "STRONG_MEAN_REVERT"
+    } else if h < 0.45 {
+        "MEAN_REVERT"
+    } else if h < 0.55 {
+        "RANDOM_WALK"
+    } else if h < 0.65 {
+        "PERSISTENT"
+    } else {
+        "STRONG_PERSISTENT"
+    };
+    HurstSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: window.len(),
+        hurst_exponent: h,
+        scales_used: xs.len(),
+        min_scale: *candidate_scales.iter().min().unwrap_or(&0),
+        max_scale: *candidate_scales.iter().max().unwrap_or(&0),
+        memory_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// HITRATE compute: share of positive-return bars over 5/20/60/252
+/// trailing windows. Label combines the 20d and 60d hit rates: both
+/// above 55% → BULLISH, both below 45% → BEARISH, otherwise NEUTRAL /
+/// WEAK_BULLISH / WEAK_BEARISH based on the 20d alone.
+pub fn compute_hitrate_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> HitRateSnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 20 {
+        return HitRateSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            hit_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} valid log returns", log_rets.len()),
+            ..Default::default()
+        };
+    }
+    fn hit_over(rets: &[f64], take: usize) -> f64 {
+        let start = rets.len().saturating_sub(take);
+        let slice = &rets[start..];
+        if slice.is_empty() { return 0.0; }
+        let up = slice.iter().filter(|&&r| r > 0.0).count() as f64;
+        up / slice.len() as f64
+    }
+    let h5 = hit_over(&log_rets, 5) * 100.0;
+    let h20 = hit_over(&log_rets, 20) * 100.0;
+    let h60 = hit_over(&log_rets, 60) * 100.0;
+    let h252 = hit_over(&log_rets, 252) * 100.0;
+    let up = log_rets.iter().filter(|&&r| r > 0.0).count();
+    let down = log_rets.iter().filter(|&&r| r < 0.0).count();
+    let flat = log_rets.len() - up - down;
+
+    let label = if h20 >= 60.0 && h60 >= 55.0 {
+        "BULLISH"
+    } else if h20 >= 55.0 {
+        "WEAK_BULLISH"
+    } else if h20 <= 40.0 && h60 <= 45.0 {
+        "BEARISH"
+    } else if h20 <= 45.0 {
+        "WEAK_BEARISH"
+    } else {
+        "NEUTRAL"
+    };
+    HitRateSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: window.len(),
+        hitrate_5d: h5,
+        hitrate_20d: h20,
+        hitrate_60d: h60,
+        hitrate_252d: h252,
+        up_days: up,
+        down_days: down,
+        flat_days: flat,
+        hit_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// GLASYM compute: average and median magnitude of up vs down days.
+/// Magnitudes are expressed as percent log returns × 100.
+pub fn compute_glasym_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> GainLossAsymmetrySnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 20 {
+        return GainLossAsymmetrySnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            asymmetry_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} valid log returns", log_rets.len()),
+            ..Default::default()
+        };
+    }
+    let mut ups: Vec<f64> = log_rets.iter().filter(|&&r| r > 0.0).map(|r| r * 100.0).collect();
+    let mut downs: Vec<f64> = log_rets.iter().filter(|&&r| r < 0.0).map(|r| -r * 100.0).collect();
+    if ups.is_empty() || downs.is_empty() {
+        return GainLossAsymmetrySnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            asymmetry_label: "INSUFFICIENT_DATA".into(),
+            note: "all-up or all-down window".into(),
+            up_days: ups.len(),
+            down_days: downs.len(),
+            ..Default::default()
+        };
+    }
+    let avg_up: f64 = ups.iter().sum::<f64>() / ups.len() as f64;
+    let avg_down: f64 = downs.iter().sum::<f64>() / downs.len() as f64;
+    ups.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    downs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_up = quantile_f64(&ups, 0.5);
+    let median_down = quantile_f64(&downs, 0.5);
+    let ratio = if avg_down > f64::EPSILON { avg_up / avg_down } else { 0.0 };
+    let label = if ratio <= 0.75 {
+        "DOWNSIDE_HEAVY"
+    } else if ratio <= 0.9 {
+        "SLIGHT_DOWNSIDE"
+    } else if ratio < 1.1 {
+        "BALANCED"
+    } else if ratio < 1.3 {
+        "SLIGHT_UPSIDE"
+    } else {
+        "UPSIDE_HEAVY"
+    };
+    GainLossAsymmetrySnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: window.len(),
+        avg_up_pct: avg_up,
+        avg_down_pct: avg_down,
+        median_up_pct: median_up,
+        median_down_pct: median_down,
+        magnitude_ratio: ratio,
+        up_days: ups.len(),
+        down_days: downs.len(),
+        asymmetry_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// VOLRATIO compute: up-day vs down-day volume summary over the
+/// trailing 253-session window. Emits INSUFFICIENT_DATA when the HP
+/// cache was populated without volume (all zeros).
+pub fn compute_volratio_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> VolumeRatioSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let window: Vec<&HistoricalPriceRow> = sorted.iter().rev().take(253).rev().copied().collect();
+    if window.len() < 20 {
+        return VolumeRatioSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            flow_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} bars", window.len()),
+            ..Default::default()
+        };
+    }
+    let mut up_vols: Vec<f64> = Vec::new();
+    let mut down_vols: Vec<f64> = Vec::new();
+    for w in window.windows(2) {
+        let prev = w[0].close;
+        let curr = w[1].close;
+        let vol = w[1].volume;
+        if prev > 0.0 && curr > 0.0 && vol > 0.0 {
+            let r = (curr / prev).ln();
+            if r > 0.0 {
+                up_vols.push(vol);
+            } else if r < 0.0 {
+                down_vols.push(vol);
+            }
+        }
+    }
+    if up_vols.is_empty() || down_vols.is_empty() {
+        return VolumeRatioSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            flow_label: "INSUFFICIENT_DATA".into(),
+            note: "HP cache lacks volume or one side empty".into(),
+            up_days: up_vols.len(),
+            down_days: down_vols.len(),
+            ..Default::default()
+        };
+    }
+    let avg_up: f64 = up_vols.iter().sum::<f64>() / up_vols.len() as f64;
+    let avg_down: f64 = down_vols.iter().sum::<f64>() / down_vols.len() as f64;
+    let max_up = up_vols.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let max_down = down_vols.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let mut sorted_up = up_vols.clone();
+    let mut sorted_down = down_vols.clone();
+    sorted_up.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_down.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_up = quantile_f64(&sorted_up, 0.5);
+    let median_down = quantile_f64(&sorted_down, 0.5);
+    let ratio = if avg_down > f64::EPSILON { avg_up / avg_down } else { 0.0 };
+    let label = if ratio <= 0.8 {
+        "DISTRIBUTION"
+    } else if ratio <= 0.95 {
+        "SLIGHT_DISTRIBUTION"
+    } else if ratio < 1.05 {
+        "NEUTRAL"
+    } else if ratio < 1.25 {
+        "SLIGHT_ACCUMULATION"
+    } else {
+        "ACCUMULATION"
+    };
+    VolumeRatioSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: window.len(),
+        avg_up_volume: avg_up,
+        avg_down_volume: avg_down,
+        median_up_volume: median_up,
+        median_down_volume: median_down,
+        up_down_volume_ratio: ratio,
+        max_up_volume: max_up,
+        max_down_volume: max_down,
+        up_days: up_vols.len(),
+        down_days: down_vols.len(),
+        flow_label: label.into(),
+        note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -16114,6 +16652,159 @@ pub fn parse_ingest_block(text: &str) -> Vec<(String, Vec<WebArticle>)> {
     }
 
     out.into_iter().collect()
+}
+
+// ── ADR-131 Godel Parity Round 23 schema + helpers ────────────────────────
+
+pub fn create_research_tables_v24(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v23(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_autocor (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_autocor_updated ON research_autocor(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_hurst (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_hurst_updated ON research_hurst(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_hitrate (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_hitrate_updated ON research_hitrate(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_glasym (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_glasym_updated ON research_glasym(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_volratio (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_volratio_updated ON research_volratio(updated_at);",
+    ).map_err(|e| format!("create v24 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_autocor(conn: &Connection, symbol: &str, snap: &AutocorrelationSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v24(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("autocor json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_autocor(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert autocor: {e}"))?;
+    Ok(())
+}
+
+pub fn get_autocor(conn: &Connection, symbol: &str) -> Result<Option<AutocorrelationSnapshot>, String> {
+    let _ = create_research_tables_v24(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_autocor WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_autocor: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_autocor: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_autocor: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_hurst(conn: &Connection, symbol: &str, snap: &HurstSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v24(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("hurst json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_hurst(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert hurst: {e}"))?;
+    Ok(())
+}
+
+pub fn get_hurst(conn: &Connection, symbol: &str) -> Result<Option<HurstSnapshot>, String> {
+    let _ = create_research_tables_v24(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_hurst WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_hurst: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_hurst: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_hurst: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_hitrate(conn: &Connection, symbol: &str, snap: &HitRateSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v24(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("hitrate json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_hitrate(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert hitrate: {e}"))?;
+    Ok(())
+}
+
+pub fn get_hitrate(conn: &Connection, symbol: &str) -> Result<Option<HitRateSnapshot>, String> {
+    let _ = create_research_tables_v24(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_hitrate WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_hitrate: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_hitrate: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_hitrate: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_glasym(conn: &Connection, symbol: &str, snap: &GainLossAsymmetrySnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v24(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("glasym json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_glasym(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert glasym: {e}"))?;
+    Ok(())
+}
+
+pub fn get_glasym(conn: &Connection, symbol: &str) -> Result<Option<GainLossAsymmetrySnapshot>, String> {
+    let _ = create_research_tables_v24(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_glasym WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_glasym: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_glasym: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_glasym: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_volratio(conn: &Connection, symbol: &str, snap: &VolumeRatioSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v24(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("volratio json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_volratio(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert volratio: {e}"))?;
+    Ok(())
+}
+
+pub fn get_volratio(conn: &Connection, symbol: &str) -> Result<Option<VolumeRatioSnapshot>, String> {
+    let _ = create_research_tables_v24(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_volratio WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_volratio: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_volratio: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_volratio: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
 }
 
 /// Whole-table scan of `research_divg`. Used by DVDRANK.
@@ -21716,5 +22407,230 @@ Trailing text.
         let text = "No ingest block here.";
         let parsed = parse_ingest_block(text);
         assert!(parsed.is_empty());
+    }
+
+    // ── ADR-131 Round 23 tests ──
+
+    fn synthetic_up_trend_bars() -> Vec<HistoricalPriceRow> {
+        // 60 bars, each slightly higher than the previous (deterministic
+        // drift). Simulates a persistent uptrend: Hurst should be > 0.5,
+        // hit rate should be high, GLASYM ratio should be ≥ 1, AUTOCOR
+        // lag 1 ~ 0.
+        (0..60).map(|i| {
+            let close = 100.0 + (i as f64) * 0.5;
+            HistoricalPriceRow {
+                date: format!("2025-{:02}-{:02}", 1 + (i / 20) as u32, 1 + (i % 20) as u32),
+                open: close - 0.25,
+                high: close + 0.5,
+                low: close - 0.75,
+                close,
+                adj_close: close,
+                volume: 1_000_000.0 + (i as f64) * 50_000.0,
+                change: 0.5,
+                change_pct: 0.5,
+            }
+        }).collect()
+    }
+
+    fn synthetic_mixed_bars() -> Vec<HistoricalPriceRow> {
+        // 60 bars, alternating up/down ~equally — tests the BALANCED /
+        // NEUTRAL / RANDOM_WALK paths.
+        (0..60).map(|i| {
+            let base = 100.0;
+            let close = if i % 2 == 0 { base + 1.0 } else { base - 1.0 };
+            HistoricalPriceRow {
+                date: format!("2025-{:02}-{:02}", 1 + (i / 20) as u32, 1 + (i % 20) as u32),
+                open: base,
+                high: base + 1.5,
+                low: base - 1.5,
+                close,
+                adj_close: close,
+                volume: if i % 2 == 0 { 2_000_000.0 } else { 1_000_000.0 },
+                change: 0.0,
+                change_pct: 0.0,
+            }
+        }).collect()
+    }
+
+    #[test]
+    fn autocor_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = AutocorrelationSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 200,
+            lag1_acf: -0.12,
+            lag5_acf: 0.02,
+            lag10_acf: -0.01,
+            lag20_acf: 0.03,
+            mean_log_return: 0.0008,
+            regime_label: "MEAN_REVERT".into(),
+            note: String::new(),
+        };
+        upsert_autocor(&c, "TEST", &snap).unwrap();
+        let got = get_autocor(&c, "TEST").unwrap().unwrap();
+        assert_eq!(got.symbol, "TEST");
+        assert!((got.lag1_acf - -0.12).abs() < 1e-9);
+        assert_eq!(got.regime_label, "MEAN_REVERT");
+    }
+
+    #[test]
+    fn autocor_compute_insufficient_data() {
+        let snap = compute_autocor_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.regime_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn autocor_compute_uptrend_labels() {
+        let bars = synthetic_up_trend_bars();
+        let snap = compute_autocor_snapshot("X", "2026-04-15", &bars);
+        assert_ne!(snap.regime_label, "INSUFFICIENT_DATA");
+        assert!(snap.bars_used >= 30);
+    }
+
+    #[test]
+    fn hurst_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = HurstSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            hurst_exponent: 0.58,
+            scales_used: 4,
+            min_scale: 8,
+            max_scale: 64,
+            memory_label: "PERSISTENT".into(),
+            note: String::new(),
+        };
+        upsert_hurst(&c, "TEST", &snap).unwrap();
+        let got = get_hurst(&c, "TEST").unwrap().unwrap();
+        assert!((got.hurst_exponent - 0.58).abs() < 1e-9);
+        assert_eq!(got.memory_label, "PERSISTENT");
+    }
+
+    #[test]
+    fn hurst_compute_insufficient_data() {
+        let snap = compute_hurst_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.memory_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn hurst_compute_picks_label() {
+        let bars = synthetic_mixed_bars();
+        let snap = compute_hurst_snapshot("X", "2026-04-15", &bars);
+        assert_ne!(snap.memory_label, "INSUFFICIENT_DATA");
+        assert!(snap.scales_used >= 2);
+    }
+
+    #[test]
+    fn hitrate_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = HitRateSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            hitrate_5d: 60.0,
+            hitrate_20d: 55.0,
+            hitrate_60d: 52.0,
+            hitrate_252d: 51.0,
+            up_days: 130,
+            down_days: 120,
+            flat_days: 3,
+            hit_label: "WEAK_BULLISH".into(),
+            note: String::new(),
+        };
+        upsert_hitrate(&c, "TEST", &snap).unwrap();
+        let got = get_hitrate(&c, "TEST").unwrap().unwrap();
+        assert_eq!(got.up_days, 130);
+        assert_eq!(got.hit_label, "WEAK_BULLISH");
+    }
+
+    #[test]
+    fn hitrate_compute_uptrend_is_bullish() {
+        let bars = synthetic_up_trend_bars();
+        let snap = compute_hitrate_snapshot("X", "2026-04-15", &bars);
+        assert_ne!(snap.hit_label, "INSUFFICIENT_DATA");
+        assert!(snap.up_days > snap.down_days, "uptrend should have more up days");
+    }
+
+    #[test]
+    fn glasym_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = GainLossAsymmetrySnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            avg_up_pct: 1.2,
+            avg_down_pct: 1.1,
+            median_up_pct: 0.9,
+            median_down_pct: 0.8,
+            magnitude_ratio: 1.09,
+            up_days: 130,
+            down_days: 120,
+            asymmetry_label: "BALANCED".into(),
+            note: String::new(),
+        };
+        upsert_glasym(&c, "TEST", &snap).unwrap();
+        let got = get_glasym(&c, "TEST").unwrap().unwrap();
+        assert!((got.magnitude_ratio - 1.09).abs() < 1e-9);
+        assert_eq!(got.asymmetry_label, "BALANCED");
+    }
+
+    #[test]
+    fn glasym_compute_insufficient_when_empty() {
+        let snap = compute_glasym_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.asymmetry_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn glasym_compute_mixed_is_balanced() {
+        let bars = synthetic_mixed_bars();
+        let snap = compute_glasym_snapshot("X", "2026-04-15", &bars);
+        assert_ne!(snap.asymmetry_label, "INSUFFICIENT_DATA");
+        assert!(snap.up_days > 0 && snap.down_days > 0);
+    }
+
+    #[test]
+    fn volratio_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = VolumeRatioSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            avg_up_volume: 2_500_000.0,
+            avg_down_volume: 2_000_000.0,
+            median_up_volume: 2_400_000.0,
+            median_down_volume: 1_900_000.0,
+            up_down_volume_ratio: 1.25,
+            max_up_volume: 8_000_000.0,
+            max_down_volume: 5_500_000.0,
+            up_days: 130,
+            down_days: 120,
+            flow_label: "SLIGHT_ACCUMULATION".into(),
+            note: String::new(),
+        };
+        upsert_volratio(&c, "TEST", &snap).unwrap();
+        let got = get_volratio(&c, "TEST").unwrap().unwrap();
+        assert!((got.up_down_volume_ratio - 1.25).abs() < 1e-9);
+        assert_eq!(got.flow_label, "SLIGHT_ACCUMULATION");
+    }
+
+    #[test]
+    fn volratio_compute_no_volume_returns_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = (0..30).map(|i| HistoricalPriceRow {
+            date: format!("2025-01-{:02}", i + 1),
+            open: 100.0, high: 101.0, low: 99.0, close: 100.0 + i as f64,
+            adj_close: 100.0, volume: 0.0, change: 0.0, change_pct: 0.0,
+        }).collect();
+        let snap = compute_volratio_snapshot("X", "2026-04-15", &bars);
+        assert_eq!(snap.flow_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn volratio_compute_with_volume() {
+        let bars = synthetic_mixed_bars();
+        let snap = compute_volratio_snapshot("X", "2026-04-15", &bars);
+        assert_ne!(snap.flow_label, "INSUFFICIENT_DATA");
+        assert!(snap.up_days > 0 && snap.down_days > 0);
     }
 }
