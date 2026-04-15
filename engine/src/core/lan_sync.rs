@@ -238,6 +238,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_atrann",
     "research_ddhist",
     "research_priceperf",
+    // ── ADR-128 Round 21 ────────────────────────────
+    "research_betarank",
+    "research_pegrank",
+    "research_fhighlow",
+    "research_rvcone",
+    "research_calpb",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -1035,6 +1041,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_betarank" => Some(
+            "CREATE TABLE IF NOT EXISTS research_betarank (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_pegrank" => Some(
+            "CREATE TABLE IF NOT EXISTS research_pegrank (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_fhighlow" => Some(
+            "CREATE TABLE IF NOT EXISTS research_fhighlow (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_rvcone" => Some(
+            "CREATE TABLE IF NOT EXISTS research_rvcone (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_calpb" => Some(
+            "CREATE TABLE IF NOT EXISTS research_calpb (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -1143,6 +1184,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_atrann" => Some("updated_at"),
         "research_ddhist" => Some("updated_at"),
         "research_priceperf" => Some("updated_at"),
+        "research_betarank" => Some("updated_at"),
+        "research_pegrank" => Some("updated_at"),
+        "research_fhighlow" => Some("updated_at"),
+        "research_rvcone" => Some("updated_at"),
+        "research_calpb" => Some("updated_at"),
         _ => None,
     }
 }

@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**ninety-two sub-blocks**, each of which is skipped silently when its data
+**ninety-seven sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -1195,7 +1195,78 @@ used, and latest close. Trend label gates on `bars_used >= 20` so
 shallow histories emit INSUFFICIENT_DATA rather than noise. Source:
 ADR-127 PRICEPERF window.
 
-#### 2.92 Sector peer comparison
+#### 2.92 Beta Rank vs Sector (BETARANK — ADR-128)
+
+Pulled from `research::get_betarank`. Direct companion to SHRANK.
+Risk-inverted percentile rank of `Fundamentals.beta` within the
+same sector — *lower* beta earns a *higher* (safer) rank. Header
+line gives the **rank_label** (SAFEST_DECILE / SAFEST_QUARTILE /
+ABOVE_MEDIAN_SAFE / BELOW_MEDIAN_RISKY / BOTTOM_QUARTILE_RISKY /
+RISKIEST_DECILE / INSUFFICIENT_DATA), subject beta, sector
+median/p25/p75, and percentile. Body block reports subject beta,
+sector median, p25, p75, safer-than count, and percentile. Needs
+≥3 sector peers with a non-None beta. Source: ADR-128 BETARANK
+window. Negative-beta subjects correctly land at SAFEST_DECILE
+against conventional positive-beta peers.
+
+#### 2.93 PEG Ratio Rank vs Sector (PEGRANK — ADR-128)
+
+Pulled from `research::get_pegrank`. Value-inverted percentile
+rank of `Fundamentals.peg_ratio` — *lower* PEG (cheaper growth)
+earns a *higher* (better-value) rank. Fills the gap where VAL
+(Round 15) fuses P/E, Forward P/E, P/B, P/S, EV/EBITDA, FCF yield
+but not PEG. Header line gives the **rank_label** (TOP_DECILE …
+BOTTOM_DECILE), subject PEG, sector median/p25/p75, and
+percentile. Body block reports subject PEG, sector median, p25,
+p75, beat count, and percentile. Non-positive / non-finite PEG is
+filtered on both subject and peer sides. Source: ADR-128 PEGRANK
+window.
+
+#### 2.94 52-Week High/Low Distance (FHIGHLOW — ADR-128)
+
+Pulled from `research::get_fhighlow`. Pure symbol-local HP stat
+over the trailing 253-session window. Tracks max/min close,
+high/low dates, days since each, percent-from-high,
+percent-from-low, and range position (0 = at low, 100 = at high).
+Header line gives the **proximity_label** (AT_HIGH / NEAR_HIGH /
+MID_RANGE / NEAR_LOW / AT_LOW / INSUFFICIENT_DATA), latest close,
+pct-from-high, pct-from-low, and range position. Body block
+reports 52w high + date + days-since, 52w low + date + days-since,
+pct-from-high/low, range position, and bars used. Falls back to
+mid-range (50.0) on degenerate flat-series case. Source: ADR-128
+FHIGHLOW window.
+
+#### 2.95 Realized Volatility Cone (RVCONE — ADR-128)
+
+Pulled from `research::get_rvcone`. Pure symbol-local HP stat that
+computes 20d / 60d / 120d / 252d annualized realized volatility
+(stdev of log returns × √252) and overlays the latest 20d RV
+percentile against the rolling distribution of 20d RVs across the
+full window. Header line gives the **cone_label** (COMPRESSED /
+BELOW_AVG / TYPICAL / ELEVATED / EXTREME / INSUFFICIENT_DATA),
+RV20, RV20 min/median/max, and percentile. Body block reports
+RV20/RV60/RV120/RV252, RV20 rolling min/median/max, RV20
+percentile, and bars used. Uses sample-mean stdev with N
+denominator (matches RVOL convention). Latest 20d window is
+excluded from the ranking distribution so it's compared against
+its *history*. Source: ADR-128 RVCONE window.
+
+#### 2.96 Calendar Period Breakdowns (CALPB — ADR-128)
+
+Pulled from `research::get_calpb`. Pure symbol-local HP stat that
+aligns to calendar boundaries rather than rolling-session offsets.
+Computes MTD, QTD, current-year YTD, prior-quarter full return,
+and prior-year full return. Complementary to PRICEPERF's rolling
+1M/3M/6M/YTD/1Y lookbacks — portfolio reporting and reviews are
+calendar-aligned. Header line gives the **momentum_label**
+(ACCELERATING / STEADY / DECELERATING / REVERSING /
+INSUFFICIENT_DATA, comparing QTD to prior-quarter with a 5pp
+threshold), MTD, QTD, and prior-quarter. Body block reports MTD,
+QTD, YTD, prior-quarter, prior-year, current year/quarter, and
+latest close. Q1 prior-quarter correctly rolls to Q4 of prior
+year. Source: ADR-128 CALPB window.
+
+#### 2.97 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1316,21 +1387,26 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | Annualized ATR fields (ADR-127 ATRANN) | 4 k/v rows | Latest close + ATR14 price units + ATR14 % + annualized % (×√252) + volatility regime label |
 | Drawdown history fields (ADR-127 DDHIST) | 5 k/v rows | Max drawdown % + peak/trough dates + longest drawdown days + 5%/10% correction counts + current drawdown |
 | Price performance fields (ADR-127 PRICEPERF) | 4 k/v rows | 1M/3M/6M/YTD/1Y returns + latest close + bars used + trend label (1Y/3M blend) |
+| Beta rank fields (ADR-128 BETARANK) | 3 k/v rows | Subject beta + sector median/p25/p75 + risk-inverted percentile + rank position (lower beta = safer) |
+| PEG rank fields (ADR-128 PEGRANK) | 3 k/v rows | Subject PEG + sector median/p25/p75 + value-inverted percentile + rank position (lower PEG = better value) |
+| 52-week high/low fields (ADR-128 FHIGHLOW) | 5 k/v rows | 52w high/low + dates + days since + pct-from-high/low + range position + proximity label |
+| Realized vol cone fields (ADR-128 RVCONE) | 4 k/v rows | RV20/60/120/252 + RV20 rolling min/median/max + RV20 percentile + cone label |
+| Calendar period breakdown fields (ADR-128 CALPB) | 5 k/v rows | MTD + QTD + YTD + prior quarter + prior year + current year/quarter + momentum label |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **36-68 KB**
-(up from 34-64 KB after ADR-126; ADR-127 added five per-symbol blocks —
-DVDYIELDRANK / SHRANK / ATRANN / DDHIST / PRICEPERF — covering two
-new sector-rank overlays on Fundamentals fields (current dividend
-yield and short_percent_of_float, the latter risk-inverted) and
-three new pure-time-series HP stats (14-period Wilder ATR
-annualized via √252, drawdown history with correction counts, and
-multi-horizon price performance) — all pure compute over existing
-Fundamentals and HP caches with zero new API dependencies); a
-10-symbol basket lands near **350-700 KB** (the global context is
-emitted only once, so multi-symbol overhead is still bounded by the
-per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **38-72 KB**
+(up from 36-68 KB after ADR-127; ADR-128 added five per-symbol blocks —
+BETARANK / PEGRANK / FHIGHLOW / RVCONE / CALPB — covering two
+new sector-rank overlays on Fundamentals fields (beta risk-inverted
+and peg_ratio value-inverted) and three new pure-time-series HP
+stats (52-week high/low distance with proximity band, multi-horizon
+realized volatility cone with rolling 20d percentile, and calendar
+period breakdowns MTD/QTD/YTD plus prior quarter/year with
+momentum label) — all pure compute over existing Fundamentals and
+HP caches with zero new API dependencies); a 10-symbol basket lands
+near **370-740 KB** (the global context is emitted only once, so
+multi-symbol overhead is still bounded by the per-symbol blocks).
 
 ---
 
@@ -1560,6 +1636,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_atrann` | SQLite `research_atrann` | ADR-127 ATRANN window (Wilder 14-period ATR annualized via √252 with volatility regime label) |
 | `research::get_ddhist` | SQLite `research_ddhist` | ADR-127 DDHIST window (253-bar drawdown history with max dd + longest dd + 5%/10% correction counts) |
 | `research::get_priceperf` | SQLite `research_priceperf` | ADR-127 PRICEPERF window (multi-horizon total returns: 1M/3M/6M/YTD/1Y with trend label) |
+| `research::get_betarank` | SQLite `research_betarank` | ADR-128 BETARANK window (risk-inverted sector percentile rank of Fundamentals.beta) |
+| `research::get_pegrank` | SQLite `research_pegrank` | ADR-128 PEGRANK window (value-inverted sector percentile rank of Fundamentals.peg_ratio) |
+| `research::get_fhighlow` | SQLite `research_fhighlow` | ADR-128 FHIGHLOW window (52-week high/low distance + proximity band) |
+| `research::get_rvcone` | SQLite `research_rvcone` | ADR-128 RVCONE window (multi-horizon realized volatility cone 20d/60d/120d/252d) |
+| `research::get_calpb` | SQLite `research_calpb` | ADR-128 CALPB window (calendar period breakdowns MTD/QTD/YTD + prior quarter/year) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -1596,4 +1677,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 — Godel parity research surfaces

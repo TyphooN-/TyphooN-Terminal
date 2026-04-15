@@ -2309,6 +2309,117 @@ pub struct PricePerformanceSnapshot {
     pub note: String,
 }
 
+// ── ADR-128 Round 21 — beta/peg rank + HP 52wk/rvcone/calendar ──
+
+/// BETARANK — Sector percentile rank of Fundamentals.beta, risk-inverted.
+/// Lower beta earns a higher (safer) rank, mirroring SHRANK / LEVRANK /
+/// RRK. Requires ≥3 sector peers with a non-None beta value.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BetaRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub subject_beta: Option<f64>,
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_beta: f64,
+    pub sector_p25_beta: f64,
+    pub sector_p75_beta: f64,
+    pub percentile_rank: f64,         // risk-inverted: low beta → high pct
+    pub rank_position: usize,         // 1 = safest beta in sector
+    pub rank_label: String,           // SAFEST_DECILE … RISKIEST_DECILE | INSUFFICIENT_DATA | NO_DATA
+    pub note: String,
+}
+
+/// PEGRANK — Sector percentile rank of Fundamentals.peg_ratio.
+/// Lower PEG (cheaper growth) earns a higher (better-value) rank. Not
+/// covered by VAL (which uses P/E, Forward P/E, P/B, P/S, EV/EBITDA, FCFY).
+/// Requires ≥3 sector peers with a positive finite peg_ratio.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PegRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub subject_peg: Option<f64>,
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_peg: f64,
+    pub sector_p25_peg: f64,
+    pub sector_p75_peg: f64,
+    pub percentile_rank: f64,         // value-inverted: low PEG → high pct
+    pub rank_position: usize,         // 1 = best value in sector
+    pub rank_label: String,           // TOP_DECILE … BOTTOM_DECILE | INSUFFICIENT_DATA | NO_DATA
+    pub note: String,
+}
+
+/// FHIGHLOW — 52-week high/low distance + proximity band.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Tracks max/min close + dates + current-vs-high/low distance + a
+/// proximity label (AT_HIGH / NEAR_HIGH / MID_RANGE / NEAR_LOW / AT_LOW).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FiftyTwoWeekHighLowSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub latest_close: f64,
+    pub high_52w: f64,
+    pub high_52w_date: String,
+    pub days_since_high: usize,
+    pub low_52w: f64,
+    pub low_52w_date: String,
+    pub days_since_low: usize,
+    pub pct_from_high: f64,           // (latest - high) / high × 100 — negative or 0
+    pub pct_from_low: f64,            // (latest - low) / low × 100 — positive or 0
+    pub range_position_pct: f64,      // (latest - low) / (high - low) × 100
+    pub proximity_label: String,      // "AT_HIGH" | "NEAR_HIGH" | "MID_RANGE" | "NEAR_LOW" | "AT_LOW" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// RVCONE — Multi-horizon Realized Volatility Cone.
+/// Pure symbol-local HP stat. Computes 20d/60d/120d/252d annualized
+/// realized volatility (stdev of log returns × √252) from cached bars,
+/// plus a cone-position percentile of the latest 20d RV vs the rolling
+/// distribution of 20d RVs over the full window.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RealizedVolConeSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub latest_close: f64,
+    pub rv20_pct: f64,                // annualized realized vol over 20 sessions
+    pub rv60_pct: f64,
+    pub rv120_pct: f64,
+    pub rv252_pct: f64,
+    pub rv20_min_pct: f64,            // min of all rolling 20d RVs in the window
+    pub rv20_median_pct: f64,         // median of rolling 20d RVs
+    pub rv20_max_pct: f64,            // max of rolling 20d RVs
+    pub rv20_percentile: f64,         // latest 20d RV percentile vs rolling distribution (0-100)
+    pub cone_label: String,           // "COMPRESSED" | "BELOW_AVG" | "TYPICAL" | "ELEVATED" | "EXTREME" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// CALPB — Calendar Period Breakdowns.
+/// Pure symbol-local HP stat that aligns to calendar boundaries rather
+/// than rolling-session offsets. Emits MTD/QTD/current-year returns
+/// plus prior-quarter and prior-year returns for comparison, and a
+/// momentum-vs-prior-period label.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CalendarPeriodBreakdownSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub latest_close: f64,
+    pub mtd_pct: f64,                 // current month-to-date return
+    pub qtd_pct: f64,                 // current quarter-to-date return
+    pub ytd_pct: f64,                 // current year-to-date return (calendar)
+    pub prior_quarter_pct: f64,       // prior calendar quarter return
+    pub prior_year_pct: f64,          // prior calendar year return
+    pub current_year: String,
+    pub current_quarter: String,      // e.g. "Q2"
+    pub momentum_label: String,       // "ACCELERATING" | "STEADY" | "DECELERATING" | "REVERSING" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -11673,6 +11784,487 @@ pub fn compute_priceperf_snapshot(
     }
 }
 
+// ── ADR-128 Round 21 compute fns ──
+
+/// BETARANK compute: sector percentile rank of Fundamentals.beta,
+/// risk-inverted so a *lower* beta earns a *higher* (safer) rank.
+pub fn compute_betarank_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject_beta: Option<f64>,
+    peers: &[(String, Option<f64>)],
+) -> BetaRankSnapshot {
+    let sym = symbol.to_uppercase();
+    let subj = match subject_beta {
+        Some(b) if b.is_finite() => b,
+        _ => {
+            return BetaRankSnapshot {
+                symbol: sym,
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "subject missing beta".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let peer_b: Vec<f64> = peers.iter()
+        .filter(|(s, _)| !s.eq_ignore_ascii_case(symbol))
+        .filter_map(|(_, v)| v.filter(|x| x.is_finite()))
+        .collect();
+    let peers_considered = peers.iter().filter(|(s, _)| !s.eq_ignore_ascii_case(symbol)).count();
+    let peers_with_data = peer_b.len();
+    if peers_with_data < 3 {
+        return BetaRankSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            subject_beta: Some(subj),
+            peers_considered,
+            peers_with_data,
+            rank_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥3 sector peers with beta, got {}", peers_with_data),
+            ..Default::default()
+        };
+    }
+    let mut sorted = peer_b.clone();
+    sorted.push(subj);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    // Risk-inverted: lower beta = safer = higher percentile
+    let pct = percentile_rank_score(subj, &peer_b, false);
+    let safer = peer_b.iter().filter(|&&p| p < subj).count();
+    let label = risk_rank_label_for_percentile(pct);
+    BetaRankSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        subject_beta: Some(subj),
+        peers_considered,
+        peers_with_data,
+        sector_median_beta: median,
+        sector_p25_beta: p25,
+        sector_p75_beta: p75,
+        percentile_rank: pct,
+        rank_position: safer + 1,
+        rank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// PEGRANK compute: sector percentile rank of Fundamentals.peg_ratio,
+/// value-inverted so a *lower* PEG (cheaper growth) earns a *higher* rank.
+/// Filters out non-positive or non-finite PEG on both subject and peer sides.
+pub fn compute_pegrank_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject_peg: Option<f64>,
+    peers: &[(String, Option<f64>)],
+) -> PegRankSnapshot {
+    let sym = symbol.to_uppercase();
+    let subj = match subject_peg {
+        Some(p) if p > 0.0 && p.is_finite() => p,
+        _ => {
+            return PegRankSnapshot {
+                symbol: sym,
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "subject has no valid PEG (negative or missing)".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let peer_p: Vec<f64> = peers.iter()
+        .filter(|(s, _)| !s.eq_ignore_ascii_case(symbol))
+        .filter_map(|(_, v)| v.filter(|x| *x > 0.0 && x.is_finite()))
+        .collect();
+    let peers_considered = peers.iter().filter(|(s, _)| !s.eq_ignore_ascii_case(symbol)).count();
+    let peers_with_data = peer_p.len();
+    if peers_with_data < 3 {
+        return PegRankSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            subject_peg: Some(subj),
+            peers_considered,
+            peers_with_data,
+            rank_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥3 sector peers with positive PEG, got {}", peers_with_data),
+            ..Default::default()
+        };
+    }
+    let mut sorted = peer_p.clone();
+    sorted.push(subj);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    // Value-inverted: lower PEG = better value = higher percentile
+    let pct = percentile_rank_score(subj, &peer_p, false);
+    let better = peer_p.iter().filter(|&&p| p < subj).count();
+    let label = rank_label_for_percentile(pct);
+    PegRankSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        subject_peg: Some(subj),
+        peers_considered,
+        peers_with_data,
+        sector_median_peg: median,
+        sector_p25_peg: p25,
+        sector_p75_peg: p75,
+        percentile_rank: pct,
+        rank_position: better + 1,
+        rank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// FHIGHLOW compute: 52-week high/low distance stat over cached HP bars.
+/// Takes the trailing 253 sessions, tracks max close + min close + dates,
+/// computes distance-from-high/low and range position, and emits a
+/// proximity label band.
+pub fn compute_fhighlow_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> FiftyTwoWeekHighLowSnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 2 {
+        return FiftyTwoWeekHighLowSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: bars.len(),
+            proximity_label: "INSUFFICIENT_DATA".into(),
+            note: "need ≥2 bars".into(),
+            ..Default::default()
+        };
+    }
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    // Trailing 253 sessions only.
+    let window: Vec<&&HistoricalPriceRow> = sorted.iter().rev().take(253).collect();
+    let bars_used = window.len();
+    let latest = *window[0];
+    let latest_close = latest.close;
+    if latest_close <= 0.0 {
+        return FiftyTwoWeekHighLowSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used,
+            proximity_label: "INSUFFICIENT_DATA".into(),
+            note: "latest close not positive".into(),
+            ..Default::default()
+        };
+    }
+    let mut high = latest_close;
+    let mut high_date = latest.date.clone();
+    let mut high_idx: usize = 0; // index from latest (0 = most recent)
+    let mut low = latest_close;
+    let mut low_date = latest.date.clone();
+    let mut low_idx: usize = 0;
+    for (i, row) in window.iter().enumerate() {
+        if row.close > 0.0 {
+            if row.close > high {
+                high = row.close;
+                high_date = row.date.clone();
+                high_idx = i;
+            }
+            if row.close < low {
+                low = row.close;
+                low_date = row.date.clone();
+                low_idx = i;
+            }
+        }
+    }
+    let pct_from_high = if high > 0.0 { (latest_close - high) / high * 100.0 } else { 0.0 };
+    let pct_from_low = if low > 0.0 { (latest_close - low) / low * 100.0 } else { 0.0 };
+    let range = high - low;
+    let range_position = if range > 0.0 { (latest_close - low) / range * 100.0 } else { 50.0 };
+    let proximity = if bars_used < 20 {
+        "INSUFFICIENT_DATA"
+    } else if range_position >= 98.0 {
+        "AT_HIGH"
+    } else if range_position >= 80.0 {
+        "NEAR_HIGH"
+    } else if range_position >= 20.0 {
+        "MID_RANGE"
+    } else if range_position >= 2.0 {
+        "NEAR_LOW"
+    } else {
+        "AT_LOW"
+    };
+    FiftyTwoWeekHighLowSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used,
+        latest_close,
+        high_52w: high,
+        high_52w_date: high_date,
+        days_since_high: high_idx,
+        low_52w: low,
+        low_52w_date: low_date,
+        days_since_low: low_idx,
+        pct_from_high,
+        pct_from_low,
+        range_position_pct: range_position,
+        proximity_label: proximity.into(),
+        note: String::new(),
+    }
+}
+
+/// RVCONE compute: multi-horizon annualized realized volatility over the
+/// HP cache, plus a rolling 20d RV percentile cone label.
+pub fn compute_rvcone_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> RealizedVolConeSnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 21 {
+        return RealizedVolConeSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: bars.len(),
+            cone_label: "INSUFFICIENT_DATA".into(),
+            note: "need ≥21 bars for 20-session realized vol".into(),
+            ..Default::default()
+        };
+    }
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let bars_used = sorted.len();
+    let latest_close = sorted.last().unwrap().close;
+    if latest_close <= 0.0 {
+        return RealizedVolConeSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used,
+            cone_label: "INSUFFICIENT_DATA".into(),
+            note: "latest close not positive".into(),
+            ..Default::default()
+        };
+    }
+    // Log returns.
+    let mut log_rets: Vec<f64> = Vec::with_capacity(sorted.len());
+    for w in sorted.windows(2) {
+        let prev = w[0].close;
+        let curr = w[1].close;
+        if prev > 0.0 && curr > 0.0 {
+            log_rets.push((curr / prev).ln());
+        }
+    }
+    if log_rets.len() < 20 {
+        return RealizedVolConeSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used,
+            cone_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} valid log returns", log_rets.len()),
+            ..Default::default()
+        };
+    }
+    // Annualized realized vol of trailing n returns, as percent.
+    let ann_rv = |n: usize| -> f64 {
+        if log_rets.len() < n { return 0.0; }
+        let slice = &log_rets[log_rets.len() - n..];
+        let mean: f64 = slice.iter().sum::<f64>() / n as f64;
+        let var: f64 = slice.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / n as f64;
+        var.sqrt() * (252.0_f64).sqrt() * 100.0
+    };
+    let rv20 = ann_rv(20);
+    let rv60 = ann_rv(60);
+    let rv120 = ann_rv(120);
+    let rv252 = ann_rv(252);
+    // Rolling 20d RV distribution across the full return window.
+    let mut rolling20: Vec<f64> = Vec::new();
+    if log_rets.len() >= 20 {
+        for end in 20..=log_rets.len() {
+            let slice = &log_rets[end - 20..end];
+            let mean: f64 = slice.iter().sum::<f64>() / 20.0;
+            let var: f64 = slice.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / 20.0;
+            rolling20.push(var.sqrt() * (252.0_f64).sqrt() * 100.0);
+        }
+    }
+    let (rv20_min, rv20_med, rv20_max, rv20_pct) = if !rolling20.is_empty() {
+        let mut sorted_r = rolling20.clone();
+        sorted_r.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let min = *sorted_r.first().unwrap();
+        let max = *sorted_r.last().unwrap();
+        let med = quantile_f64(&sorted_r, 0.5);
+        // Percentile of latest rv20 within the historical rolling distribution.
+        let others: Vec<f64> = rolling20.iter().take(rolling20.len() - 1).copied().collect();
+        let pct = if others.is_empty() { 50.0 } else { percentile_rank_score(rv20, &others, true) };
+        (min, med, max, pct)
+    } else { (rv20, rv20, rv20, 50.0) };
+    let cone = if rolling20.len() < 20 {
+        "INSUFFICIENT_DATA"
+    } else if rv20_pct >= 90.0 {
+        "EXTREME"
+    } else if rv20_pct >= 70.0 {
+        "ELEVATED"
+    } else if rv20_pct >= 30.0 {
+        "TYPICAL"
+    } else if rv20_pct >= 10.0 {
+        "BELOW_AVG"
+    } else {
+        "COMPRESSED"
+    };
+    RealizedVolConeSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used,
+        latest_close,
+        rv20_pct: rv20,
+        rv60_pct: rv60,
+        rv120_pct: rv120,
+        rv252_pct: rv252,
+        rv20_min_pct: rv20_min,
+        rv20_median_pct: rv20_med,
+        rv20_max_pct: rv20_max,
+        rv20_percentile: rv20_pct,
+        cone_label: cone.into(),
+        note: String::new(),
+    }
+}
+
+/// CALPB compute: calendar-aligned period breakdowns over the HP cache.
+/// Uses year-prefix / month-prefix string matching on `date` (assumes
+/// ISO-8601 YYYY-MM-DD), like PRICEPERF's YTD shortcut.
+pub fn compute_calpb_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> CalendarPeriodBreakdownSnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 2 {
+        return CalendarPeriodBreakdownSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: bars.len(),
+            momentum_label: "INSUFFICIENT_DATA".into(),
+            note: "need ≥2 bars".into(),
+            ..Default::default()
+        };
+    }
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let bars_used = sorted.len();
+    let latest = sorted.last().unwrap();
+    let latest_close = latest.close;
+    if latest_close <= 0.0 {
+        return CalendarPeriodBreakdownSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used,
+            momentum_label: "INSUFFICIENT_DATA".into(),
+            note: "latest close not positive".into(),
+            ..Default::default()
+        };
+    }
+    // Parse latest date as YYYY-MM-DD.
+    let year: i32 = latest.date.get(..4).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let month: u32 = latest.date.get(5..7).and_then(|s| s.parse().ok()).unwrap_or(0);
+    if year == 0 || month == 0 {
+        return CalendarPeriodBreakdownSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used,
+            momentum_label: "INSUFFICIENT_DATA".into(),
+            note: "cannot parse latest bar date".into(),
+            ..Default::default()
+        };
+    }
+    let quarter = ((month - 1) / 3) + 1; // 1..=4
+    let q_first_month = ((quarter - 1) * 3) + 1;
+    // Helpers.
+    let pct_from_first_in = |prefix: &str| -> f64 {
+        if let Some(start) = sorted.iter().find(|r| r.date.starts_with(prefix)) {
+            if start.close > 0.0 {
+                return (latest_close - start.close) / start.close * 100.0;
+            }
+        }
+        0.0
+    };
+    let full_period_return = |start_prefix: &str, end_prefix: &str| -> f64 {
+        let first = sorted.iter().find(|r| r.date.starts_with(start_prefix));
+        let last = sorted.iter().rev().find(|r| r.date.starts_with(end_prefix));
+        match (first, last) {
+            (Some(a), Some(b)) if a.close > 0.0 && b.close > 0.0 => (b.close - a.close) / a.close * 100.0,
+            _ => 0.0,
+        }
+    };
+    // MTD — bars with year-month prefix matching latest.
+    let ym_prefix = format!("{:04}-{:02}", year, month);
+    let mtd = pct_from_first_in(&ym_prefix);
+    // QTD — bars from q_first_month of current year onwards.
+    // Use inclusion filter across the 3 month-prefixes in current quarter.
+    let qtd = {
+        let q_prefixes: Vec<String> = (0..3)
+            .map(|i| format!("{:04}-{:02}", year, q_first_month + i))
+            .collect();
+        let first = sorted.iter().find(|r| q_prefixes.iter().any(|p| r.date.starts_with(p)));
+        match first {
+            Some(bar) if bar.close > 0.0 => (latest_close - bar.close) / bar.close * 100.0,
+            _ => 0.0,
+        }
+    };
+    // YTD — first bar of current year to latest.
+    let y_prefix = format!("{:04}", year);
+    let ytd = pct_from_first_in(&y_prefix);
+    // Prior quarter — full return over the quarter before the current one.
+    let (prior_q_year, prior_q) = if quarter == 1 { (year - 1, 4u32) } else { (year, quarter - 1) };
+    let prior_q_first_month = ((prior_q - 1) * 3) + 1;
+    let prior_q_prefixes: Vec<String> = (0..3)
+        .map(|i| format!("{:04}-{:02}", prior_q_year, prior_q_first_month + i))
+        .collect();
+    let prior_quarter = {
+        let first = sorted.iter().find(|r| prior_q_prefixes.iter().any(|p| r.date.starts_with(p)));
+        let last = sorted.iter().rev().find(|r| prior_q_prefixes.iter().any(|p| r.date.starts_with(p)));
+        match (first, last) {
+            (Some(a), Some(b)) if a.close > 0.0 && b.close > 0.0 => (b.close - a.close) / a.close * 100.0,
+            _ => 0.0,
+        }
+    };
+    // Prior year — full-year return of year-1.
+    let prior_year_str = format!("{:04}", year - 1);
+    let prior_year = full_period_return(&prior_year_str, &prior_year_str);
+    // Momentum label: compare QTD vs prior_quarter.
+    let momentum = if bars_used < 20 {
+        "INSUFFICIENT_DATA"
+    } else if qtd > prior_quarter + 5.0 && qtd > 0.0 {
+        "ACCELERATING"
+    } else if (qtd - prior_quarter).abs() <= 5.0 {
+        "STEADY"
+    } else if qtd < prior_quarter - 5.0 && qtd < 0.0 && prior_quarter < 0.0 {
+        "DECELERATING"
+    } else if qtd.signum() != prior_quarter.signum() && prior_quarter != 0.0 {
+        "REVERSING"
+    } else {
+        "DECELERATING"
+    };
+    CalendarPeriodBreakdownSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used,
+        latest_close,
+        mtd_pct: mtd,
+        qtd_pct: qtd,
+        ytd_pct: ytd,
+        prior_quarter_pct: prior_quarter,
+        prior_year_pct: prior_year,
+        current_year: format!("{:04}", year),
+        current_quarter: format!("Q{}", quarter),
+        momentum_label: momentum.into(),
+        note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -14544,6 +15136,159 @@ pub fn get_priceperf(conn: &Connection, symbol: &str) -> Result<Option<PricePerf
         .map_err(|e| format!("prepare get_priceperf: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_priceperf: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_priceperf: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-128 Round 21 schema v21 + wrappers ──
+
+pub fn create_research_tables_v21(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v20(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_betarank (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_betarank_updated ON research_betarank(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_pegrank (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_pegrank_updated ON research_pegrank(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_fhighlow (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_fhighlow_updated ON research_fhighlow(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_rvcone (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_rvcone_updated ON research_rvcone(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_calpb (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_calpb_updated ON research_calpb(updated_at);",
+    ).map_err(|e| format!("create v21 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_betarank(conn: &Connection, symbol: &str, snap: &BetaRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v21(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("betarank json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_betarank(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert betarank: {e}"))?;
+    Ok(())
+}
+
+pub fn get_betarank(conn: &Connection, symbol: &str) -> Result<Option<BetaRankSnapshot>, String> {
+    let _ = create_research_tables_v21(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_betarank WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_betarank: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_betarank: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_betarank: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_pegrank(conn: &Connection, symbol: &str, snap: &PegRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v21(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("pegrank json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_pegrank(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert pegrank: {e}"))?;
+    Ok(())
+}
+
+pub fn get_pegrank(conn: &Connection, symbol: &str) -> Result<Option<PegRankSnapshot>, String> {
+    let _ = create_research_tables_v21(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_pegrank WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_pegrank: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_pegrank: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_pegrank: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_fhighlow(conn: &Connection, symbol: &str, snap: &FiftyTwoWeekHighLowSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v21(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("fhighlow json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_fhighlow(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert fhighlow: {e}"))?;
+    Ok(())
+}
+
+pub fn get_fhighlow(conn: &Connection, symbol: &str) -> Result<Option<FiftyTwoWeekHighLowSnapshot>, String> {
+    let _ = create_research_tables_v21(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_fhighlow WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_fhighlow: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_fhighlow: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_fhighlow: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_rvcone(conn: &Connection, symbol: &str, snap: &RealizedVolConeSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v21(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("rvcone json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_rvcone(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert rvcone: {e}"))?;
+    Ok(())
+}
+
+pub fn get_rvcone(conn: &Connection, symbol: &str) -> Result<Option<RealizedVolConeSnapshot>, String> {
+    let _ = create_research_tables_v21(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_rvcone WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_rvcone: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_rvcone: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_rvcone: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_calpb(conn: &Connection, symbol: &str, snap: &CalendarPeriodBreakdownSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v21(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("calpb json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_calpb(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert calpb: {e}"))?;
+    Ok(())
+}
+
+pub fn get_calpb(conn: &Connection, symbol: &str) -> Result<Option<CalendarPeriodBreakdownSnapshot>, String> {
+    let _ = create_research_tables_v21(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_calpb WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_calpb: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_calpb: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_calpb: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -19448,5 +20193,319 @@ mod tests {
         let bars = vec![mk_hp("2025-06-01", 100.0, 101.0, 99.0, 100.0)];
         let snap = compute_priceperf_snapshot("AAA", "2026-04-15", &bars);
         assert_eq!(snap.trend_label, "INSUFFICIENT_DATA");
+    }
+
+    // ── ADR-128 Round 21 tests ──
+
+    #[test]
+    fn betarank_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v21(&c).unwrap();
+        let snap = BetaRankSnapshot {
+            symbol: "AAA".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Technology".into(),
+            subject_beta: Some(0.8),
+            percentile_rank: 85.0,
+            rank_label: "SAFEST_QUARTILE".into(),
+            ..Default::default()
+        };
+        upsert_betarank(&c, "AAA", &snap).unwrap();
+        let got = get_betarank(&c, "AAA").unwrap().unwrap();
+        assert_eq!(got.rank_label, "SAFEST_QUARTILE");
+        assert!((got.subject_beta.unwrap() - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pegrank_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v21(&c).unwrap();
+        let snap = PegRankSnapshot {
+            symbol: "BBB".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Technology".into(),
+            subject_peg: Some(0.9),
+            percentile_rank: 90.0,
+            rank_label: "TOP_DECILE".into(),
+            ..Default::default()
+        };
+        upsert_pegrank(&c, "BBB", &snap).unwrap();
+        let got = get_pegrank(&c, "BBB").unwrap().unwrap();
+        assert_eq!(got.rank_label, "TOP_DECILE");
+    }
+
+    #[test]
+    fn fhighlow_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v21(&c).unwrap();
+        let snap = FiftyTwoWeekHighLowSnapshot {
+            symbol: "CCC".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            latest_close: 120.0,
+            high_52w: 150.0,
+            high_52w_date: "2025-11-01".into(),
+            days_since_high: 100,
+            low_52w: 80.0,
+            low_52w_date: "2025-07-01".into(),
+            days_since_low: 200,
+            pct_from_high: -20.0,
+            pct_from_low: 50.0,
+            range_position_pct: 57.0,
+            proximity_label: "MID_RANGE".into(),
+            ..Default::default()
+        };
+        upsert_fhighlow(&c, "CCC", &snap).unwrap();
+        let got = get_fhighlow(&c, "CCC").unwrap().unwrap();
+        assert_eq!(got.proximity_label, "MID_RANGE");
+    }
+
+    #[test]
+    fn rvcone_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v21(&c).unwrap();
+        let snap = RealizedVolConeSnapshot {
+            symbol: "DDD".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            latest_close: 120.0,
+            rv20_pct: 25.0,
+            rv60_pct: 22.0,
+            rv120_pct: 20.0,
+            rv252_pct: 18.0,
+            rv20_min_pct: 10.0,
+            rv20_median_pct: 20.0,
+            rv20_max_pct: 40.0,
+            rv20_percentile: 75.0,
+            cone_label: "ELEVATED".into(),
+            ..Default::default()
+        };
+        upsert_rvcone(&c, "DDD", &snap).unwrap();
+        let got = get_rvcone(&c, "DDD").unwrap().unwrap();
+        assert_eq!(got.cone_label, "ELEVATED");
+    }
+
+    #[test]
+    fn calpb_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v21(&c).unwrap();
+        let snap = CalendarPeriodBreakdownSnapshot {
+            symbol: "EEE".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            latest_close: 100.0,
+            mtd_pct: 2.0,
+            qtd_pct: 5.0,
+            ytd_pct: 8.0,
+            prior_quarter_pct: 1.0,
+            prior_year_pct: 10.0,
+            current_year: "2026".into(),
+            current_quarter: "Q2".into(),
+            momentum_label: "ACCELERATING".into(),
+            ..Default::default()
+        };
+        upsert_calpb(&c, "EEE", &snap).unwrap();
+        let got = get_calpb(&c, "EEE").unwrap().unwrap();
+        assert_eq!(got.momentum_label, "ACCELERATING");
+    }
+
+    #[test]
+    fn compute_betarank_safest_decile() {
+        // Subject has the lowest beta by far → safest decile.
+        let peers = vec![
+            ("B".to_string(), Some(1.5)),
+            ("C".to_string(), Some(1.8)),
+            ("D".to_string(), Some(2.0)),
+            ("E".to_string(), Some(1.6)),
+            ("F".to_string(), Some(1.7)),
+            ("G".to_string(), Some(1.9)),
+            ("H".to_string(), Some(2.1)),
+            ("I".to_string(), Some(1.4)),
+            ("J".to_string(), Some(1.55)),
+            ("K".to_string(), Some(2.2)),
+        ];
+        let snap = compute_betarank_snapshot("AAA", "2026-04-15", "Technology", Some(0.6), &peers);
+        assert_eq!(snap.rank_label, "SAFEST_DECILE");
+        assert_eq!(snap.rank_position, 1);
+    }
+
+    #[test]
+    fn compute_betarank_riskiest_decile() {
+        // Subject has the highest beta → riskiest decile.
+        let peers = vec![
+            ("B".to_string(), Some(0.6)),
+            ("C".to_string(), Some(0.7)),
+            ("D".to_string(), Some(0.8)),
+            ("E".to_string(), Some(0.9)),
+            ("F".to_string(), Some(1.0)),
+            ("G".to_string(), Some(1.1)),
+            ("H".to_string(), Some(1.2)),
+            ("I".to_string(), Some(1.3)),
+            ("J".to_string(), Some(1.4)),
+            ("K".to_string(), Some(1.5)),
+        ];
+        let snap = compute_betarank_snapshot("AAA", "2026-04-15", "Technology", Some(2.5), &peers);
+        assert_eq!(snap.rank_label, "RISKIEST_DECILE");
+    }
+
+    #[test]
+    fn compute_betarank_insufficient() {
+        let peers = vec![("B".to_string(), Some(1.0)), ("C".to_string(), Some(1.1))];
+        let snap = compute_betarank_snapshot("AAA", "2026-04-15", "Technology", Some(0.9), &peers);
+        assert_eq!(snap.rank_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_pegrank_top_decile() {
+        // Subject has the lowest PEG → top (best value) decile.
+        let peers = vec![
+            ("B".to_string(), Some(2.0)),
+            ("C".to_string(), Some(2.2)),
+            ("D".to_string(), Some(2.5)),
+            ("E".to_string(), Some(2.8)),
+            ("F".to_string(), Some(3.0)),
+            ("G".to_string(), Some(3.2)),
+            ("H".to_string(), Some(3.5)),
+            ("I".to_string(), Some(3.8)),
+            ("J".to_string(), Some(4.0)),
+            ("K".to_string(), Some(4.5)),
+        ];
+        let snap = compute_pegrank_snapshot("AAA", "2026-04-15", "Technology", Some(0.5), &peers);
+        assert_eq!(snap.rank_label, "TOP_DECILE");
+        assert_eq!(snap.rank_position, 1);
+    }
+
+    #[test]
+    fn compute_pegrank_filters_negative() {
+        // Negative/missing peer PEGs get filtered out.
+        let peers = vec![
+            ("B".to_string(), Some(2.0)),
+            ("C".to_string(), Some(2.5)),
+            ("D".to_string(), None),
+            ("E".to_string(), Some(-1.5)),
+            ("F".to_string(), Some(3.0)),
+        ];
+        let snap = compute_pegrank_snapshot("AAA", "2026-04-15", "Technology", Some(1.5), &peers);
+        assert_eq!(snap.peers_with_data, 3);
+    }
+
+    #[test]
+    fn compute_pegrank_subject_negative() {
+        let peers = vec![("B".to_string(), Some(2.0)), ("C".to_string(), Some(2.5)), ("D".to_string(), Some(3.0))];
+        let snap = compute_pegrank_snapshot("AAA", "2026-04-15", "Technology", Some(-0.5), &peers);
+        assert_eq!(snap.rank_label, "NO_DATA");
+    }
+
+    #[test]
+    fn compute_fhighlow_at_high() {
+        // Latest close == the highest close in the window.
+        let mut bars = Vec::new();
+        for i in 0..253 {
+            let date = format!("2025-{:02}-{:02}", (i / 21) + 1, (i % 21) + 1);
+            let c = 100.0 + i as f64 * 0.5;  // monotone up
+            bars.push(mk_hp(&date, c, c + 0.5, c - 0.5, c));
+        }
+        let snap = compute_fhighlow_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.proximity_label, "AT_HIGH");
+        assert_eq!(snap.days_since_high, 0);
+        assert!((snap.pct_from_high - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_fhighlow_at_low() {
+        // Monotone down → latest close == lowest close.
+        let mut bars = Vec::new();
+        for i in 0..253 {
+            let date = format!("2025-{:02}-{:02}", (i / 21) + 1, (i % 21) + 1);
+            let c = 200.0 - i as f64 * 0.5;
+            bars.push(mk_hp(&date, c, c + 0.5, c - 0.5, c));
+        }
+        let snap = compute_fhighlow_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.proximity_label, "AT_LOW");
+        assert_eq!(snap.days_since_low, 0);
+    }
+
+    #[test]
+    fn compute_fhighlow_insufficient() {
+        let bars = vec![mk_hp("2025-06-01", 100.0, 101.0, 99.0, 100.0)];
+        let snap = compute_fhighlow_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.proximity_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_rvcone_compressed() {
+        // Flat-ish series → compressed / below-avg realized vol.
+        let mut bars = Vec::new();
+        for i in 0..260 {
+            let date = format!("2025-{:02}-{:02}", (i / 20) + 1, (i % 20) + 1);
+            let c = 100.0 + (i as f64 * 0.0001);
+            bars.push(mk_hp(&date, c, c + 0.001, c - 0.001, c));
+        }
+        let snap = compute_rvcone_snapshot("AAA", "2026-04-15", &bars);
+        assert!(snap.cone_label != "INSUFFICIENT_DATA");
+        assert!(snap.rv252_pct < 5.0, "expected low vol, got {}", snap.rv252_pct);
+    }
+
+    #[test]
+    fn compute_rvcone_extreme() {
+        // Highly variable → elevated / extreme.
+        let mut bars = Vec::new();
+        for i in 0..260 {
+            let date = format!("2025-{:02}-{:02}", (i / 20) + 1, (i % 20) + 1);
+            // Large oscillations with bigger swings at the end.
+            let base = 100.0;
+            let amp = if i < 200 { 1.0 } else { 10.0 };
+            let c = base + amp * ((i as f64 * 0.5).sin() * (i as f64 * 0.3).cos());
+            bars.push(mk_hp(&date, c, c + 0.5, c - 0.5, c));
+        }
+        let snap = compute_rvcone_snapshot("AAA", "2026-04-15", &bars);
+        assert!(snap.cone_label != "INSUFFICIENT_DATA");
+        assert!(snap.rv20_pct > snap.rv252_pct,
+            "expected recent 20d RV > 252d RV due to amplitude shift, got rv20={} rv252={}",
+            snap.rv20_pct, snap.rv252_pct);
+    }
+
+    #[test]
+    fn compute_rvcone_insufficient() {
+        let bars = vec![mk_hp("2025-06-01", 100.0, 101.0, 99.0, 100.0)];
+        let snap = compute_rvcone_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.cone_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_calpb_accelerating() {
+        // Q1 2026 flat, Q2 2026 big up move — accelerating vs prior quarter.
+        let mut bars = Vec::new();
+        // Prior year 2025 Q4 (Oct-Dec): bars from 100→100 (flat prior year Q4).
+        for m in 10..=12 {
+            for d in 1..=20 {
+                let c = 100.0;
+                bars.push(mk_hp(&format!("2025-{:02}-{:02}", m, d), c, c + 0.1, c - 0.1, c));
+            }
+        }
+        // 2026 Q1 (Jan-Mar) flat at 100 → 100.5
+        for m in 1..=3 {
+            for d in 1..=20 {
+                let c = 100.0 + ((m - 1) * 20 + d) as f64 * 0.01;
+                bars.push(mk_hp(&format!("2026-{:02}-{:02}", m, d), c, c + 0.1, c - 0.1, c));
+            }
+        }
+        // 2026 Q2 (Apr): big up move.
+        for d in 1..=15 {
+            let c = 100.5 + d as f64 * 1.0;
+            bars.push(mk_hp(&format!("2026-04-{:02}", d), c, c + 0.1, c - 0.1, c));
+        }
+        let snap = compute_calpb_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.current_year, "2026");
+        assert_eq!(snap.current_quarter, "Q2");
+        assert!(snap.qtd_pct > 5.0, "expected QTD up, got {}", snap.qtd_pct);
+        assert_eq!(snap.momentum_label, "ACCELERATING");
+    }
+
+    #[test]
+    fn compute_calpb_insufficient() {
+        let bars = vec![mk_hp("2026-04-15", 100.0, 101.0, 99.0, 100.0)];
+        let snap = compute_calpb_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.momentum_label, "INSUFFICIENT_DATA");
     }
 }
