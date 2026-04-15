@@ -1351,6 +1351,136 @@ pub struct UpdmSnapshot {
     pub note: String,
 }
 
+// ── ADR-120 Godel Parity Round 13 ───────────────────────────────────────────
+
+/// MOM — 12-1 month momentum snapshot for a symbol.
+/// Pure compute over cached historical bars (HP).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MomentumSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: i32,
+    pub return_1m_pct: f64,
+    pub return_3m_pct: f64,
+    pub return_6m_pct: f64,
+    pub return_12m_pct: f64,
+    pub return_12_1_pct: f64,        // 12-month minus 1-month
+    pub vol_annualized_pct: f64,     // daily stdev × √252
+    pub vol_adjusted_score: f64,     // return_12_1 / vol_annualized
+    pub composite_score: f64,        // 0..100 composite
+    pub regime_label: String,        // "STRONG" | "NEUTRAL" | "WEAK" | "CRASH" | "INSUFFICIENT_DATA"
+    pub trend_label: String,         // "ACCELERATING" | "STABLE" | "DECELERATING"
+    pub note: String,
+}
+
+/// LIQ — Liquidity profile snapshot for a symbol.
+/// Pure compute over cached historical bars (HP) + Fundamentals shares_outstanding.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LiquiditySnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub window_days: i32,
+    pub avg_daily_share_volume: f64,
+    pub median_daily_share_volume: f64,
+    pub avg_daily_dollar_volume: f64,
+    pub median_daily_dollar_volume: f64,
+    pub shares_outstanding: f64,
+    pub daily_turnover_pct: f64,            // avg share volume / shares out × 100
+    pub amihud_illiquidity: f64,            // 1e6 × mean(|return| / dollar volume)
+    pub avg_true_range_pct: f64,            // mean((high-low)/close) × 100
+    pub spread_proxy_pct: f64,              // Corwin-Schultz high-low estimator
+    pub liquidity_tier: String,             // "DEEP" | "LIQUID" | "MODERATE" | "THIN" | "ILLIQUID" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// BREAK — Breakout proximity snapshot for a symbol.
+/// Pure compute over cached historical bars (HP).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BreakoutSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub current_price: f64,
+    pub high_20d: f64,
+    pub low_20d: f64,
+    pub high_60d: f64,
+    pub low_60d: f64,
+    pub high_52w: f64,
+    pub low_52w: f64,
+    pub dist_from_52w_high_pct: f64,    // (current - high) / high × 100 (negative when below)
+    pub dist_from_52w_low_pct: f64,
+    pub dist_from_20d_high_pct: f64,
+    pub dist_from_60d_high_pct: f64,
+    pub position_in_52w_range_pct: f64, // (current - low) / (high - low) × 100
+    pub position_in_20d_range_pct: f64,
+    pub consolidation_pct: f64,         // 20d range / mean × 100
+    pub breakout_label: String,         // "NEW_HIGH" | "NEAR_HIGH" | "MID_RANGE" | "NEAR_LOW" | "NEW_LOW"
+    pub setup_label: String,            // "BREAKOUT_IMMINENT" | "CONSOLIDATING" | "TRENDING_UP" | "TRENDING_DOWN" | "NEUTRAL"
+    pub note: String,
+}
+
+/// CCRL — Cash conversion cycle per-period row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CashCycleRow {
+    pub period: String,
+    pub dso_days: f64,
+    pub dio_days: f64,
+    pub dpo_days: f64,
+    pub ccc_days: f64,
+}
+
+/// CCRL — Cash conversion cycle snapshot for a symbol.
+/// Pure compute over cached FA statements (annual preferred, quarterly fallback).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CashCycleSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub latest_period: String,
+    pub dso_days: f64,
+    pub dio_days: f64,
+    pub dpo_days: f64,
+    pub ccc_days: f64,
+    pub prior_ccc_days: f64,
+    pub ccc_change_days: f64,
+    pub ccc_3y_avg_days: f64,
+    pub periods_used: usize,
+    pub efficiency_label: String,    // "EFFICIENT" | "NEUTRAL" | "INEFFICIENT" | "INSUFFICIENT_DATA"
+    pub trend_label: String,         // "IMPROVING" | "STABLE" | "DETERIORATING"
+    pub periods: Vec<CashCycleRow>,
+    pub note: String,
+}
+
+/// CREDIT — Unified credit score component row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CreditComponent {
+    pub name: String,
+    pub value: String,
+    pub score: f64,
+    pub weight: f64,
+    pub contribution: f64,
+}
+
+/// CREDIT — Unified credit score snapshot for a symbol.
+/// Fuses cached ALTZ + PTFS + LEV + ACRL snapshots from Rounds 10/11.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CreditSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub altman_z: f64,
+    pub altman_zone: String,
+    pub piotroski_score: i32,
+    pub piotroski_label: String,
+    pub leverage_summary: String,
+    pub leverage_score: f64,
+    pub accruals_trend: String,
+    pub accruals_ttm_cash_conversion_pct: f64,
+    pub composite_score: f64,        // 0..100
+    pub letter_grade: String,        // "AAA" | "AA" | "A" | "BBB" | "BB" | "B" | "CCC" | "INSUFFICIENT_DATA"
+    pub credit_label: String,        // "INVESTMENT_GRADE" | "BORDERLINE" | "SPECULATIVE" | "DISTRESSED"
+    pub inputs_available: usize,
+    pub components: Vec<CreditComponent>,
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -6342,6 +6472,615 @@ pub fn compute_updm_snapshot(
     }
 }
 
+// ── ADR-120 Godel Parity Round 13 compute fns ──────────────────────────────
+
+/// Pick the daily close closest to (and not after) `target_offset_back` bars
+/// from the most recent bar. `bars` is newest-first. Returns None if the
+/// offset is out of range.
+fn pick_close_offset(bars_newest_first: &[HistoricalPriceRow], offset: usize) -> Option<f64> {
+    if offset >= bars_newest_first.len() { return None; }
+    let c = bars_newest_first[offset].close;
+    if c > 0.0 { Some(c) } else { None }
+}
+
+/// MOM — 12-1 month momentum snapshot.
+pub fn compute_momentum_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars_newest_first: &[HistoricalPriceRow],
+) -> MomentumSnapshot {
+    let sym = symbol.to_uppercase();
+    let n = bars_newest_first.len();
+
+    if n < 252 {
+        return MomentumSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: n as i32,
+            regime_label: "INSUFFICIENT_DATA".to_string(),
+            trend_label: "STABLE".to_string(),
+            note: format!("need ≥252 bars; have {n}"),
+            ..Default::default()
+        };
+    }
+
+    let current = bars_newest_first[0].close;
+    let c_1m = pick_close_offset(bars_newest_first, 21).unwrap_or(current);
+    let c_3m = pick_close_offset(bars_newest_first, 63).unwrap_or(current);
+    let c_6m = pick_close_offset(bars_newest_first, 126).unwrap_or(current);
+    let c_12m = pick_close_offset(bars_newest_first, 252).unwrap_or(current);
+
+    let pct = |from: f64, to: f64| -> f64 {
+        if from > 0.0 { (to - from) / from * 100.0 } else { 0.0 }
+    };
+    let return_1m = pct(c_1m, current);
+    let return_3m = pct(c_3m, current);
+    let return_6m = pct(c_6m, current);
+    let return_12m = pct(c_12m, current);
+    // 12-1 = return from 12m ago to 1m ago (skipping the most recent month)
+    let return_12_1 = pct(c_12m, c_1m);
+
+    // Annualised daily return stdev over the last 252 bars.
+    let mut log_rets: Vec<f64> = Vec::with_capacity(251);
+    for i in 0..251 {
+        let c_new = bars_newest_first[i].close;
+        let c_old = bars_newest_first[i + 1].close;
+        if c_new > 0.0 && c_old > 0.0 {
+            log_rets.push((c_new / c_old).ln());
+        }
+    }
+    let mean: f64 = if log_rets.is_empty() { 0.0 } else { log_rets.iter().sum::<f64>() / log_rets.len() as f64 };
+    let var: f64 = if log_rets.len() > 1 {
+        log_rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (log_rets.len() - 1) as f64
+    } else { 0.0 };
+    let daily_stdev = var.sqrt();
+    let vol_ann_pct = daily_stdev * (252f64).sqrt() * 100.0;
+
+    let vol_adj_score = if vol_ann_pct > 0.0 { return_12_1 / vol_ann_pct } else { 0.0 };
+
+    let composite = (50.0 + vol_adj_score * 20.0 + return_6m * 0.3).clamp(0.0, 100.0);
+    let regime = if composite >= 75.0 { "STRONG" }
+                 else if composite >= 40.0 { "NEUTRAL" }
+                 else if composite >= 20.0 { "WEAK" }
+                 else { "CRASH" };
+    let trend = if return_1m > return_3m / 3.0 && return_3m > return_6m / 2.0 { "ACCELERATING" }
+                else if return_1m < return_3m / 3.0 && return_3m < return_6m / 2.0 { "DECELERATING" }
+                else { "STABLE" };
+
+    MomentumSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: n as i32,
+        return_1m_pct: return_1m,
+        return_3m_pct: return_3m,
+        return_6m_pct: return_6m,
+        return_12m_pct: return_12m,
+        return_12_1_pct: return_12_1,
+        vol_annualized_pct: vol_ann_pct,
+        vol_adjusted_score: vol_adj_score,
+        composite_score: composite,
+        regime_label: regime.to_string(),
+        trend_label: trend.to_string(),
+        note: String::new(),
+    }
+}
+
+/// LIQ — Liquidity profile snapshot.
+pub fn compute_liquidity_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars_newest_first: &[HistoricalPriceRow],
+    shares_outstanding: f64,
+    window_days: i32,
+) -> LiquiditySnapshot {
+    let sym = symbol.to_uppercase();
+    let w = window_days.max(20) as usize;
+
+    if bars_newest_first.len() < 20 {
+        return LiquiditySnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            window_days: w as i32,
+            shares_outstanding,
+            liquidity_tier: "INSUFFICIENT_DATA".to_string(),
+            note: format!("need ≥20 bars; have {}", bars_newest_first.len()),
+            ..Default::default()
+        };
+    }
+
+    let slice_len = bars_newest_first.len().min(w);
+    let slice = &bars_newest_first[..slice_len];
+
+    let mut share_vols: Vec<f64> = Vec::with_capacity(slice_len);
+    let mut dollar_vols: Vec<f64> = Vec::with_capacity(slice_len);
+    let mut true_range_pcts: Vec<f64> = Vec::with_capacity(slice_len);
+    let mut amihud_terms: Vec<f64> = Vec::new();
+    let mut high_low_betas: Vec<f64> = Vec::new();
+
+    for (i, b) in slice.iter().enumerate() {
+        if b.volume > 0.0 {
+            share_vols.push(b.volume);
+            let dv = b.volume * b.close;
+            dollar_vols.push(dv);
+            if b.high > 0.0 && b.low > 0.0 && b.high >= b.low {
+                let hl = b.high - b.low;
+                if b.close > 0.0 {
+                    true_range_pcts.push(hl / b.close * 100.0);
+                }
+                // Corwin-Schultz beta term — ln²(H/L)
+                if b.high > 0.0 && b.low > 0.0 {
+                    let ln_hl = (b.high / b.low).ln();
+                    high_low_betas.push(ln_hl * ln_hl);
+                }
+            }
+            // Amihud: |daily return| / dollar volume
+            if i + 1 < slice.len() {
+                let prev = slice[i + 1].close;
+                if prev > 0.0 && dv > 0.0 {
+                    let r = (b.close - prev) / prev;
+                    amihud_terms.push(r.abs() / dv);
+                }
+            }
+        }
+    }
+
+    let avg_share = if share_vols.is_empty() { 0.0 } else { share_vols.iter().sum::<f64>() / share_vols.len() as f64 };
+    let avg_dollar = if dollar_vols.is_empty() { 0.0 } else { dollar_vols.iter().sum::<f64>() / dollar_vols.len() as f64 };
+    let median = |mut v: Vec<f64>| -> f64 {
+        if v.is_empty() { return 0.0; }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mid = v.len() / 2;
+        if v.len() % 2 == 0 { (v[mid - 1] + v[mid]) / 2.0 } else { v[mid] }
+    };
+    let med_share = median(share_vols.clone());
+    let med_dollar = median(dollar_vols.clone());
+
+    let turnover_pct = if shares_outstanding > 0.0 { avg_share / shares_outstanding * 100.0 } else { 0.0 };
+    let amihud = if amihud_terms.is_empty() {
+        0.0
+    } else {
+        amihud_terms.iter().sum::<f64>() / amihud_terms.len() as f64 * 1.0e6
+    };
+    let atr_pct = if true_range_pcts.is_empty() { 0.0 } else { true_range_pcts.iter().sum::<f64>() / true_range_pcts.len() as f64 };
+    // Corwin-Schultz simplified: spread% ≈ 2 · (exp(α) − 1) / (1 + exp(α))
+    // where α = (√(2β) − √β) / (3 − 2√2) and β is the average of ln²(H/L).
+    let spread_proxy_pct = if high_low_betas.is_empty() {
+        0.0
+    } else {
+        let beta = high_low_betas.iter().sum::<f64>() / high_low_betas.len() as f64;
+        let denom = 3.0 - 2.0 * (2f64).sqrt();
+        if denom > 0.0 && beta >= 0.0 {
+            let alpha = ((2.0 * beta).sqrt() - beta.sqrt()) / denom;
+            let ea = alpha.exp();
+            if ea + 1.0 > 0.0 {
+                (2.0 * (ea - 1.0) / (ea + 1.0)) * 100.0
+            } else { 0.0 }
+        } else { 0.0 }
+    };
+
+    let tier = if avg_dollar >= 5.0e8 {
+        "DEEP"
+    } else if avg_dollar >= 5.0e7 {
+        "LIQUID"
+    } else if avg_dollar >= 5.0e6 {
+        "MODERATE"
+    } else if avg_dollar >= 5.0e5 {
+        "THIN"
+    } else {
+        "ILLIQUID"
+    };
+
+    LiquiditySnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        window_days: w as i32,
+        avg_daily_share_volume: avg_share,
+        median_daily_share_volume: med_share,
+        avg_daily_dollar_volume: avg_dollar,
+        median_daily_dollar_volume: med_dollar,
+        shares_outstanding,
+        daily_turnover_pct: turnover_pct,
+        amihud_illiquidity: amihud,
+        avg_true_range_pct: atr_pct,
+        spread_proxy_pct: spread_proxy_pct.max(0.0),
+        liquidity_tier: tier.to_string(),
+        note: String::new(),
+    }
+}
+
+/// BREAK — Breakout proximity snapshot.
+pub fn compute_breakout_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars_newest_first: &[HistoricalPriceRow],
+) -> BreakoutSnapshot {
+    let sym = symbol.to_uppercase();
+    let n = bars_newest_first.len();
+
+    if n < 20 {
+        return BreakoutSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            breakout_label: "INSUFFICIENT_DATA".to_string(),
+            setup_label: "NEUTRAL".to_string(),
+            note: format!("need ≥20 bars; have {n}"),
+            ..Default::default()
+        };
+    }
+
+    let current = bars_newest_first[0].close;
+
+    let range_high_low = |slice: &[HistoricalPriceRow]| -> (f64, f64) {
+        let mut hi = f64::MIN;
+        let mut lo = f64::MAX;
+        for b in slice {
+            if b.high > 0.0 && b.high > hi { hi = b.high; }
+            if b.low > 0.0 && b.low < lo { lo = b.low; }
+        }
+        if hi == f64::MIN { hi = 0.0; }
+        if lo == f64::MAX { lo = 0.0; }
+        (hi, lo)
+    };
+
+    let (h20, l20) = range_high_low(&bars_newest_first[..20.min(n)]);
+    let (h60, l60) = range_high_low(&bars_newest_first[..60.min(n)]);
+    let (h52, l52) = range_high_low(&bars_newest_first[..252.min(n)]);
+
+    let pct_from = |target: f64, from: f64| -> f64 {
+        if from > 0.0 { (target - from) / from * 100.0 } else { 0.0 }
+    };
+
+    let dist_52w_high = pct_from(current, h52);
+    let dist_52w_low = pct_from(current, l52);
+    let dist_20d_high = pct_from(current, h20);
+    let dist_60d_high = pct_from(current, h60);
+
+    let pos_in_range = |cur: f64, hi: f64, lo: f64| -> f64 {
+        let width = hi - lo;
+        if width > 0.0 { (cur - lo) / width * 100.0 } else { 50.0 }
+    };
+    let pos_52w = pos_in_range(current, h52, l52);
+    let pos_20d = pos_in_range(current, h20, l20);
+
+    let cons_pct = {
+        let mean_close = {
+            let mut s = 0.0;
+            let mut k = 0;
+            for b in &bars_newest_first[..20.min(n)] {
+                if b.close > 0.0 { s += b.close; k += 1; }
+            }
+            if k > 0 { s / k as f64 } else { current }
+        };
+        if mean_close > 0.0 { (h20 - l20) / mean_close * 100.0 } else { 0.0 }
+    };
+
+    let breakout = if pos_52w >= 99.0 && current >= h52 {
+        "NEW_HIGH"
+    } else if pos_52w >= 85.0 {
+        "NEAR_HIGH"
+    } else if pos_52w >= 15.0 {
+        "MID_RANGE"
+    } else if pos_52w >= 1.0 {
+        "NEAR_LOW"
+    } else {
+        "NEW_LOW"
+    };
+
+    let setup = if cons_pct < 8.0 && pos_20d >= 70.0 {
+        "BREAKOUT_IMMINENT"
+    } else if cons_pct < 6.0 {
+        "CONSOLIDATING"
+    } else if dist_60d_high.abs() < 3.0 && pos_52w >= 60.0 {
+        "TRENDING_UP"
+    } else if pos_52w <= 35.0 && dist_52w_low < 10.0 {
+        "TRENDING_DOWN"
+    } else {
+        "NEUTRAL"
+    };
+
+    BreakoutSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        current_price: current,
+        high_20d: h20,
+        low_20d: l20,
+        high_60d: h60,
+        low_60d: l60,
+        high_52w: h52,
+        low_52w: l52,
+        dist_from_52w_high_pct: dist_52w_high,
+        dist_from_52w_low_pct: dist_52w_low,
+        dist_from_20d_high_pct: dist_20d_high,
+        dist_from_60d_high_pct: dist_60d_high,
+        position_in_52w_range_pct: pos_52w,
+        position_in_20d_range_pct: pos_20d,
+        consolidation_pct: cons_pct,
+        breakout_label: breakout.to_string(),
+        setup_label: setup.to_string(),
+        note: String::new(),
+    }
+}
+
+/// CCRL — Cash conversion cycle snapshot.
+pub fn compute_cash_cycle_snapshot(
+    symbol: &str,
+    as_of: &str,
+    statements: &FinancialStatements,
+) -> CashCycleSnapshot {
+    let sym = symbol.to_uppercase();
+
+    let (income, balance, basis) = if !statements.income_annual.is_empty() && !statements.balance_annual.is_empty() {
+        (&statements.income_annual, &statements.balance_annual, "annual")
+    } else if !statements.income_quarterly.is_empty() && !statements.balance_quarterly.is_empty() {
+        (&statements.income_quarterly, &statements.balance_quarterly, "quarterly")
+    } else {
+        return CashCycleSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            efficiency_label: "INSUFFICIENT_DATA".to_string(),
+            trend_label: "STABLE".to_string(),
+            note: "need cached FA annual or quarterly statements".to_string(),
+            ..Default::default()
+        };
+    };
+
+    let days_factor: f64 = if basis == "annual" { 365.0 } else { 91.25 };
+
+    let compute_row = |inc: &IncomeStatement, bal: &BalanceSheet| -> Option<CashCycleRow> {
+        if inc.revenue <= 0.0 || inc.cost_of_revenue <= 0.0 { return None; }
+        let dso = bal.net_receivables / inc.revenue * days_factor;
+        let dio = bal.inventory / inc.cost_of_revenue * days_factor;
+        let dpo = bal.accounts_payable / inc.cost_of_revenue * days_factor;
+        let ccc = dso + dio - dpo;
+        Some(CashCycleRow {
+            period: inc.date.clone(),
+            dso_days: dso,
+            dio_days: dio,
+            dpo_days: dpo,
+            ccc_days: ccc,
+        })
+    };
+
+    let pair_count = income.len().min(balance.len());
+    let mut rows: Vec<CashCycleRow> = Vec::with_capacity(pair_count);
+    for i in 0..pair_count {
+        if let Some(r) = compute_row(&income[i], &balance[i]) {
+            rows.push(r);
+        }
+    }
+
+    if rows.is_empty() {
+        return CashCycleSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            efficiency_label: "INSUFFICIENT_DATA".to_string(),
+            trend_label: "STABLE".to_string(),
+            note: "revenue or COGS missing / zero in cached statements".to_string(),
+            ..Default::default()
+        };
+    }
+
+    let latest = &rows[0];
+    let prior = rows.get(1);
+    let prior_ccc = prior.map(|p| p.ccc_days).unwrap_or(latest.ccc_days);
+    let change = latest.ccc_days - prior_ccc;
+
+    let avg_window = rows.iter().take(3).map(|r| r.ccc_days).collect::<Vec<_>>();
+    let avg_3y = avg_window.iter().sum::<f64>() / avg_window.len() as f64;
+
+    let efficiency = if latest.ccc_days < 30.0 {
+        "EFFICIENT"
+    } else if latest.ccc_days < 90.0 {
+        "NEUTRAL"
+    } else {
+        "INEFFICIENT"
+    };
+
+    let trend = if change <= -5.0 {
+        "IMPROVING"
+    } else if change >= 5.0 {
+        "DETERIORATING"
+    } else {
+        "STABLE"
+    };
+
+    CashCycleSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        latest_period: latest.period.clone(),
+        dso_days: latest.dso_days,
+        dio_days: latest.dio_days,
+        dpo_days: latest.dpo_days,
+        ccc_days: latest.ccc_days,
+        prior_ccc_days: prior_ccc,
+        ccc_change_days: change,
+        ccc_3y_avg_days: avg_3y,
+        periods_used: rows.len(),
+        efficiency_label: efficiency.to_string(),
+        trend_label: trend.to_string(),
+        periods: rows,
+        note: String::new(),
+    }
+}
+
+/// CREDIT — Unified credit score fusing ALTZ + PTFS + LEV + ACRL snapshots.
+pub fn compute_credit_snapshot(
+    symbol: &str,
+    as_of: &str,
+    altman: Option<&AltmanZSnapshot>,
+    piotroski: Option<&PiotroskiSnapshot>,
+    leverage: Option<&LeverageSnapshot>,
+    accruals: Option<&AccrualsSnapshot>,
+) -> CreditSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut components: Vec<CreditComponent> = Vec::new();
+    let mut total_weight = 0.0;
+    let mut weighted_sum = 0.0;
+
+    let mut altman_z = 0.0;
+    let mut altman_zone = String::new();
+    let mut piotroski_score = 0;
+    let mut piotroski_label = String::new();
+    let mut leverage_summary = String::new();
+    let mut leverage_score = 0.0;
+    let mut accruals_trend = String::new();
+    let mut accruals_ttm = 0.0;
+    let mut inputs_available = 0usize;
+
+    // ALTZ — weight 35. Map Z via piecewise linear: DISTRESS<1.81→0..30, GRAY→30..70, SAFE≥2.99→70..100.
+    if let Some(a) = altman {
+        if a.zone != "INSUFFICIENT_DATA" && !a.zone.is_empty() {
+            altman_z = a.z_score;
+            altman_zone = a.zone.clone();
+            let z = a.z_score;
+            let score = if z >= 2.99 {
+                let extra = (z - 2.99).min(3.0);
+                (70.0 + extra / 3.0 * 30.0).min(100.0)
+            } else if z >= 1.81 {
+                let t = (z - 1.81) / (2.99 - 1.81);
+                30.0 + t * 40.0
+            } else if z > 0.0 {
+                (z / 1.81 * 30.0).clamp(0.0, 30.0)
+            } else {
+                0.0
+            };
+            let w = 35.0;
+            components.push(CreditComponent {
+                name: "Altman Z".to_string(),
+                value: format!("Z {:.2} ({})", z, a.zone),
+                score,
+                weight: w,
+                contribution: score * w / 100.0,
+            });
+            weighted_sum += score * w;
+            total_weight += w;
+            inputs_available += 1;
+        }
+    }
+
+    // PTFS — weight 25. Map F score linearly 0..9 → 0..100.
+    if let Some(p) = piotroski {
+        if p.strength_label != "INSUFFICIENT_DATA" && !p.strength_label.is_empty() {
+            piotroski_score = p.f_score;
+            piotroski_label = p.strength_label.clone();
+            let score = (p.f_score as f64 / 9.0 * 100.0).clamp(0.0, 100.0);
+            let w = 25.0;
+            components.push(CreditComponent {
+                name: "Piotroski F".to_string(),
+                value: format!("{}/9 ({})", p.f_score, p.strength_label),
+                score,
+                weight: w,
+                contribution: score * w / 100.0,
+            });
+            weighted_sum += score * w;
+            total_weight += w;
+            inputs_available += 1;
+        }
+    }
+
+    // LEV — weight 25. Map solvency_summary label to a score.
+    if let Some(lv) = leverage {
+        if !lv.solvency_summary.is_empty() {
+            leverage_summary = lv.solvency_summary.clone();
+            let score = match lv.solvency_summary.as_str() {
+                "HEALTHY" => 85.0,
+                "MODERATE" | "NEUTRAL" => 60.0,
+                "ELEVATED" => 40.0,
+                "STRETCHED" | "DISTRESSED" => 15.0,
+                _ => 50.0,
+            };
+            leverage_score = score;
+            let w = 25.0;
+            components.push(CreditComponent {
+                name: "Leverage".to_string(),
+                value: lv.solvency_summary.clone(),
+                score,
+                weight: w,
+                contribution: score * w / 100.0,
+            });
+            weighted_sum += score * w;
+            total_weight += w;
+            inputs_available += 1;
+        }
+    }
+
+    // ACRL — weight 15. Map trend_label and ttm cash conversion to a score.
+    if let Some(ac) = accruals {
+        if !ac.trend_label.is_empty() {
+            accruals_trend = ac.trend_label.clone();
+            accruals_ttm = ac.ttm_cash_conversion_pct;
+            let mut score: f64 = match ac.trend_label.as_str() {
+                "IMPROVING" => 80.0,
+                "STABLE" => 60.0,
+                "MIXED" => 50.0,
+                "DETERIORATING" => 30.0,
+                _ => 50.0,
+            };
+            // Cash conversion >100% is a positive lean; <50% drags.
+            if ac.ttm_cash_conversion_pct >= 100.0 {
+                score = (score + 10.0).min(100.0);
+            } else if ac.ttm_cash_conversion_pct < 50.0 && ac.ttm_cash_conversion_pct != 0.0 {
+                score = (score - 10.0).max(0.0);
+            }
+            let w = 15.0;
+            components.push(CreditComponent {
+                name: "Accruals".to_string(),
+                value: format!("{} ({:.0}% cash conv)", ac.trend_label, ac.ttm_cash_conversion_pct),
+                score,
+                weight: w,
+                contribution: score * w / 100.0,
+            });
+            weighted_sum += score * w;
+            total_weight += w;
+            inputs_available += 1;
+        }
+    }
+
+    if inputs_available == 0 || total_weight <= 0.0 {
+        return CreditSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            letter_grade: "INSUFFICIENT_DATA".to_string(),
+            credit_label: "INSUFFICIENT_DATA".to_string(),
+            inputs_available: 0,
+            note: "need at least one of ALTZ / PTFS / LEV / ACRL cached".to_string(),
+            ..Default::default()
+        };
+    }
+
+    let composite = (weighted_sum / total_weight).clamp(0.0, 100.0);
+    let letter = if composite >= 90.0 { "AAA" }
+                 else if composite >= 80.0 { "AA" }
+                 else if composite >= 70.0 { "A" }
+                 else if composite >= 60.0 { "BBB" }
+                 else if composite >= 50.0 { "BB" }
+                 else if composite >= 35.0 { "B" }
+                 else { "CCC" };
+    let label = if composite >= 70.0 { "INVESTMENT_GRADE" }
+                else if composite >= 55.0 { "BORDERLINE" }
+                else if composite >= 35.0 { "SPECULATIVE" }
+                else { "DISTRESSED" };
+
+    CreditSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        altman_z,
+        altman_zone,
+        piotroski_score,
+        piotroski_label,
+        leverage_summary,
+        leverage_score,
+        accruals_trend,
+        accruals_ttm_cash_conversion_pct: accruals_ttm,
+        composite_score: composite,
+        letter_grade: letter.to_string(),
+        credit_label: label.to_string(),
+        inputs_available,
+        components,
+        note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -7875,6 +8614,158 @@ pub fn get_updm(conn: &Connection, symbol: &str) -> Result<Option<UpdmSnapshot>,
         .map_err(|e| format!("prepare get_updm: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_updm: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_updm: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-120 Godel Parity Round 13 schema + helpers ─────────────────────────
+
+pub fn create_research_tables_v13(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_momentum (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_momentum_updated ON research_momentum(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_liquidity (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_liquidity_updated ON research_liquidity(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_breakout (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_breakout_updated ON research_breakout(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cash_cycle (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cash_cycle_updated ON research_cash_cycle(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_credit (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_credit_updated ON research_credit(updated_at);",
+    ).map_err(|e| format!("create v13 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_momentum(conn: &Connection, symbol: &str, snap: &MomentumSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v13(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("momentum json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_momentum(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert momentum: {e}"))?;
+    Ok(())
+}
+
+pub fn get_momentum(conn: &Connection, symbol: &str) -> Result<Option<MomentumSnapshot>, String> {
+    let _ = create_research_tables_v13(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_momentum WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_momentum: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_momentum: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_momentum: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_liquidity(conn: &Connection, symbol: &str, snap: &LiquiditySnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v13(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("liquidity json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_liquidity(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert liquidity: {e}"))?;
+    Ok(())
+}
+
+pub fn get_liquidity(conn: &Connection, symbol: &str) -> Result<Option<LiquiditySnapshot>, String> {
+    let _ = create_research_tables_v13(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_liquidity WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_liquidity: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_liquidity: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_liquidity: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_breakout(conn: &Connection, symbol: &str, snap: &BreakoutSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v13(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("breakout json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_breakout(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert breakout: {e}"))?;
+    Ok(())
+}
+
+pub fn get_breakout(conn: &Connection, symbol: &str) -> Result<Option<BreakoutSnapshot>, String> {
+    let _ = create_research_tables_v13(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_breakout WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_breakout: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_breakout: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_breakout: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cash_cycle(conn: &Connection, symbol: &str, snap: &CashCycleSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v13(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cash_cycle json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cash_cycle(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cash_cycle: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cash_cycle(conn: &Connection, symbol: &str) -> Result<Option<CashCycleSnapshot>, String> {
+    let _ = create_research_tables_v13(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cash_cycle WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_cash_cycle: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_cash_cycle: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_cash_cycle: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_credit(conn: &Connection, symbol: &str, snap: &CreditSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v13(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("credit json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_credit(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert credit: {e}"))?;
+    Ok(())
+}
+
+pub fn get_credit(conn: &Connection, symbol: &str) -> Result<Option<CreditSnapshot>, String> {
+    let _ = create_research_tables_v13(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_credit WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_credit: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_credit: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_credit: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -10405,5 +11296,331 @@ mod tests {
     fn compute_updm_no_coverage() {
         let snap = compute_updm_snapshot("X", "2026-04-14", &[]);
         assert_eq!(snap.bias_label, "NO_COVERAGE");
+    }
+
+    // ── ADR-120 Godel Parity Round 13 tests ────────────────────────────────
+
+    fn open_mem_conn_v13() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v13(&c).unwrap();
+        c
+    }
+
+    fn make_bar(date: &str, close: f64, volume: f64) -> HistoricalPriceRow {
+        HistoricalPriceRow {
+            date: date.to_string(),
+            open: close,
+            high: close * 1.01,
+            low: close * 0.99,
+            close,
+            adj_close: close,
+            volume,
+            change: 0.0,
+            change_pct: 0.0,
+        }
+    }
+
+    fn make_bar_flat(date: &str, close: f64, volume: f64) -> HistoricalPriceRow {
+        HistoricalPriceRow {
+            date: date.to_string(),
+            open: close,
+            high: close,
+            low: close,
+            close,
+            adj_close: close,
+            volume,
+            change: 0.0,
+            change_pct: 0.0,
+        }
+    }
+
+    #[test]
+    fn momentum_snapshot_roundtrip() {
+        let c = open_mem_conn_v13();
+        let snap = MomentumSnapshot {
+            symbol: "X".to_string(),
+            as_of: "2026-04-14".to_string(),
+            bars_used: 252,
+            return_12m_pct: 35.0,
+            regime_label: "STRONG".to_string(),
+            trend_label: "ACCELERATING".to_string(),
+            ..Default::default()
+        };
+        upsert_momentum(&c, "x", &snap).unwrap();
+        let got = get_momentum(&c, "X").unwrap().unwrap();
+        assert_eq!(got.symbol, "X");
+        assert_eq!(got.regime_label, "STRONG");
+    }
+
+    #[test]
+    fn liquidity_snapshot_roundtrip() {
+        let c = open_mem_conn_v13();
+        let snap = LiquiditySnapshot {
+            symbol: "Y".to_string(),
+            as_of: "2026-04-14".to_string(),
+            window_days: 60,
+            avg_daily_dollar_volume: 1.5e9,
+            liquidity_tier: "DEEP".to_string(),
+            ..Default::default()
+        };
+        upsert_liquidity(&c, "y", &snap).unwrap();
+        let got = get_liquidity(&c, "Y").unwrap().unwrap();
+        assert_eq!(got.liquidity_tier, "DEEP");
+    }
+
+    #[test]
+    fn breakout_snapshot_roundtrip() {
+        let c = open_mem_conn_v13();
+        let snap = BreakoutSnapshot {
+            symbol: "Z".to_string(),
+            as_of: "2026-04-14".to_string(),
+            current_price: 100.0,
+            high_52w: 100.0,
+            low_52w: 60.0,
+            position_in_52w_range_pct: 100.0,
+            breakout_label: "NEW_HIGH".to_string(),
+            setup_label: "TRENDING_UP".to_string(),
+            ..Default::default()
+        };
+        upsert_breakout(&c, "z", &snap).unwrap();
+        let got = get_breakout(&c, "Z").unwrap().unwrap();
+        assert_eq!(got.breakout_label, "NEW_HIGH");
+    }
+
+    #[test]
+    fn cash_cycle_snapshot_roundtrip() {
+        let c = open_mem_conn_v13();
+        let snap = CashCycleSnapshot {
+            symbol: "W".to_string(),
+            as_of: "2026-04-14".to_string(),
+            latest_period: "2025-12-31".to_string(),
+            ccc_days: 45.0,
+            efficiency_label: "NEUTRAL".to_string(),
+            trend_label: "STABLE".to_string(),
+            periods: vec![CashCycleRow {
+                period: "2025-12-31".to_string(),
+                dso_days: 40.0,
+                dio_days: 30.0,
+                dpo_days: 25.0,
+                ccc_days: 45.0,
+            }],
+            ..Default::default()
+        };
+        upsert_cash_cycle(&c, "w", &snap).unwrap();
+        let got = get_cash_cycle(&c, "W").unwrap().unwrap();
+        assert_eq!(got.latest_period, "2025-12-31");
+        assert_eq!(got.periods.len(), 1);
+    }
+
+    #[test]
+    fn credit_snapshot_roundtrip() {
+        let c = open_mem_conn_v13();
+        let snap = CreditSnapshot {
+            symbol: "V".to_string(),
+            as_of: "2026-04-14".to_string(),
+            composite_score: 78.0,
+            letter_grade: "A".to_string(),
+            credit_label: "INVESTMENT_GRADE".to_string(),
+            inputs_available: 4,
+            ..Default::default()
+        };
+        upsert_credit(&c, "v", &snap).unwrap();
+        let got = get_credit(&c, "V").unwrap().unwrap();
+        assert_eq!(got.letter_grade, "A");
+        assert_eq!(got.credit_label, "INVESTMENT_GRADE");
+    }
+
+    #[test]
+    fn compute_momentum_strong() {
+        // 260 bars, steadily rising from 100 → 140 with low vol.
+        // Needs > 252 bars because compute_momentum_snapshot reads offset 252.
+        let mut bars: Vec<HistoricalPriceRow> = Vec::new();
+        for i in 0..260 {
+            // newest-first: i=0 is the newest bar
+            let days_old = i as f64;
+            let close = 140.0 - days_old * (40.0 / 260.0); // newest=140, oldest≈100
+            bars.push(make_bar(&format!("2026-{:02}-{:02}", 1 + (i / 30) % 12, 1 + (i % 28)), close, 1_000_000.0));
+        }
+        let snap = compute_momentum_snapshot("AAA", "2026-04-14", &bars);
+        assert!(snap.bars_used >= 252);
+        assert!(snap.return_12m_pct > 0.0);
+        assert_ne!(snap.regime_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_momentum_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = (0..50).map(|i| make_bar(&format!("2026-04-{:02}", (i % 28) + 1), 100.0, 1_000.0)).collect();
+        let snap = compute_momentum_snapshot("AAA", "2026-04-14", &bars);
+        assert_eq!(snap.regime_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_liquidity_deep() {
+        // 60 bars, large dollar volume
+        let bars: Vec<HistoricalPriceRow> = (0..60).map(|i| {
+            make_bar(&format!("2026-04-{:02}", (i % 28) + 1), 200.0, 10_000_000.0)
+        }).collect();
+        let snap = compute_liquidity_snapshot("BBB", "2026-04-14", &bars, 1_000_000_000.0, 60);
+        assert_eq!(snap.liquidity_tier, "DEEP");
+        assert!(snap.avg_daily_dollar_volume > 1.0e9);
+    }
+
+    #[test]
+    fn compute_liquidity_thin() {
+        let bars: Vec<HistoricalPriceRow> = (0..60).map(|i| {
+            make_bar(&format!("2026-04-{:02}", (i % 28) + 1), 5.0, 1_000.0)
+        }).collect();
+        let snap = compute_liquidity_snapshot("BBB", "2026-04-14", &bars, 100_000_000.0, 60);
+        assert!(matches!(snap.liquidity_tier.as_str(), "THIN" | "ILLIQUID"));
+    }
+
+    #[test]
+    fn compute_liquidity_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = (0..10).map(|i| make_bar(&format!("2026-04-{:02}", i + 1), 100.0, 1_000.0)).collect();
+        let snap = compute_liquidity_snapshot("BBB", "2026-04-14", &bars, 1_000_000.0, 60);
+        assert_eq!(snap.liquidity_tier, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_breakout_new_high() {
+        // Uses flat bars (high = low = close) so `current >= h52` holds.
+        let mut bars: Vec<HistoricalPriceRow> = Vec::new();
+        for i in 0..252 {
+            let close = 100.0 - (i as f64) * 0.3; // newest = 100, oldest = ~24
+            bars.push(make_bar_flat(&format!("2025-{:02}-{:02}", (1 + i / 30) % 12 + 1, (i % 28) + 1), close, 1_000_000.0));
+        }
+        let snap = compute_breakout_snapshot("CCC", "2026-04-14", &bars);
+        assert_eq!(snap.breakout_label, "NEW_HIGH");
+        assert!(snap.position_in_52w_range_pct >= 99.0);
+    }
+
+    #[test]
+    fn compute_breakout_near_low() {
+        // Newest bar is near the 52w low (older bars are higher)
+        let mut bars: Vec<HistoricalPriceRow> = Vec::new();
+        for i in 0..252 {
+            let close = 10.0 + (i as f64) * 0.3;
+            bars.push(make_bar_flat(&format!("2025-{:02}-{:02}", (1 + i / 30) % 12 + 1, (i % 28) + 1), close, 1_000_000.0));
+        }
+        let snap = compute_breakout_snapshot("CCC", "2026-04-14", &bars);
+        assert!(matches!(snap.breakout_label.as_str(), "NEAR_LOW" | "NEW_LOW"));
+    }
+
+    #[test]
+    fn compute_breakout_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = (0..5).map(|i| make_bar(&format!("2026-04-{:02}", i + 1), 100.0, 1_000.0)).collect();
+        let snap = compute_breakout_snapshot("CCC", "2026-04-14", &bars);
+        assert_eq!(snap.breakout_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_cash_cycle_efficient() {
+        let income = IncomeStatement {
+            date: "2025-12-31".to_string(),
+            period: "FY".to_string(),
+            revenue: 10_000.0,
+            cost_of_revenue: 6_000.0,
+            ..Default::default()
+        };
+        let income_prior = IncomeStatement {
+            date: "2024-12-31".to_string(),
+            period: "FY".to_string(),
+            revenue: 9_000.0,
+            cost_of_revenue: 5_400.0,
+            ..Default::default()
+        };
+        let balance = BalanceSheet {
+            date: "2025-12-31".to_string(),
+            period: "FY".to_string(),
+            net_receivables: 400.0,   // ~14.6 DSO
+            inventory: 300.0,         // ~18.25 DIO
+            accounts_payable: 900.0,  // ~54.75 DPO → CCC ≈ -21.9
+            ..Default::default()
+        };
+        let balance_prior = BalanceSheet {
+            date: "2024-12-31".to_string(),
+            period: "FY".to_string(),
+            net_receivables: 500.0,
+            inventory: 350.0,
+            accounts_payable: 850.0,
+            ..Default::default()
+        };
+        let statements = FinancialStatements {
+            income_annual: vec![income, income_prior],
+            balance_annual: vec![balance, balance_prior],
+            ..Default::default()
+        };
+        let snap = compute_cash_cycle_snapshot("DDD", "2026-04-14", &statements);
+        assert!(snap.ccc_days < 30.0);
+        assert_eq!(snap.efficiency_label, "EFFICIENT");
+        assert_eq!(snap.periods.len(), 2);
+    }
+
+    #[test]
+    fn compute_cash_cycle_insufficient() {
+        let statements = FinancialStatements::default();
+        let snap = compute_cash_cycle_snapshot("DDD", "2026-04-14", &statements);
+        assert_eq!(snap.efficiency_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_credit_investment_grade() {
+        let altz = AltmanZSnapshot {
+            z_score: 4.5,
+            zone: "SAFE".to_string(),
+            ..Default::default()
+        };
+        let ptfs = PiotroskiSnapshot {
+            f_score: 8,
+            strength_label: "STRONG".to_string(),
+            ..Default::default()
+        };
+        let lev = LeverageSnapshot {
+            solvency_summary: "HEALTHY".to_string(),
+            ..Default::default()
+        };
+        let acrl = AccrualsSnapshot {
+            trend_label: "IMPROVING".to_string(),
+            ttm_cash_conversion_pct: 120.0,
+            ..Default::default()
+        };
+        let snap = compute_credit_snapshot("EEE", "2026-04-14", Some(&altz), Some(&ptfs), Some(&lev), Some(&acrl));
+        assert_eq!(snap.credit_label, "INVESTMENT_GRADE");
+        assert!(snap.composite_score >= 70.0);
+        assert_eq!(snap.inputs_available, 4);
+        assert_eq!(snap.components.len(), 4);
+    }
+
+    #[test]
+    fn compute_credit_distressed() {
+        let altz = AltmanZSnapshot {
+            z_score: 0.8,
+            zone: "DISTRESS".to_string(),
+            ..Default::default()
+        };
+        let ptfs = PiotroskiSnapshot {
+            f_score: 1,
+            strength_label: "WEAK".to_string(),
+            ..Default::default()
+        };
+        let lev = LeverageSnapshot {
+            solvency_summary: "STRETCHED".to_string(),
+            ..Default::default()
+        };
+        let acrl = AccrualsSnapshot {
+            trend_label: "DETERIORATING".to_string(),
+            ttm_cash_conversion_pct: 30.0,
+            ..Default::default()
+        };
+        let snap = compute_credit_snapshot("EEE", "2026-04-14", Some(&altz), Some(&ptfs), Some(&lev), Some(&acrl));
+        assert_eq!(snap.credit_label, "DISTRESSED");
+        assert!(snap.composite_score < 35.0);
+    }
+
+    #[test]
+    fn compute_credit_no_inputs() {
+        let snap = compute_credit_snapshot("EEE", "2026-04-14", None, None, None, None);
+        assert_eq!(snap.letter_grade, "INSUFFICIENT_DATA");
+        assert_eq!(snap.inputs_available, 0);
     }
 }

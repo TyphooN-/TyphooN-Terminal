@@ -9985,6 +9985,17 @@ enum BrokerCmd {
     ComputeSectorRotationSnapshot { symbol: String, symbol_sector: String },
     /// UPDM — Upgrade/downgrade momentum from cached RatingChange history.
     ComputeUpdmSnapshot { symbol: String },
+    // ── ADR-120 Godel Parity Round 13 ──
+    /// MOM — 12-1 month momentum score over cached HP bars.
+    ComputeMomentumSnapshot { symbol: String },
+    /// LIQ — Liquidity profile (ADV, Amihud, spread proxy, turnover); shares_outstanding from main thread.
+    ComputeLiquiditySnapshot { symbol: String, window_days: i32, shares_outstanding: f64 },
+    /// BREAK — Breakout proximity over cached HP bars (52w/60d/20d high/low, consolidation).
+    ComputeBreakoutSnapshot { symbol: String },
+    /// CCRL — Cash conversion cycle (DSO + DIO - DPO) over cached FA statements.
+    ComputeCashCycleSnapshot { symbol: String },
+    /// CREDIT — Unified credit score fusing cached ALTZ + PTFS + LEV + ACRL snapshots.
+    ComputeCreditSnapshot { symbol: String },
     /// Fetch multi-source news for a symbol (GDELT + Yahoo RSS + SEC + Marketaux + AV + FMP),
     /// cache results in SQLite, and return the cached set.
     FetchNewsMulti {
@@ -10214,6 +10225,17 @@ enum BrokerMsg {
     SectorRotationSnapshotMsg(String, typhoon_engine::core::research::SectorRotationSnapshot),
     /// UPDM — Upgrade/downgrade momentum snapshot for a symbol.
     UpdmSnapshotMsg(String, typhoon_engine::core::research::UpdmSnapshot),
+    // ── ADR-120 ──
+    /// MOM — 12-1 month momentum snapshot for a symbol.
+    MomentumSnapshotMsg(String, typhoon_engine::core::research::MomentumSnapshot),
+    /// LIQ — Liquidity profile snapshot for a symbol.
+    LiquiditySnapshotMsg(String, typhoon_engine::core::research::LiquiditySnapshot),
+    /// BREAK — Breakout proximity snapshot for a symbol.
+    BreakoutSnapshotMsg(String, typhoon_engine::core::research::BreakoutSnapshot),
+    /// CCRL — Cash conversion cycle snapshot for a symbol.
+    CashCycleSnapshotMsg(String, typhoon_engine::core::research::CashCycleSnapshot),
+    /// CREDIT — Unified credit score snapshot for a symbol.
+    CreditSnapshotMsg(String, typhoon_engine::core::research::CreditSnapshot),
     /// Multi-source news articles loaded (from cache + fresh fetch) for a symbol.
     NewsArticlesLoaded {
         symbol: String,
@@ -11298,6 +11320,38 @@ pub struct TyphooNApp {
     updm_symbol: String,
     updm_snapshot: typhoon_engine::core::research::UpdmSnapshot,
     updm_loading: bool,
+
+    // ── ADR-120 Godel Parity Round 13 ──
+    /// MOM — 12-1 month momentum score from cached HP bars.
+    show_mom: bool,
+    mom_symbol: String,
+    mom_snapshot: typhoon_engine::core::research::MomentumSnapshot,
+    mom_loading: bool,
+
+    /// LIQ — Liquidity profile from cached HP bars + Fundamentals.
+    show_liq: bool,
+    liq_symbol: String,
+    liq_window_days: i32,
+    liq_snapshot: typhoon_engine::core::research::LiquiditySnapshot,
+    liq_loading: bool,
+
+    /// BREAK — Breakout proximity from cached HP bars.
+    show_break: bool,
+    break_symbol: String,
+    break_snapshot: typhoon_engine::core::research::BreakoutSnapshot,
+    break_loading: bool,
+
+    /// CCRL — Cash conversion cycle from cached FA statements.
+    show_ccrl: bool,
+    ccrl_symbol: String,
+    ccrl_snapshot: typhoon_engine::core::research::CashCycleSnapshot,
+    ccrl_loading: bool,
+
+    /// CREDIT — Unified credit score fusing cached ALTZ + PTFS + LEV + ACRL.
+    show_credit: bool,
+    credit_symbol: String,
+    credit_snapshot: typhoon_engine::core::research::CreditSnapshot,
+    credit_loading: bool,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -13606,6 +13660,98 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             }
                             let snap = research::compute_updm_snapshot(&symbol, &today, &actions);
                             let _ = msg_tx.send(BrokerMsg::UpdmSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeMomentumSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let mut bars: Vec<research::HistoricalPriceRow> = Vec::new();
+                            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(rows)) = research::get_historical_price(&conn, &symbol) {
+                                        bars = rows;
+                                    }
+                                }
+                            }
+                            let snap = research::compute_momentum_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::MomentumSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeLiquiditySnapshot { symbol, window_days, shares_outstanding } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let mut bars: Vec<research::HistoricalPriceRow> = Vec::new();
+                            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(rows)) = research::get_historical_price(&conn, &symbol) {
+                                        bars = rows;
+                                    }
+                                }
+                            }
+                            let snap = research::compute_liquidity_snapshot(&symbol, &today, &bars, shares_outstanding, window_days);
+                            let _ = msg_tx.send(BrokerMsg::LiquiditySnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeBreakoutSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let mut bars: Vec<research::HistoricalPriceRow> = Vec::new();
+                            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(rows)) = research::get_historical_price(&conn, &symbol) {
+                                        bars = rows;
+                                    }
+                                }
+                            }
+                            let snap = research::compute_breakout_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::BreakoutSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeCashCycleSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let statements = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_financials(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { research::FinancialStatements::default() }
+                            } else { research::FinancialStatements::default() };
+                            let snap = research::compute_cash_cycle_snapshot(&symbol, &today, &statements);
+                            let _ = msg_tx.send(BrokerMsg::CashCycleSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeCreditSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let (altz, ptfs, lev, acrl) = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    (
+                                        research::get_altman_z(&conn, &symbol).ok().flatten(),
+                                        research::get_piotroski(&conn, &symbol).ok().flatten(),
+                                        research::get_leverage(&conn, &symbol).ok().flatten(),
+                                        research::get_accruals(&conn, &symbol).ok().flatten(),
+                                    )
+                                } else { (None, None, None, None) }
+                            } else { (None, None, None, None) };
+                            let snap = research::compute_credit_snapshot(
+                                &symbol, &today,
+                                altz.as_ref(), ptfs.as_ref(), lev.as_ref(), acrl.as_ref(),
+                            );
+                            let _ = msg_tx.send(BrokerMsg::CreditSnapshotMsg(symbol, snap));
                         });
                     }
                     BrokerCmd::FetchNewsMulti { symbol, marketaux_key, alpha_vantage_key, fmp_key } => {
@@ -16009,6 +16155,28 @@ When the question touches recent news, sentiment, or prices, combine the researc
             updm_symbol: String::new(),
             updm_snapshot: typhoon_engine::core::research::UpdmSnapshot::default(),
             updm_loading: false,
+            // ── ADR-120 Round 13 defaults ──
+            show_mom: false,
+            mom_symbol: String::new(),
+            mom_snapshot: typhoon_engine::core::research::MomentumSnapshot::default(),
+            mom_loading: false,
+            show_liq: false,
+            liq_symbol: String::new(),
+            liq_window_days: 60,
+            liq_snapshot: typhoon_engine::core::research::LiquiditySnapshot::default(),
+            liq_loading: false,
+            show_break: false,
+            break_symbol: String::new(),
+            break_snapshot: typhoon_engine::core::research::BreakoutSnapshot::default(),
+            break_loading: false,
+            show_ccrl: false,
+            ccrl_symbol: String::new(),
+            ccrl_snapshot: typhoon_engine::core::research::CashCycleSnapshot::default(),
+            ccrl_loading: false,
+            show_credit: false,
+            credit_symbol: String::new(),
+            credit_snapshot: typhoon_engine::core::research::CreditSnapshot::default(),
+            credit_loading: false,
             bottom_tab: BottomTab::Log,
             log,
             log_filter: LogFilter::All,
@@ -18362,6 +18530,96 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = writeln!(p);
                         }
                     }
+
+                    // ADR-120 Round 13 — MOM 12-1 month momentum score
+                    if let Ok(Some(mom)) = rx::get_momentum(&conn, &sym_upper) {
+                        if mom.bars_used > 0 {
+                            let _ = writeln!(p, "### Momentum 12-1 (as of {})", mom.as_of);
+                            let _ = writeln!(p, "- Regime: {} · trend: {} · composite {:.1}/100 · {} bars used",
+                                mom.regime_label, mom.trend_label, mom.composite_score, mom.bars_used);
+                            let _ = writeln!(p, "- Returns: 1m {:+.2}% · 3m {:+.2}% · 6m {:+.2}% · 12m {:+.2}% · 12-1 {:+.2}%",
+                                mom.return_1m_pct, mom.return_3m_pct, mom.return_6m_pct,
+                                mom.return_12m_pct, mom.return_12_1_pct);
+                            let _ = writeln!(p, "- Annualized vol {:.2}% · vol-adjusted score {:+.3}",
+                                mom.vol_annualized_pct, mom.vol_adjusted_score);
+                            if !mom.note.is_empty() { let _ = writeln!(p, "- Note: {}", mom.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // ADR-120 Round 13 — LIQ liquidity profile
+                    if let Ok(Some(lq)) = rx::get_liquidity(&conn, &sym_upper) {
+                        if lq.window_days > 0 {
+                            let _ = writeln!(p, "### Liquidity Profile (window {}d, as of {})", lq.window_days, lq.as_of);
+                            let _ = writeln!(p, "- Tier: {} · avg $/day {:.0} · median $/day {:.0}",
+                                lq.liquidity_tier, lq.avg_daily_dollar_volume, lq.median_daily_dollar_volume);
+                            let _ = writeln!(p, "- Avg shares/day {:.0} · daily turnover {:.3}%",
+                                lq.avg_daily_share_volume, lq.daily_turnover_pct);
+                            let _ = writeln!(p, "- Amihud illiquidity ×1e6 {:.4} · ATR {:.2}% · spread proxy {:.3}%",
+                                lq.amihud_illiquidity, lq.avg_true_range_pct, lq.spread_proxy_pct);
+                            if !lq.note.is_empty() { let _ = writeln!(p, "- Note: {}", lq.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // ADR-120 Round 13 — BREAK breakout proximity
+                    if let Ok(Some(bk)) = rx::get_breakout(&conn, &sym_upper) {
+                        if bk.current_price > 0.0 {
+                            let _ = writeln!(p, "### Breakout Proximity (as of {})", bk.as_of);
+                            let _ = writeln!(p, "- {} · setup: {} · last {:.2}",
+                                bk.breakout_label, bk.setup_label, bk.current_price);
+                            let _ = writeln!(p, "- 20d [{:.2} .. {:.2}] · 60d [{:.2} .. {:.2}] · 52w [{:.2} .. {:.2}]",
+                                bk.low_20d, bk.high_20d, bk.low_60d, bk.high_60d, bk.low_52w, bk.high_52w);
+                            let _ = writeln!(p, "- Dist 52w high {:+.2}% · dist 52w low {:+.2}% · pos in 52w range {:.0}% · consolidation {:.2}%",
+                                bk.dist_from_52w_high_pct, bk.dist_from_52w_low_pct,
+                                bk.position_in_52w_range_pct, bk.consolidation_pct);
+                            if !bk.note.is_empty() { let _ = writeln!(p, "- Note: {}", bk.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // ADR-120 Round 13 — CCRL cash conversion cycle
+                    if let Ok(Some(cc)) = rx::get_cash_cycle(&conn, &sym_upper) {
+                        if cc.periods_used > 0 {
+                            let _ = writeln!(p, "### Cash Conversion Cycle (latest {}, as of {})", cc.latest_period, cc.as_of);
+                            let _ = writeln!(p, "- {} · trend: {} · CCC {:.1}d · prior {:.1}d · Δ {:+.1}d · 3y avg {:.1}d",
+                                cc.efficiency_label, cc.trend_label, cc.ccc_days, cc.prior_ccc_days,
+                                cc.ccc_change_days, cc.ccc_3y_avg_days);
+                            let _ = writeln!(p, "- DSO {:.1}d · DIO {:.1}d · DPO {:.1}d", cc.dso_days, cc.dio_days, cc.dpo_days);
+                            if !cc.periods.is_empty() {
+                                let _ = writeln!(p, "- Per-period:");
+                                for row in cc.periods.iter().take(8) {
+                                    let _ = writeln!(p, "  - {}: DSO {:.0} · DIO {:.0} · DPO {:.0} · CCC {:.0}",
+                                        row.period, row.dso_days, row.dio_days, row.dpo_days, row.ccc_days);
+                                }
+                            }
+                            if !cc.note.is_empty() { let _ = writeln!(p, "- Note: {}", cc.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    // ADR-120 Round 13 — CREDIT unified credit score
+                    if let Ok(Some(cr)) = rx::get_credit(&conn, &sym_upper) {
+                        if cr.inputs_available > 0 {
+                            let _ = writeln!(p, "### Credit Score (as of {})", cr.as_of);
+                            let _ = writeln!(p, "- {} · {} · composite {:.1}/100 · {}/4 inputs",
+                                cr.letter_grade, cr.credit_label, cr.composite_score, cr.inputs_available);
+                            let _ = writeln!(p, "- Altman Z {:.2} ({}) · Piotroski {}/9 ({}) · leverage: {} · accruals: {}",
+                                cr.altman_z, cr.altman_zone,
+                                cr.piotroski_score, cr.piotroski_label,
+                                cr.leverage_summary, cr.accruals_trend);
+                            let _ = writeln!(p, "- TTM cash conversion {:.1}%", cr.accruals_ttm_cash_conversion_pct);
+                            if !cr.components.is_empty() {
+                                let _ = writeln!(p, "- Components:");
+                                for c in cr.components.iter().take(6) {
+                                    let _ = writeln!(p, "  - {}: value {} · score {:.1} · weight {:.0}% · contrib {:.1}",
+                                        c.name, c.value, c.score, c.weight, c.contribution);
+                                }
+                            }
+                            if !cr.note.is_empty() { let _ = writeln!(p, "- Note: {}", cr.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
                 }
             }
 
@@ -19951,6 +20209,87 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         if let Ok(conn) = cache.connection() {
                             if let Ok(Some(snap)) = typhoon_engine::core::research::get_updm(&conn, &self.updm_symbol) {
                                 self.updm_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            // ── ADR-120 Godel Parity Round 13 ──
+            "MOM" | "MOMENTUM" | "MOM_SCORE" | "MOMENTUM_12_1" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.mom_symbol = sym; }
+                self.show_mom = true;
+                if self.mom_snapshot.symbol.is_empty() && !self.mom_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_momentum(&conn, &self.mom_symbol) {
+                                self.mom_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "LIQ" | "LIQUIDITY" | "LIQUIDITY_PROFILE" | "AMIHUD" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.liq_symbol = sym; }
+                self.show_liq = true;
+                if self.liq_snapshot.symbol.is_empty() && !self.liq_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_liquidity(&conn, &self.liq_symbol) {
+                                self.liq_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "BREAK" | "BREAKOUT" | "BREAKOUT_PROXIMITY" | "BRK_PROX" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.break_symbol = sym; }
+                self.show_break = true;
+                if self.break_snapshot.symbol.is_empty() && !self.break_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_breakout(&conn, &self.break_symbol) {
+                                self.break_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "CCRL" | "CASH_CYCLE" | "CCC" | "WORKING_CAPITAL_CYCLE" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.ccrl_symbol = sym; }
+                self.show_ccrl = true;
+                if self.ccrl_snapshot.symbol.is_empty() && !self.ccrl_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_cash_cycle(&conn, &self.ccrl_symbol) {
+                                self.ccrl_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "CREDIT" | "CREDIT_SCORE" | "LETTER_GRADE" | "COMPOSITE_CREDIT" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.credit_symbol = sym; }
+                self.show_credit = true;
+                if self.credit_snapshot.symbol.is_empty() && !self.credit_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_credit(&conn, &self.credit_symbol) {
+                                self.credit_snapshot = snap;
                             }
                         }
                     }
@@ -33493,6 +33832,485 @@ When the question touches recent news, sentiment, or prices, combine the researc
             self.show_updm = open;
         }
 
+        // MOM — 12-1 Month Momentum Score (Round 13)
+        if self.show_mom {
+            if self.mom_symbol.is_empty() { self.mom_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_mom;
+            egui::Window::new("MOM — 12-1 Month Momentum Score")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([520.0, 380.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.mom_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.mom_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.mom_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_momentum(&conn, &sym_u) {
+                                        self.mom_snapshot = snap;
+                                        self.mom_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.mom_symbol.to_uppercase();
+                            self.mom_loading = true;
+                            self.mom_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeMomentumSnapshot { symbol: sym });
+                        }
+                        if self.mom_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.mom_snapshot;
+                    if snap.symbol.is_empty() || snap.bars_used == 0 {
+                        ui.label(egui::RichText::new("No data — ensure HP bars are cached for this symbol, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.regime_label.as_str() {
+                            "STRONG" => UP,
+                            "CRASH" | "WEAK" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — trend: {} — bars: {} — as of {}",
+                            snap.symbol, snap.regime_label, snap.trend_label, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("mom_grid").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            let pct_row = |ui: &mut egui::Ui, label: &str, val: f64| {
+                                ui.label(egui::RichText::new(label).small().strong());
+                                let c = if val > 0.0 { UP } else if val < 0.0 { DOWN } else { AXIS_TEXT };
+                                ui.label(egui::RichText::new(format!("{:+.2}%", val)).small().monospace().color(c));
+                                ui.end_row();
+                            };
+                            pct_row(ui, "Return 1m",    snap.return_1m_pct);
+                            pct_row(ui, "Return 3m",    snap.return_3m_pct);
+                            pct_row(ui, "Return 6m",    snap.return_6m_pct);
+                            pct_row(ui, "Return 12m",   snap.return_12m_pct);
+                            pct_row(ui, "Return 12-1",  snap.return_12_1_pct);
+                            ui.label(egui::RichText::new("Annualized vol").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.vol_annualized_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Vol-adjusted score").small().strong());
+                            let cv = if snap.vol_adjusted_score > 0.0 { UP } else if snap.vol_adjusted_score < 0.0 { DOWN } else { AXIS_TEXT };
+                            ui.label(egui::RichText::new(format!("{:+.3}", snap.vol_adjusted_score)).small().monospace().color(cv));
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Composite score").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1} / 100", snap.composite_score)).small().monospace().color(color));
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_mom = open;
+        }
+
+        // LIQ — Liquidity Profile (Round 13)
+        if self.show_liq {
+            if self.liq_symbol.is_empty() { self.liq_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_liq;
+            egui::Window::new("LIQ — Liquidity Profile")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([540.0, 420.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.liq_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.liq_symbol = chart_sym_research.clone(); }
+                        ui.label(egui::RichText::new("Window days:").color(AXIS_TEXT).small());
+                        ui.add(egui::DragValue::new(&mut self.liq_window_days).range(10..=252).speed(1));
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.liq_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_liquidity(&conn, &sym_u) {
+                                        self.liq_snapshot = snap;
+                                        self.liq_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.liq_symbol.to_uppercase();
+                            self.liq_loading = true;
+                            self.liq_symbol = sym.clone();
+                            // Pre-read shares outstanding from cached Fundamentals so the
+                            // broker thread can stay Send-safe without reaching back into SQLite.
+                            let mut shares_outstanding = 0.0_f64;
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(Some(prof)) = typhoon_engine::core::research::get_profile(&conn, &sym) {
+                                        shares_outstanding = prof.shares_outstanding;
+                                    }
+                                }
+                            }
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeLiquiditySnapshot {
+                                symbol: sym,
+                                window_days: self.liq_window_days,
+                                shares_outstanding,
+                            });
+                        }
+                        if self.liq_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.liq_snapshot;
+                    if snap.symbol.is_empty() || snap.window_days == 0 {
+                        ui.label(egui::RichText::new("No data — ensure HP bars are cached for this symbol, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.liquidity_tier.as_str() {
+                            "DEEP" | "LIQUID" => UP,
+                            "THIN" | "ILLIQUID" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — window: {}d — as of {}",
+                            snap.symbol, snap.liquidity_tier, snap.window_days, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("liq_grid").striped(true).num_columns(2).min_col_width(240.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Avg daily share volume").small().strong());
+                            ui.label(egui::RichText::new(format!("{:>15.0}", snap.avg_daily_share_volume)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Median daily share volume").small().strong());
+                            ui.label(egui::RichText::new(format!("{:>15.0}", snap.median_daily_share_volume)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Avg daily dollar volume").small().strong());
+                            ui.label(egui::RichText::new(format!("${:>14.0}", snap.avg_daily_dollar_volume)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Median daily dollar volume").small().strong());
+                            ui.label(egui::RichText::new(format!("${:>14.0}", snap.median_daily_dollar_volume)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Shares outstanding").small().strong());
+                            ui.label(egui::RichText::new(format!("{:>15.0}", snap.shares_outstanding)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Daily turnover").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.3}%", snap.daily_turnover_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Amihud illiquidity ×1e6").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.amihud_illiquidity)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Avg true range").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.avg_true_range_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Spread proxy (Corwin-Schultz)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.3}%", snap.spread_proxy_pct)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_liq = open;
+        }
+
+        // BREAK — Breakout Proximity (Round 13)
+        if self.show_break {
+            if self.break_symbol.is_empty() { self.break_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_break;
+            egui::Window::new("BREAK — Breakout Proximity")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([540.0, 420.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.break_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.break_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.break_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_breakout(&conn, &sym_u) {
+                                        self.break_snapshot = snap;
+                                        self.break_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.break_symbol.to_uppercase();
+                            self.break_loading = true;
+                            self.break_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeBreakoutSnapshot { symbol: sym });
+                        }
+                        if self.break_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.break_snapshot;
+                    if snap.symbol.is_empty() || snap.current_price <= 0.0 {
+                        ui.label(egui::RichText::new("No data — ensure HP bars are cached for this symbol, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.breakout_label.as_str() {
+                            "NEW_HIGH" => UP,
+                            "NEW_LOW" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — setup: {} — last: {:.2} — as of {}",
+                            snap.symbol, snap.breakout_label, snap.setup_label, snap.current_price, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("break_grid").striped(true).num_columns(4).spacing([14.0, 3.0]).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Window").strong().small());
+                            ui.label(egui::RichText::new("High").strong().small().color(UP));
+                            ui.label(egui::RichText::new("Low").strong().small().color(DOWN));
+                            ui.label(egui::RichText::new("Pos in range").strong().small());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("20d").monospace().small());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.high_20d)).monospace().small());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.low_20d)).monospace().small());
+                            ui.label(egui::RichText::new(format!("{:.0}%", snap.position_in_20d_range_pct)).monospace().small());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("60d").monospace().small());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.high_60d)).monospace().small());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.low_60d)).monospace().small());
+                            ui.label(egui::RichText::new("").small());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("52w").monospace().small());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.high_52w)).monospace().small());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.low_52w)).monospace().small());
+                            ui.label(egui::RichText::new(format!("{:.0}%", snap.position_in_52w_range_pct)).monospace().small());
+                            ui.end_row();
+                        });
+                        ui.separator();
+                        egui::Grid::new("break_sub").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            let dist_row = |ui: &mut egui::Ui, label: &str, val: f64| {
+                                ui.label(egui::RichText::new(label).small().strong());
+                                let c = if val >= 0.0 { UP } else { DOWN };
+                                ui.label(egui::RichText::new(format!("{:+.2}%", val)).small().monospace().color(c));
+                                ui.end_row();
+                            };
+                            dist_row(ui, "Distance from 52w high",  snap.dist_from_52w_high_pct);
+                            dist_row(ui, "Distance from 52w low",   snap.dist_from_52w_low_pct);
+                            dist_row(ui, "Distance from 20d high",  snap.dist_from_20d_high_pct);
+                            dist_row(ui, "Distance from 60d high",  snap.dist_from_60d_high_pct);
+                            ui.label(egui::RichText::new("Consolidation (20d range/mean)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.consolidation_pct)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_break = open;
+        }
+
+        // CCRL — Cash Conversion Cycle (Round 13)
+        if self.show_ccrl {
+            if self.ccrl_symbol.is_empty() { self.ccrl_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_ccrl;
+            egui::Window::new("CCRL — Cash Conversion Cycle")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([620.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.ccrl_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.ccrl_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.ccrl_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_cash_cycle(&conn, &sym_u) {
+                                        self.ccrl_snapshot = snap;
+                                        self.ccrl_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.ccrl_symbol.to_uppercase();
+                            self.ccrl_loading = true;
+                            self.ccrl_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeCashCycleSnapshot { symbol: sym });
+                        }
+                        if self.ccrl_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.ccrl_snapshot;
+                    if snap.symbol.is_empty() || snap.periods_used == 0 {
+                        ui.label(egui::RichText::new("No data — run FA for this symbol, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.efficiency_label.as_str() {
+                            "EFFICIENT" => UP,
+                            "INEFFICIENT" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — trend: {} — latest: {} — CCC {:.1}d — as of {}",
+                            snap.symbol, snap.efficiency_label, snap.trend_label,
+                            snap.latest_period, snap.ccc_days, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("ccrl_sub").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("DSO (days sales outstanding)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1} days", snap.dso_days)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("DIO (days inventory outstanding)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1} days", snap.dio_days)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("DPO (days payables outstanding)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1} days", snap.dpo_days)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Prior CCC").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1} days", snap.prior_ccc_days)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("CCC change vs prior").small().strong());
+                            let cc = if snap.ccc_change_days < 0.0 { UP } else if snap.ccc_change_days > 0.0 { DOWN } else { AXIS_TEXT };
+                            ui.label(egui::RichText::new(format!("{:+.1} days", snap.ccc_change_days)).small().monospace().color(cc));
+                            ui.end_row();
+                            ui.label(egui::RichText::new("3y avg CCC").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1} days", snap.ccc_3y_avg_days)).small().monospace());
+                            ui.end_row();
+                        });
+                        if !snap.periods.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new("Per-period history").strong().small().color(AXIS_TEXT));
+                            egui::Grid::new("ccrl_grid").striped(true).num_columns(5).spacing([14.0, 3.0]).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Period").strong().small());
+                                ui.label(egui::RichText::new("DSO").strong().small());
+                                ui.label(egui::RichText::new("DIO").strong().small());
+                                ui.label(egui::RichText::new("DPO").strong().small());
+                                ui.label(egui::RichText::new("CCC").strong().small());
+                                ui.end_row();
+                                for row in &snap.periods {
+                                    ui.label(egui::RichText::new(&row.period).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.0}", row.dso_days)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.0}", row.dio_days)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.0}", row.dpo_days)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.0}", row.ccc_days)).monospace().small());
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                    }
+                });
+            self.show_ccrl = open;
+        }
+
+        // CREDIT — Unified Credit Score (Round 13)
+        if self.show_credit {
+            if self.credit_symbol.is_empty() { self.credit_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_credit;
+            egui::Window::new("CREDIT — Unified Credit Score")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([620.0, 460.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.credit_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.credit_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.credit_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_credit(&conn, &sym_u) {
+                                        self.credit_snapshot = snap;
+                                        self.credit_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.credit_symbol.to_uppercase();
+                            self.credit_loading = true;
+                            self.credit_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeCreditSnapshot { symbol: sym });
+                        }
+                        if self.credit_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.credit_snapshot;
+                    if snap.symbol.is_empty() || snap.inputs_available == 0 {
+                        ui.label(egui::RichText::new("No data — run ALTZ, PTFS, LEV and ACRL for this symbol, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.letter_grade.as_str() {
+                            "AAA" | "AA" | "A" | "BBB" => UP,
+                            "CCC" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — {} — composite: {:.1} / 100 — as of {}",
+                            snap.symbol, snap.letter_grade, snap.credit_label,
+                            snap.composite_score, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("credit_sub").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Altman Z").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2} ({})", snap.altman_z, snap.altman_zone)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Piotroski score").small().strong());
+                            ui.label(egui::RichText::new(format!("{}/9 ({})", snap.piotroski_score, snap.piotroski_label)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Leverage summary").small().strong());
+                            ui.label(egui::RichText::new(&snap.leverage_summary).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Accruals trend").small().strong());
+                            ui.label(egui::RichText::new(&snap.accruals_trend).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("TTM cash conversion").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1}%", snap.accruals_ttm_cash_conversion_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Inputs available").small().strong());
+                            ui.label(egui::RichText::new(format!("{} / 4", snap.inputs_available)).small().monospace());
+                            ui.end_row();
+                        });
+                        if !snap.components.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new("Component contributions").strong().small().color(AXIS_TEXT));
+                            egui::Grid::new("credit_grid").striped(true).num_columns(5).spacing([14.0, 3.0]).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Component").strong().small());
+                                ui.label(egui::RichText::new("Value").strong().small());
+                                ui.label(egui::RichText::new("Score").strong().small());
+                                ui.label(egui::RichText::new("Weight").strong().small());
+                                ui.label(egui::RichText::new("Contribution").strong().small());
+                                ui.end_row();
+                                for c in &snap.components {
+                                    ui.label(egui::RichText::new(&c.name).monospace().small());
+                                    ui.label(egui::RichText::new(&c.value).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.1}", c.score)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.0}%", c.weight * 100.0)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.1}", c.contribution)).monospace().small());
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                    }
+                });
+            self.show_credit = open;
+        }
+
         // GY — Treasury Yield Curve
         if self.show_treasury_curve {
             let mut open = self.show_treasury_curve;
@@ -40907,6 +41725,66 @@ impl eframe::App for TyphooNApp {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let _ = typhoon_engine::core::research::upsert_updm(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::MomentumSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.mom_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.mom_snapshot = snap.clone();
+                        self.mom_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_momentum(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::LiquiditySnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.liq_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.liq_snapshot = snap.clone();
+                        self.liq_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_liquidity(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::BreakoutSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.break_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.break_snapshot = snap.clone();
+                        self.break_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_breakout(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::CashCycleSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.ccrl_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.ccrl_snapshot = snap.clone();
+                        self.ccrl_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_cash_cycle(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::CreditSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.credit_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.credit_snapshot = snap.clone();
+                        self.credit_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_credit(&conn, &sym_u, &snap);
                         }
                     }
                 }

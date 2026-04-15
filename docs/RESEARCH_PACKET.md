@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**fifty-two sub-blocks**, each of which is skipped silently when its data
+**fifty-seven sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -642,7 +642,80 @@ BULLISH when net_90d ≥ 2, BEARISH when ≤ -2, else NEUTRAL. Trend
 IMPROVING when net_30d > net_90d / 3, DETERIORATING when net_30d <
 -net_90d / 3, else STABLE. Source: ADR-119 UPDM window.
 
-#### 2.52 Sector peer comparison
+#### 2.52 Momentum 12-1 (MOM — ADR-120)
+
+Pulled from `research::get_momentum`. The Jegadeesh-Titman
+12-month-minus-1-month momentum score over cached `HP` bars, requiring
+**≥252 bars**. Header line gives the **regime label** (STRONG /
+NEUTRAL / WEAK / CRASH / INSUFFICIENT_DATA), **trend label**
+(ACCELERATING / STABLE / DECELERATING), composite score (0-100), and
+bars used. A key-value block follows with 1m / 3m / 6m / 12m / 12-1
+returns %, annualised vol %, and the vol-adjusted score. Composite =
+`50 + vol_adj·20 + 6m·0.3`, clamped [0, 100]. Regime STRONG ≥75,
+NEUTRAL ≥40, WEAK ≥20, else CRASH. Trend ACCELERATING when 1m > 3m/3
+AND 3m > 6m/2; DECELERATING when both are reversed; STABLE otherwise.
+Source: ADR-120 MOM window.
+
+#### 2.53 Liquidity Profile (LIQ — ADR-120)
+
+Pulled from `research::get_liquidity`. Rolls up cached `HP` bars and
+`Fundamentals.shares_outstanding` over a user-tunable window
+(default **60 days**, min 20). Header line gives the **tier label**
+(DEEP / LIQUID / MODERATE / THIN / ILLIQUID / INSUFFICIENT_DATA), avg
+$ / day, and median $ / day. A key-value block follows with avg
+shares / day, daily turnover % (against shares outstanding), Amihud
+illiquidity ×1e6, ATR %, and Corwin-Schultz spread proxy %. Tier
+thresholds on avg daily dollar volume: DEEP ≥$500M, LIQUID ≥$50M,
+MODERATE ≥$5M, THIN ≥$500K, ILLIQUID below. Source: ADR-120 LIQ
+window.
+
+#### 2.54 Breakout Proximity (BREAK — ADR-120)
+
+Pulled from `research::get_breakout`. Tracks the symbol's position
+inside its 20d / 60d / 52w ranges over cached `HP` bars, requiring
+**≥20 bars**. Header line gives the **breakout label** (NEW_HIGH /
+NEAR_HIGH / MID_RANGE / NEAR_LOW / NEW_LOW), **setup label**
+(BREAKOUT_IMMINENT / CONSOLIDATING / TRENDING_UP / TRENDING_DOWN /
+NEUTRAL), and last close. A key-value block follows with 20d / 60d /
+52w highs and lows, distance from 52w high / low (%), position in
+52w range (%), and consolidation % (20d range / mean close). Setup
+BREAKOUT_IMMINENT when consolidation < 8% AND position in 20d range
+≥ 70%; CONSOLIDATING when < 6%; TRENDING_UP / DOWN when near the
+60d high / 52w low with matching range position; NEUTRAL otherwise.
+Source: ADR-120 BREAK window.
+
+#### 2.55 Cash Conversion Cycle (CCRL — ADR-120)
+
+Pulled from `research::get_cash_cycle`. Computes DSO + DIO - DPO
+over cached `FA` statements (annual preferred, days factor 365;
+quarterly fallback, days factor 91.25). Header line gives the
+**efficiency label** (EFFICIENT / NEUTRAL / INEFFICIENT /
+INSUFFICIENT_DATA), **trend label** (IMPROVING / STABLE /
+DETERIORATING), latest CCC days, prior CCC days, change days, and
+3y avg CCC days. A key-value block reports the latest DSO / DIO /
+DPO components. A per-period table follows (up to **8 rows**) with
+period / DSO / DIO / DPO / CCC. Efficiency EFFICIENT <30 days,
+NEUTRAL <90, else INEFFICIENT. Trend IMPROVING when change ≤ -5,
+DETERIORATING when ≥ +5, STABLE otherwise. Source: ADR-120 CCRL
+window.
+
+#### 2.56 Unified Credit Score (CREDIT — ADR-120)
+
+Pulled from `research::get_credit`. Fuses the cached ALTZ / PTFS /
+LEV / ACRL snapshots from Rounds 10 / 11 into a single 0-100
+weighted score (weights **35 / 25 / 25 / 15**). Header line gives
+the **letter grade** (AAA ≥90 / AA ≥80 / A ≥70 / BBB ≥60 / BB ≥50 /
+B ≥35 / CCC / INSUFFICIENT_DATA), **credit label**
+(INVESTMENT_GRADE / BORDERLINE / SPECULATIVE / DISTRESSED), composite
+score, and inputs available (0..4). A key-value block follows with
+Altman Z + zone, Piotroski F + label, leverage summary label,
+accruals trend label, and TTM cash conversion %. A component table
+(up to **6 rows**) reports each populated component: name / value /
+score / weight % / contribution. Returns INSUFFICIENT_DATA when
+none of ALTZ / PTFS / LEV / ACRL is cached. Source: ADR-120 CREDIT
+window.
+
+#### 2.57 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -723,18 +796,24 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | Earnings momentum quarters (ADR-119 EARM) | ≤8 rows | 8 quarters covers both recent and prior 4Q comparison windows |
 | Sector rotation fields (ADR-119 SECTR) | 10 k/v rows | Sector rank, rel strength, breadth, strongest/weakest |
 | Upgrade/downgrade momentum fields (ADR-119 UPDM) | 12 k/v rows | Net 30/90/180, counts per bucket, latest action |
+| Momentum 12-1 fields (ADR-120 MOM) | 5 k/v rows | Regime, trend, composite, returns ladder, vol-adj score |
+| Liquidity profile fields (ADR-120 LIQ) | 10 k/v rows | Tier, avg/median $, turnover, Amihud, ATR, spread proxy |
+| Breakout proximity fields (ADR-120 BREAK) | 10 k/v rows | Label, setup, 20d/60d/52w ranges, position, consolidation |
+| Cash conversion cycle periods (ADR-120 CCRL) | ≤8 rows | Latest period + up to 7 prior with DSO/DIO/DPO/CCC |
+| Credit score components (ADR-120 CREDIT) | ≤6 rows | ALTZ / PTFS / LEV / ACRL each with value + score + weight |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **20-40 KB**
-(up from 18-36 KB after ADR-118; ADR-119 added five per-symbol blocks —
-MNGR / DIVG / EARM / SECTR / UPDM — covering insider activity bias,
-dividend growth arc, earnings momentum trend, sector rotation strength,
-and upgrade/downgrade momentum — all pure compute over cached INS /
-DVD / FA / ERN / INDU / UPDG snapshots with zero new API dependencies);
-a 10-symbol basket lands near **190-380 KB** (the global context is
-emitted only once, so multi-symbol overhead is still bounded by the
-per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **22-44 KB**
+(up from 20-40 KB after ADR-119; ADR-120 added five per-symbol blocks —
+MOM / LIQ / BREAK / CCRL / CREDIT — covering 12-1 month momentum score,
+liquidity tier + Amihud + spread proxy, breakout proximity vs the 20d /
+60d / 52w ranges, cash conversion cycle (DSO + DIO − DPO), and a fused
+letter-grade credit score built from cached ALTZ / PTFS / LEV / ACRL —
+all pure compute over cached HP / FA / Round 10+11 snapshots with zero
+new API dependencies); a 10-symbol basket lands near **210-420 KB**
+(the global context is emitted only once, so multi-symbol overhead is
+still bounded by the per-symbol blocks).
 
 ---
 
@@ -924,6 +1003,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_earm` | SQLite `research_earm` | ADR-119 EARM window |
 | `research::get_sector_rotation` | SQLite `research_sector_rotation` | ADR-119 SECTR window |
 | `research::get_updm` | SQLite `research_updm` | ADR-119 UPDM window |
+| `research::get_momentum` | SQLite `research_momentum` | ADR-120 MOM window |
+| `research::get_liquidity` | SQLite `research_liquidity` | ADR-120 LIQ window |
+| `research::get_breakout` | SQLite `research_breakout` | ADR-120 BREAK window |
+| `research::get_cash_cycle` | SQLite `research_cash_cycle` | ADR-120 CCRL window |
+| `research::get_credit` | SQLite `research_credit` | ADR-120 CREDIT window |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -960,4 +1044,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 — Godel parity research surfaces

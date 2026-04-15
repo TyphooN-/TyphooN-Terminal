@@ -190,6 +190,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_earm",
     "research_sector_rotation",
     "research_updm",
+    // ── ADR-120 Round 13 ────────────────────────────
+    "research_momentum",
+    "research_liquidity",
+    "research_breakout",
+    "research_cash_cycle",
+    "research_credit",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -707,6 +713,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_momentum" => Some(
+            "CREATE TABLE IF NOT EXISTS research_momentum (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_liquidity" => Some(
+            "CREATE TABLE IF NOT EXISTS research_liquidity (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_breakout" => Some(
+            "CREATE TABLE IF NOT EXISTS research_breakout (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cash_cycle" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cash_cycle (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_credit" => Some(
+            "CREATE TABLE IF NOT EXISTS research_credit (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -775,6 +816,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_earm" => Some("updated_at"),
         "research_sector_rotation" => Some("updated_at"),
         "research_updm" => Some("updated_at"),
+        "research_momentum" => Some("updated_at"),
+        "research_liquidity" => Some("updated_at"),
+        "research_breakout" => Some("updated_at"),
+        "research_cash_cycle" => Some("updated_at"),
+        "research_credit" => Some("updated_at"),
         _ => None,
     }
 }
