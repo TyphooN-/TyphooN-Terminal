@@ -202,6 +202,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_regime",
     "research_relvol",
     "research_margins",
+    // ── ADR-122 Round 15 ────────────────────────────
+    "research_val",
+    "research_qual",
+    "research_risk",
+    "research_insstrk",
+    "research_covg",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -789,6 +795,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_val" => Some(
+            "CREATE TABLE IF NOT EXISTS research_val (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_qual" => Some(
+            "CREATE TABLE IF NOT EXISTS research_qual (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_risk" => Some(
+            "CREATE TABLE IF NOT EXISTS research_risk (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_insstrk" => Some(
+            "CREATE TABLE IF NOT EXISTS research_insstrk (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_covg" => Some(
+            "CREATE TABLE IF NOT EXISTS research_covg (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -867,6 +908,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_regime" => Some("updated_at"),
         "research_relvol" => Some("updated_at"),
         "research_margins" => Some("updated_at"),
+        "research_val" => Some("updated_at"),
+        "research_qual" => Some("updated_at"),
+        "research_risk" => Some("updated_at"),
+        "research_insstrk" => Some("updated_at"),
+        "research_covg" => Some("updated_at"),
         _ => None,
     }
 }

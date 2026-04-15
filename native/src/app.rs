@@ -10006,6 +10006,16 @@ enum BrokerCmd {
     ComputeRelvolSnapshot { symbol: String },
     /// MARGINS — Margin trajectory (gross/op/net) over cached FA statements.
     ComputeMarginsSnapshot { symbol: String },
+    /// VAL — Value-factor composite vs sector peers.
+    ComputeValSnapshot { symbol: String },
+    /// QUAL — Quality-factor composite fusing PTFS + MARGINS + ACRL + LEV.
+    ComputeQualSnapshot { symbol: String },
+    /// RISK — Risk-factor composite fusing VOLE + BETA + LIQ + SHRT + ALTZ.
+    ComputeRiskSnapshot { symbol: String },
+    /// INSSTRK — Insider streak detector from cached Form 4 trades.
+    ComputeInsstrkSnapshot { symbol: String, window_days: i32 },
+    /// COVG — Analyst coverage breadth + churn snapshot.
+    ComputeCovgSnapshot { symbol: String },
     /// Fetch multi-source news for a symbol (GDELT + Yahoo RSS + SEC + Marketaux + AV + FMP),
     /// cache results in SQLite, and return the cached set.
     FetchNewsMulti {
@@ -10257,6 +10267,17 @@ enum BrokerMsg {
     RelvolSnapshotMsg(String, typhoon_engine::core::research::RelVolSnapshot),
     /// MARGINS — Margin trajectory snapshot for a symbol.
     MarginsSnapshotMsg(String, typhoon_engine::core::research::MarginsSnapshot),
+    // ── ADR-122 ──
+    /// VAL — Value-factor composite snapshot for a symbol.
+    ValSnapshotMsg(String, typhoon_engine::core::research::ValueSnapshot),
+    /// QUAL — Quality-factor composite snapshot for a symbol.
+    QualSnapshotMsg(String, typhoon_engine::core::research::QualitySnapshot),
+    /// RISK — Risk-factor composite snapshot for a symbol.
+    RiskSnapshotMsg(String, typhoon_engine::core::research::RiskSnapshot),
+    /// INSSTRK — Insider streak detector snapshot for a symbol.
+    InsstrkSnapshotMsg(String, typhoon_engine::core::research::InsiderStreakSnapshot),
+    /// COVG — Analyst coverage breadth + churn snapshot for a symbol.
+    CovgSnapshotMsg(String, typhoon_engine::core::research::CoverageSnapshot),
     /// Multi-source news articles loaded (from cache + fresh fetch) for a symbol.
     NewsArticlesLoaded {
         symbol: String,
@@ -11405,6 +11426,38 @@ pub struct TyphooNApp {
     margins_symbol: String,
     margins_snapshot: typhoon_engine::core::research::MarginsSnapshot,
     margins_loading: bool,
+
+    // ── ADR-122 Godel Parity Round 15 ─────────────────────────────────
+    /// VAL — Value-factor composite vs sector peers.
+    show_val: bool,
+    val_symbol: String,
+    val_snapshot: typhoon_engine::core::research::ValueSnapshot,
+    val_loading: bool,
+
+    /// QUAL — Quality-factor composite fusing PTFS + MARGINS + ACRL + LEV.
+    show_qual: bool,
+    qual_symbol: String,
+    qual_snapshot: typhoon_engine::core::research::QualitySnapshot,
+    qual_loading: bool,
+
+    /// RISK — Risk-factor composite fusing VOLE + BETA + LIQ + SHRT + ALTZ.
+    show_risk: bool,
+    risk_symbol: String,
+    risk_snapshot: typhoon_engine::core::research::RiskSnapshot,
+    risk_loading: bool,
+
+    /// INSSTRK — Insider streak detector from cached Form 4 trades.
+    show_insstrk: bool,
+    insstrk_symbol: String,
+    insstrk_window_days: i32,
+    insstrk_snapshot: typhoon_engine::core::research::InsiderStreakSnapshot,
+    insstrk_loading: bool,
+
+    /// COVG — Analyst coverage breadth + churn snapshot.
+    show_covg: bool,
+    covg_symbol: String,
+    covg_snapshot: typhoon_engine::core::research::CoverageSnapshot,
+    covg_loading: bool,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -13899,6 +13952,130 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::MarginsSnapshotMsg(symbol, snap));
                         });
                     }
+                    BrokerCmd::ComputeValSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        use typhoon_engine::core::fundamentals;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let (subject, peers, fcfy, peer_fcf_yields, sector) = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    let subj = fundamentals::get_fundamentals(&conn, &symbol).ok().flatten();
+                                    let sector = subj.as_ref().map(|s| s.sector.clone()).unwrap_or_default();
+                                    let mut peers: Vec<fundamentals::Fundamentals> = Vec::new();
+                                    if !sector.is_empty() {
+                                        if let Ok(all) = fundamentals::get_all_fundamentals(&conn) {
+                                            for f in all {
+                                                if f.sector == sector && f.symbol.to_uppercase() != symbol.to_uppercase() {
+                                                    peers.push(f);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    let subj_fcfy = research::get_fcf_yield(&conn, &symbol).ok().flatten();
+                                    let mut peer_fcfy: Vec<f64> = Vec::new();
+                                    for p in &peers {
+                                        if let Some(f) = research::get_fcf_yield(&conn, &p.symbol).ok().flatten() {
+                                            if f.ttm_fcf_yield_pct.is_finite() && f.ttm_fcf_yield_pct != 0.0 {
+                                                peer_fcfy.push(f.ttm_fcf_yield_pct);
+                                            }
+                                        }
+                                    }
+                                    (subj, peers, subj_fcfy, peer_fcfy, sector)
+                                } else { (None, Vec::new(), None, Vec::new(), String::new()) }
+                            } else { (None, Vec::new(), None, Vec::new(), String::new()) };
+                            let snap = research::compute_val_snapshot(
+                                &symbol, &today, &sector,
+                                subject.as_ref(), &peers, fcfy.as_ref(), &peer_fcf_yields,
+                            );
+                            let _ = msg_tx.send(BrokerMsg::ValSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeQualSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let (ptfs, margins, acrl, lev) = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    (
+                                        research::get_piotroski(&conn, &symbol).ok().flatten(),
+                                        research::get_margins(&conn, &symbol).ok().flatten(),
+                                        research::get_accruals(&conn, &symbol).ok().flatten(),
+                                        research::get_leverage(&conn, &symbol).ok().flatten(),
+                                    )
+                                } else { (None, None, None, None) }
+                            } else { (None, None, None, None) };
+                            let snap = research::compute_qual_snapshot(
+                                &symbol, &today,
+                                ptfs.as_ref(), margins.as_ref(), acrl.as_ref(), lev.as_ref(),
+                            );
+                            let _ = msg_tx.send(BrokerMsg::QualSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeRiskSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let (vole, beta, liq, shrt, altz) = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    (
+                                        research::get_ohlc_vol(&conn, &symbol).ok().flatten(),
+                                        research::get_beta(&conn, &symbol).ok().flatten(),
+                                        research::get_liquidity(&conn, &symbol).ok().flatten(),
+                                        research::get_short_interest(&conn, &symbol).ok().flatten(),
+                                        research::get_altman_z(&conn, &symbol).ok().flatten(),
+                                    )
+                                } else { (None, None, None, None, None) }
+                            } else { (None, None, None, None, None) };
+                            let snap = research::compute_risk_snapshot(
+                                &symbol, &today,
+                                vole.as_ref(), beta.as_ref(), liq.as_ref(), shrt.as_ref(), altz.as_ref(),
+                            );
+                            let _ = msg_tx.send(BrokerMsg::RiskSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeInsstrkSnapshot { symbol, window_days } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let trades = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_insider_trades(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_insstrk_snapshot(&symbol, &today, &trades, window_days);
+                            let _ = msg_tx.send(BrokerMsg::InsstrkSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeCovgSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let (pt, recs, updm) = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    (
+                                        research::get_price_target(&conn, &symbol).ok().flatten(),
+                                        research::get_analyst_recs(&conn, &symbol).ok().flatten().unwrap_or_default(),
+                                        research::get_updm(&conn, &symbol).ok().flatten(),
+                                    )
+                                } else { (None, Vec::new(), None) }
+                            } else { (None, Vec::new(), None) };
+                            let snap = research::compute_covg_snapshot(
+                                &symbol, &today,
+                                pt.as_ref(), &recs, updm.as_ref(),
+                            );
+                            let _ = msg_tx.send(BrokerMsg::CovgSnapshotMsg(symbol, snap));
+                        });
+                    }
                     BrokerCmd::FetchNewsMulti { symbol, marketaux_key, alpha_vantage_key, fmp_key } => {
                         use typhoon_engine::core::news;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -16344,6 +16521,28 @@ When the question touches recent news, sentiment, or prices, combine the researc
             margins_symbol: String::new(),
             margins_snapshot: typhoon_engine::core::research::MarginsSnapshot::default(),
             margins_loading: false,
+            // ── ADR-122 Round 15 defaults ──
+            show_val: false,
+            val_symbol: String::new(),
+            val_snapshot: typhoon_engine::core::research::ValueSnapshot::default(),
+            val_loading: false,
+            show_qual: false,
+            qual_symbol: String::new(),
+            qual_snapshot: typhoon_engine::core::research::QualitySnapshot::default(),
+            qual_loading: false,
+            show_risk: false,
+            risk_symbol: String::new(),
+            risk_snapshot: typhoon_engine::core::research::RiskSnapshot::default(),
+            risk_loading: false,
+            show_insstrk: false,
+            insstrk_symbol: String::new(),
+            insstrk_window_days: 180,
+            insstrk_snapshot: typhoon_engine::core::research::InsiderStreakSnapshot::default(),
+            insstrk_loading: false,
+            show_covg: false,
+            covg_symbol: String::new(),
+            covg_snapshot: typhoon_engine::core::research::CoverageSnapshot::default(),
+            covg_loading: false,
             bottom_tab: BottomTab::Log,
             log,
             log_filter: LogFilter::All,
@@ -18879,6 +19078,110 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = writeln!(p);
                         }
                     }
+
+                    // ── ADR-122 Round 15 ────────────────────────────
+                    if let Ok(Some(v)) = rx::get_val(&conn, &sym_upper) {
+                        if v.value_label != "NO_DATA" && !v.value_label.is_empty() {
+                            let _ = writeln!(p, "### Value-Factor Composite — VAL ({}, as of {})", v.value_label, v.as_of);
+                            let _ = writeln!(p, "- Sector: {} · peers considered: {} · composite {:.1} · inputs {}",
+                                if v.sector.is_empty() { "?".to_string() } else { v.sector.clone() },
+                                v.peers_considered, v.composite_score, v.inputs_available);
+                            let _ = writeln!(p, "- P/E {:.2} vs sector median {:.2} · Forward P/E {:.2} vs {:.2} · P/B {:.2} vs {:.2}",
+                                v.pe_ratio, v.pe_sector_median, v.forward_pe, v.forward_pe_sector_median,
+                                v.price_to_book, v.price_to_book_sector_median);
+                            let _ = writeln!(p, "- P/S {:.2} vs {:.2} · EV/EBITDA {:.2} vs {:.2} · FCF yield {:.2}% vs {:.2}%",
+                                v.price_to_sales, v.price_to_sales_sector_median,
+                                v.ev_to_ebitda, v.ev_to_ebitda_sector_median,
+                                v.fcf_yield_pct, v.fcf_yield_sector_median_pct);
+                            if !v.components.is_empty() {
+                                let _ = writeln!(p, "- Components:");
+                                for c in &v.components {
+                                    let _ = writeln!(p, "  - {} ({}): score {:.1}, weight {:.0}%", c.name, c.value, c.score, c.weight);
+                                }
+                            }
+                            if !v.note.is_empty() { let _ = writeln!(p, "- Note: {}", v.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(q)) = rx::get_qual(&conn, &sym_upper) {
+                        if q.quality_label != "NO_DATA" && !q.quality_label.is_empty() {
+                            let _ = writeln!(p, "### Quality-Factor Composite — QUAL ({}, as of {})", q.quality_label, q.as_of);
+                            let _ = writeln!(p, "- Composite {:.1} · inputs {}/4", q.composite_score, q.inputs_available);
+                            let _ = writeln!(p, "- Piotroski F {}/9 ({}) · Op margin {:.2}% ({}) · Cash conversion {:.0}% ({}) · Leverage {} (D/EBITDA {:.2})",
+                                q.piotroski_score, q.piotroski_label,
+                                q.operating_margin_pct, q.margin_trend_label,
+                                q.cash_conversion_pct, q.accruals_trend_label,
+                                q.leverage_summary, q.debt_to_ebitda);
+                            if !q.components.is_empty() {
+                                let _ = writeln!(p, "- Components:");
+                                for c in &q.components {
+                                    let _ = writeln!(p, "  - {} ({}): score {:.1}, weight {:.0}%", c.name, c.value, c.score, c.weight);
+                                }
+                            }
+                            if !q.note.is_empty() { let _ = writeln!(p, "- Note: {}", q.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(r)) = rx::get_risk(&conn, &sym_upper) {
+                        if r.risk_label != "NO_DATA" && !r.risk_label.is_empty() {
+                            let _ = writeln!(p, "### Risk-Factor Composite — RISK ({}, as of {})", r.risk_label, r.as_of);
+                            let _ = writeln!(p, "- Composite {:.1} (higher = riskier) · inputs {}/5", r.composite_score, r.inputs_available);
+                            let _ = writeln!(p, "- Realized vol {:.1}% · Beta 1Y {:.2} · Liquidity {} · Short % float {:.1}% · DTC {:.1}",
+                                r.realized_vol_pct, r.beta_1y, r.liquidity_tier, r.short_percent_of_float, r.days_to_cover);
+                            let _ = writeln!(p, "- Altman Z {:.2} ({})", r.altman_z, r.altman_zone);
+                            if !r.components.is_empty() {
+                                let _ = writeln!(p, "- Components:");
+                                for c in &r.components {
+                                    let _ = writeln!(p, "  - {} ({}): score {:.1}, weight {:.0}%", c.name, c.value, c.score, c.weight);
+                                }
+                            }
+                            if !r.note.is_empty() { let _ = writeln!(p, "- Note: {}", r.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(ins)) = rx::get_insstrk(&conn, &sym_upper) {
+                        if ins.streak_label != "NONE" && !ins.streak_label.is_empty() {
+                            let _ = writeln!(p, "### Insider Streak Detector — INSSTRK ({}, window {}d, as of {})",
+                                ins.streak_label, ins.window_days, ins.as_of);
+                            let _ = writeln!(p, "- Unique insiders: {} · buy streaks {} · sell streaks {} · longest buy {} · longest sell {}",
+                                ins.unique_insiders, ins.buy_streak_count, ins.sell_streak_count,
+                                ins.longest_buy_streak, ins.longest_sell_streak);
+                            let _ = writeln!(p, "- Net buy ${:.0} · Net sell ${:.0}",
+                                ins.net_buy_value_usd, ins.net_sell_value_usd);
+                            if !ins.rows.is_empty() {
+                                let _ = writeln!(p, "- Top streaks:");
+                                for row in ins.rows.iter().take(6) {
+                                    let _ = writeln!(p, "  - {} ({}) — {} events, net ${:.0} ({}..{})",
+                                        row.insider_name, row.streak_direction, row.consecutive_events,
+                                        row.net_value_usd, row.first_date, row.latest_date);
+                                }
+                            }
+                            if !ins.note.is_empty() { let _ = writeln!(p, "- Note: {}", ins.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(cv)) = rx::get_covg(&conn, &sym_upper) {
+                        if cv.coverage_label != "NONE" && !cv.coverage_label.is_empty() {
+                            let _ = writeln!(p, "### Analyst Coverage — COVG ({}, as of {})", cv.coverage_label, cv.as_of);
+                            let _ = writeln!(p, "- Analysts: {} · Target ${:.2} (${:.2}..${:.2}) · Composite {:.1} · inputs {}/3",
+                                cv.num_analysts, cv.target_mean, cv.target_low, cv.target_high,
+                                cv.composite_score, cv.inputs_available);
+                            let _ = writeln!(p, "- Consensus SB/B/H/S/SS {}/{}/{}/{}/{} · Bull ratio {:.0}%",
+                                cv.consensus_strong_buy, cv.consensus_buy, cv.consensus_hold,
+                                cv.consensus_sell, cv.consensus_strong_sell,
+                                cv.consensus_bull_ratio * 100.0);
+                            let _ = writeln!(p, "- 90d: Upgrades {} · Downgrades {} · Net {:+} · Churn {}",
+                                cv.upgrades_90d, cv.downgrades_90d, cv.net_90d, cv.churn_90d);
+                            let _ = writeln!(p, "- Breadth score {:.0} · Consensus score {:.0} · Churn score {:.0}",
+                                cv.breadth_score, cv.consensus_score, cv.churn_score);
+                            if !cv.note.is_empty() { let _ = writeln!(p, "- Note: {}", cv.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
                 }
             }
 
@@ -20629,6 +20932,86 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         if let Ok(conn) = cache.connection() {
                             if let Ok(Some(snap)) = typhoon_engine::core::research::get_margins(&conn, &self.margins_symbol) {
                                 self.margins_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "VAL" | "VALUE_FACTOR" | "VALUE_COMPOSITE" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.val_symbol = sym; }
+                self.show_val = true;
+                if self.val_snapshot.symbol.is_empty() && !self.val_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_val(&conn, &self.val_symbol) {
+                                self.val_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "QUAL" | "QUALITY_FACTOR" | "QUALITY_COMPOSITE" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.qual_symbol = sym; }
+                self.show_qual = true;
+                if self.qual_snapshot.symbol.is_empty() && !self.qual_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_qual(&conn, &self.qual_symbol) {
+                                self.qual_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "RISK" | "RISK_FACTOR" | "RISK_COMPOSITE" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.risk_symbol = sym; }
+                self.show_risk = true;
+                if self.risk_snapshot.symbol.is_empty() && !self.risk_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_risk(&conn, &self.risk_symbol) {
+                                self.risk_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "INSSTRK" | "INSIDER_STREAK" | "INSIDER_STREAKS" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.insstrk_symbol = sym; }
+                self.show_insstrk = true;
+                if self.insstrk_snapshot.symbol.is_empty() && !self.insstrk_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_insstrk(&conn, &self.insstrk_symbol) {
+                                self.insstrk_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "COVG" | "COVERAGE" | "ANALYST_COVERAGE" | "COVERAGE_BREADTH" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.covg_symbol = sym; }
+                self.show_covg = true;
+                if self.covg_snapshot.symbol.is_empty() && !self.covg_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_covg(&conn, &self.covg_symbol) {
+                                self.covg_snapshot = snap;
                             }
                         }
                     }
@@ -35125,6 +35508,479 @@ When the question touches recent news, sentiment, or prices, combine the researc
             self.show_margins = open;
         }
 
+        // VAL — Value-factor composite vs sector peers
+        if self.show_val {
+            if self.val_symbol.is_empty() { self.val_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_val;
+            egui::Window::new("VAL — Value-Factor Composite")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 460.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.val_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.val_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.val_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_val(&conn, &sym_u) {
+                                        self.val_snapshot = snap;
+                                        self.val_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.val_symbol.to_uppercase();
+                            self.val_loading = true;
+                            self.val_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeValSnapshot { symbol: sym });
+                        }
+                        if self.val_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.val_snapshot;
+                    if snap.symbol.is_empty() || snap.value_label == "NO_DATA" {
+                        ui.label(egui::RichText::new("No data — needs FUNDAMENTALS cached for this symbol + sector peers, ideally FCFY too.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.value_label.as_str() {
+                            "DEEP_VALUE" | "VALUE" => UP,
+                            "EXPENSIVE" | "PREMIUM" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — composite {:.1} — sector {} — peers {} — as of {}",
+                            snap.symbol, snap.value_label, snap.composite_score,
+                            if snap.sector.is_empty() { "?".to_string() } else { snap.sector.clone() },
+                            snap.peers_considered, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("val_metrics").striped(true).num_columns(3).min_col_width(150.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Metric").strong().small());
+                            ui.label(egui::RichText::new("Symbol").strong().small());
+                            ui.label(egui::RichText::new("Sector Median").strong().small());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("P/E").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.pe_ratio)).small().monospace());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.pe_sector_median)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Forward P/E").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.forward_pe)).small().monospace());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.forward_pe_sector_median)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("P/B").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.price_to_book)).small().monospace());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.price_to_book_sector_median)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("P/S").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.price_to_sales)).small().monospace());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.price_to_sales_sector_median)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("EV/EBITDA").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.ev_to_ebitda)).small().monospace());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.ev_to_ebitda_sector_median)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("FCF Yield").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.fcf_yield_pct)).small().monospace());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.fcf_yield_sector_median_pct)).small().monospace());
+                            ui.end_row();
+                        });
+                        if !snap.components.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new("Component contributions").strong().small().color(AXIS_TEXT));
+                            egui::Grid::new("val_comps").striped(true).num_columns(4).min_col_width(130.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Component").strong().small());
+                                ui.label(egui::RichText::new("Value").strong().small());
+                                ui.label(egui::RichText::new("Score").strong().small());
+                                ui.label(egui::RichText::new("Weight").strong().small());
+                                ui.end_row();
+                                for c in &snap.components {
+                                    ui.label(egui::RichText::new(&c.name).small().strong());
+                                    ui.label(egui::RichText::new(&c.value).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.1}", c.score)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.0}%", c.weight)).small().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                    }
+                });
+            self.show_val = open;
+        }
+
+        // QUAL — Quality-factor composite
+        if self.show_qual {
+            if self.qual_symbol.is_empty() { self.qual_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_qual;
+            egui::Window::new("QUAL — Quality-Factor Composite")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.qual_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.qual_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.qual_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_qual(&conn, &sym_u) {
+                                        self.qual_snapshot = snap;
+                                        self.qual_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.qual_symbol.to_uppercase();
+                            self.qual_loading = true;
+                            self.qual_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeQualSnapshot { symbol: sym });
+                        }
+                        if self.qual_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.qual_snapshot;
+                    if snap.symbol.is_empty() || snap.quality_label == "NO_DATA" {
+                        ui.label(egui::RichText::new("No data — needs at least one of PTFS / MARGINS / ACRL / LEV cached.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.quality_label.as_str() {
+                            "HIGH_QUALITY" | "QUALITY" => UP,
+                            "POOR" | "WEAK" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — composite {:.1} — as of {}",
+                            snap.symbol, snap.quality_label, snap.composite_score, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("qual_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Piotroski F").small().strong());
+                            ui.label(egui::RichText::new(format!("{}/9 ({})", snap.piotroski_score, snap.piotroski_label)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Operating margin").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}% ({})", snap.operating_margin_pct, snap.margin_trend_label)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Cash conversion").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.0}% ({})", snap.cash_conversion_pct, snap.accruals_trend_label)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Leverage").small().strong());
+                            ui.label(egui::RichText::new(format!("{} — D/EBITDA {:.2}", snap.leverage_summary, snap.debt_to_ebitda)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Inputs used").small().strong());
+                            ui.label(egui::RichText::new(format!("{}/4", snap.inputs_available)).small().monospace());
+                            ui.end_row();
+                        });
+                        if !snap.components.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new("Component contributions").strong().small().color(AXIS_TEXT));
+                            egui::Grid::new("qual_comps").striped(true).num_columns(4).min_col_width(130.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Component").strong().small());
+                                ui.label(egui::RichText::new("Value").strong().small());
+                                ui.label(egui::RichText::new("Score").strong().small());
+                                ui.label(egui::RichText::new("Weight").strong().small());
+                                ui.end_row();
+                                for c in &snap.components {
+                                    ui.label(egui::RichText::new(&c.name).small().strong());
+                                    ui.label(egui::RichText::new(&c.value).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.1}", c.score)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.0}%", c.weight)).small().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                    }
+                });
+            self.show_qual = open;
+        }
+
+        // RISK — Risk-factor composite
+        if self.show_risk {
+            if self.risk_symbol.is_empty() { self.risk_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_risk;
+            egui::Window::new("RISK — Risk-Factor Composite")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 420.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.risk_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.risk_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.risk_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_risk(&conn, &sym_u) {
+                                        self.risk_snapshot = snap;
+                                        self.risk_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.risk_symbol.to_uppercase();
+                            self.risk_loading = true;
+                            self.risk_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeRiskSnapshot { symbol: sym });
+                        }
+                        if self.risk_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.risk_snapshot;
+                    if snap.symbol.is_empty() || snap.risk_label == "NO_DATA" {
+                        ui.label(egui::RichText::new("No data — needs at least one of VOLE / BETA / LIQ / SHRT / ALTZ cached.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.risk_label.as_str() {
+                            "LOW_RISK" => UP,
+                            "DISTRESSED" | "HIGH_RISK" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — composite {:.1} (higher = riskier) — as of {}",
+                            snap.symbol, snap.risk_label, snap.composite_score, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("risk_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Realized vol").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1}%", snap.realized_vol_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Beta 1Y").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.beta_1y)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Liquidity").small().strong());
+                            ui.label(egui::RichText::new(&snap.liquidity_tier).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Short % float / DTC").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1}% / {:.1}", snap.short_percent_of_float, snap.days_to_cover)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Altman Z").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2} ({})", snap.altman_z, snap.altman_zone)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Inputs used").small().strong());
+                            ui.label(egui::RichText::new(format!("{}/5", snap.inputs_available)).small().monospace());
+                            ui.end_row();
+                        });
+                        if !snap.components.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new("Component contributions").strong().small().color(AXIS_TEXT));
+                            egui::Grid::new("risk_comps").striped(true).num_columns(4).min_col_width(130.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Component").strong().small());
+                                ui.label(egui::RichText::new("Value").strong().small());
+                                ui.label(egui::RichText::new("Score").strong().small());
+                                ui.label(egui::RichText::new("Weight").strong().small());
+                                ui.end_row();
+                                for c in &snap.components {
+                                    ui.label(egui::RichText::new(&c.name).small().strong());
+                                    ui.label(egui::RichText::new(&c.value).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.1}", c.score)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.0}%", c.weight)).small().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                    }
+                });
+            self.show_risk = open;
+        }
+
+        // INSSTRK — Insider streak detector
+        if self.show_insstrk {
+            if self.insstrk_symbol.is_empty() { self.insstrk_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_insstrk;
+            egui::Window::new("INSSTRK — Insider Streak Detector")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([680.0, 460.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.insstrk_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.insstrk_symbol = chart_sym_research.clone(); }
+                        ui.label(egui::RichText::new("Window (days):").color(AXIS_TEXT));
+                        ui.add(egui::DragValue::new(&mut self.insstrk_window_days).range(30..=720));
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.insstrk_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_insstrk(&conn, &sym_u) {
+                                        self.insstrk_snapshot = snap;
+                                        self.insstrk_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.insstrk_symbol.to_uppercase();
+                            self.insstrk_loading = true;
+                            self.insstrk_symbol = sym.clone();
+                            let wd = self.insstrk_window_days;
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeInsstrkSnapshot { symbol: sym, window_days: wd });
+                        }
+                        if self.insstrk_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.insstrk_snapshot;
+                    if snap.symbol.is_empty() || snap.streak_label == "NONE" {
+                        ui.label(egui::RichText::new("No insider trades in window — run INS for this symbol, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.streak_label.as_str() {
+                            "STRONG_ACCUMULATION" | "ACCUMULATION" => UP,
+                            "STRONG_DISTRIBUTION" | "DISTRIBUTION" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — {} insiders — window {}d — as of {}",
+                            snap.symbol, snap.streak_label, snap.unique_insiders,
+                            snap.window_days, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("insstrk_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Buy streaks / Sell streaks").small().strong());
+                            ui.label(egui::RichText::new(format!("{} / {}", snap.buy_streak_count, snap.sell_streak_count)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Longest buy / sell").small().strong());
+                            ui.label(egui::RichText::new(format!("{} / {}", snap.longest_buy_streak, snap.longest_sell_streak)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Net buy / sell value").small().strong());
+                            ui.label(egui::RichText::new(format!("${:.0} / ${:.0}", snap.net_buy_value_usd, snap.net_sell_value_usd)).small().monospace());
+                            ui.end_row();
+                        });
+                        if !snap.rows.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new("Per-insider streaks").strong().small().color(AXIS_TEXT));
+                            egui::Grid::new("insstrk_rows").striped(true).num_columns(5).min_col_width(130.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Insider").strong().small());
+                                ui.label(egui::RichText::new("Dir").strong().small());
+                                ui.label(egui::RichText::new("Events").strong().small());
+                                ui.label(egui::RichText::new("Net $").strong().small());
+                                ui.label(egui::RichText::new("Latest").strong().small());
+                                ui.end_row();
+                                for r in &snap.rows {
+                                    let rc = match r.streak_direction.as_str() { "BUY" => UP, "SELL" => DOWN, _ => AXIS_TEXT };
+                                    ui.label(egui::RichText::new(&r.insider_name).small());
+                                    ui.label(egui::RichText::new(&r.streak_direction).small().color(rc));
+                                    ui.label(egui::RichText::new(format!("{}", r.consecutive_events)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("${:.0}", r.net_value_usd)).small().monospace());
+                                    ui.label(egui::RichText::new(&r.latest_date).small().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                    }
+                });
+            self.show_insstrk = open;
+        }
+
+        // COVG — Analyst coverage breadth + churn
+        if self.show_covg {
+            if self.covg_symbol.is_empty() { self.covg_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_covg;
+            egui::Window::new("COVG — Analyst Coverage Breadth & Churn")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 420.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.covg_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.covg_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.covg_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_covg(&conn, &sym_u) {
+                                        self.covg_snapshot = snap;
+                                        self.covg_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.covg_symbol.to_uppercase();
+                            self.covg_loading = true;
+                            self.covg_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeCovgSnapshot { symbol: sym });
+                        }
+                        if self.covg_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.covg_snapshot;
+                    if snap.symbol.is_empty() || snap.coverage_label == "NONE" {
+                        ui.label(egui::RichText::new("No data — needs ANR (price targets / consensus) and/or UPDG (rating changes) cached.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.coverage_label.as_str() {
+                            "EXPANDING" => UP,
+                            "CONTRACTING" | "THIN" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — composite {:.1} — {} analysts — as of {}",
+                            snap.symbol, snap.coverage_label, snap.composite_score,
+                            snap.num_analysts, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("covg_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Target mean (low / high)").small().strong());
+                            ui.label(egui::RichText::new(format!("${:.2} (${:.2} / ${:.2})", snap.target_mean, snap.target_low, snap.target_high)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Consensus SB/B/H/S/SS").small().strong());
+                            ui.label(egui::RichText::new(format!("{}/{}/{}/{}/{}",
+                                snap.consensus_strong_buy, snap.consensus_buy, snap.consensus_hold,
+                                snap.consensus_sell, snap.consensus_strong_sell)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Bullish ratio").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.0}%", snap.consensus_bull_ratio * 100.0)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Upgrades / Downgrades 90d").small().strong());
+                            let nc = if snap.net_90d > 0 { UP } else if snap.net_90d < 0 { DOWN } else { AXIS_TEXT };
+                            ui.label(egui::RichText::new(format!("{} / {} (net {:+})", snap.upgrades_90d, snap.downgrades_90d, snap.net_90d)).small().monospace().color(nc));
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Breadth / Consensus / Churn score").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.0} / {:.0} / {:.0}", snap.breadth_score, snap.consensus_score, snap.churn_score)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Inputs used").small().strong());
+                            ui.label(egui::RichText::new(format!("{}/3", snap.inputs_available)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_covg = open;
+        }
+
         // GY — Treasury Yield Curve
         if self.show_treasury_curve {
             let mut open = self.show_treasury_curve;
@@ -42659,6 +43515,66 @@ impl eframe::App for TyphooNApp {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let _ = typhoon_engine::core::research::upsert_margins(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::ValSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.val_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.val_snapshot = snap.clone();
+                        self.val_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_val(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::QualSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.qual_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.qual_snapshot = snap.clone();
+                        self.qual_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_qual(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::RiskSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.risk_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.risk_snapshot = snap.clone();
+                        self.risk_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_risk(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::InsstrkSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.insstrk_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.insstrk_snapshot = snap.clone();
+                        self.insstrk_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_insstrk(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::CovgSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.covg_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.covg_snapshot = snap.clone();
+                        self.covg_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_covg(&conn, &sym_u, &snap);
                         }
                     }
                 }

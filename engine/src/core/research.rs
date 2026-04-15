@@ -1614,6 +1614,145 @@ pub struct MarginsSnapshot {
     pub note: String,
 }
 
+// ── ADR-122 Godel Parity Round 15 ───────────────────────────────────────────
+
+/// Generic meta-composite sub-component row used by VAL / QUAL / RISK.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FactorComponent {
+    pub name: String,
+    pub value: String,
+    pub score: f64,       // 0..100 (higher = better for VAL/QUAL, higher = riskier for RISK)
+    pub weight: f64,      // raw percent weight
+    pub contribution: f64,
+}
+
+/// VAL — Unified value-factor composite fusing valuation ratios vs sector peers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ValueSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,                   // sector used for peer medians
+    pub peers_considered: usize,
+    // per-metric this-symbol vs sector-median values
+    pub pe_ratio: f64,
+    pub pe_sector_median: f64,
+    pub forward_pe: f64,
+    pub forward_pe_sector_median: f64,
+    pub price_to_book: f64,
+    pub price_to_book_sector_median: f64,
+    pub price_to_sales: f64,
+    pub price_to_sales_sector_median: f64,
+    pub ev_to_ebitda: f64,
+    pub ev_to_ebitda_sector_median: f64,
+    pub fcf_yield_pct: f64,               // from FCFY snapshot
+    pub fcf_yield_sector_median_pct: f64, // sector median of FCFY TTM yield
+    pub composite_score: f64,             // 0..100
+    pub value_label: String,              // "DEEP_VALUE" | "VALUE" | "FAIR" | "EXPENSIVE" | "PREMIUM" | "NO_DATA"
+    pub inputs_available: usize,
+    pub components: Vec<FactorComponent>,
+    pub note: String,
+}
+
+/// QUAL — Unified quality-factor composite fusing PTFS + MARGINS + ACRL + LEV.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QualitySnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub piotroski_score: i32,
+    pub piotroski_label: String,
+    pub operating_margin_pct: f64,
+    pub margin_trend_label: String,
+    pub cash_conversion_pct: f64,
+    pub accruals_trend_label: String,
+    pub leverage_summary: String,
+    pub debt_to_ebitda: f64,
+    pub composite_score: f64,             // 0..100
+    pub quality_label: String,            // "HIGH_QUALITY" | "QUALITY" | "AVERAGE" | "POOR" | "WEAK" | "NO_DATA"
+    pub inputs_available: usize,
+    pub components: Vec<FactorComponent>,
+    pub note: String,
+}
+
+/// RISK — Unified risk-factor composite fusing VOLE + BETA + LIQ + SHRT + ALTZ.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RiskSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub realized_vol_pct: f64,
+    pub beta_1y: f64,
+    pub liquidity_tier: String,
+    pub short_percent_of_float: f64,
+    pub days_to_cover: f64,
+    pub altman_z: f64,
+    pub altman_zone: String,
+    pub composite_score: f64,             // 0..100 — higher = RISKIER
+    pub risk_label: String,               // "LOW_RISK" | "MODERATE" | "ELEVATED" | "HIGH_RISK" | "DISTRESSED" | "NO_DATA"
+    pub inputs_available: usize,
+    pub components: Vec<FactorComponent>,
+    pub note: String,
+}
+
+/// INSSTRK — One per-insider streak row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InsiderStreakRow {
+    pub insider_name: String,
+    pub streak_direction: String,   // "BUY" | "SELL" | "MIXED"
+    pub consecutive_events: usize,
+    pub net_value_usd: f64,
+    pub net_shares: f64,
+    pub first_date: String,
+    pub latest_date: String,
+}
+
+/// INSSTRK — Insider streak detector snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InsiderStreakSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub window_days: i32,
+    pub unique_insiders: usize,
+    pub buy_streak_count: usize,    // insiders with ≥ 2 consecutive buys
+    pub sell_streak_count: usize,
+    pub longest_buy_streak: usize,
+    pub longest_sell_streak: usize,
+    pub net_buy_value_usd: f64,
+    pub net_sell_value_usd: f64,
+    pub streak_label: String,       // "STRONG_ACCUMULATION" | "ACCUMULATION" | "DISTRIBUTION" | "STRONG_DISTRIBUTION" | "MIXED" | "NONE"
+    pub rows: Vec<InsiderStreakRow>,
+    pub note: String,
+}
+
+/// COVG — Analyst coverage breadth + churn snapshot.
+/// Fuses cached PriceTarget (coverage size), AnalystRecommendations (consensus
+/// distribution), and UPDM (upgrade/downgrade tape) into one snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CoverageSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub num_analysts: i32,
+    pub target_mean: f64,
+    pub target_low: f64,
+    pub target_high: f64,
+    pub consensus_strong_buy: i32,
+    pub consensus_buy: i32,
+    pub consensus_hold: i32,
+    pub consensus_sell: i32,
+    pub consensus_strong_sell: i32,
+    pub consensus_total: i32,
+    pub consensus_bull_ratio: f64,  // (strong_buy + buy) / total
+    pub upgrades_90d: usize,
+    pub downgrades_90d: usize,
+    pub net_90d: i32,
+    pub churn_90d: usize,           // upgrades + downgrades (total activity)
+    pub breadth_score: f64,         // 0..100 (coverage size)
+    pub consensus_score: f64,       // 0..100 (bullishness)
+    pub churn_score: f64,           // 0..100 (activity)
+    pub composite_score: f64,       // 0..100 weighted average
+    pub coverage_label: String,     // "EXPANDING" | "STABLE" | "CONTRACTING" | "THIN" | "NONE"
+    pub inputs_available: usize,
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -7796,6 +7935,842 @@ pub fn compute_margins_snapshot(
     }
 }
 
+// ── ADR-122 Round 15 compute fns ───────────────────────────────────────────
+
+fn median_f64(values: &[f64]) -> f64 {
+    if values.is_empty() { return 0.0; }
+    let mut v: Vec<f64> = values.iter().copied().filter(|x| x.is_finite()).collect();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    if v.is_empty() { return 0.0; }
+    let mid = v.len() / 2;
+    if v.len() % 2 == 0 { (v[mid - 1] + v[mid]) / 2.0 } else { v[mid] }
+}
+
+/// Score a "lower is better" multiple vs a peer median.
+/// ratio ≤ median × 0.5 → 100; ratio ≥ median × 2.0 → 0; linear in between.
+fn score_multiple_lower_better(value: f64, median: f64) -> f64 {
+    if !value.is_finite() || value <= 0.0 || !median.is_finite() || median <= 0.0 {
+        return 0.0;
+    }
+    let ratio = value / median;
+    if ratio <= 0.5 { 100.0 }
+    else if ratio >= 2.0 { 0.0 }
+    else { (100.0 * (2.0 - ratio) / 1.5).clamp(0.0, 100.0) }
+}
+
+/// Score a "higher is better" yield vs a peer median.
+/// yield ≥ median × 1.5 → 100; yield ≤ median × 0.5 → 0; linear in between.
+fn score_yield_higher_better(value: f64, median: f64) -> f64 {
+    if !value.is_finite() || !median.is_finite() || median <= 0.0 {
+        return 0.0;
+    }
+    let ratio = value / median;
+    if ratio >= 1.5 { 100.0 }
+    else if ratio <= 0.5 { 0.0 }
+    else { (100.0 * (ratio - 0.5) / 1.0).clamp(0.0, 100.0) }
+}
+
+/// VAL — Value-factor composite vs sector peers.
+pub fn compute_val_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    fund: Option<&crate::core::fundamentals::Fundamentals>,
+    peer_fundamentals: &[crate::core::fundamentals::Fundamentals],
+    fcfy: Option<&FcfYieldSnapshot>,
+    peer_fcf_yields: &[f64],
+) -> ValueSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut components: Vec<FactorComponent> = Vec::new();
+    let mut total_weight = 0.0;
+    let mut weighted_sum = 0.0;
+    let mut inputs_available = 0usize;
+
+    let f = match fund {
+        Some(v) => v,
+        None => {
+            return ValueSnapshot {
+                symbol: sym,
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                value_label: "NO_DATA".to_string(),
+                note: "no Fundamentals row cached for this symbol".to_string(),
+                ..Default::default()
+            };
+        }
+    };
+
+    let peers_considered = peer_fundamentals.len();
+
+    // Collect peer medians for each metric — only non-missing, positive values.
+    let peer_pe: Vec<f64> = peer_fundamentals.iter()
+        .filter_map(|p| p.pe_ratio).filter(|v| *v > 0.0 && v.is_finite()).collect();
+    let peer_fpe: Vec<f64> = peer_fundamentals.iter()
+        .filter_map(|p| p.forward_pe).filter(|v| *v > 0.0 && v.is_finite()).collect();
+    let peer_pb: Vec<f64> = peer_fundamentals.iter()
+        .filter_map(|p| p.price_to_book).filter(|v| *v > 0.0 && v.is_finite()).collect();
+    let peer_ps: Vec<f64> = peer_fundamentals.iter()
+        .filter_map(|p| p.price_to_sales).filter(|v| *v > 0.0 && v.is_finite()).collect();
+    let peer_evebitda: Vec<f64> = peer_fundamentals.iter()
+        .filter_map(|p| p.ev_to_ebitda).filter(|v| *v > 0.0 && v.is_finite()).collect();
+
+    let pe_median = median_f64(&peer_pe);
+    let fpe_median = median_f64(&peer_fpe);
+    let pb_median = median_f64(&peer_pb);
+    let ps_median = median_f64(&peer_ps);
+    let evebitda_median = median_f64(&peer_evebitda);
+    let fcfy_median = median_f64(peer_fcf_yields);
+
+    let pe = f.pe_ratio.unwrap_or(0.0);
+    let fpe = f.forward_pe.unwrap_or(0.0);
+    let pb = f.price_to_book.unwrap_or(0.0);
+    let ps = f.price_to_sales.unwrap_or(0.0);
+    let evebitda = f.ev_to_ebitda.unwrap_or(0.0);
+    let fcfy_val = fcfy.map(|s| s.ttm_fcf_yield_pct).unwrap_or(0.0);
+
+    // P/E — weight 25
+    if pe > 0.0 && pe_median > 0.0 {
+        let score = score_multiple_lower_better(pe, pe_median);
+        let w = 25.0;
+        components.push(FactorComponent {
+            name: "P/E".to_string(),
+            value: format!("{:.2} vs median {:.2}", pe, pe_median),
+            score, weight: w, contribution: score * w / 100.0,
+        });
+        weighted_sum += score * w;
+        total_weight += w;
+        inputs_available += 1;
+    }
+
+    // Forward P/E — weight 15
+    if fpe > 0.0 && fpe_median > 0.0 {
+        let score = score_multiple_lower_better(fpe, fpe_median);
+        let w = 15.0;
+        components.push(FactorComponent {
+            name: "Forward P/E".to_string(),
+            value: format!("{:.2} vs median {:.2}", fpe, fpe_median),
+            score, weight: w, contribution: score * w / 100.0,
+        });
+        weighted_sum += score * w;
+        total_weight += w;
+        inputs_available += 1;
+    }
+
+    // P/B — weight 15
+    if pb > 0.0 && pb_median > 0.0 {
+        let score = score_multiple_lower_better(pb, pb_median);
+        let w = 15.0;
+        components.push(FactorComponent {
+            name: "P/B".to_string(),
+            value: format!("{:.2} vs median {:.2}", pb, pb_median),
+            score, weight: w, contribution: score * w / 100.0,
+        });
+        weighted_sum += score * w;
+        total_weight += w;
+        inputs_available += 1;
+    }
+
+    // P/S — weight 15
+    if ps > 0.0 && ps_median > 0.0 {
+        let score = score_multiple_lower_better(ps, ps_median);
+        let w = 15.0;
+        components.push(FactorComponent {
+            name: "P/S".to_string(),
+            value: format!("{:.2} vs median {:.2}", ps, ps_median),
+            score, weight: w, contribution: score * w / 100.0,
+        });
+        weighted_sum += score * w;
+        total_weight += w;
+        inputs_available += 1;
+    }
+
+    // EV/EBITDA — weight 20
+    if evebitda > 0.0 && evebitda_median > 0.0 {
+        let score = score_multiple_lower_better(evebitda, evebitda_median);
+        let w = 20.0;
+        components.push(FactorComponent {
+            name: "EV/EBITDA".to_string(),
+            value: format!("{:.2} vs median {:.2}", evebitda, evebitda_median),
+            score, weight: w, contribution: score * w / 100.0,
+        });
+        weighted_sum += score * w;
+        total_weight += w;
+        inputs_available += 1;
+    }
+
+    // FCF Yield — weight 10
+    if fcfy_val.is_finite() && fcfy_median > 0.0 {
+        let score = score_yield_higher_better(fcfy_val, fcfy_median);
+        let w = 10.0;
+        components.push(FactorComponent {
+            name: "FCF Yield".to_string(),
+            value: format!("{:.2}% vs median {:.2}%", fcfy_val, fcfy_median),
+            score, weight: w, contribution: score * w / 100.0,
+        });
+        weighted_sum += score * w;
+        total_weight += w;
+        inputs_available += 1;
+    }
+
+    if inputs_available == 0 || total_weight <= 0.0 {
+        return ValueSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            peers_considered,
+            value_label: "NO_DATA".to_string(),
+            note: "need at least one valuation metric vs a non-empty sector peer median".to_string(),
+            ..Default::default()
+        };
+    }
+
+    let composite = (weighted_sum / total_weight).clamp(0.0, 100.0);
+    let label = if composite >= 80.0 { "DEEP_VALUE" }
+                else if composite >= 65.0 { "VALUE" }
+                else if composite >= 45.0 { "FAIR" }
+                else if composite >= 30.0 { "EXPENSIVE" }
+                else { "PREMIUM" };
+
+    ValueSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        peers_considered,
+        pe_ratio: pe,
+        pe_sector_median: pe_median,
+        forward_pe: fpe,
+        forward_pe_sector_median: fpe_median,
+        price_to_book: pb,
+        price_to_book_sector_median: pb_median,
+        price_to_sales: ps,
+        price_to_sales_sector_median: ps_median,
+        ev_to_ebitda: evebitda,
+        ev_to_ebitda_sector_median: evebitda_median,
+        fcf_yield_pct: fcfy_val,
+        fcf_yield_sector_median_pct: fcfy_median,
+        composite_score: composite,
+        value_label: label.to_string(),
+        inputs_available,
+        components,
+        note: String::new(),
+    }
+}
+
+/// QUAL — Quality-factor composite fusing PTFS + MARGINS + ACRL + LEV.
+pub fn compute_qual_snapshot(
+    symbol: &str,
+    as_of: &str,
+    piotroski: Option<&PiotroskiSnapshot>,
+    margins: Option<&MarginsSnapshot>,
+    accruals: Option<&AccrualsSnapshot>,
+    leverage: Option<&LeverageSnapshot>,
+) -> QualitySnapshot {
+    let sym = symbol.to_uppercase();
+    let mut components: Vec<FactorComponent> = Vec::new();
+    let mut total_weight = 0.0;
+    let mut weighted_sum = 0.0;
+    let mut inputs_available = 0usize;
+
+    let mut piotroski_score = 0;
+    let mut piotroski_label = String::new();
+    let mut operating_margin_pct = 0.0;
+    let mut margin_trend_label = String::new();
+    let mut cash_conversion_pct = 0.0;
+    let mut accruals_trend_label = String::new();
+    let mut leverage_summary = String::new();
+    let mut debt_to_ebitda = 0.0;
+
+    // PTFS — weight 30. Map F score linearly 0..9 → 0..100.
+    if let Some(p) = piotroski {
+        if p.strength_label != "INSUFFICIENT_DATA" && !p.strength_label.is_empty() {
+            piotroski_score = p.f_score;
+            piotroski_label = p.strength_label.clone();
+            let score = (p.f_score as f64 / 9.0 * 100.0).clamp(0.0, 100.0);
+            let w = 30.0;
+            components.push(FactorComponent {
+                name: "Piotroski F".to_string(),
+                value: format!("{}/9 ({})", p.f_score, p.strength_label),
+                score, weight: w, contribution: score * w / 100.0,
+            });
+            weighted_sum += score * w;
+            total_weight += w;
+            inputs_available += 1;
+        }
+    }
+
+    // MARGINS — weight 25. Fuse quality_label bucket + trend bonus.
+    if let Some(m) = margins {
+        if m.quality_label != "INSUFFICIENT_DATA" && !m.quality_label.is_empty() {
+            operating_margin_pct = m.latest_operating_margin_pct;
+            margin_trend_label = m.overall_trend_label.clone();
+            let mut score: f64 = match m.quality_label.as_str() {
+                "HIGH" => 85.0,
+                "MEDIUM" => 60.0,
+                "LOW" => 30.0,
+                _ => 50.0,
+            };
+            match m.overall_trend_label.as_str() {
+                "EXPANDING" => score = (score + 10.0).min(100.0),
+                "CONTRACTING" => score = (score - 10.0).max(0.0),
+                _ => {}
+            }
+            let w = 25.0;
+            components.push(FactorComponent {
+                name: "Margins".to_string(),
+                value: format!("{} op {:.1}% ({})", m.quality_label, m.latest_operating_margin_pct, m.overall_trend_label),
+                score, weight: w, contribution: score * w / 100.0,
+            });
+            weighted_sum += score * w;
+            total_weight += w;
+            inputs_available += 1;
+        }
+    }
+
+    // ACRL — weight 25. Fuse trend_label + ttm cash conversion bonus.
+    if let Some(ac) = accruals {
+        if !ac.trend_label.is_empty() {
+            accruals_trend_label = ac.trend_label.clone();
+            cash_conversion_pct = ac.ttm_cash_conversion_pct;
+            let mut score: f64 = match ac.trend_label.as_str() {
+                "IMPROVING" => 80.0,
+                "STABLE" => 60.0,
+                "MIXED" => 50.0,
+                "DETERIORATING" => 30.0,
+                _ => 50.0,
+            };
+            if ac.ttm_cash_conversion_pct >= 100.0 {
+                score = (score + 10.0).min(100.0);
+            } else if ac.ttm_cash_conversion_pct < 50.0 && ac.ttm_cash_conversion_pct != 0.0 {
+                score = (score - 10.0).max(0.0);
+            }
+            let w = 25.0;
+            components.push(FactorComponent {
+                name: "Accruals".to_string(),
+                value: format!("{} ({:.0}% cash conv)", ac.trend_label, ac.ttm_cash_conversion_pct),
+                score, weight: w, contribution: score * w / 100.0,
+            });
+            weighted_sum += score * w;
+            total_weight += w;
+            inputs_available += 1;
+        }
+    }
+
+    // LEV — weight 20. Map solvency_summary label to a score + debt/ebitda.
+    if let Some(lv) = leverage {
+        if !lv.solvency_summary.is_empty() {
+            leverage_summary = lv.solvency_summary.clone();
+            debt_to_ebitda = if lv.ebitda_ttm > 0.0 { lv.total_debt / lv.ebitda_ttm } else { 0.0 };
+            let score = match lv.solvency_summary.as_str() {
+                "HEALTHY" => 85.0,
+                "MODERATE" | "NEUTRAL" => 60.0,
+                "ELEVATED" => 40.0,
+                "STRETCHED" | "DISTRESSED" => 15.0,
+                _ => 50.0,
+            };
+            let w = 20.0;
+            components.push(FactorComponent {
+                name: "Leverage".to_string(),
+                value: format!("{} (D/EBITDA {:.2})", lv.solvency_summary, debt_to_ebitda),
+                score, weight: w, contribution: score * w / 100.0,
+            });
+            weighted_sum += score * w;
+            total_weight += w;
+            inputs_available += 1;
+        }
+    }
+
+    if inputs_available == 0 || total_weight <= 0.0 {
+        return QualitySnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            quality_label: "NO_DATA".to_string(),
+            note: "need at least one of PTFS / MARGINS / ACRL / LEV cached".to_string(),
+            ..Default::default()
+        };
+    }
+
+    let composite = (weighted_sum / total_weight).clamp(0.0, 100.0);
+    let label = if composite >= 80.0 { "HIGH_QUALITY" }
+                else if composite >= 65.0 { "QUALITY" }
+                else if composite >= 45.0 { "AVERAGE" }
+                else if composite >= 30.0 { "POOR" }
+                else { "WEAK" };
+
+    QualitySnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        piotroski_score,
+        piotroski_label,
+        operating_margin_pct,
+        margin_trend_label,
+        cash_conversion_pct,
+        accruals_trend_label,
+        leverage_summary,
+        debt_to_ebitda,
+        composite_score: composite,
+        quality_label: label.to_string(),
+        inputs_available,
+        components,
+        note: String::new(),
+    }
+}
+
+/// RISK — Risk-factor composite fusing VOLE + BETA + LIQ + SHRT + ALTZ.
+/// Higher composite_score = RISKIER.
+pub fn compute_risk_snapshot(
+    symbol: &str,
+    as_of: &str,
+    vole: Option<&OhlcVolSnapshot>,
+    beta: Option<&BetaSnapshot>,
+    liquidity: Option<&LiquiditySnapshot>,
+    short_interest: Option<&ShortInterestSnapshot>,
+    altman: Option<&AltmanZSnapshot>,
+) -> RiskSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut components: Vec<FactorComponent> = Vec::new();
+    let mut total_weight = 0.0;
+    let mut weighted_sum = 0.0;
+    let mut inputs_available = 0usize;
+
+    let mut realized_vol_pct = 0.0;
+    let mut beta_1y = 0.0;
+    let mut liquidity_tier = String::new();
+    let mut short_percent_of_float = 0.0;
+    let mut days_to_cover = 0.0;
+    let mut altman_z = 0.0;
+    let mut altman_zone = String::new();
+    let mut distressed = false;
+
+    // VOLE — weight 25. Higher vol → higher risk score.
+    // 10% vol = 0, 30% = 50, 60% = 100 (linear piecewise).
+    if let Some(v) = vole {
+        if v.preferred_estimate_pct > 0.0 {
+            realized_vol_pct = v.preferred_estimate_pct;
+            let score = if v.preferred_estimate_pct <= 10.0 { 0.0 }
+                        else if v.preferred_estimate_pct <= 30.0 {
+                            (v.preferred_estimate_pct - 10.0) / 20.0 * 50.0
+                        } else if v.preferred_estimate_pct <= 60.0 {
+                            50.0 + (v.preferred_estimate_pct - 30.0) / 30.0 * 50.0
+                        } else { 100.0 };
+            let w = 25.0;
+            components.push(FactorComponent {
+                name: "Realized Vol".to_string(),
+                value: format!("{:.1}% ({})", v.preferred_estimate_pct, v.preferred_label),
+                score, weight: w, contribution: score * w / 100.0,
+            });
+            weighted_sum += score * w;
+            total_weight += w;
+            inputs_available += 1;
+        }
+    }
+
+    // BETA — weight 20. |β - 1| contributes to risk; high |β| far from 1 = high risk.
+    if let Some(b) = beta {
+        if let Some(one_y) = b.windows.iter().find(|w| w.window_label == "1Y") {
+            if one_y.n_observations > 0 {
+                beta_1y = one_y.beta;
+                let dist = (one_y.beta - 1.0).abs();
+                let score = (dist / 1.0 * 60.0).min(100.0);   // |β-1|=1 → 60; |β-1|>=1.67 → 100
+                let w = 20.0;
+                components.push(FactorComponent {
+                    name: "Beta 1Y".to_string(),
+                    value: format!("β {:.2}", one_y.beta),
+                    score, weight: w, contribution: score * w / 100.0,
+                });
+                weighted_sum += score * w;
+                total_weight += w;
+                inputs_available += 1;
+            }
+        }
+    }
+
+    // LIQ — weight 15. Thin liquidity = high risk.
+    if let Some(l) = liquidity {
+        if l.liquidity_tier != "INSUFFICIENT_DATA" && !l.liquidity_tier.is_empty() {
+            liquidity_tier = l.liquidity_tier.clone();
+            let score = match l.liquidity_tier.as_str() {
+                "DEEP" => 5.0,
+                "LIQUID" => 20.0,
+                "MODERATE" => 45.0,
+                "THIN" => 75.0,
+                "ILLIQUID" => 95.0,
+                _ => 50.0,
+            };
+            let w = 15.0;
+            components.push(FactorComponent {
+                name: "Liquidity".to_string(),
+                value: l.liquidity_tier.clone(),
+                score, weight: w, contribution: score * w / 100.0,
+            });
+            weighted_sum += score * w;
+            total_weight += w;
+            inputs_available += 1;
+        }
+    }
+
+    // SHRT — weight 15. High short % of float + days to cover = high squeeze / sentiment risk.
+    if let Some(s) = short_interest {
+        if s.squeeze_risk_label != "INSUFFICIENT_DATA" && !s.squeeze_risk_label.is_empty() {
+            short_percent_of_float = s.short_percent_of_float;
+            days_to_cover = s.days_to_cover;
+            let score = match s.squeeze_risk_label.as_str() {
+                "LOW" => 20.0,
+                "ELEVATED" => 55.0,
+                "HIGH" => 80.0,
+                "EXTREME" => 100.0,
+                _ => 40.0,
+            };
+            let w = 15.0;
+            components.push(FactorComponent {
+                name: "Short Interest".to_string(),
+                value: format!("{:.1}% float, {:.1} DTC ({})", s.short_percent_of_float, s.days_to_cover, s.squeeze_risk_label),
+                score, weight: w, contribution: score * w / 100.0,
+            });
+            weighted_sum += score * w;
+            total_weight += w;
+            inputs_available += 1;
+        }
+    }
+
+    // ALTZ — weight 25. DISTRESS zone = highest risk.
+    if let Some(a) = altman {
+        if a.zone != "INSUFFICIENT_DATA" && !a.zone.is_empty() {
+            altman_z = a.z_score;
+            altman_zone = a.zone.clone();
+            let score = match a.zone.as_str() {
+                "SAFE" => 10.0,
+                "GRAY" => 55.0,
+                "DISTRESS" => { distressed = true; 95.0 }
+                _ => 50.0,
+            };
+            let w = 25.0;
+            components.push(FactorComponent {
+                name: "Altman Z".to_string(),
+                value: format!("Z {:.2} ({})", a.z_score, a.zone),
+                score, weight: w, contribution: score * w / 100.0,
+            });
+            weighted_sum += score * w;
+            total_weight += w;
+            inputs_available += 1;
+        }
+    }
+
+    if inputs_available == 0 || total_weight <= 0.0 {
+        return RiskSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            risk_label: "NO_DATA".to_string(),
+            note: "need at least one of VOLE / BETA / LIQ / SHRT / ALTZ cached".to_string(),
+            ..Default::default()
+        };
+    }
+
+    let composite = (weighted_sum / total_weight).clamp(0.0, 100.0);
+    let label = if distressed { "DISTRESSED" }
+                else if composite >= 75.0 { "HIGH_RISK" }
+                else if composite >= 55.0 { "ELEVATED" }
+                else if composite >= 35.0 { "MODERATE" }
+                else { "LOW_RISK" };
+
+    RiskSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        realized_vol_pct,
+        beta_1y,
+        liquidity_tier,
+        short_percent_of_float,
+        days_to_cover,
+        altman_z,
+        altman_zone,
+        composite_score: composite,
+        risk_label: label.to_string(),
+        inputs_available,
+        components,
+        note: String::new(),
+    }
+}
+
+/// INSSTRK — Insider streak detector from cached Form 4 trades.
+pub fn compute_insstrk_snapshot(
+    symbol: &str,
+    as_of: &str,
+    trades: &[InsiderTrade],
+    window_days: i32,
+) -> InsiderStreakSnapshot {
+    let sym = symbol.to_uppercase();
+
+    let as_of_days = parse_yyyy_mm_dd_to_days(as_of);
+    let window_floor_days = as_of_days.map(|d| d - window_days as i64);
+
+    // Filter to window.
+    let mut filtered: Vec<&InsiderTrade> = trades.iter()
+        .filter(|t| {
+            let txn_days = parse_yyyy_mm_dd_to_days(&t.transaction_date);
+            match (txn_days, window_floor_days) {
+                (Some(td), Some(floor)) => td >= floor,
+                _ => true,
+            }
+        })
+        .collect();
+
+    if filtered.is_empty() {
+        return InsiderStreakSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            window_days,
+            streak_label: "NONE".to_string(),
+            note: "no insider trades within window".to_string(),
+            ..Default::default()
+        };
+    }
+
+    // Sort chronologically (oldest first) so streaks read naturally.
+    filtered.sort_by(|a, b| a.transaction_date.cmp(&b.transaction_date));
+
+    // Group by insider name.
+    use std::collections::BTreeMap;
+    let mut per_insider: BTreeMap<String, Vec<&InsiderTrade>> = BTreeMap::new();
+    for t in &filtered {
+        per_insider.entry(t.reporting_name.clone()).or_default().push(*t);
+    }
+
+    let unique_insiders = per_insider.len();
+    let mut rows: Vec<InsiderStreakRow> = Vec::new();
+    let mut buy_streak_count = 0usize;
+    let mut sell_streak_count = 0usize;
+    let mut longest_buy_streak = 0usize;
+    let mut longest_sell_streak = 0usize;
+    let mut net_buy_value_usd = 0.0;
+    let mut net_sell_value_usd = 0.0;
+
+    for (name, ts) in &per_insider {
+        // Classify each trade BUY/SELL/OTHER from transaction_type or acquisition_disposition.
+        let dir_of = |t: &InsiderTrade| -> &'static str {
+            let tt = t.transaction_type.to_uppercase();
+            if tt.starts_with("P") || tt.contains("PURCHASE") { return "BUY"; }
+            if tt.starts_with("S") || tt.contains("SALE") { return "SELL"; }
+            if t.acquisition_disposition.to_uppercase() == "A" { return "BUY"; }
+            if t.acquisition_disposition.to_uppercase() == "D" { return "SELL"; }
+            "OTHER"
+        };
+
+        // Longest consecutive run of same direction (BUY or SELL only, OTHER breaks).
+        let mut longest_run: usize = 0;
+        let mut longest_dir: &'static str = "MIXED";
+        let mut cur_run: usize = 0;
+        let mut cur_dir: &'static str = "";
+        for t in ts {
+            let d = dir_of(t);
+            if d == "OTHER" {
+                cur_run = 0;
+                cur_dir = "";
+                continue;
+            }
+            if d == cur_dir { cur_run += 1; }
+            else { cur_run = 1; cur_dir = d; }
+            if cur_run > longest_run {
+                longest_run = cur_run;
+                longest_dir = cur_dir;
+            }
+        }
+
+        // Net signed totals for this insider in window.
+        let mut net_value = 0.0;
+        let mut net_shares = 0.0;
+        let mut has_buy = false;
+        let mut has_sell = false;
+        for t in ts {
+            let d = dir_of(t);
+            if d == "BUY" { net_value += t.value_usd; net_shares += t.shares; has_buy = true; }
+            else if d == "SELL" { net_value -= t.value_usd; net_shares -= t.shares; has_sell = true; }
+        }
+
+        let mixed = has_buy && has_sell;
+        let row_dir = if mixed { "MIXED".to_string() }
+                      else if has_buy { "BUY".to_string() }
+                      else if has_sell { "SELL".to_string() }
+                      else { "OTHER".to_string() };
+
+        if row_dir == "BUY" && longest_run >= 2 { buy_streak_count += 1; }
+        if row_dir == "SELL" && longest_run >= 2 { sell_streak_count += 1; }
+        if longest_dir == "BUY" && longest_run > longest_buy_streak { longest_buy_streak = longest_run; }
+        if longest_dir == "SELL" && longest_run > longest_sell_streak { longest_sell_streak = longest_run; }
+        if row_dir == "BUY" { net_buy_value_usd += net_value.max(0.0); }
+        if row_dir == "SELL" { net_sell_value_usd += (-net_value).max(0.0); }
+
+        let first_date = ts.first().map(|t| t.transaction_date.clone()).unwrap_or_default();
+        let latest_date = ts.last().map(|t| t.transaction_date.clone()).unwrap_or_default();
+
+        rows.push(InsiderStreakRow {
+            insider_name: name.clone(),
+            streak_direction: row_dir,
+            consecutive_events: longest_run,
+            net_value_usd: net_value,
+            net_shares,
+            first_date,
+            latest_date,
+        });
+    }
+
+    // Sort rows: buys first, then by longest streak desc.
+    rows.sort_by(|a, b| {
+        let ka = match a.streak_direction.as_str() { "BUY" => 0, "SELL" => 1, "MIXED" => 2, _ => 3 };
+        let kb = match b.streak_direction.as_str() { "BUY" => 0, "SELL" => 1, "MIXED" => 2, _ => 3 };
+        ka.cmp(&kb).then(b.consecutive_events.cmp(&a.consecutive_events))
+    });
+
+    let label = if buy_streak_count >= 3 && longest_buy_streak >= 4 {
+        "STRONG_ACCUMULATION"
+    } else if sell_streak_count >= 3 && longest_sell_streak >= 4 {
+        "STRONG_DISTRIBUTION"
+    } else if buy_streak_count >= 2 && sell_streak_count >= 2 {
+        "MIXED"
+    } else if buy_streak_count >= 2 {
+        "ACCUMULATION"
+    } else if sell_streak_count >= 2 {
+        "DISTRIBUTION"
+    } else if buy_streak_count > 0 || sell_streak_count > 0 {
+        "MIXED"
+    } else {
+        "NONE"
+    };
+
+    InsiderStreakSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        window_days,
+        unique_insiders,
+        buy_streak_count,
+        sell_streak_count,
+        longest_buy_streak,
+        longest_sell_streak,
+        net_buy_value_usd,
+        net_sell_value_usd,
+        streak_label: label.to_string(),
+        rows,
+        note: String::new(),
+    }
+}
+
+/// COVG — Analyst coverage breadth + churn snapshot.
+pub fn compute_covg_snapshot(
+    symbol: &str,
+    as_of: &str,
+    price_target: Option<&PriceTarget>,
+    recs: &[AnalystRecommendation],
+    updm: Option<&UpdmSnapshot>,
+) -> CoverageSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut inputs_available = 0usize;
+
+    let mut num_analysts = 0;
+    let mut target_mean = 0.0;
+    let mut target_low = 0.0;
+    let mut target_high = 0.0;
+    if let Some(pt) = price_target {
+        num_analysts = pt.num_analysts;
+        target_mean = pt.target_mean;
+        target_low = pt.target_low;
+        target_high = pt.target_high;
+        if num_analysts > 0 || target_mean > 0.0 {
+            inputs_available += 1;
+        }
+    }
+
+    // Consensus distribution from latest AnalystRecommendation row (sorted chronologically).
+    let mut sb = 0; let mut b = 0; let mut h = 0; let mut s = 0; let mut ss = 0;
+    if !recs.is_empty() {
+        let mut sorted = recs.to_vec();
+        sorted.sort_by(|a, b| a.period.cmp(&b.period));
+        if let Some(latest) = sorted.last() {
+            sb = latest.strong_buy;
+            b = latest.buy;
+            h = latest.hold;
+            s = latest.sell;
+            ss = latest.strong_sell;
+            if (sb + b + h + s + ss) > 0 {
+                inputs_available += 1;
+            }
+        }
+    }
+    let total_recs = sb + b + h + s + ss;
+    let bull_ratio = if total_recs > 0 { (sb + b) as f64 / total_recs as f64 } else { 0.0 };
+
+    // UPDM — churn activity (upgrades/downgrades 90d).
+    let mut upgrades_90d = 0usize;
+    let mut downgrades_90d = 0usize;
+    let mut net_90d = 0i32;
+    if let Some(u) = updm {
+        if u.total_actions > 0 {
+            upgrades_90d = u.upgrades_90d;
+            downgrades_90d = u.downgrades_90d;
+            net_90d = u.net_90d;
+            inputs_available += 1;
+        }
+    }
+    let churn_90d = upgrades_90d + downgrades_90d;
+
+    if inputs_available == 0 {
+        return CoverageSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            coverage_label: "NONE".to_string(),
+            note: "need PriceTarget / AnalystRecommendations / UPDM cached".to_string(),
+            ..Default::default()
+        };
+    }
+
+    // Breadth — num_analysts normalized: ≥20 = 100, 0 = 0.
+    let breadth = ((num_analysts as f64 / 20.0) * 100.0).clamp(0.0, 100.0);
+    // Consensus — bull ratio × 100.
+    let consensus = (bull_ratio * 100.0).clamp(0.0, 100.0);
+    // Churn — net_90d centered at 50, ±5 per net action.
+    let churn = (50.0 + (net_90d as f64) * 5.0).clamp(0.0, 100.0);
+
+    let composite = breadth * 0.35 + consensus * 0.35 + churn * 0.30;
+
+    let label = if num_analysts > 0 && num_analysts < 5 {
+        "THIN"
+    } else if net_90d >= 3 && breadth >= 70.0 {
+        "EXPANDING"
+    } else if net_90d <= -3 {
+        "CONTRACTING"
+    } else if composite >= 50.0 {
+        "STABLE"
+    } else if inputs_available == 0 {
+        "NONE"
+    } else {
+        "STABLE"
+    };
+
+    CoverageSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        num_analysts,
+        target_mean,
+        target_low,
+        target_high,
+        consensus_strong_buy: sb,
+        consensus_buy: b,
+        consensus_hold: h,
+        consensus_sell: s,
+        consensus_strong_sell: ss,
+        consensus_total: total_recs,
+        consensus_bull_ratio: bull_ratio,
+        upgrades_90d,
+        downgrades_90d,
+        net_90d,
+        churn_90d,
+        breadth_score: breadth,
+        consensus_score: consensus,
+        churn_score: churn,
+        composite_score: composite,
+        coverage_label: label.to_string(),
+        inputs_available,
+        note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -9633,6 +10608,158 @@ pub fn get_margins(conn: &Connection, symbol: &str) -> Result<Option<MarginsSnap
         .map_err(|e| format!("prepare get_margins: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_margins: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_margins: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-122 Godel Parity Round 15 schema + helpers ─────────────────────────
+
+pub fn create_research_tables_v15(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_val (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_val_updated ON research_val(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_qual (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_qual_updated ON research_qual(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_risk (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_risk_updated ON research_risk(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_insstrk (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_insstrk_updated ON research_insstrk(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_covg (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_covg_updated ON research_covg(updated_at);",
+    ).map_err(|e| format!("create v15 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_val(conn: &Connection, symbol: &str, snap: &ValueSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v15(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("val json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_val(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert val: {e}"))?;
+    Ok(())
+}
+
+pub fn get_val(conn: &Connection, symbol: &str) -> Result<Option<ValueSnapshot>, String> {
+    let _ = create_research_tables_v15(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_val WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_val: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_val: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_val: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_qual(conn: &Connection, symbol: &str, snap: &QualitySnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v15(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("qual json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_qual(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert qual: {e}"))?;
+    Ok(())
+}
+
+pub fn get_qual(conn: &Connection, symbol: &str) -> Result<Option<QualitySnapshot>, String> {
+    let _ = create_research_tables_v15(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_qual WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_qual: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_qual: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_qual: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_risk(conn: &Connection, symbol: &str, snap: &RiskSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v15(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("risk json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_risk(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert risk: {e}"))?;
+    Ok(())
+}
+
+pub fn get_risk(conn: &Connection, symbol: &str) -> Result<Option<RiskSnapshot>, String> {
+    let _ = create_research_tables_v15(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_risk WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_risk: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_risk: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_risk: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_insstrk(conn: &Connection, symbol: &str, snap: &InsiderStreakSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v15(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("insstrk json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_insstrk(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert insstrk: {e}"))?;
+    Ok(())
+}
+
+pub fn get_insstrk(conn: &Connection, symbol: &str) -> Result<Option<InsiderStreakSnapshot>, String> {
+    let _ = create_research_tables_v15(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_insstrk WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_insstrk: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_insstrk: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_insstrk: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_covg(conn: &Connection, symbol: &str, snap: &CoverageSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v15(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("covg json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_covg(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert covg: {e}"))?;
+    Ok(())
+}
+
+pub fn get_covg(conn: &Connection, symbol: &str) -> Result<Option<CoverageSnapshot>, String> {
+    let _ = create_research_tables_v15(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_covg WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_covg: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_covg: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_covg: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -12758,5 +13885,301 @@ mod tests {
         let statements = FinancialStatements::default();
         let snap = compute_margins_snapshot("EEE", "2026-04-14", &statements);
         assert_eq!(snap.overall_trend_label, "INSUFFICIENT_DATA");
+    }
+
+    // ── ADR-122 Round 15 tests ─────────────────────────────────────────────
+
+    #[test]
+    fn val_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v15(&c).unwrap();
+        let snap = ValueSnapshot {
+            symbol: "VAL1".to_string(),
+            as_of: "2026-04-14".to_string(),
+            sector: "Technology".to_string(),
+            peers_considered: 9,
+            value_label: "VALUE".to_string(),
+            ..Default::default()
+        };
+        upsert_val(&c, "val1", &snap).unwrap();
+        let got = get_val(&c, "VAL1").unwrap().unwrap();
+        assert_eq!(got.value_label, "VALUE");
+        assert_eq!(got.peers_considered, 9);
+    }
+
+    #[test]
+    fn qual_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v15(&c).unwrap();
+        let snap = QualitySnapshot {
+            symbol: "QL1".to_string(),
+            as_of: "2026-04-14".to_string(),
+            quality_label: "HIGH_QUALITY".to_string(),
+            composite_score: 82.0,
+            ..Default::default()
+        };
+        upsert_qual(&c, "ql1", &snap).unwrap();
+        let got = get_qual(&c, "QL1").unwrap().unwrap();
+        assert_eq!(got.quality_label, "HIGH_QUALITY");
+    }
+
+    #[test]
+    fn risk_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v15(&c).unwrap();
+        let snap = RiskSnapshot {
+            symbol: "RK1".to_string(),
+            as_of: "2026-04-14".to_string(),
+            risk_label: "MODERATE".to_string(),
+            composite_score: 42.0,
+            ..Default::default()
+        };
+        upsert_risk(&c, "rk1", &snap).unwrap();
+        let got = get_risk(&c, "RK1").unwrap().unwrap();
+        assert_eq!(got.risk_label, "MODERATE");
+    }
+
+    #[test]
+    fn insstrk_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v15(&c).unwrap();
+        let snap = InsiderStreakSnapshot {
+            symbol: "INS1".to_string(),
+            as_of: "2026-04-14".to_string(),
+            window_days: 180,
+            unique_insiders: 4,
+            streak_label: "ACCUMULATION".to_string(),
+            ..Default::default()
+        };
+        upsert_insstrk(&c, "ins1", &snap).unwrap();
+        let got = get_insstrk(&c, "INS1").unwrap().unwrap();
+        assert_eq!(got.streak_label, "ACCUMULATION");
+    }
+
+    #[test]
+    fn covg_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v15(&c).unwrap();
+        let snap = CoverageSnapshot {
+            symbol: "CVG1".to_string(),
+            as_of: "2026-04-14".to_string(),
+            num_analysts: 18,
+            coverage_label: "STABLE".to_string(),
+            ..Default::default()
+        };
+        upsert_covg(&c, "cvg1", &snap).unwrap();
+        let got = get_covg(&c, "CVG1").unwrap().unwrap();
+        assert_eq!(got.coverage_label, "STABLE");
+    }
+
+    #[test]
+    fn compute_val_value_label() {
+        use crate::core::fundamentals::Fundamentals;
+        let subject = Fundamentals {
+            symbol: "SUB".to_string(),
+            pe_ratio: Some(10.0),
+            forward_pe: Some(9.0),
+            price_to_book: Some(1.0),
+            price_to_sales: Some(1.0),
+            ev_to_ebitda: Some(6.0),
+            ..Default::default()
+        };
+        let peers: Vec<Fundamentals> = (0..5).map(|i| Fundamentals {
+            symbol: format!("P{}", i),
+            pe_ratio: Some(20.0),
+            forward_pe: Some(18.0),
+            price_to_book: Some(3.0),
+            price_to_sales: Some(3.0),
+            ev_to_ebitda: Some(14.0),
+            ..Default::default()
+        }).collect();
+        let fcfy = FcfYieldSnapshot {
+            ttm_fcf_yield_pct: 8.0,
+            ..Default::default()
+        };
+        let peer_fcfy = vec![4.0, 4.0, 4.0, 4.0, 4.0];
+        let snap = compute_val_snapshot("SUB", "2026-04-14", "Technology", Some(&subject), &peers, Some(&fcfy), &peer_fcfy);
+        assert!(matches!(snap.value_label.as_str(), "DEEP_VALUE" | "VALUE"));
+        assert!(snap.composite_score >= 65.0);
+        assert_eq!(snap.inputs_available, 6);
+    }
+
+    #[test]
+    fn compute_val_no_data() {
+        let snap = compute_val_snapshot("SUB", "2026-04-14", "Technology", None, &[], None, &[]);
+        assert_eq!(snap.value_label, "NO_DATA");
+    }
+
+    #[test]
+    fn compute_qual_high_quality() {
+        let pt = PiotroskiSnapshot {
+            f_score: 8,
+            strength_label: "STRONG".to_string(),
+            ..Default::default()
+        };
+        let mg = MarginsSnapshot {
+            latest_operating_margin_pct: 28.0,
+            overall_trend_label: "EXPANDING".to_string(),
+            quality_label: "HIGH".to_string(),
+            ..Default::default()
+        };
+        let ac = AccrualsSnapshot {
+            ttm_cash_conversion_pct: 115.0,
+            trend_label: "IMPROVING".to_string(),
+            ..Default::default()
+        };
+        let lv = LeverageSnapshot {
+            total_debt: 100.0,
+            ebitda_ttm: 200.0,
+            solvency_summary: "HEALTHY".to_string(),
+            ..Default::default()
+        };
+        let snap = compute_qual_snapshot("QQ", "2026-04-14", Some(&pt), Some(&mg), Some(&ac), Some(&lv));
+        assert!(matches!(snap.quality_label.as_str(), "HIGH_QUALITY" | "QUALITY"));
+        assert_eq!(snap.inputs_available, 4);
+        assert!(snap.composite_score >= 70.0);
+    }
+
+    #[test]
+    fn compute_qual_no_inputs() {
+        let snap = compute_qual_snapshot("QQ", "2026-04-14", None, None, None, None);
+        assert_eq!(snap.quality_label, "NO_DATA");
+    }
+
+    #[test]
+    fn compute_risk_distressed() {
+        let altz = AltmanZSnapshot {
+            z_score: 1.2,
+            zone: "DISTRESS".to_string(),
+            ..Default::default()
+        };
+        let snap = compute_risk_snapshot("RK", "2026-04-14", None, None, None, None, Some(&altz));
+        assert_eq!(snap.risk_label, "DISTRESSED");
+    }
+
+    #[test]
+    fn compute_risk_low() {
+        let vole = OhlcVolSnapshot {
+            preferred_estimate_pct: 12.0,
+            preferred_label: "Yang-Zhang".to_string(),
+            ..Default::default()
+        };
+        let beta = BetaSnapshot {
+            windows: vec![BetaWindow {
+                window_label: "1Y".to_string(),
+                beta: 1.05,
+                n_observations: 252,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let liq = LiquiditySnapshot {
+            liquidity_tier: "DEEP".to_string(),
+            ..Default::default()
+        };
+        let altz = AltmanZSnapshot {
+            z_score: 4.5,
+            zone: "SAFE".to_string(),
+            ..Default::default()
+        };
+        let snap = compute_risk_snapshot("RK", "2026-04-14", Some(&vole), Some(&beta), Some(&liq), None, Some(&altz));
+        assert_eq!(snap.risk_label, "LOW_RISK");
+        assert_eq!(snap.inputs_available, 4);
+    }
+
+    #[test]
+    fn compute_risk_no_inputs() {
+        let snap = compute_risk_snapshot("RK", "2026-04-14", None, None, None, None, None);
+        assert_eq!(snap.risk_label, "NO_DATA");
+    }
+
+    #[test]
+    fn compute_insstrk_accumulation() {
+        let trades = vec![
+            InsiderTrade {
+                transaction_date: "2026-03-01".to_string(),
+                reporting_name: "Alice CFO".to_string(),
+                transaction_type: "P-Purchase".to_string(),
+                acquisition_disposition: "A".to_string(),
+                shares: 1_000.0,
+                value_usd: 50_000.0,
+                ..Default::default()
+            },
+            InsiderTrade {
+                transaction_date: "2026-03-10".to_string(),
+                reporting_name: "Alice CFO".to_string(),
+                transaction_type: "P-Purchase".to_string(),
+                acquisition_disposition: "A".to_string(),
+                shares: 1_000.0,
+                value_usd: 55_000.0,
+                ..Default::default()
+            },
+            InsiderTrade {
+                transaction_date: "2026-03-05".to_string(),
+                reporting_name: "Bob CEO".to_string(),
+                transaction_type: "P-Purchase".to_string(),
+                acquisition_disposition: "A".to_string(),
+                shares: 500.0,
+                value_usd: 25_000.0,
+                ..Default::default()
+            },
+            InsiderTrade {
+                transaction_date: "2026-03-20".to_string(),
+                reporting_name: "Bob CEO".to_string(),
+                transaction_type: "P-Purchase".to_string(),
+                acquisition_disposition: "A".to_string(),
+                shares: 500.0,
+                value_usd: 27_000.0,
+                ..Default::default()
+            },
+        ];
+        let snap = compute_insstrk_snapshot("INS", "2026-04-14", &trades, 180);
+        assert_eq!(snap.unique_insiders, 2);
+        assert!(matches!(snap.streak_label.as_str(), "ACCUMULATION" | "STRONG_ACCUMULATION" | "MIXED"));
+        assert!(snap.buy_streak_count >= 2);
+    }
+
+    #[test]
+    fn compute_insstrk_none() {
+        let snap = compute_insstrk_snapshot("INS", "2026-04-14", &[], 180);
+        assert_eq!(snap.streak_label, "NONE");
+    }
+
+    #[test]
+    fn compute_covg_stable() {
+        let pt = PriceTarget {
+            symbol: "CVG".to_string(),
+            target_mean: 150.0,
+            target_low: 120.0,
+            target_high: 180.0,
+            num_analysts: 18,
+            ..Default::default()
+        };
+        let recs = vec![
+            AnalystRecommendation {
+                period: "2026-04-01".to_string(),
+                strong_buy: 6,
+                buy: 8,
+                hold: 3,
+                sell: 1,
+                strong_sell: 0,
+            },
+        ];
+        let updm = UpdmSnapshot {
+            total_actions: 10,
+            upgrades_90d: 5,
+            downgrades_90d: 3,
+            net_90d: 2,
+            ..Default::default()
+        };
+        let snap = compute_covg_snapshot("CVG", "2026-04-14", Some(&pt), &recs, Some(&updm));
+        assert!(matches!(snap.coverage_label.as_str(), "STABLE" | "EXPANDING"));
+        assert_eq!(snap.inputs_available, 3);
+    }
+
+    #[test]
+    fn compute_covg_none() {
+        let snap = compute_covg_snapshot("CVG", "2026-04-14", None, &[], None);
+        assert_eq!(snap.coverage_label, "NONE");
     }
 }

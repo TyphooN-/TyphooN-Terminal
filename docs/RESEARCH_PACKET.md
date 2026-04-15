@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**sixty-two sub-blocks**, each of which is skipped silently when its data
+**sixty-seven sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -783,7 +783,84 @@ history table follows (up to **6 rows**) with gross / op / net %
 for each period. Returns INSUFFICIENT_DATA when the FA statements
 cache is empty. Source: ADR-121 MARGINS window.
 
-#### 2.62 Sector peer comparison
+#### 2.62 Value-Factor Composite (VAL — ADR-122)
+
+Pulled from `research::get_val`. Meta-composite that fuses six
+valuation ratios (P/E, Forward P/E, P/B, P/S, EV/EBITDA, FCF Yield)
+against sector-peer medians into a single 0-100 score with weights
+**25 / 15 / 15 / 15 / 20 / 10**. Header line gives the **value_label**
+(DEEP_VALUE / VALUE / FAIR / EXPENSIVE / PREMIUM / NO_DATA),
+composite score, inputs_available (0..6), and peers_considered +
+sector. Body block reports each metric and its sector median
+pairwise. A component table (up to **6 rows**) lists each populated
+component: name / value / score / weight % / contribution. Lower-
+better scoring (ratio ≤0.5× median → 100, ≥2.0× → 0); FCFY uses
+higher-better. Returns NO_DATA when no inputs usable. Source:
+ADR-122 VAL window.
+
+#### 2.63 Quality-Factor Composite (QUAL — ADR-122)
+
+Pulled from `research::get_qual`. Meta-composite that fuses Round 10
+PTFS (Piotroski F-score), Round 14 MARGINS (operating margin trend),
+Round 10 ACRL (cash conversion / accruals trend), and Round 10 LEV
+(leverage summary) into a single 0-100 score with weights **30 / 25 /
+25 / 20**. Header line gives the **quality_label** (HIGH_QUALITY /
+QUALITY / AVERAGE / POOR / WEAK / NO_DATA), composite score, and
+inputs_available (0..4). Body block reports Piotroski F + label,
+operating margin + trend, cash conversion + accruals trend, leverage
+summary + debt/EBITDA. A component table (up to **4 rows**) lists
+each populated component. Source: ADR-122 QUAL window.
+
+#### 2.64 Risk-Factor Composite (RISK — ADR-122)
+
+Pulled from `research::get_risk`. Meta-composite that fuses Round 8
+VOLE (realized vol), BETA (beta_1y), Round 13 LIQ (liquidity tier),
+Round 10 SHRT (short % float + DTC), and Round 10 ALTZ (Altman Z)
+into a single 0-100 score with weights **25 / 20 / 15 / 15 / 25**.
+**Higher composite = RISKIER.** Header line gives the **risk_label**
+(LOW_RISK / MODERATE / ELEVATED / HIGH_RISK / DISTRESSED / NO_DATA),
+composite score, and inputs_available (0..5). DISTRESSED is a
+single-factor veto from Altman Z zone — it overrides numeric
+thresholds. Body block reports realized vol, beta_1y, liquidity tier,
+short % float + days to cover, Altman Z + zone. A component table
+(up to **5 rows**) lists each populated component. Source: ADR-122
+RISK window.
+
+#### 2.65 Insider Streak Detector (INSSTRK — ADR-122)
+
+Pulled from `research::get_insstrk`. Pure post-processing over cached
+`InsiderTrade` rows (user-tunable window, default **180 days**).
+Groups trades by insider name, finds each insider's longest
+consecutive-direction run, tallies buy-streak / sell-streak counts,
+and emits a single **streak_label** (STRONG_ACCUMULATION /
+ACCUMULATION / DISTRIBUTION / STRONG_DISTRIBUTION / MIXED / NONE).
+Header line gives label, unique_insiders, window_days, and streak
+counts. Body block reports buy_streak_count, sell_streak_count,
+longest_buy_streak, longest_sell_streak, net buy / sell USD totals.
+Per-insider streak table (up to **8 rows**) lists name / direction /
+consecutive events / net $ / net shares / first + latest date.
+STRONG_ACCUMULATION fires when buy_streak_count ≥ 3 **and**
+longest_buy_streak ≥ 4; symmetric for distribution. BTreeMap-based
+grouping gives deterministic row ordering for LAN-sync byte parity.
+Source: ADR-122 INSSTRK window.
+
+#### 2.66 Analyst Coverage (COVG — ADR-122)
+
+Pulled from `research::get_covg`. Fuses Round 7 PriceTarget (coverage
+size), AnalystRecommendations (5-bucket consensus distribution), and
+Round 12 UPDM (90d upgrades / downgrades) into three sub-scores plus
+a composite. Header line gives the **coverage_label** (EXPANDING /
+STABLE / CONTRACTING / THIN / NONE), composite score, num_analysts,
+and inputs_available (0..3). Composite weights: breadth 35 /
+consensus 35 / churn 30. Body block reports num_analysts, target
+mean / low / high, 5-bucket consensus counts + total + bull_ratio,
+90d upgrades / downgrades / net / churn, and the three sub-scores.
+Label logic: THIN if num_analysts < 5; EXPANDING if net_90d ≥ 3 AND
+breadth ≥ 70; CONTRACTING if net_90d ≤ -3; STABLE otherwise.
+Churn score is centred at 50 (neutral) so "no activity" doesn't bias
+the composite down. Source: ADR-122 COVG window.
+
+#### 2.67 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -874,20 +951,27 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | Market regime fields (ADR-121 REGIME) | 8 k/v rows | Label, composite, realized vol + source, ADX + trend summary, 1Y return, Sharpe, 3 sub-scores, inputs |
 | Relative volume fields (ADR-121 RELVOL) | 6 k/v rows | Activity, direction, current+avg, rel-vol ratios, 5d-vs-20d trend, 60d percentile, bars used |
 | Margin trajectory rows (ADR-121 MARGINS) | 3×4 grid + ≤6 period rows | Gross/op/net margin (latest/prior/Δpp/trend) + avg row + per-period history |
+| Value-factor composite fields (ADR-122 VAL) | 6 metric pairs + ≤6 component rows | Ratio vs sector median for P/E, Forward P/E, P/B, P/S, EV/EBITDA, FCF Yield |
+| Quality-factor composite fields (ADR-122 QUAL) | 8 k/v rows + ≤4 component rows | Piotroski, op margin + trend, cash conversion + trend, leverage summary, debt/EBITDA |
+| Risk-factor composite fields (ADR-122 RISK) | 7 k/v rows + ≤5 component rows | Realized vol, beta, liquidity tier, short%float + DTC, Altman Z + zone; higher = riskier |
+| Insider streak rows (ADR-122 INSSTRK) | 8 k/v rows + ≤8 per-insider rows | Unique insiders, buy/sell streak counts, longest streaks, net $ totals |
+| Coverage breadth fields (ADR-122 COVG) | 12 k/v rows | Num analysts, target mean/low/high, consensus 5-bucket, bull ratio, 90d churn, 3 sub-scores |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **24-48 KB**
-(up from 22-44 KB after ADR-120; ADR-121 added five per-symbol blocks —
-GROWM / FLOW / REGIME / RELVOL / MARGINS — covering a GARP composite that
-fuses MOM+EARM+DIVG, a smart-money flow composite from cached INS+HDS, a
-market regime classifier that fuses VOLE+TECH+HRA, relative volume vs
-trailing averages (self-skew corrected), and a margin trajectory with
-quality bucket over cached FA statements — all pure compute over cached
-Round 7/8/10+11/12/13 snapshots with zero new API dependencies); a
-10-symbol basket lands near **230-460 KB** (the global context is
-emitted only once, so multi-symbol overhead is still bounded by the
-per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **26-52 KB**
+(up from 24-48 KB after ADR-121; ADR-122 added five per-symbol blocks —
+VAL / QUAL / RISK / INSSTRK / COVG — covering a value-factor composite
+that fuses six valuation ratios against sector-peer medians, a quality
+composite from PTFS+MARGINS+ACRL+LEV, a risk composite from
+VOLE+BETA+LIQ+SHRT+ALTZ (higher = riskier, with Altman-Z distress
+veto), an insider streak detector that groups cached InsiderTrade rows
+by insider and flags cluster buying/selling, and an analyst-coverage
+breadth + churn composite from PriceTarget+AnalystRecs+UPDM — all
+pure compute over cached Round 7/8/10-14 snapshots with zero new API
+dependencies); a 10-symbol basket lands near **250-500 KB** (the
+global context is emitted only once, so multi-symbol overhead is still
+bounded by the per-symbol blocks).
 
 ---
 
@@ -1087,6 +1171,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_regime` | SQLite `research_regime` | ADR-121 REGIME window (fuses VOLE+TECH+HRA) |
 | `research::get_relvol` | SQLite `research_relvol` | ADR-121 RELVOL window (over cached HP bars) |
 | `research::get_margins` | SQLite `research_margins` | ADR-121 MARGINS window (over cached FA statements) |
+| `research::get_val` | SQLite `research_val` | ADR-122 VAL window (fuses 6 valuation ratios vs sector-peer medians) |
+| `research::get_qual` | SQLite `research_qual` | ADR-122 QUAL window (fuses PTFS+MARGINS+ACRL+LEV) |
+| `research::get_risk` | SQLite `research_risk` | ADR-122 RISK window (fuses VOLE+BETA+LIQ+SHRT+ALTZ, higher = riskier) |
+| `research::get_insstrk` | SQLite `research_insstrk` | ADR-122 INSSTRK window (groups cached InsiderTrade rows by insider) |
+| `research::get_covg` | SQLite `research_covg` | ADR-122 COVG window (fuses PriceTarget+AnalystRecs+UPDM) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -1123,4 +1212,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 — Godel parity research surfaces
