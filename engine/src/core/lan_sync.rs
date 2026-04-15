@@ -258,6 +258,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_hitrate",
     "research_glasym",
     "research_volratio",
+    // ── ADR-132 Round 24 ────────────────────────────
+    "research_drawup",
+    "research_gapstats",
+    "research_volcluster",
+    "research_closeplc",
+    "research_mrhl",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -1169,6 +1175,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-132 Round 24 ──
+        "research_drawup" => Some(
+            "CREATE TABLE IF NOT EXISTS research_drawup (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_gapstats" => Some(
+            "CREATE TABLE IF NOT EXISTS research_gapstats (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_volcluster" => Some(
+            "CREATE TABLE IF NOT EXISTS research_volcluster (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_closeplc" => Some(
+            "CREATE TABLE IF NOT EXISTS research_closeplc (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_mrhl" => Some(
+            "CREATE TABLE IF NOT EXISTS research_mrhl (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -1293,6 +1335,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_hitrate" => Some("updated_at"),
         "research_glasym" => Some("updated_at"),
         "research_volratio" => Some("updated_at"),
+        "research_drawup" => Some("updated_at"),
+        "research_gapstats" => Some("updated_at"),
+        "research_volcluster" => Some("updated_at"),
+        "research_closeplc" => Some("updated_at"),
+        "research_mrhl" => Some("updated_at"),
         _ => None,
     }
 }

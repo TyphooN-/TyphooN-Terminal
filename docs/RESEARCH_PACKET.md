@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**one hundred and eight sub-blocks**, each of which is skipped silently when its data
+**one hundred and thirteen sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -1420,7 +1420,82 @@ Complements RSTATS / AUTOCOR / DAYRANGE (all price-only) with
 the one volume-derived HP surface in the Round 23 bundle.
 Source: ADR-131 VOLRATIO window.
 
-#### 2.107 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.107 Rally History (DRAWUP — ADR-132)
+
+Pulled from `research::get_drawup`. Pure symbol-local HP stat over the
+trailing 253-session window. Upside mirror of DDHIST (ADR-127):
+tracks running minimum close, reports the deepest peak-from-trough
+advance `max_drawup_pct` (with trough date and peak date), the
+longest rally duration in sessions, the count of local-trough-to-peak
+advances ≥5% and ≥10%, and `current_drawup_pct` (latest close vs
+running trough). Header gives **rally_label** (MUTED ≤5% / MILD ≤10% /
+MEANINGFUL ≤20% / STRONG ≤50% / EXPLOSIVE >50% / INSUFFICIENT_DATA).
+Complements DDHIST one-for-one: the pair of surfaces gives the full
+peak-trough-peak-trough history view. Source: ADR-132 DRAWUP window.
+
+#### 2.108 Overnight Gap Statistics (GAPSTATS — ADR-132)
+
+Pulled from `research::get_gapstats`. Pure symbol-local HP stat — the
+first surface in the packet to read `bar.open`. Iterates trailing-
+window bar pairs computing `gap_t = (open_t - close_{t-1}) /
+close_{t-1}`; a gap is "real" if |gap| > 0.5%. Header gives
+**bias_label** (DOWN_BIAS ≤ -0.25% / SLIGHT_DOWN ≤ -0.1% / NEUTRAL /
+SLIGHT_UP ≥ 0.1% / UP_BIAS ≥ 0.25% / INSUFFICIENT_DATA) computed
+from the signed average gap. Body reports bars_used, gap_up / gap_down
+counts, `gap_frequency_pct`, avg signed gap, avg up / down gap
+magnitudes, and the single largest up and down gaps in the window.
+Useful for reading whether a name has a systematic overnight skew
+(often visible on earnings-heavy or news-driven names). Source:
+ADR-132 GAPSTATS window.
+
+#### 2.109 Volatility Clustering (VOLCLUSTER — ADR-132)
+
+Pulled from `research::get_volcluster`. Pure symbol-local HP stat
+over the trailing 253-session window. Canonical GARCH-effect test:
+ACF of squared log returns and absolute log returns at lags 1 / 5 /
+20. Header gives **cluster_label** (NONE ≤0.05 / MILD ≤0.15 /
+MODERATE ≤0.3 / STRONG ≤0.5 / VERY_STRONG >0.5 / INSUFFICIENT_DATA)
+bucketed from |r| lag-1 ACF, the most common reference metric. Body
+reports bars_used, |r| ACF at lags 1 / 5 / 20, and r² ACF at lags
+1 / 5 / 20. Complements AUTOCOR (ADR-131) one-to-one: return ACF
+measures *directional* persistence, vol ACF measures *magnitude*
+persistence. A name can have zero return ACF (random direction)
+while still exhibiting strong volatility clustering ("big moves
+follow big moves"). Source: ADR-132 VOLCLUSTER window.
+
+#### 2.110 Close Placement (CLOSEPLC — ADR-132)
+
+Pulled from `research::get_closeplc`. Pure symbol-local HP stat over
+the trailing 253-session window. For each bar with `high > low`:
+`pos = (close - low) / (high - low)` ∈ [0, 1]. Averaged over the
+window, this captures bar "anatomy": near 1.0 → closes typically
+pin near the high (buyers in control); near 0.0 → closes near the
+low (sellers in control). Header gives **placement_label**
+(STRONG_BEAR ≤0.35 / BEAR ≤0.45 / NEUTRAL / BULL ≥0.55 /
+STRONG_BULL ≥0.65 / INSUFFICIENT_DATA). Body reports bars_used,
+avg / median / latest placement, and the share of bars that closed
+in the top 20% of the range (`pct_near_high`) and bottom 20%
+(`pct_near_low`). Skips flat bars (`high == low`) to avoid divide-
+by-zero. Source: ADR-132 CLOSEPLC window.
+
+#### 2.111 Mean-Reversion Half-Life (MRHL — ADR-132)
+
+Pulled from `research::get_mrhl`. Pure symbol-local HP stat over the
+trailing 253-session window. Fits `r_t = α + β r_{t-1} + ε` to log
+returns via two-pass OLS, then reports `half_life = -ln(2) / ln(β)`
+for `0 < β < 1` — the explicit "how many sessions until a shock
+decays to half its size" view. Header gives **regime_label**
+(FAST_REVERT / MEAN_REVERTING half-life ≤10 / NEUTRAL / PERSISTENT
+half-life ≥30 / STRONG_PERSISTENT half-life ≥60 / INSUFFICIENT_DATA).
+Body reports bars_used, AR(1) β / α / R², and half-life in sessions.
+Complements AUTOCOR (lag-k ACF) and HURST (multi-scale persistence)
+one-for-one: AUTOCOR answers "is there lag-1 dependence?", HURST
+answers "is there long-memory?", MRHL answers "how fast does a
+shock decay?". β ≤ 0 → FAST_REVERT with half-life 0 (same-period
+mean reversion); β ≥ 1 → INSUFFICIENT_DATA (explosive regime, should
+not occur on stationary log returns). Source: ADR-132 MRHL window.
+
+#### 2.112 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -1436,7 +1511,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.108 Sector peer comparison
+#### 2.113 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1467,7 +1542,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.102 above.
+articles to the per-symbol bag consumed by sub-block 2.112 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -1612,18 +1687,24 @@ Question section, not per-symbol.
 | Hit rate fields (ADR-131 HITRATE) | 3 k/v rows | Bars used + up/down/flat days + hitrate 5d/20d/60d/252d + hit label |
 | Gain/loss asymmetry fields (ADR-131 GLASYM) | 3 k/v rows | Bars used + up/down day counts + avg/median up & down pct + ratio + asymmetry label |
 | Up/down volume ratio fields (ADR-131 VOLRATIO) | 4 k/v rows | Bars used + up/down day counts + avg/median up & down volume + ratio + max up/down volume + flow label |
+| Rally history fields (ADR-132 DRAWUP) | 3 k/v rows | Bars used + max drawup % + trough/peak dates + longest rally days + rallies ≥5%/≥10% + current drawup + rally label |
+| Overnight gap stat fields (ADR-132 GAPSTATS) | 3 k/v rows | Bars used + gap up/down counts + frequency + avg/up/down gap pct + largest up/down gap + bias label |
+| Volatility clustering fields (ADR-132 VOLCLUSTER) | 2 k/v rows | Bars used + |r| ACF lag 1/5/20 + r² ACF lag 1/5/20 + cluster label |
+| Close placement fields (ADR-132 CLOSEPLC) | 2 k/v rows | Bars used + avg/median/latest placement + near-high/near-low % + placement label |
+| Mean-reversion half-life fields (ADR-132 MRHL) | 2 k/v rows | Bars used + AR(1) β/α + R² + half-life days + regime label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **42-82 KB**
-(up from 40-78 KB after ADR-130; ADR-131 adds five optional per-symbol
-blocks — AUTOCOR / HURST / HITRATE / GLASYM / VOLRATIO — each
+symbols. A single S&P 500 symbol now produces a packet around **44-86 KB**
+(up from 42-82 KB after ADR-131; ADR-132 adds five optional per-symbol
+blocks — DRAWUP / GAPSTATS / VOLCLUSTER / CLOSEPLC / MRHL — each
 measuring ~2-3 k/v rows and adding ~400-600 bytes when populated,
 for a typical +2 KB per symbol and +4 KB worst case; all five reuse
 the existing `research_historical_price` HP cache and the standard
-research-table LAN sync path with zero new API dependencies); a
-10-symbol basket now lands near **410-820 KB** when every symbol
+research-table LAN sync path with zero new API dependencies; GAPSTATS
+is the first HP-derived surface to read the `bar.open` column); a
+10-symbol basket now lands near **430-860 KB** when every symbol
 has a fully populated ingest bag (the global context and the Return
 Path footer are each emitted exactly once, so multi-symbol overhead
 is still bounded by the per-symbol blocks).
@@ -1871,6 +1952,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_hitrate` | SQLite `research_hitrate` | ADR-131 HITRATE window (multi-horizon hit rate 5d/20d/60d/252d + up/down/flat counts + bias label) |
 | `research::get_glasym` | SQLite `research_glasym` | ADR-131 GLASYM window (gain/loss magnitude asymmetry ratio + up/down day medians) |
 | `research::get_volratio` | SQLite `research_volratio` | ADR-131 VOLRATIO window (up-day vs down-day volume ratio with accumulation/distribution label) |
+| `research::get_drawup` | SQLite `research_drawup` | ADR-132 DRAWUP window (rally history mirror of DDHIST — deepest advance, longest rally, 5%/10% rally counts, current drawup with 5-way rally label) |
+| `research::get_gapstats` | SQLite `research_gapstats` | ADR-132 GAPSTATS window (overnight gap frequency + magnitude with up/down bias label; first HP surface to read `bar.open`) |
+| `research::get_volcluster` | SQLite `research_volcluster` | ADR-132 VOLCLUSTER window (ACF of r² and |r| at lags 1/5/20 — canonical GARCH-effect volatility clustering test with 5-way label) |
+| `research::get_closeplc` | SQLite `research_closeplc` | ADR-132 CLOSEPLC window (average `(close-low)/(high-low)` bar-anatomy stat + near-high/near-low shares with bull/bear label) |
+| `research::get_mrhl` | SQLite `research_mrhl` | ADR-132 MRHL window (AR(1) mean-reversion half-life via OLS fit on log returns with fast-revert/persistent label) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -1908,5 +1994,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)

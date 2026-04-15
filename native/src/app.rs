@@ -10113,6 +10113,17 @@ enum BrokerCmd {
     ComputeGlasymSnapshot { symbol: String },
     /// VOLRATIO — Up-day vs down-day volume ratio.
     ComputeVolratioSnapshot { symbol: String },
+    // ── ADR-132 Round 24 ──
+    /// DRAWUP — Upside rally history (mirror of DDHIST).
+    ComputeDrawupSnapshot { symbol: String },
+    /// GAPSTATS — Overnight gap frequency + magnitude.
+    ComputeGapstatsSnapshot { symbol: String },
+    /// VOLCLUSTER — ACF of squared / absolute returns (ARCH signature).
+    ComputeVolclusterSnapshot { symbol: String },
+    /// CLOSEPLC — Close placement within daily range.
+    ComputeCloseplcSnapshot { symbol: String },
+    /// MRHL — AR(1) mean-reversion half-life.
+    ComputeMrhlSnapshot { symbol: String },
     // ── ADR-130 web article ingestion ──
     /// Parse an AI agent reply, extract any `===TYPHOON_INGEST===` fenced
     /// blocks, and merge the discovered articles into the per-symbol
@@ -10469,6 +10480,17 @@ enum BrokerMsg {
     GlasymSnapshotMsg(String, typhoon_engine::core::research::GainLossAsymmetrySnapshot),
     /// VOLRATIO — Up/down volume ratio snapshot for a symbol.
     VolratioSnapshotMsg(String, typhoon_engine::core::research::VolumeRatioSnapshot),
+    // ── ADR-132 ──
+    /// DRAWUP — Rally history snapshot for a symbol.
+    DrawupSnapshotMsg(String, typhoon_engine::core::research::DrawupHistorySnapshot),
+    /// GAPSTATS — Overnight gap statistics snapshot for a symbol.
+    GapstatsSnapshotMsg(String, typhoon_engine::core::research::GapStatsSnapshot),
+    /// VOLCLUSTER — Volatility clustering snapshot for a symbol.
+    VolclusterSnapshotMsg(String, typhoon_engine::core::research::VolClusterSnapshot),
+    /// CLOSEPLC — Close placement snapshot for a symbol.
+    CloseplcSnapshotMsg(String, typhoon_engine::core::research::ClosePlacementSnapshot),
+    /// MRHL — Mean-reversion half-life snapshot for a symbol.
+    MrhlSnapshotMsg(String, typhoon_engine::core::research::MeanReversionHalfLifeSnapshot),
     // ── ADR-130 ──
     /// Result of an INGEST_RESEARCH operation: per-symbol counts of
     /// newly-added articles plus any parser/write errors encountered.
@@ -11900,6 +11922,37 @@ pub struct TyphooNApp {
     volratio_symbol: String,
     volratio_snapshot: typhoon_engine::core::research::VolumeRatioSnapshot,
     volratio_loading: bool,
+
+    // ── ADR-132 Round 24 ──
+    /// DRAWUP — Upside rally history (mirror of DDHIST).
+    show_drawup: bool,
+    drawup_symbol: String,
+    drawup_snapshot: typhoon_engine::core::research::DrawupHistorySnapshot,
+    drawup_loading: bool,
+
+    /// GAPSTATS — Overnight gap statistics.
+    show_gapstats: bool,
+    gapstats_symbol: String,
+    gapstats_snapshot: typhoon_engine::core::research::GapStatsSnapshot,
+    gapstats_loading: bool,
+
+    /// VOLCLUSTER — Volatility clustering autocorrelation.
+    show_volcluster: bool,
+    volcluster_symbol: String,
+    volcluster_snapshot: typhoon_engine::core::research::VolClusterSnapshot,
+    volcluster_loading: bool,
+
+    /// CLOSEPLC — Close placement within daily range.
+    show_closeplc: bool,
+    closeplc_symbol: String,
+    closeplc_snapshot: typhoon_engine::core::research::ClosePlacementSnapshot,
+    closeplc_loading: bool,
+
+    /// MRHL — AR(1) mean-reversion half-life.
+    show_mrhl: bool,
+    mrhl_symbol: String,
+    mrhl_snapshot: typhoon_engine::core::research::MeanReversionHalfLifeSnapshot,
+    mrhl_loading: bool,
 
     // ── ADR-130 Web article ingestion + packet viewer ──
     /// INGEST_RESEARCH — paste-in window where the user drops an AI
@@ -15428,6 +15481,82 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::VolratioSnapshotMsg(symbol, snap));
                         });
                     }
+                    // ── ADR-132 Round 24 handlers ──
+                    BrokerCmd::ComputeDrawupSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_drawup_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::DrawupSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeGapstatsSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_gapstats_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::GapstatsSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeVolclusterSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_volcluster_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::VolclusterSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeCloseplcSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_closeplc_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::CloseplcSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeMrhlSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_mrhl_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::MrhlSnapshotMsg(symbol, snap));
+                        });
+                    }
                     // ── ADR-130 web article ingestion handler ──
                     BrokerCmd::IngestResearchArticles { text, agent_override } => {
                         use typhoon_engine::core::research;
@@ -18101,6 +18230,27 @@ When the question touches recent news, sentiment, or prices, combine the researc
             volratio_symbol: String::new(),
             volratio_snapshot: typhoon_engine::core::research::VolumeRatioSnapshot::default(),
             volratio_loading: false,
+            // ── ADR-132 Round 24 defaults ──
+            show_drawup: false,
+            drawup_symbol: String::new(),
+            drawup_snapshot: typhoon_engine::core::research::DrawupHistorySnapshot::default(),
+            drawup_loading: false,
+            show_gapstats: false,
+            gapstats_symbol: String::new(),
+            gapstats_snapshot: typhoon_engine::core::research::GapStatsSnapshot::default(),
+            gapstats_loading: false,
+            show_volcluster: false,
+            volcluster_symbol: String::new(),
+            volcluster_snapshot: typhoon_engine::core::research::VolClusterSnapshot::default(),
+            volcluster_loading: false,
+            show_closeplc: false,
+            closeplc_symbol: String::new(),
+            closeplc_snapshot: typhoon_engine::core::research::ClosePlacementSnapshot::default(),
+            closeplc_loading: false,
+            show_mrhl: false,
+            mrhl_symbol: String::new(),
+            mrhl_snapshot: typhoon_engine::core::research::MeanReversionHalfLifeSnapshot::default(),
+            mrhl_loading: false,
             // ── ADR-130 defaults ──
             show_ingest_research: false,
             ingest_research_text: String::new(),
@@ -21285,6 +21435,71 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                     }
 
+                    // ── ADR-132 Round 24 HP-local research surfaces ──
+                    if let Ok(Some(du)) = rx::get_drawup(&conn, &sym_upper) {
+                        if du.rally_label != "INSUFFICIENT_DATA" && !du.rally_label.is_empty() {
+                            let _ = writeln!(p, "### Rally History — DRAWUP ({}, as of {})", du.rally_label, du.as_of);
+                            let _ = writeln!(p, "- Bars {} · max drawup {:.2}% (trough {} → peak {})",
+                                du.bars_used, du.max_drawup_pct, du.max_drawup_trough_date, du.max_drawup_peak_date);
+                            let _ = writeln!(p, "- Longest rally {} sessions · current drawup {:.2}%",
+                                du.longest_drawup_days, du.current_drawup_pct);
+                            let _ = writeln!(p, "- Rallies ≥5% {} · rallies ≥10% {}",
+                                du.rallies_5pct, du.rallies_10pct);
+                            if !du.note.is_empty() { let _ = writeln!(p, "- Note: {}", du.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(gs)) = rx::get_gapstats(&conn, &sym_upper) {
+                        if gs.bias_label != "INSUFFICIENT_DATA" && !gs.bias_label.is_empty() {
+                            let _ = writeln!(p, "### Gap Statistics — GAPSTATS ({}, as of {})", gs.bias_label, gs.as_of);
+                            let _ = writeln!(p, "- Bars {} · gap-ups {} · gap-downs {} · frequency {:.1}%",
+                                gs.bars_used, gs.gap_up_count, gs.gap_down_count, gs.gap_frequency_pct);
+                            let _ = writeln!(p, "- Avg gap {:.3}% · avg up {:.3}% · avg down {:.3}%",
+                                gs.avg_gap_pct, gs.avg_gap_up_pct, gs.avg_gap_down_pct);
+                            let _ = writeln!(p, "- Largest up {:.2}% · largest down {:.2}%",
+                                gs.largest_gap_up_pct, gs.largest_gap_down_pct);
+                            if !gs.note.is_empty() { let _ = writeln!(p, "- Note: {}", gs.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(vc)) = rx::get_volcluster(&conn, &sym_upper) {
+                        if vc.cluster_label != "INSUFFICIENT_DATA" && !vc.cluster_label.is_empty() {
+                            let _ = writeln!(p, "### Volatility Clustering — VOLCLUSTER ({}, as of {})", vc.cluster_label, vc.as_of);
+                            let _ = writeln!(p, "- Bars {} · |r| ACF lag1 {:.3} · lag5 {:.3} · lag20 {:.3}",
+                                vc.bars_used, vc.abs_acf_lag1, vc.abs_acf_lag5, vc.abs_acf_lag20);
+                            let _ = writeln!(p, "- r² ACF lag1 {:.3} · lag5 {:.3} · lag20 {:.3}",
+                                vc.sq_acf_lag1, vc.sq_acf_lag5, vc.sq_acf_lag20);
+                            if !vc.note.is_empty() { let _ = writeln!(p, "- Note: {}", vc.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(cp)) = rx::get_closeplc(&conn, &sym_upper) {
+                        if cp.placement_label != "INSUFFICIENT_DATA" && !cp.placement_label.is_empty() {
+                            let _ = writeln!(p, "### Close Placement — CLOSEPLC ({}, as of {})", cp.placement_label, cp.as_of);
+                            let _ = writeln!(p, "- Bars {} · avg {:.3} · median {:.3} · latest {:.3}",
+                                cp.bars_used, cp.avg_placement, cp.median_placement, cp.latest_placement);
+                            let _ = writeln!(p, "- Near-high share {:.1}% · near-low share {:.1}%",
+                                cp.pct_near_high, cp.pct_near_low);
+                            if !cp.note.is_empty() { let _ = writeln!(p, "- Note: {}", cp.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(mr)) = rx::get_mrhl(&conn, &sym_upper) {
+                        if mr.regime_label != "INSUFFICIENT_DATA" && !mr.regime_label.is_empty() {
+                            let _ = writeln!(p, "### Mean-Reversion Half-Life — MRHL ({}, as of {})", mr.regime_label, mr.as_of);
+                            let _ = writeln!(p, "- Bars {} · AR(1) β {:.4} · α {:.6} · R² {:.3}",
+                                mr.bars_used, mr.beta, mr.alpha, mr.r_squared);
+                            let _ = writeln!(p, "- Half-life {:.1} sessions",
+                                mr.half_life_days);
+                            if !mr.note.is_empty() { let _ = writeln!(p, "- Note: {}", mr.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
                     // ── ADR-130 prior-ingested web research (if any) ──
                     if let Ok(Some(ing)) = rx::get_ingested_articles(&conn, &sym_upper) {
                         if !ing.articles.is_empty() {
@@ -23835,6 +24050,87 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         if let Ok(conn) = cache.connection() {
                             if let Ok(Some(snap)) = typhoon_engine::core::research::get_volratio(&conn, &self.volratio_symbol) {
                                 self.volratio_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            // ── ADR-132 Round 24 palette ──
+            "DRAWUP" | "DRAW_UP" | "RALLYHIST" | "RALLY_HISTORY" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.drawup_symbol = sym; }
+                self.show_drawup = true;
+                if self.drawup_snapshot.symbol.is_empty() && !self.drawup_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_drawup(&conn, &self.drawup_symbol) {
+                                self.drawup_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "GAPSTATS" | "GAP_STATS" | "GAP" | "OVERNIGHT_GAP" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.gapstats_symbol = sym; }
+                self.show_gapstats = true;
+                if self.gapstats_snapshot.symbol.is_empty() && !self.gapstats_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_gapstats(&conn, &self.gapstats_symbol) {
+                                self.gapstats_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "VOLCLUSTER" | "VOL_CLUSTER" | "ARCH" | "VOLATILITYCLUSTER" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.volcluster_symbol = sym; }
+                self.show_volcluster = true;
+                if self.volcluster_snapshot.symbol.is_empty() && !self.volcluster_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_volcluster(&conn, &self.volcluster_symbol) {
+                                self.volcluster_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "CLOSEPLC" | "CLOSE_PLC" | "CLOSEPLACEMENT" | "CLOSE_PLACEMENT" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.closeplc_symbol = sym; }
+                self.show_closeplc = true;
+                if self.closeplc_snapshot.symbol.is_empty() && !self.closeplc_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_closeplc(&conn, &self.closeplc_symbol) {
+                                self.closeplc_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "MRHL" | "HALF_LIFE" | "HALFLIFE" | "AR1" | "MEAN_REVERT_HL" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.mrhl_symbol = sym; }
+                self.show_mrhl = true;
+                if self.mrhl_snapshot.symbol.is_empty() && !self.mrhl_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_mrhl(&conn, &self.mrhl_symbol) {
+                                self.mrhl_snapshot = snap;
                             }
                         }
                     }
@@ -41947,6 +42243,367 @@ When the question touches recent news, sentiment, or prices, combine the researc
             self.show_volratio = open;
         }
 
+        // ── ADR-132 Round 24 windows ──
+        if self.show_drawup {
+            if self.drawup_symbol.is_empty() { self.drawup_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_drawup;
+            egui::Window::new("DRAWUP — Rally History")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.drawup_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.drawup_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.drawup_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_drawup(&conn, &sym_u) {
+                                        self.drawup_snapshot = snap;
+                                        self.drawup_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.drawup_symbol.to_uppercase();
+                            self.drawup_loading = true;
+                            self.drawup_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeDrawupSnapshot { symbol: sym });
+                        }
+                        if self.drawup_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.drawup_snapshot;
+                    if snap.symbol.is_empty() || snap.rally_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥20 bars.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.rally_label.as_str() {
+                            "STRONG" | "EXPLOSIVE" => UP,
+                            "MUTED" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — max drawup {:.2}% — {} bars — as of {}",
+                            snap.symbol, snap.rally_label, snap.max_drawup_pct, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("drawup_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Max drawup").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.max_drawup_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Trough → peak dates").small().strong());
+                            ui.label(egui::RichText::new(format!("{} → {}",
+                                if snap.max_drawup_trough_date.is_empty() { "—" } else { snap.max_drawup_trough_date.as_str() },
+                                if snap.max_drawup_peak_date.is_empty() { "—" } else { snap.max_drawup_peak_date.as_str() }
+                            )).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Longest drawup (days)").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.longest_drawup_days)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Rallies ≥5% / ≥10%").small().strong());
+                            ui.label(egui::RichText::new(format!("{} / {}", snap.rallies_5pct, snap.rallies_10pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Current drawup").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.current_drawup_pct)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_drawup = open;
+        }
+
+        if self.show_gapstats {
+            if self.gapstats_symbol.is_empty() { self.gapstats_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_gapstats;
+            egui::Window::new("GAPSTATS — Overnight Gap Statistics")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.gapstats_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.gapstats_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.gapstats_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_gapstats(&conn, &sym_u) {
+                                        self.gapstats_snapshot = snap;
+                                        self.gapstats_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.gapstats_symbol.to_uppercase();
+                            self.gapstats_loading = true;
+                            self.gapstats_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeGapstatsSnapshot { symbol: sym });
+                        }
+                        if self.gapstats_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.gapstats_snapshot;
+                    if snap.symbol.is_empty() || snap.bias_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥20 bars with valid open/close pairs.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.bias_label.as_str() {
+                            "UP_BIAS" | "SLIGHT_UP" => UP,
+                            "DOWN_BIAS" | "SLIGHT_DOWN" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — avg gap {:.3}% — {} bars — as of {}",
+                            snap.symbol, snap.bias_label, snap.avg_gap_pct, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("gapstats_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Gap up / down counts").small().strong());
+                            ui.label(egui::RichText::new(format!("{} / {}", snap.gap_up_count, snap.gap_down_count)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Gap frequency").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1}%", snap.gap_frequency_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Avg gap up / down %").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}% / {:.2}%", snap.avg_gap_up_pct, snap.avg_gap_down_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Largest gap up / down %").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}% / {:.2}%", snap.largest_gap_up_pct, snap.largest_gap_down_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Avg all-gap %").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.3}%", snap.avg_gap_pct)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_gapstats = open;
+        }
+
+        if self.show_volcluster {
+            if self.volcluster_symbol.is_empty() { self.volcluster_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_volcluster;
+            egui::Window::new("VOLCLUSTER — Volatility Clustering ACF")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.volcluster_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.volcluster_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.volcluster_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_volcluster(&conn, &sym_u) {
+                                        self.volcluster_snapshot = snap;
+                                        self.volcluster_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.volcluster_symbol.to_uppercase();
+                            self.volcluster_loading = true;
+                            self.volcluster_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeVolclusterSnapshot { symbol: sym });
+                        }
+                        if self.volcluster_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.volcluster_snapshot;
+                    if snap.symbol.is_empty() || snap.cluster_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 returns.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.cluster_label.as_str() {
+                            "NONE" => UP,
+                            "STRONG" | "VERY_STRONG" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — |r| lag1 ACF {:.3} — {} bars — as of {}",
+                            snap.symbol, snap.cluster_label, snap.abs_acf_lag1, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("volcluster_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("r² ACF (lag 1 / 5 / 20)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.3} / {:.3} / {:.3}",
+                                snap.sq_acf_lag1, snap.sq_acf_lag5, snap.sq_acf_lag20)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("|r| ACF (lag 1 / 5 / 20)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.3} / {:.3} / {:.3}",
+                                snap.abs_acf_lag1, snap.abs_acf_lag5, snap.abs_acf_lag20)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_volcluster = open;
+        }
+
+        if self.show_closeplc {
+            if self.closeplc_symbol.is_empty() { self.closeplc_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_closeplc;
+            egui::Window::new("CLOSEPLC — Close Placement in Daily Range")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.closeplc_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.closeplc_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.closeplc_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_closeplc(&conn, &sym_u) {
+                                        self.closeplc_snapshot = snap;
+                                        self.closeplc_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.closeplc_symbol.to_uppercase();
+                            self.closeplc_loading = true;
+                            self.closeplc_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeCloseplcSnapshot { symbol: sym });
+                        }
+                        if self.closeplc_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.closeplc_snapshot;
+                    if snap.symbol.is_empty() || snap.placement_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥20 bars with high > low.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.placement_label.as_str() {
+                            "STRONG_BULL" | "BULL" => UP,
+                            "STRONG_BEAR" | "BEAR" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — avg {:.3} — {} bars — as of {}",
+                            snap.symbol, snap.placement_label, snap.avg_placement, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("closeplc_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Mean / median placement").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.3} / {:.3}", snap.avg_placement, snap.median_placement)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Latest bar placement").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.3}", snap.latest_placement)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("% near high (>0.8)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1}%", snap.pct_near_high)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("% near low (<0.2)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1}%", snap.pct_near_low)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_closeplc = open;
+        }
+
+        if self.show_mrhl {
+            if self.mrhl_symbol.is_empty() { self.mrhl_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_mrhl;
+            egui::Window::new("MRHL — Mean-Reversion Half-Life (AR1)")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.mrhl_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.mrhl_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.mrhl_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_mrhl(&conn, &sym_u) {
+                                        self.mrhl_snapshot = snap;
+                                        self.mrhl_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.mrhl_symbol.to_uppercase();
+                            self.mrhl_loading = true;
+                            self.mrhl_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeMrhlSnapshot { symbol: sym });
+                        }
+                        if self.mrhl_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.mrhl_snapshot;
+                    if snap.symbol.is_empty() || snap.regime_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 returns.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.regime_label.as_str() {
+                            "PERSISTENT" | "STRONG_PERSISTENT" => UP,
+                            "FAST_REVERT" | "MEAN_REVERTING" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — β {:.3} — half-life {:.2}d — {} bars — as of {}",
+                            snap.symbol, snap.regime_label, snap.beta, snap.half_life_days, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("mrhl_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("AR(1) β").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.beta)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("AR(1) α").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.6}", snap.alpha)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Half-life (days)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.half_life_days)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("R²").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.r_squared)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_mrhl = open;
+        }
+
         // ── ADR-130 INGEST_RESEARCH window ──
         if self.show_ingest_research {
             let mut open = self.show_ingest_research;
@@ -50228,6 +50885,66 @@ impl eframe::App for TyphooNApp {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let _ = typhoon_engine::core::research::upsert_volratio(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::DrawupSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.drawup_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.drawup_snapshot = snap.clone();
+                        self.drawup_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_drawup(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::GapstatsSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.gapstats_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.gapstats_snapshot = snap.clone();
+                        self.gapstats_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_gapstats(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::VolclusterSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.volcluster_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.volcluster_snapshot = snap.clone();
+                        self.volcluster_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_volcluster(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::CloseplcSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.closeplc_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.closeplc_snapshot = snap.clone();
+                        self.closeplc_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_closeplc(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::MrhlSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.mrhl_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.mrhl_snapshot = snap.clone();
+                        self.mrhl_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_mrhl(&conn, &sym_u, &snap);
                         }
                     }
                 }

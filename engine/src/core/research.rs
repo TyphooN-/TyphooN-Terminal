@@ -2642,6 +2642,117 @@ pub struct VolumeRatioSnapshot {
     pub note: String,
 }
 
+// ── ADR-132 Round 24 — HP drawup/gap/vol-cluster/close-placement/AR(1) stats ──
+
+/// DRAWUP — Rally history (mirror of DDHIST).
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Tracks the running trough and each run from trough-to-peak: max
+/// drawup, longest duration, and count of ≥5% / ≥10% rallies.
+/// Complements DDHIST (ADR-127) with the upside equivalent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DrawupHistorySnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub max_drawup_pct: f64,           // deepest rally from a trough (positive)
+    pub max_drawup_trough_date: String,
+    pub max_drawup_peak_date: String,
+    pub longest_drawup_days: usize,    // sessions from trough to next failure or end of window
+    pub rallies_5pct: usize,           // count of local-trough-to-peak advances ≥5%
+    pub rallies_10pct: usize,          // count of local-trough-to-peak advances ≥10%
+    pub current_drawup_pct: f64,       // latest close vs running trough (positive or 0)
+    pub rally_label: String,           // "MUTED" | "MILD" | "MEANINGFUL" | "STRONG" | "EXPLOSIVE" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// GAPSTATS — Overnight gap statistics.
+/// Pure symbol-local HP stat. A "gap" is `(open_t - close_{t-1}) / close_{t-1}`.
+/// Reports gap frequency and magnitude in both directions plus the single
+/// largest gap up / down in the window. First surface in the packet to
+/// read the bar.open field rather than close-only. Label classifies the
+/// bias as UP_BIAS / NEUTRAL / DOWN_BIAS based on the average net gap.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GapStatsSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub gap_up_count: usize,           // gap > +0.5%
+    pub gap_down_count: usize,         // gap < -0.5%
+    pub avg_gap_pct: f64,              // mean of all gap %s
+    pub avg_gap_up_pct: f64,           // mean of up-gaps only
+    pub avg_gap_down_pct: f64,         // mean of down-gaps only
+    pub largest_gap_up_pct: f64,       // single largest gap up
+    pub largest_gap_down_pct: f64,     // single largest gap down (negative)
+    pub gap_frequency_pct: f64,        // (gap_up + gap_down) / total_bars * 100
+    pub bias_label: String,            // "DOWN_BIAS" | "SLIGHT_DOWN" | "NEUTRAL" | "SLIGHT_UP" | "UP_BIAS" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// VOLCLUSTER — Volatility clustering autocorrelation.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// ACF of squared returns and |returns| — the canonical test for ARCH /
+/// GARCH effects. High |r| autocorrelation at lag 1 means "big moves
+/// follow big moves" (volatility clustering) even if AUTOCOR shows no
+/// serial dependence in return sign. Label is bucketed from lag-1 ACF
+/// of absolute returns because that's the most common reference metric.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VolClusterSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub sq_acf_lag1: f64,              // ACF of r² at lag 1
+    pub sq_acf_lag5: f64,
+    pub sq_acf_lag20: f64,
+    pub abs_acf_lag1: f64,             // ACF of |r| at lag 1
+    pub abs_acf_lag5: f64,
+    pub abs_acf_lag20: f64,
+    pub cluster_label: String,         // "NONE" | "MILD" | "MODERATE" | "STRONG" | "VERY_STRONG" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// CLOSEPLC — Close placement within daily range.
+/// Pure symbol-local HP stat. For each bar: `pos = (close - low) / (high - low)`
+/// (∈ [0, 1]). Averaged over the window, this captures bar "anatomy":
+/// near 1.0 → closes typically pin near the high (buyers in control),
+/// near 0.0 → closes near the low (sellers in control). Reports the
+/// share of bars that closed in the top 20% of the range ("near high")
+/// and bottom 20% ("near low") alongside the mean and median positions.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ClosePlacementSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,              // bars with high > low
+    pub avg_placement: f64,            // mean pos ∈ [0, 1]
+    pub median_placement: f64,         // median pos ∈ [0, 1]
+    pub latest_placement: f64,         // latest bar's pos
+    pub pct_near_high: f64,            // % of bars with pos > 0.8
+    pub pct_near_low: f64,             // % of bars with pos < 0.2
+    pub placement_label: String,       // "STRONG_BEAR" | "BEAR" | "NEUTRAL" | "BULL" | "STRONG_BULL" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// MRHL — Mean-reversion half-life via AR(1) fit.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Fits `r_t = α + β r_{t-1} + ε` to log returns, then reports
+/// half-life = -ln(2) / ln(|β|) for 0 < β < 1 (persistent regime with
+/// finite memory decay). β ≤ 0 → same-period mean reversion (label
+/// FAST_REVERT, half-life undefined). β ≥ 1 → explosive (shouldn't
+/// happen on stationary log returns). Complements AUTOCOR (lag ACF)
+/// and HURST (multi-scale persistence) with the explicit "how many
+/// days until a shock decays" view.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MeanReversionHalfLifeSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub beta: f64,                     // AR(1) slope
+    pub alpha: f64,                    // AR(1) intercept
+    pub half_life_days: f64,           // -ln(2) / ln(|β|) for β ∈ (0, 1); else 0
+    pub r_squared: f64,                // goodness-of-fit
+    pub regime_label: String,          // "FAST_REVERT" | "MEAN_REVERTING" | "NEUTRAL" | "PERSISTENT" | "STRONG_PERSISTENT" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -13277,6 +13388,401 @@ pub fn compute_volratio_snapshot(
     }
 }
 
+// ── ADR-132 Round 24 computes (DRAWUP / GAPSTATS / VOLCLUSTER / CLOSEPLC / MRHL) ──
+
+/// DRAWUP compute: trough-to-peak rally history over the trailing 253
+/// sessions. Mirror of `compute_ddhist_snapshot` — flip peak↔trough and
+/// drawdown↔drawup, keep everything else aligned.
+pub fn compute_drawup_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> DrawupHistorySnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 20 {
+        return DrawupHistorySnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: bars.len(),
+            rally_label: "INSUFFICIENT_DATA".into(),
+            note: "need ≥20 bars".into(),
+            ..Default::default()
+        };
+    }
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let start = if sorted.len() > 253 { sorted.len() - 253 } else { 0 };
+    let window = &sorted[start..];
+    let bars_used = window.len();
+    let mut running_trough = window[0].close;
+    let mut running_trough_idx = 0usize;
+    let mut running_trough_date = window[0].date.clone();
+    let mut max_du_pct = 0.0f64;
+    let mut max_du_trough_date = String::new();
+    let mut max_du_peak_date = String::new();
+    let mut longest_du_days = 0usize;
+    let mut current_du_start: Option<(usize, String)> = None;
+    let mut rallies_5 = 0usize;
+    let mut rallies_10 = 0usize;
+    let mut in_rally = false;
+    let mut rally_trough = window[0].close;
+    for (i, bar) in window.iter().enumerate() {
+        let c = bar.close;
+        if c <= 0.0 { continue; }
+        if c <= running_trough {
+            if let Some((trough_idx, _)) = &current_du_start {
+                let duration = i - trough_idx;
+                if duration > longest_du_days { longest_du_days = duration; }
+            }
+            current_du_start = None;
+            running_trough = c;
+            running_trough_idx = i;
+            running_trough_date = bar.date.clone();
+            if in_rally {
+                let height = (c - rally_trough) / rally_trough * 100.0;
+                if height >= 10.0 { rallies_10 += 1; }
+                if height >= 5.0 { rallies_5 += 1; }
+                in_rally = false;
+            }
+            rally_trough = c;
+        } else {
+            if current_du_start.is_none() {
+                current_du_start = Some((running_trough_idx, running_trough_date.clone()));
+            }
+            let du = (c - running_trough) / running_trough * 100.0;
+            if du > max_du_pct {
+                max_du_pct = du;
+                max_du_trough_date = running_trough_date.clone();
+                max_du_peak_date = bar.date.clone();
+            }
+            if c > rally_trough {
+                in_rally = true;
+            }
+        }
+    }
+    if let Some((trough_idx, _)) = &current_du_start {
+        let duration = window.len().saturating_sub(*trough_idx);
+        if duration > longest_du_days { longest_du_days = duration; }
+    }
+    if in_rally {
+        let last = window.last().map(|r| r.close).unwrap_or(rally_trough);
+        let height = (last - rally_trough) / rally_trough * 100.0;
+        if height >= 10.0 { rallies_10 += 1; }
+        if height >= 5.0 { rallies_5 += 1; }
+    }
+    let latest = window.last().map(|r| r.close).unwrap_or(0.0);
+    let current_du = if latest > 0.0 && running_trough > 0.0 {
+        (latest - running_trough) / running_trough * 100.0
+    } else { 0.0 };
+    let label = if max_du_pct < 5.0 {
+        "MUTED"
+    } else if max_du_pct < 10.0 {
+        "MILD"
+    } else if max_du_pct < 20.0 {
+        "MEANINGFUL"
+    } else if max_du_pct < 40.0 {
+        "STRONG"
+    } else {
+        "EXPLOSIVE"
+    };
+    DrawupHistorySnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used,
+        max_drawup_pct: max_du_pct,
+        max_drawup_trough_date: max_du_trough_date,
+        max_drawup_peak_date: max_du_peak_date,
+        longest_drawup_days: longest_du_days,
+        rallies_5pct: rallies_5,
+        rallies_10pct: rallies_10,
+        current_drawup_pct: current_du,
+        rally_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// GAPSTATS compute: gap frequency and magnitude over trailing 253 sessions.
+/// A "gap" is `(open_t - close_{t-1}) / close_{t-1}`. Counts only |gap| > 0.5%
+/// as a real gap (avoids counting normal micro-noise).
+pub fn compute_gapstats_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> GapStatsSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let window: Vec<&HistoricalPriceRow> = sorted.iter().rev().take(253).rev().copied().collect();
+    if window.len() < 20 {
+        return GapStatsSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            bias_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} bars", window.len()),
+            ..Default::default()
+        };
+    }
+    let mut all_gaps: Vec<f64> = Vec::new();
+    let mut up_gaps: Vec<f64> = Vec::new();
+    let mut down_gaps: Vec<f64> = Vec::new();
+    let mut largest_up = 0.0f64;
+    let mut largest_down = 0.0f64;
+    for w in window.windows(2) {
+        let prev_close = w[0].close;
+        let curr_open = w[1].open;
+        if prev_close <= 0.0 || curr_open <= 0.0 { continue; }
+        let gap_pct = (curr_open - prev_close) / prev_close * 100.0;
+        all_gaps.push(gap_pct);
+        if gap_pct > 0.5 {
+            up_gaps.push(gap_pct);
+            if gap_pct > largest_up { largest_up = gap_pct; }
+        } else if gap_pct < -0.5 {
+            down_gaps.push(gap_pct);
+            if gap_pct < largest_down { largest_down = gap_pct; }
+        }
+    }
+    if all_gaps.is_empty() {
+        return GapStatsSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            bias_label: "INSUFFICIENT_DATA".into(),
+            note: "no usable open/close pairs".into(),
+            ..Default::default()
+        };
+    }
+    let avg_all: f64 = all_gaps.iter().sum::<f64>() / all_gaps.len() as f64;
+    let avg_up = if up_gaps.is_empty() { 0.0 } else { up_gaps.iter().sum::<f64>() / up_gaps.len() as f64 };
+    let avg_down = if down_gaps.is_empty() { 0.0 } else { down_gaps.iter().sum::<f64>() / down_gaps.len() as f64 };
+    let gap_freq = ((up_gaps.len() + down_gaps.len()) as f64) / all_gaps.len() as f64 * 100.0;
+    let label = if avg_all <= -0.15 {
+        "DOWN_BIAS"
+    } else if avg_all <= -0.05 {
+        "SLIGHT_DOWN"
+    } else if avg_all < 0.05 {
+        "NEUTRAL"
+    } else if avg_all < 0.15 {
+        "SLIGHT_UP"
+    } else {
+        "UP_BIAS"
+    };
+    GapStatsSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: window.len(),
+        gap_up_count: up_gaps.len(),
+        gap_down_count: down_gaps.len(),
+        avg_gap_pct: avg_all,
+        avg_gap_up_pct: avg_up,
+        avg_gap_down_pct: avg_down,
+        largest_gap_up_pct: largest_up,
+        largest_gap_down_pct: largest_down,
+        gap_frequency_pct: gap_freq,
+        bias_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// VOLCLUSTER compute: ACF of r² and |r| at lags 1/5/20. Classical ARCH test.
+pub fn compute_volcluster_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> VolClusterSnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return VolClusterSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            cluster_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} returns", log_rets.len()),
+            ..Default::default()
+        };
+    }
+    let sq: Vec<f64> = log_rets.iter().map(|r| r * r).collect();
+    let abs: Vec<f64> = log_rets.iter().map(|r| r.abs()).collect();
+    let sq1 = acf_at_lag(&sq, 1);
+    let sq5 = acf_at_lag(&sq, 5);
+    let sq20 = acf_at_lag(&sq, 20);
+    let a1 = acf_at_lag(&abs, 1);
+    let a5 = acf_at_lag(&abs, 5);
+    let a20 = acf_at_lag(&abs, 20);
+    let label = if a1 < 0.05 {
+        "NONE"
+    } else if a1 < 0.15 {
+        "MILD"
+    } else if a1 < 0.25 {
+        "MODERATE"
+    } else if a1 < 0.40 {
+        "STRONG"
+    } else {
+        "VERY_STRONG"
+    };
+    VolClusterSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: window.len(),
+        sq_acf_lag1: sq1,
+        sq_acf_lag5: sq5,
+        sq_acf_lag20: sq20,
+        abs_acf_lag1: a1,
+        abs_acf_lag5: a5,
+        abs_acf_lag20: a20,
+        cluster_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// CLOSEPLC compute: average `(close - low) / (high - low)` placement.
+pub fn compute_closeplc_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> ClosePlacementSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let window: Vec<&HistoricalPriceRow> = sorted.iter().rev().take(253).rev().copied().collect();
+    if window.len() < 20 {
+        return ClosePlacementSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: 0,
+            placement_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} bars", window.len()),
+            ..Default::default()
+        };
+    }
+    let mut positions: Vec<f64> = Vec::new();
+    let mut latest_placement = 0.5;
+    for bar in &window {
+        if bar.high > bar.low {
+            let pos = (bar.close - bar.low) / (bar.high - bar.low);
+            positions.push(pos);
+            latest_placement = pos;
+        }
+    }
+    if positions.len() < 20 {
+        return ClosePlacementSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: positions.len(),
+            placement_label: "INSUFFICIENT_DATA".into(),
+            note: "not enough non-flat bars".into(),
+            ..Default::default()
+        };
+    }
+    let avg: f64 = positions.iter().sum::<f64>() / positions.len() as f64;
+    let mut sorted_pos = positions.clone();
+    sorted_pos.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted_pos, 0.5);
+    let near_high = positions.iter().filter(|p| **p > 0.8).count() as f64 / positions.len() as f64 * 100.0;
+    let near_low = positions.iter().filter(|p| **p < 0.2).count() as f64 / positions.len() as f64 * 100.0;
+    let label = if avg < 0.3 {
+        "STRONG_BEAR"
+    } else if avg < 0.45 {
+        "BEAR"
+    } else if avg < 0.55 {
+        "NEUTRAL"
+    } else if avg < 0.7 {
+        "BULL"
+    } else {
+        "STRONG_BULL"
+    };
+    ClosePlacementSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: positions.len(),
+        avg_placement: avg,
+        median_placement: median,
+        latest_placement,
+        pct_near_high: near_high,
+        pct_near_low: near_low,
+        placement_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// MRHL compute: AR(1) fit `r_t = α + β r_{t-1} + ε` and derive half-life.
+pub fn compute_mrhl_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> MeanReversionHalfLifeSnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return MeanReversionHalfLifeSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            regime_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} returns", log_rets.len()),
+            ..Default::default()
+        };
+    }
+    let n = log_rets.len() - 1;
+    let x: Vec<f64> = log_rets[..n].to_vec();
+    let y: Vec<f64> = log_rets[1..].to_vec();
+    let nf = n as f64;
+    let mx: f64 = x.iter().sum::<f64>() / nf;
+    let my: f64 = y.iter().sum::<f64>() / nf;
+    let mut sxy = 0.0f64;
+    let mut sxx = 0.0f64;
+    let mut syy = 0.0f64;
+    for i in 0..n {
+        let dx = x[i] - mx;
+        let dy = y[i] - my;
+        sxy += dx * dy;
+        sxx += dx * dx;
+        syy += dy * dy;
+    }
+    if sxx < f64::EPSILON {
+        return MeanReversionHalfLifeSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            regime_label: "INSUFFICIENT_DATA".into(),
+            note: "zero variance in lagged series".into(),
+            ..Default::default()
+        };
+    }
+    let beta = sxy / sxx;
+    let alpha = my - beta * mx;
+    let r_squared = if syy > f64::EPSILON { (sxy * sxy) / (sxx * syy) } else { 0.0 };
+    let (half_life, label) = if beta <= 0.0 {
+        (0.0, "FAST_REVERT")
+    } else if beta >= 1.0 {
+        (0.0, "INSUFFICIENT_DATA")
+    } else {
+        let hl = -std::f64::consts::LN_2 / beta.ln();
+        let lbl = if beta < 0.15 {
+            "MEAN_REVERTING"
+        } else if beta < 0.35 {
+            "NEUTRAL"
+        } else if beta < 0.60 {
+            "PERSISTENT"
+        } else {
+            "STRONG_PERSISTENT"
+        };
+        (hl, lbl)
+    };
+    MeanReversionHalfLifeSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: window.len(),
+        beta,
+        alpha,
+        half_life_days: half_life,
+        r_squared,
+        regime_label: label.into(),
+        note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -16802,6 +17308,159 @@ pub fn get_volratio(conn: &Connection, symbol: &str) -> Result<Option<VolumeRati
         .map_err(|e| format!("prepare get_volratio: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_volratio: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_volratio: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-132 Round 24 schema + upsert/get ──
+
+pub fn create_research_tables_v25(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v24(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_drawup (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_drawup_updated ON research_drawup(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_gapstats (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_gapstats_updated ON research_gapstats(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_volcluster (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_volcluster_updated ON research_volcluster(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_closeplc (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_closeplc_updated ON research_closeplc(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_mrhl (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_mrhl_updated ON research_mrhl(updated_at);",
+    ).map_err(|e| format!("create v25 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_drawup(conn: &Connection, symbol: &str, snap: &DrawupHistorySnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v25(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("drawup json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_drawup(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert drawup: {e}"))?;
+    Ok(())
+}
+
+pub fn get_drawup(conn: &Connection, symbol: &str) -> Result<Option<DrawupHistorySnapshot>, String> {
+    let _ = create_research_tables_v25(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_drawup WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_drawup: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_drawup: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_drawup: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_gapstats(conn: &Connection, symbol: &str, snap: &GapStatsSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v25(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("gapstats json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_gapstats(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert gapstats: {e}"))?;
+    Ok(())
+}
+
+pub fn get_gapstats(conn: &Connection, symbol: &str) -> Result<Option<GapStatsSnapshot>, String> {
+    let _ = create_research_tables_v25(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_gapstats WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_gapstats: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_gapstats: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_gapstats: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_volcluster(conn: &Connection, symbol: &str, snap: &VolClusterSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v25(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("volcluster json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_volcluster(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert volcluster: {e}"))?;
+    Ok(())
+}
+
+pub fn get_volcluster(conn: &Connection, symbol: &str) -> Result<Option<VolClusterSnapshot>, String> {
+    let _ = create_research_tables_v25(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_volcluster WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_volcluster: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_volcluster: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_volcluster: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_closeplc(conn: &Connection, symbol: &str, snap: &ClosePlacementSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v25(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("closeplc json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_closeplc(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert closeplc: {e}"))?;
+    Ok(())
+}
+
+pub fn get_closeplc(conn: &Connection, symbol: &str) -> Result<Option<ClosePlacementSnapshot>, String> {
+    let _ = create_research_tables_v25(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_closeplc WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_closeplc: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_closeplc: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_closeplc: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_mrhl(conn: &Connection, symbol: &str, snap: &MeanReversionHalfLifeSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v25(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("mrhl json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_mrhl(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert mrhl: {e}"))?;
+    Ok(())
+}
+
+pub fn get_mrhl(conn: &Connection, symbol: &str) -> Result<Option<MeanReversionHalfLifeSnapshot>, String> {
+    let _ = create_research_tables_v25(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_mrhl WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_mrhl: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_mrhl: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_mrhl: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -22632,5 +23291,200 @@ Trailing text.
         let snap = compute_volratio_snapshot("X", "2026-04-15", &bars);
         assert_ne!(snap.flow_label, "INSUFFICIENT_DATA");
         assert!(snap.up_days > 0 && snap.down_days > 0);
+    }
+
+    // ── ADR-132 Round 24 tests ──
+
+    fn synthetic_gappy_bars() -> Vec<HistoricalPriceRow> {
+        // 40 bars with intentional overnight gaps (open ≠ prior close).
+        (0..40).map(|i| {
+            let prior_close = 100.0 + (i as f64);
+            let gap = if i % 5 == 0 { 1.5 } else if i % 7 == 0 { -1.2 } else { 0.2 };
+            let open = prior_close + gap;
+            let close = open + 0.3;
+            HistoricalPriceRow {
+                date: format!("2025-{:02}-{:02}", 1 + (i / 20) as u32, 1 + (i % 20) as u32),
+                open,
+                high: open + 0.8,
+                low: open - 0.6,
+                close,
+                adj_close: close,
+                volume: 1_000_000.0,
+                change: 0.3,
+                change_pct: 0.3,
+            }
+        }).collect()
+    }
+
+    #[test]
+    fn drawup_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = DrawupHistorySnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 200,
+            max_drawup_pct: 22.5,
+            max_drawup_trough_date: "2025-06-01".into(),
+            max_drawup_peak_date: "2025-09-15".into(),
+            longest_drawup_days: 45,
+            rallies_5pct: 4,
+            rallies_10pct: 2,
+            current_drawup_pct: 3.2,
+            rally_label: "STRONG".into(),
+            note: String::new(),
+        };
+        upsert_drawup(&c, "TEST", &snap).unwrap();
+        let got = get_drawup(&c, "TEST").unwrap().unwrap();
+        assert!((got.max_drawup_pct - 22.5).abs() < 1e-9);
+        assert_eq!(got.rally_label, "STRONG");
+    }
+
+    #[test]
+    fn drawup_compute_up_trend_is_explosive() {
+        let bars = synthetic_up_trend_bars();
+        let snap = compute_drawup_snapshot("X", "2026-04-15", &bars);
+        assert_ne!(snap.rally_label, "INSUFFICIENT_DATA");
+        assert!(snap.max_drawup_pct > 0.0);
+    }
+
+    #[test]
+    fn drawup_compute_insufficient() {
+        let snap = compute_drawup_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.rally_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn gapstats_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = GapStatsSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 252,
+            gap_up_count: 30,
+            gap_down_count: 25,
+            avg_gap_pct: 0.08,
+            avg_gap_up_pct: 1.5,
+            avg_gap_down_pct: -1.3,
+            largest_gap_up_pct: 6.2,
+            largest_gap_down_pct: -4.8,
+            gap_frequency_pct: 21.83,
+            bias_label: "SLIGHT_UP".into(),
+            note: String::new(),
+        };
+        upsert_gapstats(&c, "TEST", &snap).unwrap();
+        let got = get_gapstats(&c, "TEST").unwrap().unwrap();
+        assert_eq!(got.gap_up_count, 30);
+        assert_eq!(got.bias_label, "SLIGHT_UP");
+    }
+
+    #[test]
+    fn gapstats_compute_with_gaps() {
+        let bars = synthetic_gappy_bars();
+        let snap = compute_gapstats_snapshot("X", "2026-04-15", &bars);
+        assert_ne!(snap.bias_label, "INSUFFICIENT_DATA");
+        assert!(snap.gap_up_count > 0 || snap.gap_down_count > 0);
+    }
+
+    #[test]
+    fn gapstats_compute_insufficient() {
+        let snap = compute_gapstats_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.bias_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn volcluster_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = VolClusterSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 252,
+            sq_acf_lag1: 0.18,
+            sq_acf_lag5: 0.09,
+            sq_acf_lag20: 0.05,
+            abs_acf_lag1: 0.22,
+            abs_acf_lag5: 0.12,
+            abs_acf_lag20: 0.07,
+            cluster_label: "MODERATE".into(),
+            note: String::new(),
+        };
+        upsert_volcluster(&c, "TEST", &snap).unwrap();
+        let got = get_volcluster(&c, "TEST").unwrap().unwrap();
+        assert!((got.abs_acf_lag1 - 0.22).abs() < 1e-9);
+        assert_eq!(got.cluster_label, "MODERATE");
+    }
+
+    #[test]
+    fn volcluster_compute_insufficient() {
+        let snap = compute_volcluster_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.cluster_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn closeplc_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = ClosePlacementSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 200,
+            avg_placement: 0.65,
+            median_placement: 0.70,
+            latest_placement: 0.82,
+            pct_near_high: 35.0,
+            pct_near_low: 12.0,
+            placement_label: "BULL".into(),
+            note: String::new(),
+        };
+        upsert_closeplc(&c, "TEST", &snap).unwrap();
+        let got = get_closeplc(&c, "TEST").unwrap().unwrap();
+        assert!((got.avg_placement - 0.65).abs() < 1e-9);
+        assert_eq!(got.placement_label, "BULL");
+    }
+
+    #[test]
+    fn closeplc_compute_with_bars() {
+        let bars = synthetic_up_trend_bars();
+        let snap = compute_closeplc_snapshot("X", "2026-04-15", &bars);
+        assert_ne!(snap.placement_label, "INSUFFICIENT_DATA");
+        assert!(snap.avg_placement >= 0.0 && snap.avg_placement <= 1.0);
+    }
+
+    #[test]
+    fn closeplc_compute_insufficient() {
+        let snap = compute_closeplc_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.placement_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn mrhl_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = MeanReversionHalfLifeSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 252,
+            beta: 0.25,
+            alpha: 0.0001,
+            half_life_days: 0.5,
+            r_squared: 0.06,
+            regime_label: "NEUTRAL".into(),
+            note: String::new(),
+        };
+        upsert_mrhl(&c, "TEST", &snap).unwrap();
+        let got = get_mrhl(&c, "TEST").unwrap().unwrap();
+        assert!((got.beta - 0.25).abs() < 1e-9);
+        assert_eq!(got.regime_label, "NEUTRAL");
+    }
+
+    #[test]
+    fn mrhl_compute_insufficient() {
+        let snap = compute_mrhl_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.regime_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn mrhl_compute_with_bars() {
+        let bars = synthetic_mixed_bars();
+        let snap = compute_mrhl_snapshot("X", "2026-04-15", &bars);
+        assert_ne!(snap.regime_label, "INSUFFICIENT_DATA");
+        assert!(snap.beta.is_finite());
     }
 }
