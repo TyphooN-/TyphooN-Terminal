@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**seventy-two sub-blocks**, each of which is skipped silently when its data
+**seventy-seven sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -924,7 +924,71 @@ Requires ≥3 cached surprises and ≥11 HP bars per event (t0 + 10
 forward) for inclusion. BEAT / MISS / INLINE classification uses a
 ±1 % surprise threshold. Source: ADR-123 PEAD window.
 
-#### 2.72 Sector peer comparison
+#### 2.72 Size Factor (SIZEF — ADR-124)
+
+Pulled from `research::get_sizef`. Computes a sector-relative
+percentile rank of `log(market_cap)` plus an absolute tier label
+(MEGA_CAP ≥ $200B, LARGE_CAP ≥ $10B, MID_CAP ≥ $2B, SMALL_CAP ≥
+$300M, MICRO_CAP > $0). Header line gives tier + rank label +
+rank position within sector cohort + percentile. Body block
+reports subject market cap, log(cap), sector median / p25 / p75
+caps in $B, and peers considered / with data. Requires ≥3
+sector peers with positive market_cap in `get_all_fundamentals`.
+Source: ADR-124 SIZEF window.
+
+#### 2.73 Momentum Rank (MOMF — ADR-124)
+
+Pulled from `research::get_momf`. Sector-relative percentile rank
+of Round 10 `MomentumSnapshot.composite_score` within the same
+sector. Header line gives the **rank_label** (TOP_DECILE /
+TOP_QUARTILE / ABOVE_MEDIAN / BELOW_MEDIAN / BOTTOM_QUARTILE /
+BOTTOM_DECILE / NO_DATA), rank_position within the cohort, and
+raw percentile. Body block reports the subject composite, the
+sector median / p25 / p75, and peers_considered / peers_with_data.
+Peers with `regime_label == INSUFFICIENT_DATA` are dropped before
+ranking. Requires ≥3 sector peers with MOMENTUM cached. Source:
+ADR-124 MOMF window.
+
+#### 2.74 PEAD Rank (PEADRANK — ADR-124)
+
+Pulled from `research::get_peadrank`. Sector-relative percentile
+rank of `PeadSnapshot.avg_drift_5d_pct` within the same sector —
+answers "how does this name's post-earnings drift compare to its
+peers?" Header line gives the rank label, rank_position, and raw
+percentile. Body block reports the subject's avg 5d drift, the
+sector median / p25 / p75 5d drift percentages, and
+peers_considered / peers_with_data. Both subject and peers are
+filtered by `drift_direction_label != INSUFFICIENT_DATA &&
+events_used >= 3`. Source: ADR-124 PEADRANK window.
+
+#### 2.75 Fundamental Quality Meter (FQM — ADR-124)
+
+Pulled from `research::get_fqm`. A fused Piotroski + margins +
+accruals composite that deliberately excludes leverage (the
+differentiator from Round 15 QUAL). Weights: PTFS 40 / MARGINS 30
+/ ACRL 30. Header line gives the **operator_label** (ELITE_OPERATOR
+≥85 / STRONG_OPERATOR ≥70 / AVERAGE_OPERATOR ≥50 / WEAK_OPERATOR
+≥30 / BROKEN_OPERATOR <30 / NO_DATA) and composite score. Body
+block reports the Piotroski score + label, operating margin % +
+trend, cash conversion % + trend, and inputs_available (1-3).
+Emits a row whenever at least one of PTFS / MARGINS / ACRL is
+cached. Source: ADR-124 FQM window.
+
+#### 2.76 Relative Revenue Growth (REVRANK — ADR-124)
+
+Pulled from `research::get_revrank`. Computes the 3-year compound
+annual growth rate from `FinancialStatements.income_annual[].revenue`
+(requires ≥4 annual rows), compares to the sector median CAGR, and
+emits a gap-to-median in percentage points. Header line gives the
+**relative_label** (FAR_ABOVE / ABOVE / INLINE / BELOW / FAR_BELOW
+/ CAGR_NEGATIVE / INSUFFICIENT_DATA), gap_to_median_pp, and
+symbol_cagr_pct. Body block reports latest / earliest revenue in
+$B with years_used, the sector median / p25 / p75 CAGRs, and
+peers_considered / peers_with_data. CAGR_NEGATIVE is emitted when
+the revenue series has a non-positive endpoint (rare but handled
+for symmetry with RELEPSGR). Source: ADR-124 REVRANK window.
+
+#### 2.77 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1025,19 +1089,25 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | Risk rank fields (ADR-123 RRK) | 4 k/v rows | Subject composite (higher=riskier) + sector median/p25/p75 + SAFE percentile + rank position |
 | Relative EPS growth fields (ADR-123 RELEPSGR) | 4 k/v rows | Latest/earliest EPS, sector median/p25/p75 CAGR, gap-to-median in pp |
 | PEAD fields (ADR-123 PEAD) | 6 k/v rows + ≤8 event rows | Avg drift 1d/3d/5d/10d, BEAT/MISS breakouts, latest event, per-event detail table |
+| Size factor fields (ADR-124 SIZEF) | 4 k/v rows | Market cap + log(cap) + sector median/p25/p75 caps + percentile + rank position |
+| Momentum rank fields (ADR-124 MOMF) | 3 k/v rows | Subject momentum composite + sector median/p25/p75 + percentile + rank position |
+| PEAD rank fields (ADR-124 PEADRANK) | 3 k/v rows | Subject avg 5d drift + sector median/p25/p75 + percentile + rank position |
+| Fundamental quality meter fields (ADR-124 FQM) | 4 k/v rows | Piotroski, op margin + trend, cash conversion + trend, PTFS/MARGINS/ACRL components |
+| Relative revenue growth fields (ADR-124 REVRANK) | 4 k/v rows | Latest/earliest revenue, sector median/p25/p75 CAGR, gap-to-median in pp |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **28-55 KB**
-(up from 26-52 KB after ADR-122; ADR-123 added five per-symbol blocks —
-VRK / QRK / RRK / RELEPSGR / PEAD — covering sector-peer percentile
-ranks of the Round 15 VAL / QUAL / RISK composites (with RRK inverted
-so higher = safer), a relative-EPS-growth snapshot that compares the
-symbol's 3y EPS CAGR to the sector median, and a post-earnings-drift
-snapshot that joins cached EarningsSurprise rows with HP bars to
-measure average forward drift over 1/3/5/10 trading days — all pure
-compute over cached Round 7/8/10-15 snapshots with zero new API
-dependencies); a 10-symbol basket lands near **270-540 KB** (the
+symbols. A single S&P 500 symbol now produces a packet around **30-58 KB**
+(up from 28-55 KB after ADR-123; ADR-124 added five per-symbol blocks —
+SIZEF / MOMF / PEADRANK / FQM / REVRANK — covering a sector-relative
+size-factor rank (with an absolute MEGA/LARGE/MID/SMALL/MICRO tier
+label), percentile ranks of the Round 10 MOMENTUM and Round 16 PEAD
+snapshots within sector cohorts, a Piotroski+margins+accruals
+"fundamental quality meter" that deliberately excludes leverage to
+differentiate itself from QUAL, and a revenue-line twin to RELEPSGR
+that ranks the symbol's 3y revenue CAGR vs sector median — all pure
+compute over cached Round 7-16 snapshots with zero new API
+dependencies); a 10-symbol basket lands near **290-580 KB** (the
 global context is emitted only once, so multi-symbol overhead is still
 bounded by the per-symbol blocks).
 
@@ -1249,6 +1319,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_rrk` | SQLite `research_rrk` | ADR-123 RRK window (sector percentile rank of RISK composite, inverted) |
 | `research::get_relepsgr` | SQLite `research_relepsgr` | ADR-123 RELEPSGR window (3y EPS CAGR vs sector median CAGR) |
 | `research::get_pead` | SQLite `research_pead` | ADR-123 PEAD window (joins EarningsSurprise cache with HP bars) |
+| `research::get_sizef` | SQLite `research_sizef` | ADR-124 SIZEF window (sector percentile rank of log market cap + absolute tier) |
+| `research::get_momf` | SQLite `research_momf` | ADR-124 MOMF window (sector percentile rank of MOMENTUM composite) |
+| `research::get_peadrank` | SQLite `research_peadrank` | ADR-124 PEADRANK window (sector percentile rank of PEAD avg 5d drift) |
+| `research::get_fqm` | SQLite `research_fqm` | ADR-124 FQM window (fuses PTFS+MARGINS+ACRL, excludes leverage) |
+| `research::get_revrank` | SQLite `research_revrank` | ADR-124 REVRANK window (3y revenue CAGR vs sector median CAGR) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -1285,4 +1360,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 — Godel parity research surfaces
