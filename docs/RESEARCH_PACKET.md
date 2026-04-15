@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**seventy-seven sub-blocks**, each of which is skipped silently when its data
+**eighty-two sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -988,7 +988,74 @@ peers_considered / peers_with_data. CAGR_NEGATIVE is emitted when
 the revenue series has a non-positive endpoint (rare but handled
 for symmetry with RELEPSGR). Source: ADR-124 REVRANK window.
 
-#### 2.77 Sector peer comparison
+#### 2.77 Leverage Rank (LEVRANK — ADR-125)
+
+Pulled from `research::get_levrank`. Sector-relative percentile
+rank of **debt-to-equity** from the Round 15 LEV cache, computed
+with `higher_is_better=false` so a *lower* D/E earns a *higher*
+(safer) percentile. Header line gives the risk-inverted
+**rank_label** (SAFEST_DECILE / SAFE / ... / RISKIEST_DECILE /
+NEGATIVE_EQUITY / NO_DATA / INSUFFICIENT_DATA). Body block reports
+subject D/E, rank position within sector cohort, sector median /
+p25 / p75 D/E, and peers_considered / peers_with_data. The
+NEGATIVE_EQUITY branch fires when `total_equity <= 0` and replaces
+the rank line with raw total_debt / total_equity levels in $B.
+Source: ADR-125 LEVRANK window.
+
+#### 2.78 Operating Quality Rank (OPERANK — ADR-125)
+
+Pulled from `research::get_operank`. Sector-relative percentile
+rank of **`MarginsSnapshot.latest_operating_margin_pct`** from the
+Round 14 MARGINS cache. Isolates the pricing-power signal from
+the fused FQM/QUAL composites. Header line gives the standard
+**rank_label** (TOP_DECILE...BOTTOM_DECILE / NO_DATA /
+INSUFFICIENT_DATA), operating margin %, and margin trend label.
+Body block reports subject op margin with trend, rank position,
+sector median / p25 / p75 op margin %, and peers_considered /
+peers_with_data. Filters peers whose `periods_used > 0`. Source:
+ADR-125 OPERANK window.
+
+#### 2.79 FQM Rank (FQMRANK — ADR-125)
+
+Pulled from `research::get_fqmrank`. Sector-relative percentile
+rank of **`FundamentalQualityMeterSnapshot.composite_score`** from
+the Round 17 FQM cache. The natural rank overlay for the
+deliberately-leverage-free operator-quality composite added in
+Round 17. Header line gives `operator_label / rank_label` and the
+composite score. Body block reports subject composite, rank
+position, sector median / p25 / p75 composite, and
+peers_considered / peers_with_data. Both subject and peers are
+filtered by `operator_label != "NO_DATA" && composite_score > 0`.
+Source: ADR-125 FQMRANK window.
+
+#### 2.80 Liquidity Rank (LIQRANK — ADR-125)
+
+Pulled from `research::get_liqrank`. Sector-relative percentile
+rank of **`LiquiditySnapshot.avg_daily_dollar_volume`** from the
+Round 13 LIQ cache. Higher ADV$ = deeper = higher rank. Header
+line gives `tier_label / rank_label` so the reader can
+distinguish "deep for this sector" from "deep absolutely." Body
+block reports subject ADV$ in $M, rank position, sector median /
+p25 / p75 ADV$ in $M, and peers_considered / peers_with_data.
+Filters peers whose `liquidity_tier != "INSUFFICIENT_DATA"`.
+Source: ADR-125 LIQRANK window.
+
+#### 2.81 Earnings Surprise Streak (SURPSTK — ADR-125)
+
+Pulled from `research::get_surpstk`. Pure symbol-local
+time-series stat over the cached `EarningsSurprise` rows — no
+sector needed, no peer cross-join. Classifies each historical
+event via a ±2% band around `surprise_pct` (BEAT > +2%, MISS <
+-2%, INLINE in between), counts consecutive and longest streaks,
+and maps to a streak ladder. Header line gives the
+**streak_label** (HOT_STREAK / BEAT_TREND / MIXED / MISS_TREND /
+COLD_STREAK / INSUFFICIENT_DATA). Body block reports total events,
+beats / misses / inlines breakdown, beat rate %, current streak
+length + type, longest beat and miss streaks, avg surprise %, and
+latest event date + label + surprise %. Requires ≥4 events to
+move out of INSUFFICIENT_DATA. Source: ADR-125 SURPSTK window.
+
+#### 2.82 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1094,22 +1161,26 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | PEAD rank fields (ADR-124 PEADRANK) | 3 k/v rows | Subject avg 5d drift + sector median/p25/p75 + percentile + rank position |
 | Fundamental quality meter fields (ADR-124 FQM) | 4 k/v rows | Piotroski, op margin + trend, cash conversion + trend, PTFS/MARGINS/ACRL components |
 | Relative revenue growth fields (ADR-124 REVRANK) | 4 k/v rows | Latest/earliest revenue, sector median/p25/p75 CAGR, gap-to-median in pp |
+| Leverage rank fields (ADR-125 LEVRANK) | 3 k/v rows | Subject D/E + sector median/p25/p75 D/E + SAFE percentile + rank position (NEGATIVE_EQUITY branch prints raw total_debt/total_equity) |
+| Operating quality rank fields (ADR-125 OPERANK) | 3 k/v rows | Subject op margin % + trend + sector median/p25/p75 op margin + percentile + rank position |
+| FQM rank fields (ADR-125 FQMRANK) | 3 k/v rows | Subject FQM composite + operator label + sector median/p25/p75 + percentile + rank position |
+| Liquidity rank fields (ADR-125 LIQRANK) | 3 k/v rows | Subject ADV$ in $M + tier label + sector median/p25/p75 ADV$ + percentile + rank position |
+| Earnings surprise streak fields (ADR-125 SURPSTK) | 4 k/v rows | Events breakdown + beat rate + current/longest streaks + avg surprise + latest event |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **30-58 KB**
-(up from 28-55 KB after ADR-123; ADR-124 added five per-symbol blocks —
-SIZEF / MOMF / PEADRANK / FQM / REVRANK — covering a sector-relative
-size-factor rank (with an absolute MEGA/LARGE/MID/SMALL/MICRO tier
-label), percentile ranks of the Round 10 MOMENTUM and Round 16 PEAD
-snapshots within sector cohorts, a Piotroski+margins+accruals
-"fundamental quality meter" that deliberately excludes leverage to
-differentiate itself from QUAL, and a revenue-line twin to RELEPSGR
-that ranks the symbol's 3y revenue CAGR vs sector median — all pure
-compute over cached Round 7-16 snapshots with zero new API
-dependencies); a 10-symbol basket lands near **290-580 KB** (the
-global context is emitted only once, so multi-symbol overhead is still
-bounded by the per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **32-61 KB**
+(up from 30-58 KB after ADR-124; ADR-125 added five per-symbol blocks —
+LEVRANK / OPERANK / FQMRANK / LIQRANK / SURPSTK — covering a
+sector-relative leverage rank (risk-inverted with a NEGATIVE_EQUITY
+short-circuit), a standalone operating-margin rank that isolates
+pricing power from the fused FQM/QUAL composites, a rank overlay on
+the Round 17 FQM operator composite, a sector-relative ADV$
+liquidity rank, and a pure-time-series earnings surprise streak stat
+that needs no peer cross-join — all pure compute over cached Round
+7-17 snapshots with zero new API dependencies); a 10-symbol basket
+lands near **310-620 KB** (the global context is emitted only once,
+so multi-symbol overhead is still bounded by the per-symbol blocks).
 
 ---
 
@@ -1324,6 +1395,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_peadrank` | SQLite `research_peadrank` | ADR-124 PEADRANK window (sector percentile rank of PEAD avg 5d drift) |
 | `research::get_fqm` | SQLite `research_fqm` | ADR-124 FQM window (fuses PTFS+MARGINS+ACRL, excludes leverage) |
 | `research::get_revrank` | SQLite `research_revrank` | ADR-124 REVRANK window (3y revenue CAGR vs sector median CAGR) |
+| `research::get_levrank` | SQLite `research_levrank` | ADR-125 LEVRANK window (sector percentile rank of D/E, risk-inverted, NEGATIVE_EQUITY short-circuit) |
+| `research::get_operank` | SQLite `research_operank` | ADR-125 OPERANK window (sector percentile rank of operating margin) |
+| `research::get_fqmrank` | SQLite `research_fqmrank` | ADR-125 FQMRANK window (sector percentile rank of FQM composite) |
+| `research::get_liqrank` | SQLite `research_liqrank` | ADR-125 LIQRANK window (sector percentile rank of ADV$) |
+| `research::get_surpstk` | SQLite `research_surpstk` | ADR-125 SURPSTK window (earnings surprise streak stat from cached EarningsSurprise rows) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -1360,4 +1436,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 — Godel parity research surfaces

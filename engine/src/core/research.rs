@@ -1981,6 +1981,120 @@ pub struct RevenueGrowthRankSnapshot {
     pub note: String,
 }
 
+// ── ADR-125 Round 18 — rank overlays + surprise streak ────────────────────
+
+/// LEVRANK — Leverage Rank vs Sector Peers.
+/// Percentile rank of debt-to-equity (`total_debt / total_equity`) from the
+/// cached `LeverageSnapshot`, within the same sector. Inverted — lower D/E
+/// = safer = higher rank. Uses RRK-style SAFEST label ladder.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LeverageRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub debt_to_equity: f64,          // subject's D/E (0 when equity non-positive)
+    pub total_debt: f64,
+    pub total_equity: f64,
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_d2e: f64,
+    pub sector_p25_d2e: f64,
+    pub sector_p75_d2e: f64,
+    pub percentile_rank: f64,         // 0..100 (higher = SAFER, lower D/E)
+    pub rank_position: usize,         // 1-based (1 = safest)
+    pub rank_label: String,           // "SAFEST_DECILE" / ... / "RISKIEST_DECILE" / "NEGATIVE_EQUITY" / "NO_DATA"
+    pub note: String,
+}
+
+/// OPERANK — Operating Quality Rank vs Sector Peers.
+/// Percentile rank of `MarginsSnapshot.latest_operating_margin_pct` within
+/// the same sector. Higher operating margin = higher rank.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OperatingQualityRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub operating_margin_pct: f64,    // subject's latest op margin
+    pub margin_trend_label: String,   // copied from MarginsSnapshot.overall_trend_label
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_margin_pct: f64,
+    pub sector_p25_margin_pct: f64,
+    pub sector_p75_margin_pct: f64,
+    pub percentile_rank: f64,         // 0..100 (higher = fatter margins)
+    pub rank_position: usize,         // 1-based (1 = fattest)
+    pub rank_label: String,           // standard decile ladder
+    pub note: String,
+}
+
+/// FQMRANK — Fundamental Quality Meter Rank vs Sector Peers.
+/// Percentile rank of `FundamentalQualityMeterSnapshot.composite_score`
+/// within the same sector.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FqmRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub composite_score: f64,         // subject's FQM composite (copied)
+    pub operator_label: String,       // subject's FQM operator label (copied)
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_score: f64,
+    pub sector_p25: f64,
+    pub sector_p75: f64,
+    pub percentile_rank: f64,         // 0..100 (higher = better operator)
+    pub rank_position: usize,         // 1-based (1 = best operator)
+    pub rank_label: String,           // standard decile ladder
+    pub note: String,
+}
+
+/// LIQRANK — Liquidity Rank vs Sector Peers.
+/// Percentile rank of `LiquiditySnapshot.avg_daily_dollar_volume` within the
+/// same sector. Higher dollar volume = deeper = higher rank. The subject's
+/// `liquidity_tier` label is copied for reference.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LiquidityRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub avg_daily_dollar_volume: f64, // subject's ADV$ (copied)
+    pub tier_label: String,           // subject's LIQ tier (copied, e.g. "DEEP" / "LIQUID" / ...)
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_dollar_volume: f64,
+    pub sector_p25_dollar_volume: f64,
+    pub sector_p75_dollar_volume: f64,
+    pub percentile_rank: f64,         // 0..100 (higher = deeper liquidity)
+    pub rank_position: usize,         // 1-based (1 = deepest)
+    pub rank_label: String,           // standard decile ladder
+    pub note: String,
+}
+
+/// SURPSTK — Earnings Surprise Streak snapshot.
+/// Pure time-series stat over cached `EarningsSurprise` rows: counts
+/// consecutive beats/misses, computes beat rate over the sample window,
+/// and emits a streak-strength label. No sector needed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EarningsSurpriseStreakSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub total_events: usize,          // events considered (BEAT/MISS/INLINE classification)
+    pub beats: usize,
+    pub misses: usize,
+    pub inlines: usize,
+    pub beat_rate_pct: f64,           // beats / total_events × 100
+    pub current_streak_type: String,  // "BEAT" | "MISS" | "INLINE" | "NONE"
+    pub current_streak_len: usize,    // consecutive length of current streak
+    pub longest_beat_streak: usize,
+    pub longest_miss_streak: usize,
+    pub avg_surprise_pct: f64,
+    pub latest_event_date: String,
+    pub latest_event_surprise_pct: f64,
+    pub latest_event_label: String,   // "BEAT" | "MISS" | "INLINE"
+    pub streak_label: String,         // "HOT_STREAK" | "BEAT_TREND" | "MIXED" | "MISS_TREND" | "COLD_STREAK" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -10068,6 +10182,431 @@ pub fn compute_revrank_snapshot(
     }
 }
 
+// ── ADR-125 Round 18 compute fns ───────────────────────────────────────────
+
+/// Compute the debt-to-equity ratio for a `LeverageSnapshot`.
+/// Returns `None` when equity is non-positive (shell / deficit), which is
+/// handled by the LEVRANK surface as a special "NEGATIVE_EQUITY" bucket.
+fn debt_to_equity_for(lev: &LeverageSnapshot) -> Option<f64> {
+    if lev.total_equity > 0.0 { Some(lev.total_debt / lev.total_equity) } else { None }
+}
+
+/// LEVRANK — Leverage Rank vs sector peers.
+///
+/// Percentile-ranks the subject's D/E (from the cached `LeverageSnapshot`)
+/// against peer snapshots pre-filtered to the same sector. Uses the
+/// risk-inverted rank ladder (SAFEST_DECILE..RISKIEST_DECILE) because lower
+/// D/E = safer. Negative-equity subjects get a dedicated label.
+pub fn compute_levrank_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject: Option<&LeverageSnapshot>,
+    peers: &[&LeverageSnapshot],
+) -> LeverageRankSnapshot {
+    let subj = match subject {
+        Some(s) => s,
+        None => {
+            return LeverageRankSnapshot {
+                symbol: symbol.to_string(),
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "No LEV snapshot cached for subject".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let subj_d2e = match debt_to_equity_for(subj) {
+        Some(v) => v,
+        None => {
+            return LeverageRankSnapshot {
+                symbol: symbol.to_string(),
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                total_debt: subj.total_debt,
+                total_equity: subj.total_equity,
+                rank_label: "NEGATIVE_EQUITY".into(),
+                note: "Subject has non-positive equity; D/E undefined".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let peer_d2es: Vec<f64> = peers
+        .iter()
+        .filter_map(|p| debt_to_equity_for(p))
+        .collect();
+    let peers_considered = peers.len();
+    let peers_with_data = peer_d2es.len();
+    if peer_d2es.len() < 3 {
+        return LeverageRankSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            debt_to_equity: subj_d2e,
+            total_debt: subj.total_debt,
+            total_equity: subj.total_equity,
+            peers_considered,
+            peers_with_data,
+            rank_label: "NO_DATA".into(),
+            note: format!("Only {} LEV peers with positive equity in sector {} (need ≥3)", peer_d2es.len(), sector),
+            ..Default::default()
+        };
+    }
+    let mut sorted = peer_d2es.clone();
+    sorted.push(subj_d2e);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    // INVERSION: lower D/E = safer = higher rank.
+    let pct = percentile_rank_score(subj_d2e, &peer_d2es, false);
+    // rank_position counted by how many peers are SAFER (lower D/E).
+    let safer = peer_d2es.iter().filter(|&&p| p < subj_d2e).count();
+    let label = risk_rank_label_for_percentile(pct);
+    LeverageRankSnapshot {
+        symbol: symbol.to_string(),
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        debt_to_equity: subj_d2e,
+        total_debt: subj.total_debt,
+        total_equity: subj.total_equity,
+        peers_considered,
+        peers_with_data,
+        sector_median_d2e: median,
+        sector_p25_d2e: p25,
+        sector_p75_d2e: p75,
+        percentile_rank: pct,
+        rank_position: safer + 1,
+        rank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// OPERANK — Operating Quality Rank vs sector peers.
+///
+/// Percentile-ranks `MarginsSnapshot.latest_operating_margin_pct` within
+/// the same sector. Higher margin = higher rank. Peers must be pre-filtered.
+pub fn compute_operank_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject: Option<&MarginsSnapshot>,
+    peers: &[&MarginsSnapshot],
+) -> OperatingQualityRankSnapshot {
+    let subj = match subject {
+        Some(s) if s.periods_used > 0 => s,
+        _ => {
+            return OperatingQualityRankSnapshot {
+                symbol: symbol.to_string(),
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "No MARGINS snapshot cached for subject".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let peer_margins: Vec<f64> = peers
+        .iter()
+        .filter(|p| p.periods_used > 0)
+        .map(|p| p.latest_operating_margin_pct)
+        .collect();
+    let peers_considered = peers.len();
+    let peers_with_data = peer_margins.len();
+    if peer_margins.len() < 3 {
+        return OperatingQualityRankSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            operating_margin_pct: subj.latest_operating_margin_pct,
+            margin_trend_label: subj.overall_trend_label.clone(),
+            peers_considered,
+            peers_with_data,
+            rank_label: "NO_DATA".into(),
+            note: format!("Only {} MARGINS peers in sector {} (need ≥3)", peer_margins.len(), sector),
+            ..Default::default()
+        };
+    }
+    let mut sorted = peer_margins.clone();
+    sorted.push(subj.latest_operating_margin_pct);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    let pct = percentile_rank_score(subj.latest_operating_margin_pct, &peer_margins, true);
+    let better = peer_margins.iter().filter(|&&p| p > subj.latest_operating_margin_pct).count();
+    let label = rank_label_for_percentile(pct);
+    OperatingQualityRankSnapshot {
+        symbol: symbol.to_string(),
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        operating_margin_pct: subj.latest_operating_margin_pct,
+        margin_trend_label: subj.overall_trend_label.clone(),
+        peers_considered,
+        peers_with_data,
+        sector_median_margin_pct: median,
+        sector_p25_margin_pct: p25,
+        sector_p75_margin_pct: p75,
+        percentile_rank: pct,
+        rank_position: better + 1,
+        rank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// FQMRANK — Fundamental Quality Meter Rank vs sector peers.
+///
+/// Percentile-ranks `FundamentalQualityMeterSnapshot.composite_score` within
+/// the same sector. Filters out peers with operator_label "NO_DATA".
+pub fn compute_fqmrank_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject: Option<&FundamentalQualityMeterSnapshot>,
+    peers: &[&FundamentalQualityMeterSnapshot],
+) -> FqmRankSnapshot {
+    let subj = match subject {
+        Some(s) if s.operator_label != "NO_DATA" && s.composite_score > 0.0 => s,
+        _ => {
+            return FqmRankSnapshot {
+                symbol: symbol.to_string(),
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "No FQM snapshot cached for subject".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let peer_scores: Vec<f64> = peers
+        .iter()
+        .filter(|p| p.operator_label != "NO_DATA" && p.composite_score > 0.0)
+        .map(|p| p.composite_score)
+        .collect();
+    let peers_considered = peers.len();
+    let peers_with_data = peer_scores.len();
+    if peer_scores.len() < 3 {
+        return FqmRankSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            composite_score: subj.composite_score,
+            operator_label: subj.operator_label.clone(),
+            peers_considered,
+            peers_with_data,
+            rank_label: "NO_DATA".into(),
+            note: format!("Only {} FQM peers in sector {} (need ≥3)", peer_scores.len(), sector),
+            ..Default::default()
+        };
+    }
+    let mut sorted = peer_scores.clone();
+    sorted.push(subj.composite_score);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    let pct = percentile_rank_score(subj.composite_score, &peer_scores, true);
+    let better = peer_scores.iter().filter(|&&p| p > subj.composite_score).count();
+    let label = rank_label_for_percentile(pct);
+    FqmRankSnapshot {
+        symbol: symbol.to_string(),
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        composite_score: subj.composite_score,
+        operator_label: subj.operator_label.clone(),
+        peers_considered,
+        peers_with_data,
+        sector_median_score: median,
+        sector_p25: p25,
+        sector_p75: p75,
+        percentile_rank: pct,
+        rank_position: better + 1,
+        rank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// LIQRANK — Liquidity Rank vs sector peers.
+///
+/// Percentile-ranks `LiquiditySnapshot.avg_daily_dollar_volume` within the
+/// same sector. Higher ADV$ = deeper liquidity = higher rank. Filters out
+/// peers with INSUFFICIENT_DATA tier.
+pub fn compute_liqrank_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject: Option<&LiquiditySnapshot>,
+    peers: &[&LiquiditySnapshot],
+) -> LiquidityRankSnapshot {
+    let subj = match subject {
+        Some(s) if s.liquidity_tier != "INSUFFICIENT_DATA" && s.avg_daily_dollar_volume > 0.0 => s,
+        _ => {
+            return LiquidityRankSnapshot {
+                symbol: symbol.to_string(),
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "No LIQ snapshot cached for subject".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let peer_advs: Vec<f64> = peers
+        .iter()
+        .filter(|p| p.liquidity_tier != "INSUFFICIENT_DATA" && p.avg_daily_dollar_volume > 0.0)
+        .map(|p| p.avg_daily_dollar_volume)
+        .collect();
+    let peers_considered = peers.len();
+    let peers_with_data = peer_advs.len();
+    if peer_advs.len() < 3 {
+        return LiquidityRankSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            avg_daily_dollar_volume: subj.avg_daily_dollar_volume,
+            tier_label: subj.liquidity_tier.clone(),
+            peers_considered,
+            peers_with_data,
+            rank_label: "NO_DATA".into(),
+            note: format!("Only {} LIQ peers in sector {} (need ≥3)", peer_advs.len(), sector),
+            ..Default::default()
+        };
+    }
+    let mut sorted = peer_advs.clone();
+    sorted.push(subj.avg_daily_dollar_volume);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    let pct = percentile_rank_score(subj.avg_daily_dollar_volume, &peer_advs, true);
+    let better = peer_advs.iter().filter(|&&p| p > subj.avg_daily_dollar_volume).count();
+    let label = rank_label_for_percentile(pct);
+    LiquidityRankSnapshot {
+        symbol: symbol.to_string(),
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        avg_daily_dollar_volume: subj.avg_daily_dollar_volume,
+        tier_label: subj.liquidity_tier.clone(),
+        peers_considered,
+        peers_with_data,
+        sector_median_dollar_volume: median,
+        sector_p25_dollar_volume: p25,
+        sector_p75_dollar_volume: p75,
+        percentile_rank: pct,
+        rank_position: better + 1,
+        rank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// SURPSTK — Earnings Surprise Streak snapshot.
+///
+/// Pure time-series stat over cached `EarningsSurprise` rows. Classifies each
+/// row as BEAT / MISS / INLINE using a ±2% band around the estimate, then
+/// counts consecutive streaks over the series (sorted newest-first). Emits
+/// a streak-strength label from the beat rate + current streak. No sector.
+pub fn compute_surpstk_snapshot(
+    symbol: &str,
+    as_of: &str,
+    surprises: &[EarningsSurprise],
+) -> EarningsSurpriseStreakSnapshot {
+    if surprises.is_empty() {
+        return EarningsSurpriseStreakSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            streak_label: "INSUFFICIENT_DATA".into(),
+            note: "No EPS rows cached for subject".into(),
+            ..Default::default()
+        };
+    }
+    // Sort newest-first by date (lexical works for YYYY-MM-DD).
+    let mut rows: Vec<&EarningsSurprise> = surprises.iter().collect();
+    rows.sort_by(|a, b| b.date.cmp(&a.date));
+    let classify = |s: &EarningsSurprise| -> &'static str {
+        if s.surprise_pct >= 2.0 { "BEAT" }
+        else if s.surprise_pct <= -2.0 { "MISS" }
+        else { "INLINE" }
+    };
+    let mut beats = 0usize;
+    let mut misses = 0usize;
+    let mut inlines = 0usize;
+    let mut sum_surprise = 0.0f64;
+    for r in &rows {
+        sum_surprise += r.surprise_pct;
+        match classify(r) {
+            "BEAT" => beats += 1,
+            "MISS" => misses += 1,
+            _ => inlines += 1,
+        }
+    }
+    let total = rows.len();
+    let beat_rate = beats as f64 / total as f64 * 100.0;
+    let avg_surprise = sum_surprise / total as f64;
+    // Current streak: starts at rows[0] (newest) and extends while label matches.
+    let current_label = classify(rows[0]);
+    let mut current_len = 1usize;
+    for r in rows.iter().skip(1) {
+        if classify(r) == current_label { current_len += 1; } else { break; }
+    }
+    // Longest streaks scanned across the full series.
+    let mut longest_beat = 0usize;
+    let mut longest_miss = 0usize;
+    let mut run_beat = 0usize;
+    let mut run_miss = 0usize;
+    for r in &rows {
+        match classify(r) {
+            "BEAT" => {
+                run_beat += 1;
+                run_miss = 0;
+                if run_beat > longest_beat { longest_beat = run_beat; }
+            }
+            "MISS" => {
+                run_miss += 1;
+                run_beat = 0;
+                if run_miss > longest_miss { longest_miss = run_miss; }
+            }
+            _ => {
+                run_beat = 0;
+                run_miss = 0;
+            }
+        }
+    }
+    let streak_label = if total < 4 {
+        "INSUFFICIENT_DATA"
+    } else if beat_rate >= 75.0 && current_label == "BEAT" && current_len >= 3 {
+        "HOT_STREAK"
+    } else if beat_rate >= 60.0 {
+        "BEAT_TREND"
+    } else if beat_rate <= 25.0 && current_label == "MISS" && current_len >= 3 {
+        "COLD_STREAK"
+    } else if beat_rate <= 40.0 {
+        "MISS_TREND"
+    } else {
+        "MIXED"
+    };
+    let latest = rows[0];
+    EarningsSurpriseStreakSnapshot {
+        symbol: symbol.to_string(),
+        as_of: as_of.to_string(),
+        total_events: total,
+        beats,
+        misses,
+        inlines,
+        beat_rate_pct: beat_rate,
+        current_streak_type: current_label.to_string(),
+        current_streak_len: current_len,
+        longest_beat_streak: longest_beat,
+        longest_miss_streak: longest_miss,
+        avg_surprise_pct: avg_surprise,
+        latest_event_date: latest.date.clone(),
+        latest_event_surprise_pct: latest.surprise_pct,
+        latest_event_label: classify(latest).to_string(),
+        streak_label: streak_label.to_string(),
+        note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -12429,6 +12968,211 @@ pub fn get_all_pead(conn: &Connection) -> Result<Vec<PeadSnapshot>, String> {
         .map_err(|e| format!("query_map get_all_pead: {e}"))?
         .filter_map(|r| r.ok())
         .filter_map(|j| serde_json::from_str::<PeadSnapshot>(&j).ok())
+        .collect();
+    Ok(rows)
+}
+
+// ── ADR-125 Round 18 schema + wrappers ────────────────────────────────────
+
+pub fn create_research_tables_v18(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v17(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_levrank (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_levrank_updated ON research_levrank(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_operank (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_operank_updated ON research_operank(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_fqmrank (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_fqmrank_updated ON research_fqmrank(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_liqrank (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_liqrank_updated ON research_liqrank(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_surpstk (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_surpstk_updated ON research_surpstk(updated_at);",
+    ).map_err(|e| format!("create v18 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_levrank(conn: &Connection, symbol: &str, snap: &LeverageRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v18(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("levrank json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_levrank(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert levrank: {e}"))?;
+    Ok(())
+}
+
+pub fn get_levrank(conn: &Connection, symbol: &str) -> Result<Option<LeverageRankSnapshot>, String> {
+    let _ = create_research_tables_v18(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_levrank WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_levrank: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_levrank: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_levrank: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_operank(conn: &Connection, symbol: &str, snap: &OperatingQualityRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v18(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("operank json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_operank(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert operank: {e}"))?;
+    Ok(())
+}
+
+pub fn get_operank(conn: &Connection, symbol: &str) -> Result<Option<OperatingQualityRankSnapshot>, String> {
+    let _ = create_research_tables_v18(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_operank WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_operank: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_operank: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_operank: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_fqmrank(conn: &Connection, symbol: &str, snap: &FqmRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v18(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("fqmrank json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_fqmrank(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert fqmrank: {e}"))?;
+    Ok(())
+}
+
+pub fn get_fqmrank(conn: &Connection, symbol: &str) -> Result<Option<FqmRankSnapshot>, String> {
+    let _ = create_research_tables_v18(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_fqmrank WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_fqmrank: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_fqmrank: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_fqmrank: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_liqrank(conn: &Connection, symbol: &str, snap: &LiquidityRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v18(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("liqrank json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_liqrank(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert liqrank: {e}"))?;
+    Ok(())
+}
+
+pub fn get_liqrank(conn: &Connection, symbol: &str) -> Result<Option<LiquidityRankSnapshot>, String> {
+    let _ = create_research_tables_v18(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_liqrank WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_liqrank: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_liqrank: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_liqrank: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_surpstk(conn: &Connection, symbol: &str, snap: &EarningsSurpriseStreakSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v18(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("surpstk json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_surpstk(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert surpstk: {e}"))?;
+    Ok(())
+}
+
+pub fn get_surpstk(conn: &Connection, symbol: &str) -> Result<Option<EarningsSurpriseStreakSnapshot>, String> {
+    let _ = create_research_tables_v18(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_surpstk WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_surpstk: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_surpstk: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_surpstk: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+/// Whole-table scan of `research_leverage`. Used by LEVRANK.
+pub fn get_all_leverage(conn: &Connection) -> Result<Vec<LeverageSnapshot>, String> {
+    let _ = create_research_tables_v10(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_leverage")
+        .map_err(|e| format!("prepare get_all_leverage: {e}"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query_map get_all_leverage: {e}"))?
+        .filter_map(|r| r.ok())
+        .filter_map(|j| serde_json::from_str::<LeverageSnapshot>(&j).ok())
+        .collect();
+    Ok(rows)
+}
+
+/// Whole-table scan of `research_margins`. Used by OPERANK.
+pub fn get_all_margins(conn: &Connection) -> Result<Vec<MarginsSnapshot>, String> {
+    let _ = create_research_tables_v14(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_margins")
+        .map_err(|e| format!("prepare get_all_margins: {e}"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query_map get_all_margins: {e}"))?
+        .filter_map(|r| r.ok())
+        .filter_map(|j| serde_json::from_str::<MarginsSnapshot>(&j).ok())
+        .collect();
+    Ok(rows)
+}
+
+/// Whole-table scan of `research_fqm`. Used by FQMRANK.
+pub fn get_all_fqm(conn: &Connection) -> Result<Vec<FundamentalQualityMeterSnapshot>, String> {
+    let _ = create_research_tables_v17(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_fqm")
+        .map_err(|e| format!("prepare get_all_fqm: {e}"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query_map get_all_fqm: {e}"))?
+        .filter_map(|r| r.ok())
+        .filter_map(|j| serde_json::from_str::<FundamentalQualityMeterSnapshot>(&j).ok())
+        .collect();
+    Ok(rows)
+}
+
+/// Whole-table scan of `research_liquidity`. Used by LIQRANK.
+pub fn get_all_liquidity(conn: &Connection) -> Result<Vec<LiquiditySnapshot>, String> {
+    let _ = create_research_tables_v13(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_liquidity")
+        .map_err(|e| format!("prepare get_all_liquidity: {e}"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query_map get_all_liquidity: {e}"))?
+        .filter_map(|r| r.ok())
+        .filter_map(|j| serde_json::from_str::<LiquiditySnapshot>(&j).ok())
         .collect();
     Ok(rows)
 }
@@ -16394,5 +17138,324 @@ mod tests {
     fn compute_revrank_insufficient_subject() {
         let snap = compute_revrank_snapshot("NIL", "2026-04-15", "S", None, &[]);
         assert_eq!(snap.relative_label, "NO_DATA");
+    }
+
+    // ── ADR-125 Round 18 tests ────────────────────────────────────────────
+
+    fn mk_lev(sym: &str, debt: f64, equity: f64) -> LeverageSnapshot {
+        LeverageSnapshot {
+            symbol: sym.into(),
+            as_of: "2026-04-15".into(),
+            total_debt: debt,
+            total_equity: equity,
+            ..Default::default()
+        }
+    }
+
+    fn mk_margins_op(sym: &str, op_margin: f64) -> MarginsSnapshot {
+        MarginsSnapshot {
+            symbol: sym.into(),
+            as_of: "2026-04-15".into(),
+            latest_operating_margin_pct: op_margin,
+            overall_trend_label: "STABLE".into(),
+            periods_used: 4,
+            ..Default::default()
+        }
+    }
+
+    fn mk_fqm(sym: &str, composite: f64, operator: &str) -> FundamentalQualityMeterSnapshot {
+        FundamentalQualityMeterSnapshot {
+            symbol: sym.into(),
+            as_of: "2026-04-15".into(),
+            composite_score: composite,
+            operator_label: operator.into(),
+            inputs_available: 3,
+            ..Default::default()
+        }
+    }
+
+    fn mk_liq(sym: &str, adv_dollar: f64, tier: &str) -> LiquiditySnapshot {
+        LiquiditySnapshot {
+            symbol: sym.into(),
+            as_of: "2026-04-15".into(),
+            avg_daily_dollar_volume: adv_dollar,
+            liquidity_tier: tier.into(),
+            ..Default::default()
+        }
+    }
+
+    fn mk_surp(date: &str, surprise_pct: f64) -> EarningsSurprise {
+        EarningsSurprise {
+            date: date.into(),
+            symbol: "X".into(),
+            eps_actual: 1.0 + surprise_pct / 100.0,
+            eps_estimate: 1.0,
+            surprise: surprise_pct / 100.0,
+            surprise_pct,
+        }
+    }
+
+    #[test]
+    fn levrank_snapshot_roundtrip() {
+        let conn = Connection::open_in_memory().expect("open conn");
+        create_research_tables_v18(&conn).expect("create v18");
+        let snap = LeverageRankSnapshot {
+            symbol: "LVR".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Industrials".into(),
+            debt_to_equity: 0.3,
+            rank_label: "SAFEST_QUARTILE".into(),
+            ..Default::default()
+        };
+        upsert_levrank(&conn, "LVR", &snap).unwrap();
+        let got = get_levrank(&conn, "LVR").unwrap().unwrap();
+        assert_eq!(got.rank_label, "SAFEST_QUARTILE");
+        assert!((got.debt_to_equity - 0.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn operank_snapshot_roundtrip() {
+        let conn = Connection::open_in_memory().expect("open conn");
+        create_research_tables_v18(&conn).expect("create v18");
+        let snap = OperatingQualityRankSnapshot {
+            symbol: "OPR".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Technology".into(),
+            operating_margin_pct: 35.0,
+            rank_label: "TOP_DECILE".into(),
+            ..Default::default()
+        };
+        upsert_operank(&conn, "OPR", &snap).unwrap();
+        let got = get_operank(&conn, "OPR").unwrap().unwrap();
+        assert_eq!(got.rank_label, "TOP_DECILE");
+    }
+
+    #[test]
+    fn fqmrank_snapshot_roundtrip() {
+        let conn = Connection::open_in_memory().expect("open conn");
+        create_research_tables_v18(&conn).expect("create v18");
+        let snap = FqmRankSnapshot {
+            symbol: "FQR".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Healthcare".into(),
+            composite_score: 85.0,
+            operator_label: "ELITE_OPERATOR".into(),
+            rank_label: "TOP_DECILE".into(),
+            ..Default::default()
+        };
+        upsert_fqmrank(&conn, "FQR", &snap).unwrap();
+        let got = get_fqmrank(&conn, "FQR").unwrap().unwrap();
+        assert_eq!(got.operator_label, "ELITE_OPERATOR");
+        assert_eq!(got.rank_label, "TOP_DECILE");
+    }
+
+    #[test]
+    fn liqrank_snapshot_roundtrip() {
+        let conn = Connection::open_in_memory().expect("open conn");
+        create_research_tables_v18(&conn).expect("create v18");
+        let snap = LiquidityRankSnapshot {
+            symbol: "LQR".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Financials".into(),
+            avg_daily_dollar_volume: 2.5e9,
+            tier_label: "DEEP".into(),
+            rank_label: "TOP_QUARTILE".into(),
+            ..Default::default()
+        };
+        upsert_liqrank(&conn, "LQR", &snap).unwrap();
+        let got = get_liqrank(&conn, "LQR").unwrap().unwrap();
+        assert_eq!(got.tier_label, "DEEP");
+        assert_eq!(got.rank_label, "TOP_QUARTILE");
+    }
+
+    #[test]
+    fn surpstk_snapshot_roundtrip() {
+        let conn = Connection::open_in_memory().expect("open conn");
+        create_research_tables_v18(&conn).expect("create v18");
+        let snap = EarningsSurpriseStreakSnapshot {
+            symbol: "SUR".into(),
+            as_of: "2026-04-15".into(),
+            total_events: 8,
+            beats: 7,
+            misses: 1,
+            beat_rate_pct: 87.5,
+            current_streak_type: "BEAT".into(),
+            current_streak_len: 5,
+            streak_label: "HOT_STREAK".into(),
+            ..Default::default()
+        };
+        upsert_surpstk(&conn, "SUR", &snap).unwrap();
+        let got = get_surpstk(&conn, "SUR").unwrap().unwrap();
+        assert_eq!(got.streak_label, "HOT_STREAK");
+        assert_eq!(got.beats, 7);
+    }
+
+    #[test]
+    fn compute_levrank_safest_decile() {
+        // Subject has the LOWEST D/E in sector → should rank safest.
+        let peers_owned = [
+            mk_lev("A", 500.0, 1000.0), // D/E 0.50
+            mk_lev("B", 800.0, 1000.0), // D/E 0.80
+            mk_lev("C", 1200.0, 1000.0),// D/E 1.20
+            mk_lev("D", 1500.0, 1000.0),// D/E 1.50
+        ];
+        let peers: Vec<&LeverageSnapshot> = peers_owned.iter().collect();
+        let subj = mk_lev("LVR", 100.0, 1000.0); // D/E 0.10
+        let snap = compute_levrank_snapshot("LVR", "2026-04-15", "Industrials", Some(&subj), &peers);
+        assert_eq!(snap.rank_label, "SAFEST_DECILE");
+        assert!(snap.percentile_rank >= 90.0);
+        assert_eq!(snap.rank_position, 1);
+    }
+
+    #[test]
+    fn compute_levrank_negative_equity() {
+        let subj = mk_lev("NEG", 500.0, -100.0);
+        let snap = compute_levrank_snapshot("NEG", "2026-04-15", "S", Some(&subj), &[]);
+        assert_eq!(snap.rank_label, "NEGATIVE_EQUITY");
+    }
+
+    #[test]
+    fn compute_levrank_no_subject() {
+        let snap = compute_levrank_snapshot("NIL", "2026-04-15", "S", None, &[]);
+        assert_eq!(snap.rank_label, "NO_DATA");
+    }
+
+    #[test]
+    fn compute_operank_top_decile() {
+        let peers_owned = [
+            mk_margins_op("A", 5.0),
+            mk_margins_op("B", 10.0),
+            mk_margins_op("C", 15.0),
+            mk_margins_op("D", 20.0),
+        ];
+        let peers: Vec<&MarginsSnapshot> = peers_owned.iter().collect();
+        let subj = mk_margins_op("OPR", 45.0);
+        let snap = compute_operank_snapshot("OPR", "2026-04-15", "Technology", Some(&subj), &peers);
+        assert_eq!(snap.rank_label, "TOP_DECILE");
+        assert!(snap.percentile_rank >= 90.0);
+    }
+
+    #[test]
+    fn compute_operank_no_subject() {
+        let snap = compute_operank_snapshot("NIL", "2026-04-15", "S", None, &[]);
+        assert_eq!(snap.rank_label, "NO_DATA");
+    }
+
+    #[test]
+    fn compute_fqmrank_top_decile() {
+        let peers_owned = [
+            mk_fqm("A", 40.0, "WEAK_OPERATOR"),
+            mk_fqm("B", 55.0, "AVERAGE_OPERATOR"),
+            mk_fqm("C", 65.0, "STRONG_OPERATOR"),
+            mk_fqm("D", 72.0, "STRONG_OPERATOR"),
+        ];
+        let peers: Vec<&FundamentalQualityMeterSnapshot> = peers_owned.iter().collect();
+        let subj = mk_fqm("FQR", 92.0, "ELITE_OPERATOR");
+        let snap = compute_fqmrank_snapshot("FQR", "2026-04-15", "Technology", Some(&subj), &peers);
+        assert_eq!(snap.rank_label, "TOP_DECILE");
+        assert_eq!(snap.operator_label, "ELITE_OPERATOR");
+    }
+
+    #[test]
+    fn compute_fqmrank_filters_no_data_peers() {
+        let peers_owned = [
+            mk_fqm("A", 0.0, "NO_DATA"),
+            mk_fqm("B", 0.0, "NO_DATA"),
+            mk_fqm("C", 0.0, "NO_DATA"),
+            mk_fqm("D", 0.0, "NO_DATA"),
+        ];
+        let peers: Vec<&FundamentalQualityMeterSnapshot> = peers_owned.iter().collect();
+        let subj = mk_fqm("FQR", 90.0, "ELITE_OPERATOR");
+        let snap = compute_fqmrank_snapshot("FQR", "2026-04-15", "T", Some(&subj), &peers);
+        assert_eq!(snap.rank_label, "NO_DATA");
+    }
+
+    #[test]
+    fn compute_liqrank_deepest() {
+        let peers_owned = [
+            mk_liq("A", 1e6, "THIN"),
+            mk_liq("B", 5e7, "MODERATE"),
+            mk_liq("C", 2e8, "LIQUID"),
+            mk_liq("D", 8e8, "LIQUID"),
+        ];
+        let peers: Vec<&LiquiditySnapshot> = peers_owned.iter().collect();
+        let subj = mk_liq("LQR", 5e9, "DEEP");
+        let snap = compute_liqrank_snapshot("LQR", "2026-04-15", "Financials", Some(&subj), &peers);
+        assert_eq!(snap.rank_label, "TOP_DECILE");
+        assert_eq!(snap.rank_position, 1);
+        assert_eq!(snap.tier_label, "DEEP");
+    }
+
+    #[test]
+    fn compute_liqrank_filters_insufficient_data() {
+        let peers_owned = [
+            mk_liq("A", 0.0, "INSUFFICIENT_DATA"),
+            mk_liq("B", 0.0, "INSUFFICIENT_DATA"),
+            mk_liq("C", 0.0, "INSUFFICIENT_DATA"),
+        ];
+        let peers: Vec<&LiquiditySnapshot> = peers_owned.iter().collect();
+        let subj = mk_liq("LQR", 1e9, "DEEP");
+        let snap = compute_liqrank_snapshot("LQR", "2026-04-15", "Financials", Some(&subj), &peers);
+        assert_eq!(snap.rank_label, "NO_DATA");
+    }
+
+    #[test]
+    fn compute_surpstk_hot_streak() {
+        let rows = vec![
+            mk_surp("2026-04-01", 12.0),
+            mk_surp("2026-01-01", 9.0),
+            mk_surp("2025-10-01", 6.0),
+            mk_surp("2025-07-01", 4.0),
+            mk_surp("2025-04-01", 5.0),
+            mk_surp("2025-01-01", 3.0),
+            mk_surp("2024-10-01", 1.0),
+            mk_surp("2024-07-01", -3.0),
+        ];
+        let snap = compute_surpstk_snapshot("HOT", "2026-04-15", &rows);
+        assert_eq!(snap.streak_label, "HOT_STREAK");
+        assert_eq!(snap.current_streak_type, "BEAT");
+        assert!(snap.current_streak_len >= 3);
+        assert!(snap.beat_rate_pct >= 75.0);
+    }
+
+    #[test]
+    fn compute_surpstk_cold_streak() {
+        let rows = vec![
+            mk_surp("2026-04-01", -8.0),
+            mk_surp("2026-01-01", -5.0),
+            mk_surp("2025-10-01", -4.0),
+            mk_surp("2025-07-01", -3.0),
+            mk_surp("2025-04-01", -6.0),
+            mk_surp("2025-01-01", -2.5),
+            mk_surp("2024-10-01", 1.0),
+            mk_surp("2024-07-01", 2.5),
+        ];
+        let snap = compute_surpstk_snapshot("CLD", "2026-04-15", &rows);
+        assert_eq!(snap.streak_label, "COLD_STREAK");
+        assert_eq!(snap.current_streak_type, "MISS");
+        assert!(snap.current_streak_len >= 3);
+    }
+
+    #[test]
+    fn compute_surpstk_mixed() {
+        // 50% beat rate, alternating → neither BEAT_TREND nor MISS_TREND.
+        let rows = vec![
+            mk_surp("2026-04-01", 3.0),
+            mk_surp("2026-01-01", -3.0),
+            mk_surp("2025-10-01", 3.0),
+            mk_surp("2025-07-01", -3.0),
+            mk_surp("2025-04-01", 3.0),
+            mk_surp("2025-01-01", -3.0),
+        ];
+        let snap = compute_surpstk_snapshot("MIX", "2026-04-15", &rows);
+        assert_eq!(snap.streak_label, "MIXED");
+        assert_eq!(snap.beats, 3);
+        assert_eq!(snap.misses, 3);
+    }
+
+    #[test]
+    fn compute_surpstk_insufficient_data() {
+        let snap = compute_surpstk_snapshot("NIL", "2026-04-15", &[]);
+        assert_eq!(snap.streak_label, "INSUFFICIENT_DATA");
     }
 }
