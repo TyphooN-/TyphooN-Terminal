@@ -1363,6 +1363,13 @@ impl AlpacaBroker {
                     ("limit", "10000".to_string()),
                     ("sort", "asc".to_string()),
                 ];
+                // Stocks: request fully-adjusted bars (splits + dividends).
+                // Alpaca defaults to "raw" which leaves pre-split prices untouched,
+                // producing flat-then-spike charts for symbols after a reverse split.
+                // The crypto endpoint does not accept this parameter.
+                if !is_crypto {
+                    params.push(("adjustment", "all".to_string()));
+                }
                 // Use page_token for continuation, start date only for first request
                 if let Some(ref token) = next_page_token {
                     params.push(("page_token", token.clone()));

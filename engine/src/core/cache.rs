@@ -29,26 +29,42 @@ fn maybe_decompress(data: Vec<u8>) -> Result<Vec<u8>, String> {
 
 /// Pack bars from JSON into binary format for efficient storage.
 /// Format: [4-byte magic][u32 count][per bar: i64 ts_ms, f64 O, f64 H, f64 L, f64 C, f64 V]
+///
+/// Bars with unparseable timestamps or invalid OHLC (non-positive, NaN, high<low) are
+/// silently dropped — corrupt rows that previously defaulted to epoch 0 polluted charts
+/// with a phantom flat line at the far left.
 fn pack_bars(json_data: &str) -> Result<Vec<u8>, String> {
     let bars: Vec<serde_json::Value> = serde_json::from_str(json_data)
         .map_err(|e| format!("JSON parse failed: {e}"))?;
-    let count = bars.len() as u32;
     let mut buf = Vec::with_capacity(4 + 4 + bars.len() * BYTES_PER_BAR);
     buf.extend_from_slice(BAR_BINARY_MAGIC);
-    buf.extend_from_slice(&count.to_le_bytes());
+    // Reserve the count slot; overwrite once we know how many bars survived.
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    let mut kept: u32 = 0;
     for bar in &bars {
-        // Parse timestamp string to epoch milliseconds
         let ts_str = bar["timestamp"].as_str().unwrap_or("");
-        let ts_ms = chrono::DateTime::parse_from_rfc3339(ts_str)
-            .map(|dt| dt.timestamp_millis())
-            .unwrap_or(0i64);
+        let ts_ms = match chrono::DateTime::parse_from_rfc3339(ts_str) {
+            Ok(dt) => dt.timestamp_millis(),
+            Err(_) => continue,
+        };
+        if ts_ms <= 0 { continue; }
+        let o = bar["open"].as_f64().unwrap_or(0.0);
+        let h = bar["high"].as_f64().unwrap_or(0.0);
+        let l = bar["low"].as_f64().unwrap_or(0.0);
+        let c = bar["close"].as_f64().unwrap_or(0.0);
+        let v = bar["volume"].as_f64().unwrap_or(0.0);
+        if !(o > 0.0 && h > 0.0 && l > 0.0 && c > 0.0) { continue; }
+        if !(o.is_finite() && h.is_finite() && l.is_finite() && c.is_finite() && v.is_finite()) { continue; }
+        if h < l { continue; }
         buf.extend_from_slice(&ts_ms.to_le_bytes());
-        buf.extend_from_slice(&bar["open"].as_f64().unwrap_or(0.0).to_le_bytes());
-        buf.extend_from_slice(&bar["high"].as_f64().unwrap_or(0.0).to_le_bytes());
-        buf.extend_from_slice(&bar["low"].as_f64().unwrap_or(0.0).to_le_bytes());
-        buf.extend_from_slice(&bar["close"].as_f64().unwrap_or(0.0).to_le_bytes());
-        buf.extend_from_slice(&bar["volume"].as_f64().unwrap_or(0.0).to_le_bytes());
+        buf.extend_from_slice(&o.to_le_bytes());
+        buf.extend_from_slice(&h.to_le_bytes());
+        buf.extend_from_slice(&l.to_le_bytes());
+        buf.extend_from_slice(&c.to_le_bytes());
+        buf.extend_from_slice(&v.to_le_bytes());
+        kept += 1;
     }
+    buf[4..8].copy_from_slice(&kept.to_le_bytes());
     Ok(buf)
 }
 
@@ -262,6 +278,37 @@ impl SqliteCache {
         let _ = conn.execute("ALTER TABLE bar_cache ADD COLUMN second_last_ts TEXT", []);
         // Schema migration: track zstd compression level per entry (compact skips already-compacted)
         let _ = conn.execute("ALTER TABLE bar_cache ADD COLUMN zstd_level INTEGER NOT NULL DEFAULT 3", []);
+
+        // One-shot migration: purge existing Alpaca stock bar entries. Prior builds never
+        // requested adjustment=all, so every cached stock series is split-unadjusted and
+        // renders as flat-line-then-spike for any symbol that had a reverse split. Crypto
+        // keys (which contain a slash like "alpaca:BTC/USD:1Day") are left intact.
+        let migration_marker = "__migration__alpaca_bar_adjust_2026_04__";
+        let already_migrated: bool = conn
+            .query_row(
+                "SELECT 1 FROM kv_cache WHERE key = ?1",
+                params![migration_marker],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !already_migrated {
+            let purged = conn.execute(
+                "DELETE FROM bar_cache WHERE key LIKE 'alpaca:%' AND key NOT LIKE 'alpaca:%/%'",
+                [],
+            ).unwrap_or(0);
+            tracing::info!(
+                "cache migration: purged {} alpaca stock bar entries (re-fetch with adjustment=all)",
+                purged
+            );
+            let _ = conn.execute(
+                "INSERT OR REPLACE INTO kv_cache (key, value, timestamp) VALUES (?1, ?2, ?3)",
+                params![
+                    migration_marker,
+                    purged.to_string().as_bytes(),
+                    chrono::Utc::now().timestamp()
+                ],
+            );
+        }
 
         // Open a second read-only connection for the read path.
         // WAL mode allows this to read concurrently while conn writes.
@@ -591,8 +638,12 @@ impl SqliteCache {
         let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
         let bar_count: i64 = conn.query_row("SELECT COUNT(*) FROM bar_cache", [], |r| r.get(0))
             .unwrap_or(0);
-        let kv_count: i64 = conn.query_row("SELECT COUNT(*) FROM kv_cache", [], |r| r.get(0))
-            .unwrap_or(0);
+        // Internal migration markers (keys wrapped in "__") are not user-facing cache data.
+        let kv_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM kv_cache WHERE key NOT LIKE '\\_\\_migration\\_\\_%' ESCAPE '\\'",
+            [],
+            |r| r.get(0),
+        ).unwrap_or(0);
         // Report actual file size on disk (includes freed pages from DELETEs).
         // SUM(LENGTH(data)) only counts live data — misleading after purge operations
         // where the file stays large until VACUUM reclaims freed pages.
@@ -742,16 +793,19 @@ impl SqliteCache {
             None => Vec::new(),
         };
 
-        // Merge and deduplicate by timestamp
+        // Merge and deduplicate by numeric epoch-ms. String compare on RFC3339 silently
+        // leaks duplicates when format drifts across sources (Z vs +00:00, millis vs no-millis)
+        // and buckets all missing/empty timestamps together at the start of the series.
         all_bars.extend(new_bars);
-        all_bars.sort_by(|a, b| {
-            let ta = a["timestamp"].as_str().unwrap_or("");
-            let tb = b["timestamp"].as_str().unwrap_or("");
-            ta.cmp(tb)
-        });
-        all_bars.dedup_by(|a, b| {
-            a["timestamp"].as_str() == b["timestamp"].as_str()
-        });
+        let ts_ms_of = |v: &serde_json::Value| -> Option<i64> {
+            v["timestamp"].as_str()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.timestamp_millis())
+                .filter(|ms| *ms > 0)
+        };
+        all_bars.retain(|b| ts_ms_of(b).is_some());
+        all_bars.sort_by_key(|b| ts_ms_of(b).unwrap_or(0));
+        all_bars.dedup_by(|a, b| ts_ms_of(a) == ts_ms_of(b));
 
         // Trim to max_bars (keep most recent) — prevents unbounded cache growth
         if max_bars > 0 && all_bars.len() > max_bars {

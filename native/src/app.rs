@@ -1693,10 +1693,20 @@ impl ChartState {
         }
         if let Some((raw, primary_is_gap_fill)) = result {
             self.gap_fill_timestamps.clear();
-            self.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| {
-                if primary_is_gap_fill { self.gap_fill_timestamps.insert(ts); }
-                Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v }
-            }).collect();
+            // Filter invalid bars (parity with load() at ~line 1842) — epoch-0 timestamps,
+            // non-positive prices, NaN, or high<low would otherwise render as phantom
+            // flat lines on the non-blocking UI hot path before load() runs.
+            self.bars = raw.into_iter()
+                .filter(|(ts, o, h, l, c, _v)| {
+                    *ts > 0 && *o > 0.0 && *h > 0.0 && *l > 0.0 && *c > 0.0
+                    && o.is_finite() && h.is_finite() && l.is_finite() && c.is_finite()
+                    && *h >= *l
+                })
+                .map(|(ts, o, h, l, c, v)| {
+                    if primary_is_gap_fill { self.gap_fill_timestamps.insert(ts); }
+                    Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v }
+                })
+                .collect();
 
             // Track primary source range (bars before this are backfill)
             self.primary_first_ts = if primary_is_gap_fill { 0 } else {
