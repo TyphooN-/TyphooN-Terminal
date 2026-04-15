@@ -1753,6 +1753,127 @@ pub struct CoverageSnapshot {
     pub note: String,
 }
 
+// ── ADR-123 Godel Parity Round 16 ───────────────────────────────────────────
+
+/// VRK — Value Rank vs sector peers snapshot.
+/// Percentile rank of `ValueSnapshot.composite_score` within the same sector.
+/// Higher percentile = better value (label ladder matches VAL's "DEEP_VALUE is good").
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ValueRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub composite_score: f64,         // subject's VAL composite (copied)
+    pub peers_considered: usize,      // peers in the same sector with a VAL snapshot
+    pub peers_with_data: usize,       // same as peers_considered today
+    pub sector_median_score: f64,
+    pub sector_p25: f64,
+    pub sector_p75: f64,
+    pub percentile_rank: f64,         // 0..100 (higher = better value)
+    pub rank_position: usize,         // 1-based (1 = best value in cohort)
+    pub rank_label: String,           // "TOP_DECILE" | "TOP_QUARTILE" | "ABOVE_MEDIAN" | "BELOW_MEDIAN" | "BOTTOM_QUARTILE" | "BOTTOM_DECILE" | "NO_DATA"
+    pub note: String,
+}
+
+/// QRK — Quality Rank vs sector peers snapshot.
+/// Percentile rank of `QualitySnapshot.composite_score` within the same sector.
+/// Higher percentile = higher quality.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QualityRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub composite_score: f64,
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_score: f64,
+    pub sector_p25: f64,
+    pub sector_p75: f64,
+    pub percentile_rank: f64,         // 0..100 (higher = better quality)
+    pub rank_position: usize,
+    pub rank_label: String,           // same ladder as VRK
+    pub note: String,
+}
+
+/// RRK — Risk Rank vs sector peers snapshot.
+/// Percentile rank of `RiskSnapshot.composite_score` within the same sector.
+/// RISK composite is higher = riskier, so this snapshot *inverts* the percentile:
+/// higher `percentile_rank` here = SAFER than peers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RiskRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub composite_score: f64,         // subject's RISK composite (higher = riskier)
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_score: f64,
+    pub sector_p25: f64,
+    pub sector_p75: f64,
+    pub percentile_rank: f64,         // 0..100 (higher = SAFER vs peers)
+    pub rank_position: usize,         // 1-based (1 = safest in cohort)
+    pub rank_label: String,           // "SAFEST_DECILE" | "SAFEST_QUARTILE" | "ABOVE_MEDIAN_SAFE" | "BELOW_MEDIAN_RISKY" | "BOTTOM_QUARTILE_RISKY" | "RISKIEST_DECILE" | "NO_DATA"
+    pub note: String,
+}
+
+/// RELEPSGR — Relative 3y EPS CAGR vs sector median snapshot.
+/// CAGR computed over `FinancialStatements.income_annual[].eps` when at least
+/// 4 annual rows exist (latest vs latest-3y = 3-year CAGR).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RelativeEpsGrowthSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub latest_eps: f64,
+    pub earliest_eps: f64,
+    pub years_used: usize,
+    pub symbol_cagr_pct: f64,
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_cagr_pct: f64,
+    pub sector_p25_cagr_pct: f64,
+    pub sector_p75_cagr_pct: f64,
+    pub gap_to_median_pp: f64,        // symbol_cagr - sector_median (in percentage points)
+    pub relative_label: String,       // "FAR_ABOVE" | "ABOVE" | "INLINE" | "BELOW" | "FAR_BELOW" | "CAGR_NEGATIVE" | "NO_DATA"
+    pub note: String,
+}
+
+/// PEAD — Per-event drift row (one per earnings announcement within the window).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PeadEventRow {
+    pub event_date: String,
+    pub surprise_pct: f64,
+    pub classification: String,       // "BEAT" | "MISS" | "INLINE"
+    pub drift_1d_pct: f64,
+    pub drift_3d_pct: f64,
+    pub drift_5d_pct: f64,
+    pub drift_10d_pct: f64,
+}
+
+/// PEAD — Post-Earnings-Announcement Drift snapshot.
+/// Joins cached `EarningsSurprise` rows with cached `HistoricalPriceRow` bars
+/// to measure average forward drift over 1 / 3 / 5 / 10 trading days after
+/// each announcement.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PeadSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub num_events: usize,            // surprises in the cache
+    pub events_used: usize,           // surprises successfully matched to HP bars
+    pub avg_drift_1d_pct: f64,
+    pub avg_drift_3d_pct: f64,
+    pub avg_drift_5d_pct: f64,
+    pub avg_drift_10d_pct: f64,
+    pub beat_event_drift_5d_pct: f64,
+    pub miss_event_drift_5d_pct: f64,
+    pub latest_event_date: String,
+    pub latest_event_surprise_pct: f64,
+    pub latest_event_drift_5d_pct: f64,
+    pub drift_direction_label: String, // "DRIFT_UP" | "DRIFT_DOWN" | "MIXED" | "INSUFFICIENT_DATA"
+    pub rows: Vec<PeadEventRow>,
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -8771,6 +8892,574 @@ pub fn compute_covg_snapshot(
     }
 }
 
+// ── ADR-123 Godel Parity Round 16 compute fns ──────────────────────────────
+
+/// Simple quartile at `q ∈ [0,1]` via linear interpolation on a sorted slice.
+/// Used by the Round 16 rank surfaces for p25 / p75 sector markers.
+fn quantile_f64(sorted: &[f64], q: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    if sorted.len() == 1 {
+        return sorted[0];
+    }
+    let idx = q * (sorted.len() as f64 - 1.0);
+    let lo = idx.floor() as usize;
+    let hi = idx.ceil() as usize;
+    if lo == hi {
+        return sorted[lo];
+    }
+    let frac = idx - lo as f64;
+    sorted[lo] * (1.0 - frac) + sorted[hi] * frac
+}
+
+/// Percentile-rank `value` vs `others` using the
+/// `(below + 0.5 × equal) / total × 100` midrank convention.
+/// When `higher_is_better == false`, the returned rank is inverted so that
+/// a smaller input value yields a higher percentile (used by RRK where
+/// composite is higher = riskier).
+fn percentile_rank_score(value: f64, others: &[f64], higher_is_better: bool) -> f64 {
+    let total = others.len() + 1;
+    if total < 2 {
+        return 50.0;
+    }
+    let (mut below, mut equal) = (0usize, 0usize);
+    for &o in others {
+        if (o - value).abs() < 1e-9 {
+            equal += 1;
+        } else if higher_is_better {
+            if o < value { below += 1; }
+        } else {
+            if o > value { below += 1; }
+        }
+    }
+    let raw = (below as f64 + 0.5 * equal as f64 + 0.5) / total as f64 * 100.0;
+    raw.clamp(0.0, 100.0)
+}
+
+/// Standard 6-bucket rank label ladder for VRK / QRK.
+fn rank_label_for_percentile(pct: f64) -> &'static str {
+    if pct >= 90.0 { "TOP_DECILE" }
+    else if pct >= 75.0 { "TOP_QUARTILE" }
+    else if pct >= 50.0 { "ABOVE_MEDIAN" }
+    else if pct >= 25.0 { "BELOW_MEDIAN" }
+    else if pct >= 10.0 { "BOTTOM_QUARTILE" }
+    else { "BOTTOM_DECILE" }
+}
+
+/// Risk-inverted rank label ladder for RRK (higher rank = safer).
+fn risk_rank_label_for_percentile(pct: f64) -> &'static str {
+    if pct >= 90.0 { "SAFEST_DECILE" }
+    else if pct >= 75.0 { "SAFEST_QUARTILE" }
+    else if pct >= 50.0 { "ABOVE_MEDIAN_SAFE" }
+    else if pct >= 25.0 { "BELOW_MEDIAN_RISKY" }
+    else if pct >= 10.0 { "BOTTOM_QUARTILE_RISKY" }
+    else { "RISKIEST_DECILE" }
+}
+
+/// VRK — Value Rank vs sector peers.
+///
+/// Takes the subject's `ValueSnapshot` and a slice of peer snapshots
+/// (caller filters to the same sector). Returns a percentile rank with the
+/// standard 6-bucket label ladder. Higher percentile = better value.
+pub fn compute_vrk_snapshot(
+    symbol: &str,
+    as_of: &str,
+    subject: Option<&ValueSnapshot>,
+    peers: &[&ValueSnapshot],
+) -> ValueRankSnapshot {
+    let subj = match subject {
+        Some(s) if s.value_label != "NO_DATA" && s.composite_score > 0.0 => s,
+        _ => {
+            return ValueRankSnapshot {
+                symbol: symbol.to_string(),
+                as_of: as_of.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "No VAL snapshot cached for subject".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let peer_scores: Vec<f64> = peers
+        .iter()
+        .filter(|p| p.value_label != "NO_DATA" && p.composite_score > 0.0)
+        .map(|p| p.composite_score)
+        .collect();
+    if peer_scores.len() < 3 {
+        return ValueRankSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            sector: subj.sector.clone(),
+            composite_score: subj.composite_score,
+            peers_considered: peer_scores.len(),
+            peers_with_data: peer_scores.len(),
+            rank_label: "NO_DATA".into(),
+            note: format!(
+                "Only {} VAL peers in sector {} (need ≥3)",
+                peer_scores.len(),
+                subj.sector
+            ),
+            ..Default::default()
+        };
+    }
+    let mut sorted = peer_scores.clone();
+    sorted.push(subj.composite_score);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    let pct = percentile_rank_score(subj.composite_score, &peer_scores, true);
+    // 1-based rank position: count peers strictly better than subject + 1.
+    let better = peer_scores.iter().filter(|&&p| p > subj.composite_score).count();
+    let rank_position = better + 1;
+    let label = rank_label_for_percentile(pct);
+    ValueRankSnapshot {
+        symbol: symbol.to_string(),
+        as_of: as_of.to_string(),
+        sector: subj.sector.clone(),
+        composite_score: subj.composite_score,
+        peers_considered: peer_scores.len(),
+        peers_with_data: peer_scores.len(),
+        sector_median_score: median,
+        sector_p25: p25,
+        sector_p75: p75,
+        percentile_rank: pct,
+        rank_position,
+        rank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// QRK — Quality Rank vs sector peers.
+///
+/// `QualitySnapshot` does not carry sector — caller must supply it (typically
+/// from `fundamentals::get_fundamentals(symbol).sector`), and peers must be
+/// pre-filtered to the same sector.
+pub fn compute_qrk_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject: Option<&QualitySnapshot>,
+    peers: &[&QualitySnapshot],
+) -> QualityRankSnapshot {
+    let subj = match subject {
+        Some(s) if s.quality_label != "NO_DATA" && s.composite_score > 0.0 => s,
+        _ => {
+            return QualityRankSnapshot {
+                symbol: symbol.to_string(),
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "No QUAL snapshot cached for subject".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let peer_scores: Vec<f64> = peers
+        .iter()
+        .filter(|p| p.quality_label != "NO_DATA" && p.composite_score > 0.0)
+        .map(|p| p.composite_score)
+        .collect();
+    if peer_scores.len() < 3 {
+        return QualityRankSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            composite_score: subj.composite_score,
+            peers_considered: peer_scores.len(),
+            peers_with_data: peer_scores.len(),
+            rank_label: "NO_DATA".into(),
+            note: format!(
+                "Only {} QUAL peers in sector {} (need ≥3)",
+                peer_scores.len(),
+                sector
+            ),
+            ..Default::default()
+        };
+    }
+    let mut sorted = peer_scores.clone();
+    sorted.push(subj.composite_score);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    let pct = percentile_rank_score(subj.composite_score, &peer_scores, true);
+    let better = peer_scores.iter().filter(|&&p| p > subj.composite_score).count();
+    let label = rank_label_for_percentile(pct);
+    QualityRankSnapshot {
+        symbol: symbol.to_string(),
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        composite_score: subj.composite_score,
+        peers_considered: peer_scores.len(),
+        peers_with_data: peer_scores.len(),
+        sector_median_score: median,
+        sector_p25: p25,
+        sector_p75: p75,
+        percentile_rank: pct,
+        rank_position: better + 1,
+        rank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// RRK — Risk Rank vs sector peers.
+///
+/// Percentile rank is *inverted* relative to VRK/QRK: RISK composite is
+/// higher = riskier, so this surface treats a **lower** composite as **better**
+/// and reports "higher percentile = safer." Label ladder uses
+/// SAFEST_DECILE..RISKIEST_DECILE phrasing so the inversion is explicit.
+pub fn compute_rrk_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject: Option<&RiskSnapshot>,
+    peers: &[&RiskSnapshot],
+) -> RiskRankSnapshot {
+    let subj = match subject {
+        Some(s) if s.risk_label != "NO_DATA" && s.composite_score > 0.0 => s,
+        _ => {
+            return RiskRankSnapshot {
+                symbol: symbol.to_string(),
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "No RISK snapshot cached for subject".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let peer_scores: Vec<f64> = peers
+        .iter()
+        .filter(|p| p.risk_label != "NO_DATA" && p.composite_score > 0.0)
+        .map(|p| p.composite_score)
+        .collect();
+    if peer_scores.len() < 3 {
+        return RiskRankSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            composite_score: subj.composite_score,
+            peers_considered: peer_scores.len(),
+            peers_with_data: peer_scores.len(),
+            rank_label: "NO_DATA".into(),
+            note: format!(
+                "Only {} RISK peers in sector {} (need ≥3)",
+                peer_scores.len(),
+                sector
+            ),
+            ..Default::default()
+        };
+    }
+    let mut sorted = peer_scores.clone();
+    sorted.push(subj.composite_score);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    // INVERSION: higher_is_better = false because RISK composite is higher = riskier.
+    let pct = percentile_rank_score(subj.composite_score, &peer_scores, false);
+    // 1-based: rank position counted by how many peers are SAFER (lower composite).
+    let safer = peer_scores.iter().filter(|&&p| p < subj.composite_score).count();
+    let label = risk_rank_label_for_percentile(pct);
+    RiskRankSnapshot {
+        symbol: symbol.to_string(),
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        composite_score: subj.composite_score,
+        peers_considered: peer_scores.len(),
+        peers_with_data: peer_scores.len(),
+        sector_median_score: median,
+        sector_p25: p25,
+        sector_p75: p75,
+        percentile_rank: pct,
+        rank_position: safer + 1,
+        rank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// Compute 3-year EPS CAGR from a `FinancialStatements`.
+/// Prefers annual rows (latest[0] vs latest[3] → 3y CAGR). Returns
+/// `(latest_eps, earliest_eps, years_used, cagr_pct)` where `cagr_pct` is
+/// `f64::NAN` if the sign-rule rejects the series.
+fn eps_cagr_3y_from_statements(statements: &FinancialStatements) -> (f64, f64, usize, f64) {
+    let annuals = &statements.income_annual;
+    if annuals.len() < 4 {
+        return (0.0, 0.0, 0, f64::NAN);
+    }
+    // Rows are assumed newest-first per the Finnhub fetcher convention.
+    let latest = annuals[0].eps;
+    let earliest = annuals[3].eps;
+    let years = 3usize;
+    // CAGR only valid when both endpoints are strictly positive.
+    if latest > 0.0 && earliest > 0.0 {
+        let cagr = ((latest / earliest).powf(1.0 / years as f64) - 1.0) * 100.0;
+        (latest, earliest, years, cagr)
+    } else if latest.is_finite() && earliest.is_finite() && earliest.abs() > 1e-9 {
+        // Degrade gracefully to a linear annualised growth when signs cross:
+        // this is the "CAGR_NEGATIVE" path — the snapshot label captures it.
+        let linear = (latest - earliest) / earliest.abs() / years as f64 * 100.0;
+        (latest, earliest, years, linear)
+    } else {
+        (latest, earliest, years, f64::NAN)
+    }
+}
+
+/// RELEPSGR — Relative 3-year EPS CAGR vs sector median.
+///
+/// Computes the subject's 3y EPS CAGR and the median CAGR of the peer slice,
+/// then labels the subject relative to the sector median. Labels:
+/// FAR_ABOVE (≥ +15pp), ABOVE (≥ +5pp), INLINE (within ±5pp), BELOW (≤ -5pp),
+/// FAR_BELOW (≤ -15pp), CAGR_NEGATIVE (sign-crossed subject EPS),
+/// NO_DATA (insufficient annual rows or empty peer set).
+pub fn compute_relepsgr_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject: Option<&FinancialStatements>,
+    peer_statements: &[(String, FinancialStatements)],
+) -> RelativeEpsGrowthSnapshot {
+    let subj = match subject {
+        Some(s) if s.income_annual.len() >= 4 => s,
+        _ => {
+            return RelativeEpsGrowthSnapshot {
+                symbol: symbol.to_string(),
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                relative_label: "NO_DATA".into(),
+                note: "Subject has < 4 annual income rows".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let (latest, earliest, years, subj_cagr) = eps_cagr_3y_from_statements(subj);
+    let mut peer_cagrs: Vec<f64> = Vec::new();
+    for (_, st) in peer_statements {
+        if st.income_annual.len() < 4 {
+            continue;
+        }
+        let (_, _, _, c) = eps_cagr_3y_from_statements(st);
+        if c.is_finite() {
+            peer_cagrs.push(c);
+        }
+    }
+    let peers_considered = peer_statements.len();
+    let peers_with_data = peer_cagrs.len();
+    if peer_cagrs.len() < 3 {
+        return RelativeEpsGrowthSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            latest_eps: latest,
+            earliest_eps: earliest,
+            years_used: years,
+            symbol_cagr_pct: if subj_cagr.is_finite() { subj_cagr } else { 0.0 },
+            peers_considered,
+            peers_with_data,
+            relative_label: "NO_DATA".into(),
+            note: format!("Only {} peers with ≥4 annual rows (need ≥3)", peer_cagrs.len()),
+            ..Default::default()
+        };
+    }
+    let mut sorted = peer_cagrs.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    if !subj_cagr.is_finite() || latest <= 0.0 || earliest <= 0.0 {
+        return RelativeEpsGrowthSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            latest_eps: latest,
+            earliest_eps: earliest,
+            years_used: years,
+            symbol_cagr_pct: if subj_cagr.is_finite() { subj_cagr } else { 0.0 },
+            peers_considered,
+            peers_with_data,
+            sector_median_cagr_pct: median,
+            sector_p25_cagr_pct: p25,
+            sector_p75_cagr_pct: p75,
+            relative_label: "CAGR_NEGATIVE".into(),
+            note: "Subject EPS crosses zero; using linear proxy".into(),
+            ..Default::default()
+        };
+    }
+    let gap = subj_cagr - median;
+    let label = if gap >= 15.0 { "FAR_ABOVE" }
+        else if gap >= 5.0 { "ABOVE" }
+        else if gap >= -5.0 { "INLINE" }
+        else if gap >= -15.0 { "BELOW" }
+        else { "FAR_BELOW" };
+    RelativeEpsGrowthSnapshot {
+        symbol: symbol.to_string(),
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        latest_eps: latest,
+        earliest_eps: earliest,
+        years_used: years,
+        symbol_cagr_pct: subj_cagr,
+        peers_considered,
+        peers_with_data,
+        sector_median_cagr_pct: median,
+        sector_p25_cagr_pct: p25,
+        sector_p75_cagr_pct: p75,
+        gap_to_median_pp: gap,
+        relative_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// Locate the index of the first bar with `date >= target_date` in a
+/// newest-first HP bar slice. Returns `None` if no such bar exists.
+fn find_t0_index_newest_first(bars: &[HistoricalPriceRow], target_date: &str) -> Option<usize> {
+    // Scan from oldest to newest (reverse iteration) and return the first
+    // bar that is on-or-after the target. "newest-first" means bars[0] is
+    // the most recent trading day.
+    let mut best: Option<usize> = None;
+    for (i, b) in bars.iter().enumerate() {
+        if b.date.as_str() >= target_date {
+            best = Some(i);
+        } else {
+            break;
+        }
+    }
+    best
+}
+
+/// PEAD — Post-Earnings-Announcement Drift snapshot.
+///
+/// For each surprise row, locate `T0` in the HP bar slice (first trading day
+/// at or after the announcement date), then compute forward drift over 1 / 3 /
+/// 5 / 10 trading days. Averages over all successfully-matched events.
+/// Returns INSUFFICIENT_DATA if fewer than 3 events match.
+pub fn compute_pead_snapshot(
+    symbol: &str,
+    as_of: &str,
+    surprises: &[EarningsSurprise],
+    bars_newest_first: &[HistoricalPriceRow],
+) -> PeadSnapshot {
+    let num_events = surprises.len();
+    if num_events == 0 || bars_newest_first.len() < 11 {
+        return PeadSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            num_events,
+            events_used: 0,
+            drift_direction_label: "INSUFFICIENT_DATA".into(),
+            note: if num_events == 0 {
+                "No earnings surprises cached".into()
+            } else {
+                format!("Need ≥11 HP bars, have {}", bars_newest_first.len())
+            },
+            ..Default::default()
+        };
+    }
+    let mut rows: Vec<PeadEventRow> = Vec::new();
+    let mut beat_drifts_5d: Vec<f64> = Vec::new();
+    let mut miss_drifts_5d: Vec<f64> = Vec::new();
+    let mut all_1d: Vec<f64> = Vec::new();
+    let mut all_3d: Vec<f64> = Vec::new();
+    let mut all_5d: Vec<f64> = Vec::new();
+    let mut all_10d: Vec<f64> = Vec::new();
+    for surprise in surprises {
+        let t0_idx = match find_t0_index_newest_first(bars_newest_first, &surprise.date) {
+            Some(i) => i,
+            None => continue,
+        };
+        // drift_Nd: close(t0 - N days back in newest-first ordering) vs close(t0).
+        // Because bars are newest-first, "N trading days forward" means a
+        // *smaller* index. Subtract N from t0_idx.
+        if t0_idx < 10 {
+            continue;
+        }
+        let t0_close = bars_newest_first[t0_idx].close;
+        if t0_close <= 0.0 {
+            continue;
+        }
+        let drift = |n: usize| {
+            let fwd = &bars_newest_first[t0_idx - n];
+            (fwd.close / t0_close - 1.0) * 100.0
+        };
+        let d1 = drift(1);
+        let d3 = drift(3);
+        let d5 = drift(5);
+        let d10 = drift(10);
+        let classification = if surprise.surprise_pct > 2.0 {
+            "BEAT"
+        } else if surprise.surprise_pct < -2.0 {
+            "MISS"
+        } else {
+            "INLINE"
+        };
+        match classification {
+            "BEAT" => beat_drifts_5d.push(d5),
+            "MISS" => miss_drifts_5d.push(d5),
+            _ => {}
+        }
+        all_1d.push(d1);
+        all_3d.push(d3);
+        all_5d.push(d5);
+        all_10d.push(d10);
+        rows.push(PeadEventRow {
+            event_date: surprise.date.clone(),
+            surprise_pct: surprise.surprise_pct,
+            classification: classification.into(),
+            drift_1d_pct: d1,
+            drift_3d_pct: d3,
+            drift_5d_pct: d5,
+            drift_10d_pct: d10,
+        });
+    }
+    let events_used = rows.len();
+    if events_used < 3 {
+        return PeadSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            num_events,
+            events_used,
+            drift_direction_label: "INSUFFICIENT_DATA".into(),
+            note: format!("Matched only {} events to HP bars (need ≥3)", events_used),
+            rows,
+            ..Default::default()
+        };
+    }
+    let mean = |v: &[f64]| if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 };
+    let avg_1d = mean(&all_1d);
+    let avg_3d = mean(&all_3d);
+    let avg_5d = mean(&all_5d);
+    let avg_10d = mean(&all_10d);
+    let beat_5d = mean(&beat_drifts_5d);
+    let miss_5d = mean(&miss_drifts_5d);
+    // Sort rows newest-first (highest event_date string first) for stable display.
+    let mut sorted_rows = rows.clone();
+    sorted_rows.sort_by(|a, b| b.event_date.cmp(&a.event_date));
+    let latest = sorted_rows.first().cloned().unwrap_or_default();
+    let label = if avg_5d >= 2.0 { "DRIFT_UP" }
+        else if avg_5d <= -2.0 { "DRIFT_DOWN" }
+        else { "MIXED" };
+    let display_rows: Vec<PeadEventRow> = sorted_rows.into_iter().take(8).collect();
+    PeadSnapshot {
+        symbol: symbol.to_string(),
+        as_of: as_of.to_string(),
+        num_events,
+        events_used,
+        avg_drift_1d_pct: avg_1d,
+        avg_drift_3d_pct: avg_3d,
+        avg_drift_5d_pct: avg_5d,
+        avg_drift_10d_pct: avg_10d,
+        beat_event_drift_5d_pct: beat_5d,
+        miss_event_drift_5d_pct: miss_5d,
+        latest_event_date: latest.event_date.clone(),
+        latest_event_surprise_pct: latest.surprise_pct,
+        latest_event_drift_5d_pct: latest.drift_5d_pct,
+        drift_direction_label: label.into(),
+        rows: display_rows,
+        note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -10763,6 +11452,198 @@ pub fn get_covg(conn: &Connection, symbol: &str) -> Result<Option<CoverageSnapsh
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
+}
+
+// ── ADR-123 Round 16 schema + helpers ──────────────────────────────────────
+
+pub fn create_research_tables_v16(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v15(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_vrk (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_vrk_updated ON research_vrk(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_qrk (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_qrk_updated ON research_qrk(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_rrk (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_rrk_updated ON research_rrk(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_relepsgr (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_relepsgr_updated ON research_relepsgr(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_pead (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_pead_updated ON research_pead(updated_at);",
+    ).map_err(|e| format!("create v16 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_vrk(conn: &Connection, symbol: &str, snap: &ValueRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v16(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("vrk json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_vrk(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert vrk: {e}"))?;
+    Ok(())
+}
+
+pub fn get_vrk(conn: &Connection, symbol: &str) -> Result<Option<ValueRankSnapshot>, String> {
+    let _ = create_research_tables_v16(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_vrk WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_vrk: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_vrk: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_vrk: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_qrk(conn: &Connection, symbol: &str, snap: &QualityRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v16(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("qrk json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_qrk(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert qrk: {e}"))?;
+    Ok(())
+}
+
+pub fn get_qrk(conn: &Connection, symbol: &str) -> Result<Option<QualityRankSnapshot>, String> {
+    let _ = create_research_tables_v16(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_qrk WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_qrk: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_qrk: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_qrk: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_rrk(conn: &Connection, symbol: &str, snap: &RiskRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v16(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("rrk json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_rrk(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert rrk: {e}"))?;
+    Ok(())
+}
+
+pub fn get_rrk(conn: &Connection, symbol: &str) -> Result<Option<RiskRankSnapshot>, String> {
+    let _ = create_research_tables_v16(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_rrk WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_rrk: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_rrk: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_rrk: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_relepsgr(conn: &Connection, symbol: &str, snap: &RelativeEpsGrowthSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v16(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("relepsgr json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_relepsgr(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert relepsgr: {e}"))?;
+    Ok(())
+}
+
+pub fn get_relepsgr(conn: &Connection, symbol: &str) -> Result<Option<RelativeEpsGrowthSnapshot>, String> {
+    let _ = create_research_tables_v16(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_relepsgr WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_relepsgr: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_relepsgr: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_relepsgr: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_pead(conn: &Connection, symbol: &str, snap: &PeadSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v16(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("pead json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_pead(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert pead: {e}"))?;
+    Ok(())
+}
+
+pub fn get_pead(conn: &Connection, symbol: &str) -> Result<Option<PeadSnapshot>, String> {
+    let _ = create_research_tables_v16(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_pead WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_pead: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_pead: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_pead: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+/// Whole-table scan of `research_val`. Used by VRK / sector-rank surfaces.
+pub fn get_all_val(conn: &Connection) -> Result<Vec<ValueSnapshot>, String> {
+    let _ = create_research_tables_v15(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_val")
+        .map_err(|e| format!("prepare get_all_val: {e}"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query_map get_all_val: {e}"))?
+        .filter_map(|r| r.ok())
+        .filter_map(|j| serde_json::from_str::<ValueSnapshot>(&j).ok())
+        .collect();
+    Ok(rows)
+}
+
+/// Whole-table scan of `research_qual`. Used by QRK.
+pub fn get_all_qual(conn: &Connection) -> Result<Vec<QualitySnapshot>, String> {
+    let _ = create_research_tables_v15(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_qual")
+        .map_err(|e| format!("prepare get_all_qual: {e}"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query_map get_all_qual: {e}"))?
+        .filter_map(|r| r.ok())
+        .filter_map(|j| serde_json::from_str::<QualitySnapshot>(&j).ok())
+        .collect();
+    Ok(rows)
+}
+
+/// Whole-table scan of `research_risk`. Used by RRK.
+pub fn get_all_risk(conn: &Connection) -> Result<Vec<RiskSnapshot>, String> {
+    let _ = create_research_tables_v15(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_risk")
+        .map_err(|e| format!("prepare get_all_risk: {e}"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query_map get_all_risk: {e}"))?
+        .filter_map(|r| r.ok())
+        .filter_map(|j| serde_json::from_str::<RiskSnapshot>(&j).ok())
+        .collect();
+    Ok(rows)
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -14181,5 +15062,288 @@ mod tests {
     fn compute_covg_none() {
         let snap = compute_covg_snapshot("CVG", "2026-04-14", None, &[], None);
         assert_eq!(snap.coverage_label, "NONE");
+    }
+
+    // ── ADR-123 Round 16 tests ─────────────────────────────────────────────
+
+    #[test]
+    fn vrk_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v16(&c).unwrap();
+        let snap = ValueRankSnapshot {
+            symbol: "VRK1".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Tech".into(),
+            rank_label: "TOP_QUARTILE".into(),
+            percentile_rank: 78.5,
+            ..Default::default()
+        };
+        upsert_vrk(&c, "vrk1", &snap).unwrap();
+        let got = get_vrk(&c, "VRK1").unwrap().unwrap();
+        assert_eq!(got.rank_label, "TOP_QUARTILE");
+        assert!((got.percentile_rank - 78.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn qrk_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v16(&c).unwrap();
+        let snap = QualityRankSnapshot {
+            symbol: "QRK1".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Healthcare".into(),
+            rank_label: "ABOVE_MEDIAN".into(),
+            ..Default::default()
+        };
+        upsert_qrk(&c, "qrk1", &snap).unwrap();
+        let got = get_qrk(&c, "QRK1").unwrap().unwrap();
+        assert_eq!(got.rank_label, "ABOVE_MEDIAN");
+    }
+
+    #[test]
+    fn rrk_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v16(&c).unwrap();
+        let snap = RiskRankSnapshot {
+            symbol: "RRK1".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Energy".into(),
+            rank_label: "SAFEST_QUARTILE".into(),
+            ..Default::default()
+        };
+        upsert_rrk(&c, "rrk1", &snap).unwrap();
+        let got = get_rrk(&c, "RRK1").unwrap().unwrap();
+        assert_eq!(got.rank_label, "SAFEST_QUARTILE");
+    }
+
+    #[test]
+    fn relepsgr_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v16(&c).unwrap();
+        let snap = RelativeEpsGrowthSnapshot {
+            symbol: "RELEPS1".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Tech".into(),
+            symbol_cagr_pct: 22.0,
+            sector_median_cagr_pct: 12.0,
+            relative_label: "ABOVE".into(),
+            ..Default::default()
+        };
+        upsert_relepsgr(&c, "releps1", &snap).unwrap();
+        let got = get_relepsgr(&c, "RELEPS1").unwrap().unwrap();
+        assert_eq!(got.relative_label, "ABOVE");
+    }
+
+    #[test]
+    fn pead_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v16(&c).unwrap();
+        let snap = PeadSnapshot {
+            symbol: "PEAD1".into(),
+            as_of: "2026-04-15".into(),
+            num_events: 8,
+            events_used: 6,
+            avg_drift_5d_pct: 3.2,
+            drift_direction_label: "DRIFT_UP".into(),
+            ..Default::default()
+        };
+        upsert_pead(&c, "pead1", &snap).unwrap();
+        let got = get_pead(&c, "PEAD1").unwrap().unwrap();
+        assert_eq!(got.drift_direction_label, "DRIFT_UP");
+    }
+
+    fn mk_val_snap(sym: &str, sector: &str, score: f64) -> ValueSnapshot {
+        ValueSnapshot {
+            symbol: sym.to_string(),
+            as_of: "2026-04-15".into(),
+            sector: sector.to_string(),
+            composite_score: score,
+            value_label: if score >= 65.0 { "VALUE".into() } else { "FAIR".into() },
+            inputs_available: 6,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn compute_vrk_top_decile() {
+        let subj = mk_val_snap("SUB", "Tech", 92.0);
+        let peer_vec: Vec<ValueSnapshot> = (0..9)
+            .map(|i| mk_val_snap(&format!("P{}", i), "Tech", 30.0 + i as f64 * 5.0))
+            .collect();
+        let peers: Vec<&ValueSnapshot> = peer_vec.iter().collect();
+        let snap = compute_vrk_snapshot("SUB", "2026-04-15", Some(&subj), &peers);
+        assert_eq!(snap.rank_label, "TOP_DECILE");
+        assert!(snap.percentile_rank >= 90.0);
+        assert_eq!(snap.rank_position, 1);
+        assert_eq!(snap.peers_considered, 9);
+    }
+
+    #[test]
+    fn compute_vrk_insufficient_peers() {
+        let subj = mk_val_snap("SUB", "Tech", 70.0);
+        let peer_vec = vec![mk_val_snap("P1", "Tech", 50.0), mk_val_snap("P2", "Tech", 60.0)];
+        let peers: Vec<&ValueSnapshot> = peer_vec.iter().collect();
+        let snap = compute_vrk_snapshot("SUB", "2026-04-15", Some(&subj), &peers);
+        assert_eq!(snap.rank_label, "NO_DATA");
+    }
+
+    fn mk_qual_snap(sym: &str, score: f64) -> QualitySnapshot {
+        QualitySnapshot {
+            symbol: sym.to_string(),
+            as_of: "2026-04-15".into(),
+            composite_score: score,
+            quality_label: if score >= 65.0 { "QUALITY".into() } else { "AVERAGE".into() },
+            inputs_available: 4,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn compute_qrk_above_median() {
+        let subj = mk_qual_snap("SUB", 72.0);
+        let peer_vec: Vec<QualitySnapshot> = (0..9)
+            .map(|i| mk_qual_snap(&format!("P{}", i), 40.0 + i as f64 * 4.0))
+            .collect();
+        let peers: Vec<&QualitySnapshot> = peer_vec.iter().collect();
+        let snap = compute_qrk_snapshot("SUB", "2026-04-15", "Tech", Some(&subj), &peers);
+        assert!(matches!(
+            snap.rank_label.as_str(),
+            "ABOVE_MEDIAN" | "TOP_QUARTILE" | "TOP_DECILE"
+        ));
+        assert!(snap.percentile_rank >= 50.0);
+    }
+
+    #[test]
+    fn compute_qrk_no_data() {
+        let snap = compute_qrk_snapshot("SUB", "2026-04-15", "Tech", None, &[]);
+        assert_eq!(snap.rank_label, "NO_DATA");
+    }
+
+    fn mk_risk_snap(sym: &str, composite: f64) -> RiskSnapshot {
+        RiskSnapshot {
+            symbol: sym.to_string(),
+            as_of: "2026-04-15".into(),
+            composite_score: composite,
+            risk_label: if composite >= 75.0 { "HIGH_RISK".into() } else { "MODERATE".into() },
+            inputs_available: 5,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn compute_rrk_safest() {
+        // Subject has the LOWEST risk composite in the cohort → SAFEST_DECILE.
+        let subj = mk_risk_snap("SUB", 10.0);
+        let peer_vec: Vec<RiskSnapshot> = (0..9)
+            .map(|i| mk_risk_snap(&format!("P{}", i), 40.0 + i as f64 * 5.0))
+            .collect();
+        let peers: Vec<&RiskSnapshot> = peer_vec.iter().collect();
+        let snap = compute_rrk_snapshot("SUB", "2026-04-15", "Tech", Some(&subj), &peers);
+        assert_eq!(snap.rank_label, "SAFEST_DECILE");
+        assert!(snap.percentile_rank >= 90.0);
+        assert_eq!(snap.rank_position, 1);
+    }
+
+    #[test]
+    fn compute_rrk_riskiest() {
+        // Subject has the HIGHEST risk composite → RISKIEST_DECILE.
+        let subj = mk_risk_snap("SUB", 95.0);
+        let peer_vec: Vec<RiskSnapshot> = (0..9)
+            .map(|i| mk_risk_snap(&format!("P{}", i), 20.0 + i as f64 * 5.0))
+            .collect();
+        let peers: Vec<&RiskSnapshot> = peer_vec.iter().collect();
+        let snap = compute_rrk_snapshot("SUB", "2026-04-15", "Tech", Some(&subj), &peers);
+        assert_eq!(snap.rank_label, "RISKIEST_DECILE");
+        assert!(snap.percentile_rank < 10.0);
+    }
+
+    fn mk_financials_with_eps(annual_eps_newest_first: &[f64]) -> FinancialStatements {
+        let income: Vec<IncomeStatement> = annual_eps_newest_first
+            .iter()
+            .enumerate()
+            .map(|(i, &eps)| IncomeStatement {
+                date: format!("202{}-12-31", 6 - i),
+                period: "FY".into(),
+                eps,
+                eps_diluted: eps,
+                ..Default::default()
+            })
+            .collect();
+        FinancialStatements {
+            income_annual: income,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn compute_relepsgr_above() {
+        // Subject EPS: 8 → 4 (newest to oldest), 3-year CAGR ≈ 26 %.
+        let subj = mk_financials_with_eps(&[8.0, 7.0, 5.5, 4.0]);
+        // Peers: flat ~12 % CAGR (2.0 → 1.42)
+        let peer_vec: Vec<(String, FinancialStatements)> = (0..5)
+            .map(|i| (format!("P{}", i), mk_financials_with_eps(&[2.0, 1.8, 1.6, 1.42])))
+            .collect();
+        let snap = compute_relepsgr_snapshot("SUB", "2026-04-15", "Tech", Some(&subj), &peer_vec);
+        assert!(matches!(snap.relative_label.as_str(), "ABOVE" | "FAR_ABOVE"));
+        assert!(snap.symbol_cagr_pct > snap.sector_median_cagr_pct);
+        assert_eq!(snap.years_used, 3);
+    }
+
+    #[test]
+    fn compute_relepsgr_insufficient() {
+        let subj = mk_financials_with_eps(&[5.0, 4.0]); // only 2 rows
+        let snap = compute_relepsgr_snapshot("SUB", "2026-04-15", "Tech", Some(&subj), &[]);
+        assert_eq!(snap.relative_label, "NO_DATA");
+    }
+
+    #[test]
+    fn compute_pead_drift_up() {
+        // Build 15 newest-first HP bars with a steady 1%/day advance.
+        let mut bars: Vec<HistoricalPriceRow> = (0..15)
+            .map(|i| HistoricalPriceRow {
+                date: format!("2026-04-{:02}", 15 - i),
+                close: 100.0 * (1.01f64).powi((14 - i) as i32),
+                ..Default::default()
+            })
+            .collect();
+        // newest-first
+        bars.sort_by(|a, b| b.date.cmp(&a.date));
+        // Build 3 beat surprises at increasing dates (all old enough that t0_idx ≥ 10).
+        let surprises = vec![
+            EarningsSurprise {
+                date: "2026-04-01".into(),
+                symbol: "PEAD".into(),
+                eps_actual: 1.10,
+                eps_estimate: 1.00,
+                surprise: 0.10,
+                surprise_pct: 10.0,
+            },
+            EarningsSurprise {
+                date: "2026-04-02".into(),
+                symbol: "PEAD".into(),
+                eps_actual: 1.20,
+                eps_estimate: 1.00,
+                surprise: 0.20,
+                surprise_pct: 20.0,
+            },
+            EarningsSurprise {
+                date: "2026-04-03".into(),
+                symbol: "PEAD".into(),
+                eps_actual: 1.15,
+                eps_estimate: 1.00,
+                surprise: 0.15,
+                surprise_pct: 15.0,
+            },
+        ];
+        let snap = compute_pead_snapshot("PEAD", "2026-04-15", &surprises, &bars);
+        assert_eq!(snap.drift_direction_label, "DRIFT_UP");
+        assert!(snap.events_used >= 3);
+        assert!(snap.avg_drift_5d_pct > 2.0);
+    }
+
+    #[test]
+    fn compute_pead_no_events() {
+        let snap = compute_pead_snapshot("PEAD", "2026-04-15", &[], &[]);
+        assert_eq!(snap.drift_direction_label, "INSUFFICIENT_DATA");
     }
 }

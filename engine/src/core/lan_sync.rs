@@ -208,6 +208,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_risk",
     "research_insstrk",
     "research_covg",
+    // ── ADR-123 Round 16 ────────────────────────────
+    "research_vrk",
+    "research_qrk",
+    "research_rrk",
+    "research_relepsgr",
+    "research_pead",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -830,6 +836,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_vrk" => Some(
+            "CREATE TABLE IF NOT EXISTS research_vrk (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_qrk" => Some(
+            "CREATE TABLE IF NOT EXISTS research_qrk (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_rrk" => Some(
+            "CREATE TABLE IF NOT EXISTS research_rrk (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_relepsgr" => Some(
+            "CREATE TABLE IF NOT EXISTS research_relepsgr (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_pead" => Some(
+            "CREATE TABLE IF NOT EXISTS research_pead (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -913,6 +954,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_risk" => Some("updated_at"),
         "research_insstrk" => Some("updated_at"),
         "research_covg" => Some("updated_at"),
+        "research_vrk" => Some("updated_at"),
+        "research_qrk" => Some("updated_at"),
+        "research_rrk" => Some("updated_at"),
+        "research_relepsgr" => Some("updated_at"),
+        "research_pead" => Some("updated_at"),
         _ => None,
     }
 }

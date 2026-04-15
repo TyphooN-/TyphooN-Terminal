@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**sixty-seven sub-blocks**, each of which is skipped silently when its data
+**seventy-two sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -860,7 +860,71 @@ breadth ≥ 70; CONTRACTING if net_90d ≤ -3; STABLE otherwise.
 Churn score is centred at 50 (neutral) so "no activity" doesn't bias
 the composite down. Source: ADR-122 COVG window.
 
-#### 2.67 Sector peer comparison
+#### 2.67 Value Rank (VRK — ADR-123)
+
+Pulled from `research::get_vrk`. Percentile rank of the Round 15 VAL
+composite_score within the symbol's sector cohort. Header line gives
+**rank_label** (TOP_DECILE / TOP_QUARTILE / ABOVE_MEDIAN / BELOW_MEDIAN
+/ BOTTOM_QUARTILE / BOTTOM_DECILE / NO_DATA), percentile_rank,
+rank_position (1-based from best value), cohort size (peers_considered
++ 1), sector, and as_of. Body block reports the subject composite,
+sector median / p25 / p75 VAL scores, and peers_considered / with_data.
+Requires ≥3 peers in the same sector with VAL snapshots. Label ladder:
+TOP_DECILE ≥90, TOP_QUARTILE ≥75, ABOVE_MEDIAN ≥50, BELOW_MEDIAN ≥25,
+BOTTOM_QUARTILE ≥10, BOTTOM_DECILE <10. Source: ADR-123 VRK window.
+
+#### 2.68 Quality Rank (QRK — ADR-123)
+
+Pulled from `research::get_qrk`. Percentile rank of the Round 15 QUAL
+composite_score within the symbol's sector cohort. Same shape as VRK
+with the same label ladder. Because `QualitySnapshot` does not carry
+sector directly, the broker handler cross-joins with
+`fundamentals::get_fundamentals` per peer to filter the cohort. Body
+block reports subject composite, sector median / p25 / p75 QUAL
+scores, and peers_considered / with_data. Source: ADR-123 QRK window.
+
+#### 2.69 Risk Rank (RRK — ADR-123)
+
+Pulled from `research::get_rrk`. Percentile rank of the Round 15 RISK
+composite_score within the symbol's sector cohort. **Critical
+inversion:** RISK composite is higher = riskier, so this snapshot
+inverts the percentile such that higher `percentile_rank` here =
+SAFER than peers, and the label ladder reads SAFEST_DECILE /
+SAFEST_QUARTILE / ABOVE_MEDIAN_SAFE / BELOW_MEDIAN_RISKY /
+BOTTOM_QUARTILE_RISKY / RISKIEST_DECILE / NO_DATA. The header line
+shows "higher pct = SAFER" to make the inversion explicit. Same
+sector cross-join pattern as QRK. Source: ADR-123 RRK window.
+
+#### 2.70 Relative EPS Growth (RELEPSGR — ADR-123)
+
+Pulled from `research::get_relepsgr`. Computes 3-year EPS CAGR from
+`FinancialStatements.income_annual[].eps` (requires ≥4 annual rows)
+and compares to the sector median CAGR. Header line gives the
+**relative_label** (FAR_ABOVE / ABOVE / INLINE / BELOW / FAR_BELOW /
+CAGR_NEGATIVE / NO_DATA), symbol CAGR %, gap to median in percentage
+points, sector, and as_of. Body block reports latest / earliest EPS
+(with years_used), sector median / p25 / p75 CAGR %, and
+peers_considered / with_data. Labels are keyed on `gap_to_median_pp`
+(FAR_ABOVE ≥ +10pp, ABOVE ≥ +3, INLINE within ±3, BELOW ≤ -3,
+FAR_BELOW ≤ -10). CAGR_NEGATIVE overrides when the subject's EPS
+series has a non-positive endpoint, in which case a linear growth
+proxy is used for `symbol_cagr_pct`. Source: ADR-123 RELEPSGR window.
+
+#### 2.71 Post-Earnings Drift (PEAD — ADR-123)
+
+Pulled from `research::get_pead`. Joins cached `EarningsSurprise`
+rows with cached `HistoricalPriceRow` bars to measure average
+forward drift over 1 / 3 / 5 / 10 trading days after each
+announcement. Header line gives the **drift_direction_label**
+(DRIFT_UP / DRIFT_DOWN / MIXED / INSUFFICIENT_DATA), events_used,
+and avg 5d drift %. Body block reports avg drift at all four
+horizons, BEAT-event 5d drift, MISS-event 5d drift, the latest
+event's date / surprise% / 5d drift, and events_used / in_cache.
+Requires ≥3 cached surprises and ≥11 HP bars per event (t0 + 10
+forward) for inclusion. BEAT / MISS / INLINE classification uses a
+±1 % surprise threshold. Source: ADR-123 PEAD window.
+
+#### 2.72 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -956,20 +1020,24 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | Risk-factor composite fields (ADR-122 RISK) | 7 k/v rows + ≤5 component rows | Realized vol, beta, liquidity tier, short%float + DTC, Altman Z + zone; higher = riskier |
 | Insider streak rows (ADR-122 INSSTRK) | 8 k/v rows + ≤8 per-insider rows | Unique insiders, buy/sell streak counts, longest streaks, net $ totals |
 | Coverage breadth fields (ADR-122 COVG) | 12 k/v rows | Num analysts, target mean/low/high, consensus 5-bucket, bull ratio, 90d churn, 3 sub-scores |
+| Value rank fields (ADR-123 VRK) | 4 k/v rows | Subject composite + sector median/p25/p75 + percentile + rank position |
+| Quality rank fields (ADR-123 QRK) | 4 k/v rows | Subject composite + sector median/p25/p75 + percentile + rank position |
+| Risk rank fields (ADR-123 RRK) | 4 k/v rows | Subject composite (higher=riskier) + sector median/p25/p75 + SAFE percentile + rank position |
+| Relative EPS growth fields (ADR-123 RELEPSGR) | 4 k/v rows | Latest/earliest EPS, sector median/p25/p75 CAGR, gap-to-median in pp |
+| PEAD fields (ADR-123 PEAD) | 6 k/v rows + ≤8 event rows | Avg drift 1d/3d/5d/10d, BEAT/MISS breakouts, latest event, per-event detail table |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **26-52 KB**
-(up from 24-48 KB after ADR-121; ADR-122 added five per-symbol blocks —
-VAL / QUAL / RISK / INSSTRK / COVG — covering a value-factor composite
-that fuses six valuation ratios against sector-peer medians, a quality
-composite from PTFS+MARGINS+ACRL+LEV, a risk composite from
-VOLE+BETA+LIQ+SHRT+ALTZ (higher = riskier, with Altman-Z distress
-veto), an insider streak detector that groups cached InsiderTrade rows
-by insider and flags cluster buying/selling, and an analyst-coverage
-breadth + churn composite from PriceTarget+AnalystRecs+UPDM — all
-pure compute over cached Round 7/8/10-14 snapshots with zero new API
-dependencies); a 10-symbol basket lands near **250-500 KB** (the
+symbols. A single S&P 500 symbol now produces a packet around **28-55 KB**
+(up from 26-52 KB after ADR-122; ADR-123 added five per-symbol blocks —
+VRK / QRK / RRK / RELEPSGR / PEAD — covering sector-peer percentile
+ranks of the Round 15 VAL / QUAL / RISK composites (with RRK inverted
+so higher = safer), a relative-EPS-growth snapshot that compares the
+symbol's 3y EPS CAGR to the sector median, and a post-earnings-drift
+snapshot that joins cached EarningsSurprise rows with HP bars to
+measure average forward drift over 1/3/5/10 trading days — all pure
+compute over cached Round 7/8/10-15 snapshots with zero new API
+dependencies); a 10-symbol basket lands near **270-540 KB** (the
 global context is emitted only once, so multi-symbol overhead is still
 bounded by the per-symbol blocks).
 
@@ -1176,6 +1244,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_risk` | SQLite `research_risk` | ADR-122 RISK window (fuses VOLE+BETA+LIQ+SHRT+ALTZ, higher = riskier) |
 | `research::get_insstrk` | SQLite `research_insstrk` | ADR-122 INSSTRK window (groups cached InsiderTrade rows by insider) |
 | `research::get_covg` | SQLite `research_covg` | ADR-122 COVG window (fuses PriceTarget+AnalystRecs+UPDM) |
+| `research::get_vrk` | SQLite `research_vrk` | ADR-123 VRK window (sector percentile rank of VAL composite) |
+| `research::get_qrk` | SQLite `research_qrk` | ADR-123 QRK window (sector percentile rank of QUAL composite) |
+| `research::get_rrk` | SQLite `research_rrk` | ADR-123 RRK window (sector percentile rank of RISK composite, inverted) |
+| `research::get_relepsgr` | SQLite `research_relepsgr` | ADR-123 RELEPSGR window (3y EPS CAGR vs sector median CAGR) |
+| `research::get_pead` | SQLite `research_pead` | ADR-123 PEAD window (joins EarningsSurprise cache with HP bars) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -1212,4 +1285,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 — Godel parity research surfaces
