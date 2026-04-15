@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**one hundred and two sub-blocks**, each of which is skipped silently when its data
+**one hundred and three sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -1332,7 +1332,23 @@ avg 60d and 252d range %, latest bar's range %, compression
 ratio, and the widest/narrowest range bars in the window.
 Source: ADR-129 DAYRANGE window.
 
-#### 2.102 Sector peer comparison
+#### 2.102 Prior Ingested Web Research (INGESTED — ADR-130)
+
+Pulled from `research::get_ingested_articles`. Emitted only when a
+prior AI conversation has ingested web-search results for this
+symbol — populated by sending articles from Claude / Gemini (CLI or
+API) back into the terminal via the `INGEST_RESEARCH` command or
+the `===TYPHOON_INGEST===` Return Path footer that the packet
+builder now prints at the end of every research packet. Header
+reports the number of articles in the bag; body emits the **top
+15** articles (newest first) with title, source, published date,
+`agent_used`, truncated summary (≤260 chars), and URL. The cache
+holds up to 50 articles per symbol — FIFO with URL-based dedup,
+timestamp-wins semantics — and LAN-syncs like every other research
+table so a LAN client's ingestion populates the bag on all peers.
+Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
+
+#### 2.103 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1355,6 +1371,46 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 > (4) SEC filing activity and insider sentiment, (5) volatility regime and
 > risk profile, and (6) a neutral-to-directional takeaway. Flag any data
 > gaps you'd want filled in to refine the view.
+
+### 5. Return Path footer (ADR-130)
+
+Every packet now closes with a **Return Path** instruction block that
+asks the AI agent to echo any web-search articles it fetched back to
+the terminal in a structured, parseable format. The terminal's
+`INGEST_RESEARCH` command (and any future auto-ingest listener) scans
+model replies for this block, parses the JSON, and appends the
+articles to the per-symbol bag consumed by sub-block 2.102 above.
+
+The footer is a fixed literal string — agents are told to emit:
+
+```
+===TYPHOON_INGEST===
+[
+  {
+    "symbol": "AAPL",
+    "title": "...",
+    "url": "https://...",
+    "source": "Reuters",
+    "published_at": "2026-04-14",
+    "summary": "...",
+    "agent_used": "claude-opus-4-6"
+  },
+  ...
+]
+===END_INGEST===
+```
+
+The parser (`research::parse_ingest_block`) is intentionally lenient:
+it accepts ` ```json ` fences around the array, accepts `published` /
+`date` as aliases for `published_at`, accepts `agent` for
+`agent_used`, skips entries missing `symbol` or `url`, and ignores
+any text surrounding the sentinels. `agent_used` is overridden
+post-parse with the ingest window's "agent tag" field when the user
+wants to label a paste from a transcript.
+
+The footer adds roughly **~600 bytes** per packet regardless of how
+many symbols are in scope — it is emitted once after the closing
+Question section, not per-symbol.
 
 ---
 
@@ -1463,20 +1519,21 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | Tail ratio fields (ADR-129 TAILR) | 4 k/v rows | Bars used + P95/P05 + 95/5 tail ratio + P99/P01 + 99/1 tail ratio + bias label |
 | Run length fields (ADR-129 RUNLEN) | 4 k/v rows | Bars used + avg up/down runs + run counts + longest up/down + signed current run + trend label |
 | Daily range fields (ADR-129 DAYRANGE) | 4 k/v rows | Bars used + avg 60d/252d range % + latest range + compression ratio + widest/narrowest + range label |
+| Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **40-76 KB**
-(up from 38-72 KB after ADR-128; ADR-129 added five per-symbol blocks —
-RETSKEW / RETKURT / TAILR / RUNLEN / DAYRANGE — all pure HP-local
-return-distribution and behavior statistics: moment-based skewness
-and excess kurtosis with outlier counts, quantile-based 95/5 and
-99/1 tail ratios, up/down run-length analysis with a signed current
-run, and 60d-vs-252d daily range compression; all five pure compute
-over the existing `research_historical_price` cache with zero new
-API dependencies); a 10-symbol basket lands near **390-780 KB** (the
-global context is emitted only once, so multi-symbol overhead is
-still bounded by the per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **40-78 KB**
+(up from 40-76 KB after ADR-129; ADR-130 adds one optional per-symbol
+block — INGESTED, capped at 15 articles × ~100 bytes/row ≈ ~1.5 KB
+per symbol when populated — plus a single ~600-byte Return Path
+footer at the tail of every packet regardless of scope; both layers
+reuse the existing `research_web_articles` SQLite bag and LAN sync
+path with zero new API dependencies); a 10-symbol basket lands
+near **390-795 KB** when every symbol has a fully populated ingest
+bag (the global context and the Return Path footer are each emitted
+exactly once, so multi-symbol overhead is still bounded by the
+per-symbol blocks).
 
 ---
 
@@ -1716,6 +1773,7 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_tailr` | SQLite `research_tailr` | ADR-129 TAILR window (95/5 and 99/1 quantile tail ratios) |
 | `research::get_runlen` | SQLite `research_runlen` | ADR-129 RUNLEN window (up/down run length stats + signed current run) |
 | `research::get_dayrange` | SQLite `research_dayrange` | ADR-129 DAYRANGE window (60d vs 252d daily range compression ratio) |
+| `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -1753,3 +1811,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
 - ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 — Godel parity research surfaces
+- ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)

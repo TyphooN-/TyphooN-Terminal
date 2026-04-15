@@ -9562,6 +9562,16 @@ enum FinancialsPeriod {
     Quarterly,
 }
 
+/// ADR-130 RESEARCH_PACKET viewer tree node — one heading row in the
+/// left-hand navigation of the packet viewer window. Depth maps to
+/// markdown header level: 2 = `## `, 3 = `### `, 4 = `#### `.
+#[derive(Clone, Debug, Default)]
+struct PacketTreeNode {
+    depth: u8,
+    title: String,
+    byte_offset: usize,   // offset into packet_viewer_text where the header starts
+}
+
 /// Right panel section tabs (matching old WebKit layout).
 #[derive(Clone, Copy, PartialEq)]
 enum RightTab {
@@ -10092,6 +10102,12 @@ enum BrokerCmd {
     ComputeRunlenSnapshot { symbol: String },
     /// DAYRANGE — Daily high-low range stats (60d vs 252d baseline).
     ComputeDayrangeSnapshot { symbol: String },
+    // ── ADR-130 web article ingestion ──
+    /// Parse an AI agent reply, extract any `===TYPHOON_INGEST===` fenced
+    /// blocks, and merge the discovered articles into the per-symbol
+    /// `research_web_articles` cache. LAN sync will propagate results
+    /// to peer terminals on the next sync window.
+    IngestResearchArticles { text: String, agent_override: String },
     /// Fetch multi-source news for a symbol (GDELT + Yahoo RSS + SEC + Marketaux + AV + FMP),
     /// cache results in SQLite, and return the cached set.
     FetchNewsMulti {
@@ -10431,6 +10447,13 @@ enum BrokerMsg {
     RunlenSnapshotMsg(String, typhoon_engine::core::research::RunLengthSnapshot),
     /// DAYRANGE — Daily range analysis snapshot for a symbol.
     DayrangeSnapshotMsg(String, typhoon_engine::core::research::DailyRangeSnapshot),
+    // ── ADR-130 ──
+    /// Result of an INGEST_RESEARCH operation: per-symbol counts of
+    /// newly-added articles plus any parser/write errors encountered.
+    IngestResearchResult {
+        per_symbol_added: Vec<(String, usize, usize)>, // (symbol, added, total)
+        errors: Vec<String>,
+    },
     /// Multi-source news articles loaded (from cache + fresh fetch) for a symbol.
     NewsArticlesLoaded {
         symbol: String,
@@ -11824,6 +11847,23 @@ pub struct TyphooNApp {
     dayrange_symbol: String,
     dayrange_snapshot: typhoon_engine::core::research::DailyRangeSnapshot,
     dayrange_loading: bool,
+
+    // ── ADR-130 Web article ingestion + packet viewer ──
+    /// INGEST_RESEARCH — paste-in window where the user drops an AI
+    /// agent reply that contains `===TYPHOON_INGEST===` blocks.
+    show_ingest_research: bool,
+    ingest_research_text: String,
+    ingest_research_agent: String,        // default tag applied to records missing an agent field
+    ingest_research_status: String,       // last status / result summary
+    ingest_research_busy: bool,
+    /// RESEARCH_PACKET — viewer window with tree nav + scrollable text.
+    show_packet_viewer: bool,
+    packet_viewer_symbol: String,
+    packet_viewer_question: String,
+    packet_viewer_text: String,           // generated packet markdown
+    packet_viewer_tree: Vec<PacketTreeNode>, // parsed H2/H3/H4 headers
+    packet_viewer_scroll_target: Option<usize>, // byte offset in text to scroll to
+    packet_viewer_selected: Option<usize>,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -15259,6 +15299,45 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::DayrangeSnapshotMsg(symbol, snap));
                         });
                     }
+                    // ── ADR-130 web article ingestion handler ──
+                    BrokerCmd::IngestResearchArticles { text, agent_override } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let parsed = research::parse_ingest_block(&text);
+                            let mut per_symbol: Vec<(String, usize, usize)> = Vec::new();
+                            let mut errors: Vec<String> = Vec::new();
+                            if parsed.is_empty() {
+                                errors.push("No ===TYPHOON_INGEST=== block found in the pasted text.".into());
+                                let _ = msg_tx.send(BrokerMsg::IngestResearchResult { per_symbol_added: per_symbol, errors });
+                                return;
+                            }
+                            let cache_opt = shared_cache_broker.read().ok().and_then(|g| g.clone());
+                            let conn = match cache_opt.as_ref().and_then(|c| c.connection().ok()) {
+                                Some(c) => c,
+                                None => {
+                                    errors.push("Cache unavailable — cannot persist ingested articles.".into());
+                                    let _ = msg_tx.send(BrokerMsg::IngestResearchResult { per_symbol_added: per_symbol, errors });
+                                    return;
+                                }
+                            };
+                            for (sym, mut articles) in parsed {
+                                if !agent_override.trim().is_empty() {
+                                    for a in articles.iter_mut() {
+                                        if a.agent_used.trim().is_empty() {
+                                            a.agent_used = agent_override.clone();
+                                        }
+                                    }
+                                }
+                                match research::append_ingested_articles(&conn, &sym, articles) {
+                                    Ok((added, total)) => per_symbol.push((sym, added, total)),
+                                    Err(e) => errors.push(format!("{}: {}", sym, e)),
+                                }
+                            }
+                            let _ = msg_tx.send(BrokerMsg::IngestResearchResult { per_symbol_added: per_symbol, errors });
+                        });
+                    }
                     BrokerCmd::FetchNewsMulti { symbol, marketaux_key, alpha_vantage_key, fmp_key } => {
                         use typhoon_engine::core::news;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -17872,6 +17951,19 @@ When the question touches recent news, sentiment, or prices, combine the researc
             dayrange_symbol: String::new(),
             dayrange_snapshot: typhoon_engine::core::research::DailyRangeSnapshot::default(),
             dayrange_loading: false,
+            // ── ADR-130 defaults ──
+            show_ingest_research: false,
+            ingest_research_text: String::new(),
+            ingest_research_agent: "claude".into(),
+            ingest_research_status: String::new(),
+            ingest_research_busy: false,
+            show_packet_viewer: false,
+            packet_viewer_symbol: String::new(),
+            packet_viewer_question: String::new(),
+            packet_viewer_text: String::new(),
+            packet_viewer_tree: Vec::new(),
+            packet_viewer_scroll_target: None,
+            packet_viewer_selected: None,
             bottom_tab: BottomTab::Log,
             log,
             log_filter: LogFilter::All,
@@ -20981,6 +21073,32 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = writeln!(p);
                         }
                     }
+
+                    // ── ADR-130 prior-ingested web research (if any) ──
+                    if let Ok(Some(ing)) = rx::get_ingested_articles(&conn, &sym_upper) {
+                        if !ing.articles.is_empty() {
+                            let _ = writeln!(p, "### Prior Ingested Web Research — INGESTED ({} articles)", ing.articles.len());
+                            for a in ing.articles.iter().take(15) {
+                                let src = if !a.source.is_empty() { &a.source } else { "—" };
+                                let when = if !a.published_at.is_empty() { a.published_at.as_str() } else { "—" };
+                                let agent = if !a.agent_used.is_empty() { a.agent_used.as_str() } else { "—" };
+                                let title = if a.title.is_empty() { "(untitled)" } else { a.title.as_str() };
+                                let _ = writeln!(p, "- **{}** — {} · {} · via {}", title, src, when, agent);
+                                if !a.summary.is_empty() {
+                                    let mut s = a.summary.clone();
+                                    if s.len() > 260 { s.truncate(260); s.push('…'); }
+                                    let _ = writeln!(p, "  - {}", s);
+                                }
+                                if !a.url.is_empty() {
+                                    let _ = writeln!(p, "  - {}", a.url);
+                                }
+                            }
+                            if ing.articles.len() > 15 {
+                                let _ = writeln!(p, "- ({} more articles in cache, not shown)", ing.articles.len() - 15);
+                            }
+                            let _ = writeln!(p);
+                        }
+                    }
                 }
             }
 
@@ -21031,7 +21149,58 @@ When the question touches recent news, sentiment, or prices, combine the researc
         } else {
             let _ = writeln!(p, "{}", user_question.trim());
         }
+
+        // ── ADR-130 Return Path: instruct the agent to emit a structured
+        //    ingest block so TyphooN can absorb the web-search findings
+        //    back into the cache and share them across LAN peers. ──
+        let _ = writeln!(p);
+        let _ = writeln!(p, "---");
+        let _ = writeln!(p, "## Return Path — Web Research Ingest");
+        let _ = writeln!(p);
+        let _ = writeln!(p, "If you consulted any web sources to answer the above, **please emit a \
+            fenced ingest block at the very end of your reply** so TyphooN-Terminal can cache and \
+            share your findings with LAN peers. Use this exact format:");
+        let _ = writeln!(p);
+        let _ = writeln!(p, "```");
+        let _ = writeln!(p, "===TYPHOON_INGEST===");
+        let _ = writeln!(p, "[");
+        let _ = writeln!(p, "  {{\"symbol\": \"TICKER\", \"title\": \"article headline\", \"url\": \"https://...\",");
+        let _ = writeln!(p, "   \"source\": \"Reuters|Bloomberg|WSJ|...\", \"published_at\": \"YYYY-MM-DD\",");
+        let _ = writeln!(p, "   \"summary\": \"2-3 sentence takeaway\", \"agent\": \"claude|gemini|chatgpt|...\"}},");
+        let _ = writeln!(p, "  ...");
+        let _ = writeln!(p, "]");
+        let _ = writeln!(p, "===END_INGEST===");
+        let _ = writeln!(p, "```");
+        let _ = writeln!(p);
+        let _ = writeln!(p, "Rules: (1) one object per distinct article, (2) include every symbol from \
+            the research packet that the article references, (3) each article may appear once per symbol \
+            (dedup by URL is handled on ingest), (4) the `summary` field should be YOUR synthesis, not a \
+            raw copy-paste, (5) missing fields are OK — the parser will skip entries without a symbol or \
+            url but keep the rest.");
         p
+    }
+
+    /// ADR-130 — Parse the generated research packet markdown and return
+    /// a flat list of heading nodes (##, ###, ####) plus the byte offset
+    /// where each heading starts. Used by the RESEARCH_PACKET viewer to
+    /// build its left-hand tree nav and jump to the right section when a
+    /// node is clicked.
+    fn build_packet_tree(text: &str) -> Vec<PacketTreeNode> {
+        let mut out = Vec::new();
+        let mut offset: usize = 0;
+        for line in text.split_inclusive('\n') {
+            let trimmed = line.trim_start();
+            let depth = if trimmed.starts_with("#### ") { 4 }
+                else if trimmed.starts_with("### ") { 3 }
+                else if trimmed.starts_with("## ") { 2 }
+                else { 0 };
+            if depth > 0 {
+                let title = trimmed.trim_start_matches('#').trim().trim_end_matches('\n').to_string();
+                out.push(PacketTreeNode { depth, title, byte_offset: offset });
+            }
+            offset += line.len();
+        }
+        out
     }
 
     /// Parse the argument portion of an ASKAI/ASKCLAUDE/ASKGEMINI command.
@@ -23378,6 +23547,19 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                     }
                 }
+            }
+            // ── ADR-130 web article ingestion + packet viewer ──
+            "INGEST_RESEARCH" | "INGEST" | "RESEARCH_INGEST" | "INGESTRESEARCH" => {
+                self.show_ingest_research = true;
+            }
+            "RESEARCH_PACKET" | "PACKET" | "PACKET_VIEW" | "VIEW_PACKET" | "RESEARCH_PACKET_VIEW" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() && self.packet_viewer_symbol.is_empty() {
+                    self.packet_viewer_symbol = sym;
+                }
+                self.show_packet_viewer = true;
             }
             "CALENDAR" => {
                 self.show_calendar = true;
@@ -41102,6 +41284,210 @@ When the question touches recent news, sentiment, or prices, combine the researc
             self.show_dayrange = open;
         }
 
+        // ── ADR-130 INGEST_RESEARCH window ──
+        if self.show_ingest_research {
+            let mut open = self.show_ingest_research;
+            egui::Window::new("INGEST — AI Agent Web Research Ingest")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([700.0, 520.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new(
+                        "Paste the full reply from an AI agent (Claude, Gemini, ChatGPT, …). \
+                         Any ===TYPHOON_INGEST=== block will be parsed and merged into the \
+                         per-symbol web-article cache. LAN peers will pick up the new articles \
+                         on the next sync window."
+                    ).color(AXIS_TEXT).small());
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Default agent tag:");
+                        ui.add(egui::TextEdit::singleline(&mut self.ingest_research_agent).desired_width(120.0));
+                        ui.label(egui::RichText::new("(used when an article's 'agent' field is missing)").color(AXIS_TEXT).small());
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .id_salt("ingest_research_scroll")
+                        .max_height(360.0)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.ingest_research_text)
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(20)
+                                    .font(egui::TextStyle::Monospace)
+                                    .hint_text("Paste agent reply here…"),
+                            );
+                        });
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        let can_ingest = !self.ingest_research_busy && !self.ingest_research_text.trim().is_empty();
+                        if ui.add_enabled(can_ingest, egui::Button::new("Ingest").fill(BTN_MG)).clicked() {
+                            self.ingest_research_busy = true;
+                            self.ingest_research_status = "Parsing…".into();
+                            let _ = self.broker_tx.send(BrokerCmd::IngestResearchArticles {
+                                text: self.ingest_research_text.clone(),
+                                agent_override: self.ingest_research_agent.clone(),
+                            });
+                        }
+                        if ui.button("Clear").clicked() {
+                            self.ingest_research_text.clear();
+                            self.ingest_research_status.clear();
+                        }
+                        if self.ingest_research_busy {
+                            ui.label(egui::RichText::new("Working…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    if !self.ingest_research_status.is_empty() {
+                        ui.separator();
+                        ui.label(egui::RichText::new(&self.ingest_research_status).color(UP).small());
+                    }
+                });
+            self.show_ingest_research = open;
+        }
+
+        // ── ADR-130 RESEARCH_PACKET viewer window (tree nav + scrollable text) ──
+        if self.show_packet_viewer {
+            let mut open = self.show_packet_viewer;
+            egui::Window::new("RESEARCH_PACKET — Viewer")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([980.0, 680.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Symbols:");
+                        ui.add(egui::TextEdit::singleline(&mut self.packet_viewer_symbol).desired_width(180.0)
+                            .hint_text("AAPL or AAPL,MSFT"));
+                        if ui.button("Use Chart").clicked() {
+                            if let Some(c) = self.charts.get(self.active_tab) {
+                                let s = c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string();
+                                if !s.is_empty() { self.packet_viewer_symbol = s; }
+                            }
+                        }
+                        ui.label("Question (optional):");
+                        ui.add(egui::TextEdit::singleline(&mut self.packet_viewer_question).desired_width(240.0)
+                            .hint_text("e.g. is this cheap vs peers?"));
+                        if ui.add(egui::Button::new("Generate").fill(BTN_MG)).clicked() {
+                            let syms: Vec<String> = self.packet_viewer_symbol
+                                .split(',')
+                                .map(|s| s.trim().to_uppercase())
+                                .filter(|s| !s.is_empty())
+                                .collect();
+                            if !syms.is_empty() {
+                                let packet = self.investigate_symbols(&syms, &self.packet_viewer_question.clone());
+                                self.packet_viewer_tree = Self::build_packet_tree(&packet);
+                                self.packet_viewer_text = packet;
+                                self.packet_viewer_selected = None;
+                                self.packet_viewer_scroll_target = Some(0);
+                            }
+                        }
+                        if ui.button("Copy").clicked() {
+                            ui.ctx().copy_text(self.packet_viewer_text.clone());
+                            self.log.push_back(LogEntry::info("Packet copied to clipboard"));
+                        }
+                        if ui.button("Save…").clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .set_title("Save research packet")
+                                .set_file_name(format!(
+                                    "research_packet_{}_{}.md",
+                                    self.packet_viewer_symbol.replace(',', "_"),
+                                    chrono::Utc::now().format("%Y%m%d_%H%M%S")
+                                ))
+                                .add_filter("Markdown", &["md"])
+                                .save_file()
+                            {
+                                if let Err(e) = std::fs::write(&path, &self.packet_viewer_text) {
+                                    self.log.push_back(LogEntry::warn(format!("Save failed: {e}")));
+                                } else {
+                                    self.log.push_back(LogEntry::info(format!("Saved packet → {}", path.display())));
+                                }
+                            }
+                        }
+                    });
+                    ui.separator();
+
+                    if self.packet_viewer_text.is_empty() {
+                        ui.label(egui::RichText::new(
+                            "Enter a symbol (or comma-separated list) and click Generate to build the research packet."
+                        ).color(AXIS_TEXT).small());
+                        return;
+                    }
+
+                    let tree_snapshot = self.packet_viewer_tree.clone();
+                    let text_len = self.packet_viewer_text.len();
+
+                    egui::Panel::left("packet_viewer_tree")
+                        .resizable(true)
+                        .default_size(280.0)
+                        .size_range(180.0..=420.0)
+                        .show_inside(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(format!("{} sections · {} bytes", tree_snapshot.len(), text_len)).color(AXIS_TEXT).small());
+                                if self.packet_viewer_selected.is_some() {
+                                    if ui.small_button("Show All").clicked() {
+                                        self.packet_viewer_selected = None;
+                                    }
+                                }
+                            });
+                            ui.separator();
+                            egui::ScrollArea::vertical()
+                                .id_salt("packet_viewer_tree_scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    for (idx, node) in tree_snapshot.iter().enumerate() {
+                                        let indent = match node.depth { 2 => 0.0, 3 => 12.0, _ => 24.0 };
+                                        let selected = self.packet_viewer_selected == Some(idx);
+                                        ui.horizontal(|ui| {
+                                            ui.add_space(indent);
+                                            let text = match node.depth {
+                                                2 => egui::RichText::new(&node.title).strong(),
+                                                3 => egui::RichText::new(&node.title),
+                                                _ => egui::RichText::new(&node.title).small().color(AXIS_TEXT),
+                                            };
+                                            if ui.selectable_label(selected, text).clicked() {
+                                                self.packet_viewer_selected = Some(idx);
+                                            }
+                                        });
+                                    }
+                                });
+                        });
+
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        // If a section is selected, slice the text from its byte offset to
+                        // the start of the next section with depth <= the selected section's
+                        // depth (so selecting an H2 shows its H3/H4 children, selecting an H3
+                        // shows only the H3 block, etc.). If nothing is selected, show all.
+                        let slice: &str = match self.packet_viewer_selected {
+                            Some(idx) if idx < tree_snapshot.len() => {
+                                let start = tree_snapshot[idx].byte_offset.min(text_len);
+                                let max_depth = tree_snapshot[idx].depth;
+                                let end = tree_snapshot[idx + 1..]
+                                    .iter()
+                                    .find(|n| n.depth <= max_depth)
+                                    .map(|n| n.byte_offset.min(text_len))
+                                    .unwrap_or(text_len);
+                                &self.packet_viewer_text[start..end]
+                            }
+                            _ => self.packet_viewer_text.as_str(),
+                        };
+
+                        egui::ScrollArea::both()
+                            .id_salt("packet_viewer_body_scroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                let mut body = slice.to_string();
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut body)
+                                        .font(egui::TextStyle::Monospace)
+                                        .desired_width(f32::INFINITY)
+                                        .desired_rows(30)
+                                        .code_editor(),
+                                );
+                                // Read-only display: edits to `body` are not written back.
+                            });
+                    });
+                });
+            self.show_packet_viewer = open;
+        }
+
         // GY — Treasury Yield Curve
         if self.show_treasury_curve {
             let mut open = self.show_treasury_curve;
@@ -49120,6 +49506,25 @@ impl eframe::App for TyphooNApp {
                         if let Ok(conn) = cache.connection() {
                             let _ = typhoon_engine::core::research::upsert_dayrange(&conn, &sym_u, &snap);
                         }
+                    }
+                }
+                BrokerMsg::IngestResearchResult { per_symbol_added, errors } => {
+                    self.ingest_research_busy = false;
+                    if per_symbol_added.is_empty() && errors.is_empty() {
+                        self.ingest_research_status = "No articles parsed.".into();
+                    } else {
+                        let summary: Vec<String> = per_symbol_added.iter()
+                            .map(|(s, added, total)| format!("{}: +{} (now {})", s, added, total))
+                            .collect();
+                        let total_added: usize = per_symbol_added.iter().map(|(_, a, _)| *a).sum();
+                        self.ingest_research_status = if errors.is_empty() {
+                            format!("Ingested {} new articles across {} symbol(s): {}",
+                                total_added, per_symbol_added.len(), summary.join(" · "))
+                        } else {
+                            format!("Ingested {} new articles · {} error(s): {}",
+                                total_added, errors.len(), errors.join("; "))
+                        };
+                        self.log.push_back(LogEntry::info(self.ingest_research_status.clone()));
                     }
                 }
                 BrokerMsg::NewsArticlesLoaded { symbol, articles } => {

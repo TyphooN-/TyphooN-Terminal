@@ -250,6 +250,8 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_tailr",
     "research_runlen",
     "research_dayrange",
+    // ── ADR-130 web article ingestion ──────────────
+    "research_web_articles",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -1117,6 +1119,14 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-130 web article ingestion ──
+        "research_web_articles" => Some(
+            "CREATE TABLE IF NOT EXISTS research_web_articles (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -1235,6 +1245,7 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_tailr" => Some("updated_at"),
         "research_runlen" => Some("updated_at"),
         "research_dayrange" => Some("updated_at"),
+        "research_web_articles" => Some("updated_at"),
         _ => None,
     }
 }
