@@ -2420,6 +2420,105 @@ pub struct CalendarPeriodBreakdownSnapshot {
     pub note: String,
 }
 
+// ── ADR-129 Round 22 — HP return-distribution + behavior stats ──
+
+/// RETSKEW — Return distribution skewness (third standardized moment).
+/// Pure symbol-local HP stat over the trailing 253-session window of log
+/// returns. Positive skew → large upside outliers; negative skew → large
+/// downside outliers. Complements RVCONE (second moment) and RETKURT
+/// (fourth moment) with a third-moment tail-asymmetry view.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReturnSkewnessSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,              // number of log returns used
+    pub mean_log_return: f64,
+    pub stdev_log_return: f64,
+    pub skewness: f64,                 // third standardized moment
+    pub positive_return_pct: f64,      // share of up-days
+    pub largest_up_pct: f64,           // max log-return (×100)
+    pub largest_down_pct: f64,         // min log-return (×100)
+    pub skew_label: String,            // "STRONG_LEFT" | "LEFT" | "SYMMETRIC" | "RIGHT" | "STRONG_RIGHT" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// RETKURT — Return distribution excess kurtosis (fourth standardized moment - 3).
+/// Pure symbol-local HP stat over the trailing 253-session window of log
+/// returns. High excess kurtosis → fat-tailed distribution with more
+/// extreme moves than a normal would predict.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReturnKurtosisSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub mean_log_return: f64,
+    pub stdev_log_return: f64,
+    pub excess_kurtosis: f64,          // fourth standardized moment - 3
+    pub outlier_2sigma_count: usize,   // count of |z| > 2 returns
+    pub outlier_3sigma_count: usize,   // count of |z| > 3 returns
+    pub outlier_2sigma_pct: f64,       // share of |z| > 2 returns (normal ≈ 4.55%)
+    pub kurt_label: String,            // "PLATYKURTIC" | "NORMAL" | "MILD_FAT" | "FAT" | "EXTREME_FAT" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// TAILR — Tail ratio = 95th pct return / |5th pct return|.
+/// Pure symbol-local HP stat. Ratio > 1 → upside tail dominates;
+/// < 1 → downside tail dominates. Complements RETSKEW with a
+/// non-parametric quantile-based view of tail asymmetry.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TailRatioSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pct_95_return: f64,            // 95th percentile return (as %)
+    pub pct_05_return: f64,            // 5th percentile return (as %)
+    pub pct_99_return: f64,            // 99th percentile return
+    pub pct_01_return: f64,            // 1st percentile return
+    pub tail_ratio: f64,               // pct_95 / |pct_05|
+    pub tail_ratio_99_01: f64,         // pct_99 / |pct_01|
+    pub bias_label: String,            // "DOWNSIDE_HEAVY" | "SLIGHT_DOWNSIDE" | "BALANCED" | "SLIGHT_UPSIDE" | "UPSIDE_HEAVY" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// RUNLEN — Up/down day run length statistics.
+/// Pure symbol-local HP stat. Average and longest runs of consecutive
+/// up-days and down-days over the trailing 253-session window. Long
+/// runs → trending regime; short runs → choppy / mean-reverting.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RunLengthSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub avg_up_run: f64,
+    pub avg_down_run: f64,
+    pub longest_up_run: usize,
+    pub longest_down_run: usize,
+    pub up_runs_count: usize,
+    pub down_runs_count: usize,
+    pub current_run_length: i32,       // positive = up run, negative = down run, 0 = flat
+    pub trend_label: String,           // "CHOPPY" | "MIXED" | "TRENDING" | "STRONG_TRENDING" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// DAYRANGE — Daily range analysis.
+/// Pure symbol-local HP stat. Average (high - low) / close over 60
+/// sessions vs 252-session baseline. Ratio < 1 → compressed (expect
+/// breakout); > 1 → expanded (volatility regime).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DailyRangeSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub avg_range_60_pct: f64,         // avg (high-low)/close × 100 over 60d
+    pub avg_range_252_pct: f64,        // avg (high-low)/close × 100 over 252d
+    pub latest_range_pct: f64,         // latest bar's (high-low)/close × 100
+    pub compression_ratio: f64,        // 60d avg / 252d avg (1.0 = neutral)
+    pub widest_range_pct: f64,         // max (high-low)/close × 100 in window
+    pub narrowest_range_pct: f64,      // min (high-low)/close × 100 in window
+    pub range_label: String,           // "TIGHT" | "COMPRESSED" | "NORMAL" | "EXPANDED" | "VERY_EXPANDED" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -12265,6 +12364,381 @@ pub fn compute_calpb_snapshot(
     }
 }
 
+// ── ADR-129 Round 22 compute fns ──
+
+/// Shared helper: collect trailing 253 bars sorted oldest-first and
+/// compute log returns. Returns (sorted_bars, log_returns).
+fn trailing_log_returns(bars: &[HistoricalPriceRow]) -> (Vec<&HistoricalPriceRow>, Vec<f64>) {
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let window: Vec<&HistoricalPriceRow> = sorted.iter().rev().take(253).rev().copied().collect();
+    let mut log_rets: Vec<f64> = Vec::with_capacity(window.len());
+    for w in window.windows(2) {
+        let prev = w[0].close;
+        let curr = w[1].close;
+        if prev > 0.0 && curr > 0.0 {
+            log_rets.push((curr / prev).ln());
+        }
+    }
+    (window, log_rets)
+}
+
+/// RETSKEW compute: skewness of daily log returns over the trailing 253
+/// sessions. Uses Fisher-Pearson (sample) skew with N denominator to match
+/// RVCONE's stdev convention.
+pub fn compute_retskew_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> ReturnSkewnessSnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 20 {
+        return ReturnSkewnessSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            skew_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} valid log returns", log_rets.len()),
+            ..Default::default()
+        };
+    }
+    let n = log_rets.len() as f64;
+    let mean: f64 = log_rets.iter().sum::<f64>() / n;
+    let var: f64 = log_rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / n;
+    let stdev = var.sqrt();
+    let skew = if stdev > 0.0 {
+        let m3: f64 = log_rets.iter().map(|r| (r - mean).powi(3)).sum::<f64>() / n;
+        m3 / stdev.powi(3)
+    } else {
+        0.0
+    };
+    let positive = log_rets.iter().filter(|&&r| r > 0.0).count() as f64;
+    let positive_pct = (positive / n) * 100.0;
+    let largest_up = log_rets.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * 100.0;
+    let largest_down = log_rets.iter().cloned().fold(f64::INFINITY, f64::min) * 100.0;
+    let skew_label = if skew <= -1.0 {
+        "STRONG_LEFT"
+    } else if skew <= -0.3 {
+        "LEFT"
+    } else if skew < 0.3 {
+        "SYMMETRIC"
+    } else if skew < 1.0 {
+        "RIGHT"
+    } else {
+        "STRONG_RIGHT"
+    };
+    ReturnSkewnessSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: window.len(),
+        mean_log_return: mean,
+        stdev_log_return: stdev,
+        skewness: skew,
+        positive_return_pct: positive_pct,
+        largest_up_pct: largest_up,
+        largest_down_pct: largest_down,
+        skew_label: skew_label.into(),
+        note: String::new(),
+    }
+}
+
+/// RETKURT compute: excess kurtosis of daily log returns over trailing 253
+/// sessions. Counts 2-sigma and 3-sigma outliers for a non-parametric fat-
+/// tail check alongside the moment-based number.
+pub fn compute_retkurt_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> ReturnKurtosisSnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 20 {
+        return ReturnKurtosisSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            kurt_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} valid log returns", log_rets.len()),
+            ..Default::default()
+        };
+    }
+    let n = log_rets.len() as f64;
+    let mean: f64 = log_rets.iter().sum::<f64>() / n;
+    let var: f64 = log_rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / n;
+    let stdev = var.sqrt();
+    let excess = if stdev > 0.0 {
+        let m4: f64 = log_rets.iter().map(|r| (r - mean).powi(4)).sum::<f64>() / n;
+        (m4 / stdev.powi(4)) - 3.0
+    } else {
+        0.0
+    };
+    let (out2, out3) = if stdev > 0.0 {
+        let mut c2 = 0usize;
+        let mut c3 = 0usize;
+        for r in &log_rets {
+            let z = (r - mean).abs() / stdev;
+            if z > 2.0 { c2 += 1; }
+            if z > 3.0 { c3 += 1; }
+        }
+        (c2, c3)
+    } else {
+        (0, 0)
+    };
+    let out2_pct = (out2 as f64 / n) * 100.0;
+    let kurt_label = if excess <= -0.5 {
+        "PLATYKURTIC"
+    } else if excess < 1.0 {
+        "NORMAL"
+    } else if excess < 3.0 {
+        "MILD_FAT"
+    } else if excess < 6.0 {
+        "FAT"
+    } else {
+        "EXTREME_FAT"
+    };
+    ReturnKurtosisSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: window.len(),
+        mean_log_return: mean,
+        stdev_log_return: stdev,
+        excess_kurtosis: excess,
+        outlier_2sigma_count: out2,
+        outlier_3sigma_count: out3,
+        outlier_2sigma_pct: out2_pct,
+        kurt_label: kurt_label.into(),
+        note: String::new(),
+    }
+}
+
+/// TAILR compute: 95/5 and 99/1 tail ratios over trailing 253 sessions.
+/// Non-parametric counterpart to RETSKEW.
+pub fn compute_tailr_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> TailRatioSnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 20 {
+        return TailRatioSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            bias_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} valid log returns", log_rets.len()),
+            ..Default::default()
+        };
+    }
+    let pct_returns: Vec<f64> = log_rets.iter().map(|r| r * 100.0).collect();
+    let mut sorted = pct_returns.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p95 = quantile_f64(&sorted, 0.95);
+    let p05 = quantile_f64(&sorted, 0.05);
+    let p99 = quantile_f64(&sorted, 0.99);
+    let p01 = quantile_f64(&sorted, 0.01);
+    let tail_ratio = if p05.abs() > f64::EPSILON { p95 / p05.abs() } else { 0.0 };
+    let tail_ratio_99_01 = if p01.abs() > f64::EPSILON { p99 / p01.abs() } else { 0.0 };
+    let bias_label = if tail_ratio <= 0.6 {
+        "DOWNSIDE_HEAVY"
+    } else if tail_ratio <= 0.85 {
+        "SLIGHT_DOWNSIDE"
+    } else if tail_ratio < 1.15 {
+        "BALANCED"
+    } else if tail_ratio < 1.4 {
+        "SLIGHT_UPSIDE"
+    } else {
+        "UPSIDE_HEAVY"
+    };
+    TailRatioSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: window.len(),
+        pct_95_return: p95,
+        pct_05_return: p05,
+        pct_99_return: p99,
+        pct_01_return: p01,
+        tail_ratio,
+        tail_ratio_99_01,
+        bias_label: bias_label.into(),
+        note: String::new(),
+    }
+}
+
+/// RUNLEN compute: up/down day run length statistics over trailing 253
+/// sessions. Uses sign of log return (0 → flat, included in neither run).
+pub fn compute_runlen_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> RunLengthSnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 20 {
+        return RunLengthSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            trend_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} valid log returns", log_rets.len()),
+            ..Default::default()
+        };
+    }
+    let mut up_runs: Vec<usize> = Vec::new();
+    let mut down_runs: Vec<usize> = Vec::new();
+    let mut longest_up = 0usize;
+    let mut longest_down = 0usize;
+    let mut cur_up = 0usize;
+    let mut cur_down = 0usize;
+    for r in &log_rets {
+        if *r > 0.0 {
+            if cur_down > 0 {
+                down_runs.push(cur_down);
+                if cur_down > longest_down { longest_down = cur_down; }
+                cur_down = 0;
+            }
+            cur_up += 1;
+        } else if *r < 0.0 {
+            if cur_up > 0 {
+                up_runs.push(cur_up);
+                if cur_up > longest_up { longest_up = cur_up; }
+                cur_up = 0;
+            }
+            cur_down += 1;
+        } else {
+            if cur_up > 0 {
+                up_runs.push(cur_up);
+                if cur_up > longest_up { longest_up = cur_up; }
+                cur_up = 0;
+            }
+            if cur_down > 0 {
+                down_runs.push(cur_down);
+                if cur_down > longest_down { longest_down = cur_down; }
+                cur_down = 0;
+            }
+        }
+    }
+    // Tail: whichever run is still in progress is the "current" run.
+    let current_run: i32 = if cur_up > 0 {
+        up_runs.push(cur_up);
+        if cur_up > longest_up { longest_up = cur_up; }
+        cur_up as i32
+    } else if cur_down > 0 {
+        down_runs.push(cur_down);
+        if cur_down > longest_down { longest_down = cur_down; }
+        -(cur_down as i32)
+    } else {
+        0
+    };
+    let avg_up = if up_runs.is_empty() {
+        0.0
+    } else {
+        up_runs.iter().sum::<usize>() as f64 / up_runs.len() as f64
+    };
+    let avg_down = if down_runs.is_empty() {
+        0.0
+    } else {
+        down_runs.iter().sum::<usize>() as f64 / down_runs.len() as f64
+    };
+    let avg_run = (avg_up + avg_down) / 2.0;
+    let longest_any = longest_up.max(longest_down) as f64;
+    // Label combines avg run length and longest run length.
+    let trend_label = if avg_run < 1.4 && longest_any < 4.0 {
+        "CHOPPY"
+    } else if avg_run < 1.7 && longest_any < 6.0 {
+        "MIXED"
+    } else if avg_run < 2.2 || longest_any < 8.0 {
+        "TRENDING"
+    } else {
+        "STRONG_TRENDING"
+    };
+    RunLengthSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: window.len(),
+        avg_up_run: avg_up,
+        avg_down_run: avg_down,
+        longest_up_run: longest_up,
+        longest_down_run: longest_down,
+        up_runs_count: up_runs.len(),
+        down_runs_count: down_runs.len(),
+        current_run_length: current_run,
+        trend_label: trend_label.into(),
+        note: String::new(),
+    }
+}
+
+/// DAYRANGE compute: average (high-low)/close ratio over 60d vs 252d
+/// baseline. Compression ratio < 1 → tight; > 1 → expanded.
+pub fn compute_dayrange_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> DailyRangeSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let window: Vec<&HistoricalPriceRow> = sorted.iter().rev().take(253).rev().copied().collect();
+    if window.len() < 20 {
+        return DailyRangeSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            range_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} bars", window.len()),
+            ..Default::default()
+        };
+    }
+    // Per-bar range ratio.
+    let ratios: Vec<f64> = window.iter()
+        .filter(|r| r.close > 0.0 && r.high >= r.low)
+        .map(|r| ((r.high - r.low) / r.close) * 100.0)
+        .collect();
+    if ratios.len() < 20 {
+        return DailyRangeSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            range_label: "INSUFFICIENT_DATA".into(),
+            note: "insufficient valid bars".into(),
+            ..Default::default()
+        };
+    }
+    let avg_all: f64 = ratios.iter().sum::<f64>() / ratios.len() as f64;
+    let take60 = ratios.len().min(60);
+    let slice60 = &ratios[ratios.len() - take60..];
+    let avg60: f64 = slice60.iter().sum::<f64>() / take60 as f64;
+    let latest = *ratios.last().unwrap();
+    let widest = ratios.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let narrowest = ratios.iter().cloned().fold(f64::INFINITY, f64::min);
+    let compression = if avg_all > f64::EPSILON { avg60 / avg_all } else { 1.0 };
+    let range_label = if compression <= 0.75 {
+        "TIGHT"
+    } else if compression <= 0.9 {
+        "COMPRESSED"
+    } else if compression < 1.1 {
+        "NORMAL"
+    } else if compression < 1.35 {
+        "EXPANDED"
+    } else {
+        "VERY_EXPANDED"
+    };
+    DailyRangeSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: window.len(),
+        avg_range_60_pct: avg60,
+        avg_range_252_pct: avg_all,
+        latest_range_pct: latest,
+        compression_ratio: compression,
+        widest_range_pct: widest,
+        narrowest_range_pct: narrowest,
+        range_label: range_label.into(),
+        note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -15289,6 +15763,159 @@ pub fn get_calpb(conn: &Connection, symbol: &str) -> Result<Option<CalendarPerio
         .map_err(|e| format!("prepare get_calpb: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_calpb: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_calpb: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-129 Round 22 schema v22 + wrappers ──
+
+pub fn create_research_tables_v22(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v21(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_retskew (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_retskew_updated ON research_retskew(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_retkurt (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_retkurt_updated ON research_retkurt(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_tailr (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_tailr_updated ON research_tailr(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_runlen (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_runlen_updated ON research_runlen(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_dayrange (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_dayrange_updated ON research_dayrange(updated_at);",
+    ).map_err(|e| format!("create v22 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_retskew(conn: &Connection, symbol: &str, snap: &ReturnSkewnessSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v22(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("retskew json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_retskew(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert retskew: {e}"))?;
+    Ok(())
+}
+
+pub fn get_retskew(conn: &Connection, symbol: &str) -> Result<Option<ReturnSkewnessSnapshot>, String> {
+    let _ = create_research_tables_v22(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_retskew WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_retskew: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_retskew: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_retskew: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_retkurt(conn: &Connection, symbol: &str, snap: &ReturnKurtosisSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v22(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("retkurt json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_retkurt(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert retkurt: {e}"))?;
+    Ok(())
+}
+
+pub fn get_retkurt(conn: &Connection, symbol: &str) -> Result<Option<ReturnKurtosisSnapshot>, String> {
+    let _ = create_research_tables_v22(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_retkurt WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_retkurt: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_retkurt: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_retkurt: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_tailr(conn: &Connection, symbol: &str, snap: &TailRatioSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v22(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("tailr json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_tailr(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert tailr: {e}"))?;
+    Ok(())
+}
+
+pub fn get_tailr(conn: &Connection, symbol: &str) -> Result<Option<TailRatioSnapshot>, String> {
+    let _ = create_research_tables_v22(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_tailr WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_tailr: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_tailr: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_tailr: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_runlen(conn: &Connection, symbol: &str, snap: &RunLengthSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v22(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("runlen json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_runlen(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert runlen: {e}"))?;
+    Ok(())
+}
+
+pub fn get_runlen(conn: &Connection, symbol: &str) -> Result<Option<RunLengthSnapshot>, String> {
+    let _ = create_research_tables_v22(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_runlen WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_runlen: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_runlen: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_runlen: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_dayrange(conn: &Connection, symbol: &str, snap: &DailyRangeSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v22(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("dayrange json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_dayrange(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert dayrange: {e}"))?;
+    Ok(())
+}
+
+pub fn get_dayrange(conn: &Connection, symbol: &str) -> Result<Option<DailyRangeSnapshot>, String> {
+    let _ = create_research_tables_v22(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_dayrange WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_dayrange: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_dayrange: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_dayrange: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -20507,5 +21134,267 @@ mod tests {
         let bars = vec![mk_hp("2026-04-15", 100.0, 101.0, 99.0, 100.0)];
         let snap = compute_calpb_snapshot("AAA", "2026-04-15", &bars);
         assert_eq!(snap.momentum_label, "INSUFFICIENT_DATA");
+    }
+
+    // ── ADR-129 Round 22 tests ──
+
+    #[test]
+    fn retskew_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v22(&c).unwrap();
+        let snap = ReturnSkewnessSnapshot {
+            symbol: "AAA".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            mean_log_return: 0.0005,
+            stdev_log_return: 0.012,
+            skewness: -0.45,
+            positive_return_pct: 52.0,
+            largest_up_pct: 4.5,
+            largest_down_pct: -6.0,
+            skew_label: "LEFT".into(),
+            ..Default::default()
+        };
+        upsert_retskew(&c, "AAA", &snap).unwrap();
+        let got = get_retskew(&c, "AAA").unwrap().unwrap();
+        assert_eq!(got.skew_label, "LEFT");
+        assert!((got.skewness + 0.45).abs() < 1e-9);
+    }
+
+    #[test]
+    fn retkurt_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v22(&c).unwrap();
+        let snap = ReturnKurtosisSnapshot {
+            symbol: "BBB".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            excess_kurtosis: 3.5,
+            outlier_2sigma_count: 12,
+            outlier_3sigma_count: 2,
+            outlier_2sigma_pct: 4.74,
+            kurt_label: "FAT".into(),
+            ..Default::default()
+        };
+        upsert_retkurt(&c, "BBB", &snap).unwrap();
+        let got = get_retkurt(&c, "BBB").unwrap().unwrap();
+        assert_eq!(got.kurt_label, "FAT");
+    }
+
+    #[test]
+    fn tailr_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v22(&c).unwrap();
+        let snap = TailRatioSnapshot {
+            symbol: "CCC".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            pct_95_return: 2.0,
+            pct_05_return: -2.5,
+            tail_ratio: 0.8,
+            bias_label: "SLIGHT_DOWNSIDE".into(),
+            ..Default::default()
+        };
+        upsert_tailr(&c, "CCC", &snap).unwrap();
+        let got = get_tailr(&c, "CCC").unwrap().unwrap();
+        assert_eq!(got.bias_label, "SLIGHT_DOWNSIDE");
+    }
+
+    #[test]
+    fn runlen_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v22(&c).unwrap();
+        let snap = RunLengthSnapshot {
+            symbol: "DDD".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            avg_up_run: 1.8,
+            avg_down_run: 1.6,
+            longest_up_run: 5,
+            longest_down_run: 4,
+            trend_label: "MIXED".into(),
+            ..Default::default()
+        };
+        upsert_runlen(&c, "DDD", &snap).unwrap();
+        let got = get_runlen(&c, "DDD").unwrap().unwrap();
+        assert_eq!(got.trend_label, "MIXED");
+    }
+
+    #[test]
+    fn dayrange_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v22(&c).unwrap();
+        let snap = DailyRangeSnapshot {
+            symbol: "EEE".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 253,
+            avg_range_60_pct: 1.2,
+            avg_range_252_pct: 1.5,
+            compression_ratio: 0.8,
+            range_label: "COMPRESSED".into(),
+            ..Default::default()
+        };
+        upsert_dayrange(&c, "EEE", &snap).unwrap();
+        let got = get_dayrange(&c, "EEE").unwrap().unwrap();
+        assert_eq!(got.range_label, "COMPRESSED");
+    }
+
+    #[test]
+    fn compute_retskew_insufficient() {
+        let bars = vec![mk_hp("2025-06-01", 100.0, 101.0, 99.0, 100.0)];
+        let snap = compute_retskew_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.skew_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_retskew_left_tail() {
+        // Series with mostly small up-days and a few large down-days → negative skew.
+        let mut bars = Vec::new();
+        let mut c = 100.0;
+        bars.push(mk_hp("2025-01-01", c, c + 0.1, c - 0.1, c));
+        for i in 0..200 {
+            let date = format!("2025-{:02}-{:02}", (i / 20) + 1, (i % 20) + 1);
+            let change = if i % 25 == 0 { -8.0 } else { 0.3 }; // occasional large down
+            c *= 1.0 + change / 100.0;
+            bars.push(mk_hp(&date, c, c + 0.1, c - 0.1, c));
+        }
+        let snap = compute_retskew_snapshot("AAA", "2026-04-15", &bars);
+        assert!(snap.skew_label != "INSUFFICIENT_DATA");
+        assert!(snap.skewness < -0.2, "expected negative skew, got {}", snap.skewness);
+    }
+
+    #[test]
+    fn compute_retkurt_fat_tails() {
+        // Mostly quiet with rare 5-sigma events → fat-tailed.
+        let mut bars = Vec::new();
+        let mut c = 100.0;
+        bars.push(mk_hp("2025-01-01", c, c + 0.1, c - 0.1, c));
+        for i in 0..200 {
+            let date = format!("2025-{:02}-{:02}", (i / 20) + 1, (i % 20) + 1);
+            let change = if i % 40 == 0 { 10.0 } else { 0.05 };
+            c *= 1.0 + change / 100.0;
+            bars.push(mk_hp(&date, c, c + 0.1, c - 0.1, c));
+        }
+        let snap = compute_retkurt_snapshot("AAA", "2026-04-15", &bars);
+        assert!(snap.kurt_label != "INSUFFICIENT_DATA");
+        assert!(snap.excess_kurtosis > 1.0, "expected fat-tailed, got {}", snap.excess_kurtosis);
+    }
+
+    #[test]
+    fn compute_retkurt_insufficient() {
+        let bars = vec![mk_hp("2025-06-01", 100.0, 101.0, 99.0, 100.0)];
+        let snap = compute_retkurt_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.kurt_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_tailr_balanced() {
+        // Symmetric small random moves → balanced tail ratio.
+        let mut bars = Vec::new();
+        let mut c = 100.0;
+        bars.push(mk_hp("2025-01-01", c, c + 0.1, c - 0.1, c));
+        for i in 0..200 {
+            let date = format!("2025-{:02}-{:02}", (i / 20) + 1, (i % 20) + 1);
+            let change = if i % 2 == 0 { 1.0 } else { -1.0 };
+            c *= 1.0 + change / 100.0;
+            bars.push(mk_hp(&date, c, c + 0.1, c - 0.1, c));
+        }
+        let snap = compute_tailr_snapshot("AAA", "2026-04-15", &bars);
+        assert!(snap.bias_label != "INSUFFICIENT_DATA");
+        assert!(snap.tail_ratio > 0.5 && snap.tail_ratio < 2.0);
+    }
+
+    #[test]
+    fn compute_tailr_insufficient() {
+        let bars = vec![mk_hp("2025-06-01", 100.0, 101.0, 99.0, 100.0)];
+        let snap = compute_tailr_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.bias_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_runlen_trending() {
+        // Monotone up → one long run.
+        let mut bars = Vec::new();
+        for i in 0..100 {
+            let date = format!("2025-{:02}-{:02}", (i / 20) + 1, (i % 20) + 1);
+            let c = 100.0 + i as f64 * 0.5;
+            bars.push(mk_hp(&date, c, c + 0.1, c - 0.1, c));
+        }
+        let snap = compute_runlen_snapshot("AAA", "2026-04-15", &bars);
+        assert!(snap.trend_label != "INSUFFICIENT_DATA");
+        assert!(snap.longest_up_run >= 30, "expected long up-run, got {}", snap.longest_up_run);
+        assert_eq!(snap.longest_down_run, 0);
+        assert!(snap.current_run_length > 0);
+    }
+
+    #[test]
+    fn compute_runlen_choppy() {
+        // Alternating up/down → average run length 1.
+        let mut bars = Vec::new();
+        let mut c = 100.0;
+        bars.push(mk_hp("2025-01-01", c, c + 0.1, c - 0.1, c));
+        for i in 0..100 {
+            let date = format!("2025-{:02}-{:02}", (i / 20) + 1, (i % 20) + 1);
+            c += if i % 2 == 0 { 1.0 } else { -1.0 };
+            bars.push(mk_hp(&date, c, c + 0.1, c - 0.1, c));
+        }
+        let snap = compute_runlen_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.trend_label, "CHOPPY");
+        assert!(snap.avg_up_run < 1.5);
+        assert!(snap.avg_down_run < 1.5);
+    }
+
+    #[test]
+    fn compute_runlen_insufficient() {
+        let bars = vec![mk_hp("2025-06-01", 100.0, 101.0, 99.0, 100.0)];
+        let snap = compute_runlen_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.trend_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_dayrange_compressed() {
+        // Wide ranges historically, tighter recently → compressed.
+        let mut bars = Vec::new();
+        for i in 0..253 {
+            let date = format!("2025-{:02}-{:02}", (i / 21) + 1, (i % 21) + 1);
+            let c = 100.0;
+            let (h, l) = if i < 200 {
+                (c + 2.0, c - 2.0) // wide historical
+            } else {
+                (c + 0.3, c - 0.3) // tight recent
+            };
+            bars.push(mk_hp(&date, c, h, l, c));
+        }
+        let snap = compute_dayrange_snapshot("AAA", "2026-04-15", &bars);
+        assert!(snap.range_label == "TIGHT" || snap.range_label == "COMPRESSED",
+            "expected compressed, got {}", snap.range_label);
+        assert!(snap.compression_ratio < 1.0);
+    }
+
+    #[test]
+    fn compute_dayrange_expanded() {
+        // Tight historical, wide recent → expanded.
+        let mut bars = Vec::new();
+        for i in 0..253 {
+            let date = format!("2025-{:02}-{:02}", (i / 21) + 1, (i % 21) + 1);
+            let c = 100.0;
+            let (h, l) = if i < 200 {
+                (c + 0.3, c - 0.3)
+            } else {
+                (c + 3.0, c - 3.0)
+            };
+            bars.push(mk_hp(&date, c, h, l, c));
+        }
+        let snap = compute_dayrange_snapshot("AAA", "2026-04-15", &bars);
+        assert!(snap.range_label == "EXPANDED" || snap.range_label == "VERY_EXPANDED",
+            "expected expanded, got {}", snap.range_label);
+        assert!(snap.compression_ratio > 1.0);
+    }
+
+    #[test]
+    fn compute_dayrange_insufficient() {
+        let bars = vec![mk_hp("2025-06-01", 100.0, 101.0, 99.0, 100.0)];
+        let snap = compute_dayrange_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.range_label, "INSUFFICIENT_DATA");
     }
 }

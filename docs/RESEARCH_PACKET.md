@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**ninety-seven sub-blocks**, each of which is skipped silently when its data
+**one hundred and two sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -1266,7 +1266,73 @@ QTD, YTD, prior-quarter, prior-year, current year/quarter, and
 latest close. Q1 prior-quarter correctly rolls to Q4 of prior
 year. Source: ADR-128 CALPB window.
 
-#### 2.97 Sector peer comparison
+#### 2.97 Return Distribution Skewness (RETSKEW — ADR-129)
+
+Pulled from `research::get_retskew`. Pure symbol-local HP stat over
+the trailing 253-session window of log returns. Third standardized
+moment (Fisher-Pearson) identifies asymmetry in the return
+distribution: strong positive skew means rare large up-moves dominate,
+strong negative skew means rare large down-moves dominate (typical
+of crash-prone names). Header line gives **skew_label** (STRONG_LEFT
+≤-1.0 / LEFT ≤-0.3 / SYMMETRIC / RIGHT / STRONG_RIGHT /
+INSUFFICIENT_DATA). Body reports bars_used, mean/stdev of log
+returns, skewness, positive-day share, and the largest single-day
+up and down moves in the window. Source: ADR-129 RETSKEW window.
+
+#### 2.98 Return Distribution Excess Kurtosis (RETKURT — ADR-129)
+
+Pulled from `research::get_retkurt`. Pure symbol-local HP stat.
+Fourth standardized moment minus 3 — excess kurtosis quantifies how
+"fat-tailed" the return distribution is vs a normal (which has
+kurtosis = 3). Also counts |z|>2 and |z|>3 outliers directly since
+the tail-count is often more interpretable than the moment itself.
+Header gives **kurt_label** (PLATYKURTIC ≤-0.5 / NORMAL <1.0 /
+MILD_FAT <3.0 / FAT <6.0 / EXTREME_FAT / INSUFFICIENT_DATA). Body
+reports bars_used, mean/stdev, excess kurtosis, and the 2σ/3σ
+outlier counts plus the 2σ outlier rate (normal ≈ 4.55%).
+Source: ADR-129 RETKURT window.
+
+#### 2.99 Tail Ratio (TAILR — ADR-129)
+
+Pulled from `research::get_tailr`. Pure symbol-local HP stat.
+Non-parametric quantile-based view of tail asymmetry: tail_ratio =
+95th percentile return / |5th percentile return|. Ratio > 1 →
+upside tail dominates; < 1 → downside tail dominates. Complements
+RETSKEW's moment-based view with a cleaner tail comparison that's
+less sensitive to outliers. Header gives **bias_label**
+(DOWNSIDE_HEAVY ≤0.6 / SLIGHT_DOWNSIDE / BALANCED / SLIGHT_UPSIDE /
+UPSIDE_HEAVY / INSUFFICIENT_DATA). Body reports bars_used, P95,
+P05, the 95/5 tail ratio, plus P99/P01 and the 99/1 extreme-tail
+ratio. Source: ADR-129 TAILR window.
+
+#### 2.100 Run Length (RUNLEN — ADR-129)
+
+Pulled from `research::get_runlen`. Pure symbol-local HP stat. Mean
+and longest runs of consecutive up-days and down-days. Long runs →
+trending regime; short runs → choppy / mean-reverting. The
+`current_run_length` field is signed (positive = in an up-run,
+negative = in a down-run, 0 = flat) so the consumer can tell at a
+glance whether the latest bar extends a streak. Header gives
+**trend_label** (CHOPPY / MIXED / TRENDING / STRONG_TRENDING /
+INSUFFICIENT_DATA) computed from the blend of average and longest
+runs. Body reports bars_used, avg/longest up and down runs with
+counts, and the signed current run. Source: ADR-129 RUNLEN window.
+
+#### 2.101 Daily Range (DAYRANGE — ADR-129)
+
+Pulled from `research::get_dayrange`. Pure symbol-local HP stat.
+Average (high - low) / close over 60 sessions vs 252-session
+baseline. Compression ratio = 60d avg / 252d avg: below 1 means
+current 60d regime is tighter than the full-window baseline
+("coiled" — breakout typically follows); above 1 means the name
+is in an expanded/volatile regime. Header gives **range_label**
+(TIGHT ≤0.75 / COMPRESSED ≤0.9 / NORMAL / EXPANDED <1.35 /
+VERY_EXPANDED / INSUFFICIENT_DATA). Body reports bars_used,
+avg 60d and 252d range %, latest bar's range %, compression
+ratio, and the widest/narrowest range bars in the window.
+Source: ADR-129 DAYRANGE window.
+
+#### 2.102 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1392,21 +1458,25 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | 52-week high/low fields (ADR-128 FHIGHLOW) | 5 k/v rows | 52w high/low + dates + days since + pct-from-high/low + range position + proximity label |
 | Realized vol cone fields (ADR-128 RVCONE) | 4 k/v rows | RV20/60/120/252 + RV20 rolling min/median/max + RV20 percentile + cone label |
 | Calendar period breakdown fields (ADR-128 CALPB) | 5 k/v rows | MTD + QTD + YTD + prior quarter + prior year + current year/quarter + momentum label |
+| Return skewness fields (ADR-129 RETSKEW) | 4 k/v rows | Bars used + mean/stdev log return + skewness + positive-day % + largest up/down + skew label |
+| Return excess kurtosis fields (ADR-129 RETKURT) | 4 k/v rows | Bars used + stdev + excess kurtosis + 2σ/3σ outlier counts + 2σ outlier pct + kurt label |
+| Tail ratio fields (ADR-129 TAILR) | 4 k/v rows | Bars used + P95/P05 + 95/5 tail ratio + P99/P01 + 99/1 tail ratio + bias label |
+| Run length fields (ADR-129 RUNLEN) | 4 k/v rows | Bars used + avg up/down runs + run counts + longest up/down + signed current run + trend label |
+| Daily range fields (ADR-129 DAYRANGE) | 4 k/v rows | Bars used + avg 60d/252d range % + latest range + compression ratio + widest/narrowest + range label |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **38-72 KB**
-(up from 36-68 KB after ADR-127; ADR-128 added five per-symbol blocks —
-BETARANK / PEGRANK / FHIGHLOW / RVCONE / CALPB — covering two
-new sector-rank overlays on Fundamentals fields (beta risk-inverted
-and peg_ratio value-inverted) and three new pure-time-series HP
-stats (52-week high/low distance with proximity band, multi-horizon
-realized volatility cone with rolling 20d percentile, and calendar
-period breakdowns MTD/QTD/YTD plus prior quarter/year with
-momentum label) — all pure compute over existing Fundamentals and
-HP caches with zero new API dependencies); a 10-symbol basket lands
-near **370-740 KB** (the global context is emitted only once, so
-multi-symbol overhead is still bounded by the per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **40-76 KB**
+(up from 38-72 KB after ADR-128; ADR-129 added five per-symbol blocks —
+RETSKEW / RETKURT / TAILR / RUNLEN / DAYRANGE — all pure HP-local
+return-distribution and behavior statistics: moment-based skewness
+and excess kurtosis with outlier counts, quantile-based 95/5 and
+99/1 tail ratios, up/down run-length analysis with a signed current
+run, and 60d-vs-252d daily range compression; all five pure compute
+over the existing `research_historical_price` cache with zero new
+API dependencies); a 10-symbol basket lands near **390-780 KB** (the
+global context is emitted only once, so multi-symbol overhead is
+still bounded by the per-symbol blocks).
 
 ---
 
@@ -1641,6 +1711,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_fhighlow` | SQLite `research_fhighlow` | ADR-128 FHIGHLOW window (52-week high/low distance + proximity band) |
 | `research::get_rvcone` | SQLite `research_rvcone` | ADR-128 RVCONE window (multi-horizon realized volatility cone 20d/60d/120d/252d) |
 | `research::get_calpb` | SQLite `research_calpb` | ADR-128 CALPB window (calendar period breakdowns MTD/QTD/YTD + prior quarter/year) |
+| `research::get_retskew` | SQLite `research_retskew` | ADR-129 RETSKEW window (Fisher-Pearson skewness of log returns + positive-day share) |
+| `research::get_retkurt` | SQLite `research_retkurt` | ADR-129 RETKURT window (excess kurtosis + 2σ/3σ outlier counts) |
+| `research::get_tailr` | SQLite `research_tailr` | ADR-129 TAILR window (95/5 and 99/1 quantile tail ratios) |
+| `research::get_runlen` | SQLite `research_runlen` | ADR-129 RUNLEN window (up/down run length stats + signed current run) |
+| `research::get_dayrange` | SQLite `research_dayrange` | ADR-129 DAYRANGE window (60d vs 252d daily range compression ratio) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -1677,4 +1752,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 — Godel parity research surfaces

@@ -244,6 +244,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_fhighlow",
     "research_rvcone",
     "research_calpb",
+    // ── ADR-129 Round 22 ────────────────────────────
+    "research_retskew",
+    "research_retkurt",
+    "research_tailr",
+    "research_runlen",
+    "research_dayrange",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -1076,6 +1082,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_retskew" => Some(
+            "CREATE TABLE IF NOT EXISTS research_retskew (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_retkurt" => Some(
+            "CREATE TABLE IF NOT EXISTS research_retkurt (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_tailr" => Some(
+            "CREATE TABLE IF NOT EXISTS research_tailr (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_runlen" => Some(
+            "CREATE TABLE IF NOT EXISTS research_runlen (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_dayrange" => Some(
+            "CREATE TABLE IF NOT EXISTS research_dayrange (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -1189,6 +1230,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_fhighlow" => Some("updated_at"),
         "research_rvcone" => Some("updated_at"),
         "research_calpb" => Some("updated_at"),
+        "research_retskew" => Some("updated_at"),
+        "research_retkurt" => Some("updated_at"),
+        "research_tailr" => Some("updated_at"),
+        "research_runlen" => Some("updated_at"),
+        "research_dayrange" => Some("updated_at"),
         _ => None,
     }
 }
