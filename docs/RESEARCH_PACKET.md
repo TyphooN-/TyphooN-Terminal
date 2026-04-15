@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**fifty-seven sub-blocks**, each of which is skipped silently when its data
+**sixty-two sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -715,7 +715,75 @@ score / weight % / contribution. Returns INSUFFICIENT_DATA when
 none of ALTZ / PTFS / LEV / ACRL is cached. Source: ADR-120 CREDIT
 window.
 
-#### 2.57 Sector peer comparison
+#### 2.57 GARP Composite (GROWM — ADR-121)
+
+Pulled from `research::get_growm`. Meta-composite that fuses the
+Round 13 MOM composite, the Round 12 EARM composite, and the Round
+12 DIVG snapshot into a single 0-100 score with weights **40 / 40 /
+20**. Header line gives the **garp_label** (GARP / GROWTH / VALUE /
+SPECULATIVE / NO_DATA), composite score, and inputs_available
+(0..3). A key-value block reports momentum regime + score, earnings
+trend label + score, and dividend 3y CAGR + trend. A component
+table (up to **5 rows**) lists each populated component: name /
+value / score / weight % / contribution. Returns NO_DATA if none
+of MOM / EARM / DIVG are cached. Source: ADR-121 GROWM window.
+
+#### 2.58 Smart-Money Flow (FLOW — ADR-121)
+
+Pulled from `research::get_flow`. Windowed net flow from cached
+`InsiderTrade` + `InstitutionalHolder` rows (default **90-day**
+window, user-tunable 7..365). Header line gives the **flow_label**
+(STRONG_BUY / BUY / NEUTRAL / SELL / STRONG_SELL / NO_DATA),
+composite score, insider sub-score, institutional sub-score, and
+window in days. Body block reports insider buy / sell / net USD
+volumes, trade count + unique insiders, institutional buyers /
+sellers / holders tracked + net ratio + share delta. Composite
+weights **insider 60 / institutional 40** when both sides present;
+single-side when only one. Source: ADR-121 FLOW window.
+
+#### 2.59 Market Regime (REGIME — ADR-121)
+
+Pulled from `research::get_regime`. Meta-composite that fuses the
+Round 8 VOLE realized-vol snapshot, the Round 7 TECH technicals
+ADX field, and the Round 7 HRA 1Y return + Sharpe into a single
+regime label (TRENDING / MEAN_REVERTING / VOLATILE / QUIET /
+INSUFFICIENT_DATA). Header line gives label, composite score,
+and inputs_available (0..3). Body block reports realized vol %
+(with source), ADX value + trend summary, 1Y return, Sharpe,
+trend-strength sub-score, volatility sub-score (inverse — lower
+vol = higher score), return sub-score. Label logic: VOLATILE
+first if vol ≥ 40 %, TRENDING if ADX ≥ 25 and return positive,
+QUIET if vol < 20 % and ADX < 18, else MEAN_REVERTING.
+Source: ADR-121 REGIME window.
+
+#### 2.60 Relative Volume (RELVOL — ADR-121)
+
+Pulled from `research::get_relvol`. Pure compute over cached HP
+bars (≥20 bars). Header line gives the **activity_label** (EXTREME
+≥3× / HIGH ≥2× / ELEVATED ≥1.5× / NORMAL / LOW <0.5× /
+INSUFFICIENT_DATA), **direction_label** (BULLISH / BEARISH /
+NEUTRAL from current close vs prior ± 0.5 %), and the 20-day
+relative volume. Body block reports current volume, 5d / 20d /
+60d trailing averages, rel-vol ratios 5d / 20d / 60d, 5d-vs-20d
+volume trend %, 60-day percentile rank of the current bar's
+volume, and bars used. Averages deliberately exclude the current
+bar to prevent self-skew. Source: ADR-121 RELVOL window.
+
+#### 2.61 Margin Trajectory (MARGINS — ADR-121)
+
+Pulled from `research::get_margins`. Pure compute over cached FA
+statements (annual preferred, quarterly fallback). Header line
+gives the **overall_trend_label** (EXPANDING / STABLE /
+CONTRACTING — majority across gross / op / net), **quality_label**
+(HIGH ≥20 % / MEDIUM ≥8 % / LOW — latest op margin bucket),
+basis, and latest period. A 4-column table (metric / latest /
+prior / change+trend) shows gross, operating, and net margin
+rows. An averages block reports across-period means. A per-period
+history table follows (up to **6 rows**) with gross / op / net %
+for each period. Returns INSUFFICIENT_DATA when the FA statements
+cache is empty. Source: ADR-121 MARGINS window.
+
+#### 2.62 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -801,19 +869,25 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | Breakout proximity fields (ADR-120 BREAK) | 10 k/v rows | Label, setup, 20d/60d/52w ranges, position, consolidation |
 | Cash conversion cycle periods (ADR-120 CCRL) | ≤8 rows | Latest period + up to 7 prior with DSO/DIO/DPO/CCC |
 | Credit score components (ADR-120 CREDIT) | ≤6 rows | ALTZ / PTFS / LEV / ACRL each with value + score + weight |
+| GARP composite fields (ADR-121 GROWM) | 5 k/v rows + ≤5 component rows | Label, score, inputs, MOM/EARM/DIVG sub-lines + component contributions |
+| Smart-money flow fields (ADR-121 FLOW) | 10 k/v rows | Label, composite, insider+institutional sub-scores, buys/sells/net USD, trades+unique, buyers/sellers/holders, net ratio, share delta |
+| Market regime fields (ADR-121 REGIME) | 8 k/v rows | Label, composite, realized vol + source, ADX + trend summary, 1Y return, Sharpe, 3 sub-scores, inputs |
+| Relative volume fields (ADR-121 RELVOL) | 6 k/v rows | Activity, direction, current+avg, rel-vol ratios, 5d-vs-20d trend, 60d percentile, bars used |
+| Margin trajectory rows (ADR-121 MARGINS) | 3×4 grid + ≤6 period rows | Gross/op/net margin (latest/prior/Δpp/trend) + avg row + per-period history |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **22-44 KB**
-(up from 20-40 KB after ADR-119; ADR-120 added five per-symbol blocks —
-MOM / LIQ / BREAK / CCRL / CREDIT — covering 12-1 month momentum score,
-liquidity tier + Amihud + spread proxy, breakout proximity vs the 20d /
-60d / 52w ranges, cash conversion cycle (DSO + DIO − DPO), and a fused
-letter-grade credit score built from cached ALTZ / PTFS / LEV / ACRL —
-all pure compute over cached HP / FA / Round 10+11 snapshots with zero
-new API dependencies); a 10-symbol basket lands near **210-420 KB**
-(the global context is emitted only once, so multi-symbol overhead is
-still bounded by the per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **24-48 KB**
+(up from 22-44 KB after ADR-120; ADR-121 added five per-symbol blocks —
+GROWM / FLOW / REGIME / RELVOL / MARGINS — covering a GARP composite that
+fuses MOM+EARM+DIVG, a smart-money flow composite from cached INS+HDS, a
+market regime classifier that fuses VOLE+TECH+HRA, relative volume vs
+trailing averages (self-skew corrected), and a margin trajectory with
+quality bucket over cached FA statements — all pure compute over cached
+Round 7/8/10+11/12/13 snapshots with zero new API dependencies); a
+10-symbol basket lands near **230-460 KB** (the global context is
+emitted only once, so multi-symbol overhead is still bounded by the
+per-symbol blocks).
 
 ---
 
@@ -1008,6 +1082,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_breakout` | SQLite `research_breakout` | ADR-120 BREAK window |
 | `research::get_cash_cycle` | SQLite `research_cash_cycle` | ADR-120 CCRL window |
 | `research::get_credit` | SQLite `research_credit` | ADR-120 CREDIT window |
+| `research::get_growm` | SQLite `research_growm` | ADR-121 GROWM window (fuses MOM+EARM+DIVG) |
+| `research::get_flow` | SQLite `research_flow` | ADR-121 FLOW window (composes cached INS+HDS) |
+| `research::get_regime` | SQLite `research_regime` | ADR-121 REGIME window (fuses VOLE+TECH+HRA) |
+| `research::get_relvol` | SQLite `research_relvol` | ADR-121 RELVOL window (over cached HP bars) |
+| `research::get_margins` | SQLite `research_margins` | ADR-121 MARGINS window (over cached FA statements) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -1044,4 +1123,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 — Godel parity research surfaces

@@ -9996,6 +9996,16 @@ enum BrokerCmd {
     ComputeCashCycleSnapshot { symbol: String },
     /// CREDIT — Unified credit score fusing cached ALTZ + PTFS + LEV + ACRL snapshots.
     ComputeCreditSnapshot { symbol: String },
+    /// GROWM — GARP composite fusing cached MOM + EARM + DIVG snapshots.
+    ComputeGrowmSnapshot { symbol: String },
+    /// FLOW — Insider + institutional flow score over cached INS trades + HDS holders.
+    ComputeFlowSnapshot { symbol: String, window_days: i32 },
+    /// REGIME — Market regime classifier fusing cached VOLE + TECH + HRA snapshots.
+    ComputeRegimeSnapshot { symbol: String },
+    /// RELVOL — Relative volume vs trailing averages over cached HP bars.
+    ComputeRelvolSnapshot { symbol: String },
+    /// MARGINS — Margin trajectory (gross/op/net) over cached FA statements.
+    ComputeMarginsSnapshot { symbol: String },
     /// Fetch multi-source news for a symbol (GDELT + Yahoo RSS + SEC + Marketaux + AV + FMP),
     /// cache results in SQLite, and return the cached set.
     FetchNewsMulti {
@@ -10236,6 +10246,17 @@ enum BrokerMsg {
     CashCycleSnapshotMsg(String, typhoon_engine::core::research::CashCycleSnapshot),
     /// CREDIT — Unified credit score snapshot for a symbol.
     CreditSnapshotMsg(String, typhoon_engine::core::research::CreditSnapshot),
+    // ── ADR-121 ──
+    /// GROWM — GARP composite snapshot for a symbol.
+    GrowmSnapshotMsg(String, typhoon_engine::core::research::GrowmSnapshot),
+    /// FLOW — Insider + institutional flow snapshot for a symbol.
+    FlowSnapshotMsg(String, typhoon_engine::core::research::FlowSnapshot),
+    /// REGIME — Market regime classifier snapshot for a symbol.
+    RegimeSnapshotMsg(String, typhoon_engine::core::research::RegimeSnapshot),
+    /// RELVOL — Relative volume snapshot for a symbol.
+    RelvolSnapshotMsg(String, typhoon_engine::core::research::RelVolSnapshot),
+    /// MARGINS — Margin trajectory snapshot for a symbol.
+    MarginsSnapshotMsg(String, typhoon_engine::core::research::MarginsSnapshot),
     /// Multi-source news articles loaded (from cache + fresh fetch) for a symbol.
     NewsArticlesLoaded {
         symbol: String,
@@ -11352,6 +11373,38 @@ pub struct TyphooNApp {
     credit_symbol: String,
     credit_snapshot: typhoon_engine::core::research::CreditSnapshot,
     credit_loading: bool,
+
+    // ── ADR-121 Godel Parity Round 14 ──
+    /// GROWM — GARP composite fusing cached MOM + EARM + DIVG.
+    show_growm: bool,
+    growm_symbol: String,
+    growm_snapshot: typhoon_engine::core::research::GrowmSnapshot,
+    growm_loading: bool,
+
+    /// FLOW — Insider + institutional flow score.
+    show_flow: bool,
+    flow_symbol: String,
+    flow_window_days: i32,
+    flow_snapshot: typhoon_engine::core::research::FlowSnapshot,
+    flow_loading: bool,
+
+    /// REGIME — Market regime classifier fusing VOLE + TECH + HRA.
+    show_regime: bool,
+    regime_symbol: String,
+    regime_snapshot: typhoon_engine::core::research::RegimeSnapshot,
+    regime_loading: bool,
+
+    /// RELVOL — Relative volume vs trailing averages.
+    show_relvol: bool,
+    relvol_symbol: String,
+    relvol_snapshot: typhoon_engine::core::research::RelVolSnapshot,
+    relvol_loading: bool,
+
+    /// MARGINS — Margin trajectory (gross/op/net) over cached FA statements.
+    show_margins: bool,
+    margins_symbol: String,
+    margins_snapshot: typhoon_engine::core::research::MarginsSnapshot,
+    margins_loading: bool,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -13752,6 +13805,98 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 altz.as_ref(), ptfs.as_ref(), lev.as_ref(), acrl.as_ref(),
                             );
                             let _ = msg_tx.send(BrokerMsg::CreditSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeGrowmSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let (mom, earm, divg) = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    (
+                                        research::get_momentum(&conn, &symbol).ok().flatten(),
+                                        research::get_earm(&conn, &symbol).ok().flatten(),
+                                        research::get_divg(&conn, &symbol).ok().flatten(),
+                                    )
+                                } else { (None, None, None) }
+                            } else { (None, None, None) };
+                            let snap = research::compute_growm_snapshot(
+                                &symbol, &today,
+                                mom.as_ref(), earm.as_ref(), divg.as_ref(),
+                            );
+                            let _ = msg_tx.send(BrokerMsg::GrowmSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeFlowSnapshot { symbol, window_days } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let (trades, holders) = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    (
+                                        research::get_insider_trades(&conn, &symbol).ok().flatten().unwrap_or_default(),
+                                        research::get_institutional_holders(&conn, &symbol).ok().flatten().unwrap_or_default(),
+                                    )
+                                } else { (Vec::new(), Vec::new()) }
+                            } else { (Vec::new(), Vec::new()) };
+                            let snap = research::compute_flow_snapshot(&symbol, &today, &trades, &holders, window_days);
+                            let _ = msg_tx.send(BrokerMsg::FlowSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeRegimeSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let (vole, tech, hra) = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    (
+                                        research::get_ohlc_vol(&conn, &symbol).ok().flatten(),
+                                        research::get_technicals(&conn, &symbol).ok().flatten(),
+                                        research::get_hra(&conn, &symbol).ok().flatten(),
+                                    )
+                                } else { (None, None, None) }
+                            } else { (None, None, None) };
+                            let snap = research::compute_regime_snapshot(
+                                &symbol, &today,
+                                vole.as_ref(), tech.as_ref(), hra.as_ref(),
+                            );
+                            let _ = msg_tx.send(BrokerMsg::RegimeSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeRelvolSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars: Vec<research::HistoricalPriceRow> = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_relvol_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::RelvolSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeMarginsSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let statements = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_financials(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { research::FinancialStatements::default() }
+                            } else { research::FinancialStatements::default() };
+                            let snap = research::compute_margins_snapshot(&symbol, &today, &statements);
+                            let _ = msg_tx.send(BrokerMsg::MarginsSnapshotMsg(symbol, snap));
                         });
                     }
                     BrokerCmd::FetchNewsMulti { symbol, marketaux_key, alpha_vantage_key, fmp_key } => {
@@ -16177,6 +16322,28 @@ When the question touches recent news, sentiment, or prices, combine the researc
             credit_symbol: String::new(),
             credit_snapshot: typhoon_engine::core::research::CreditSnapshot::default(),
             credit_loading: false,
+            // ── ADR-121 Round 14 defaults ──
+            show_growm: false,
+            growm_symbol: String::new(),
+            growm_snapshot: typhoon_engine::core::research::GrowmSnapshot::default(),
+            growm_loading: false,
+            show_flow: false,
+            flow_symbol: String::new(),
+            flow_window_days: 90,
+            flow_snapshot: typhoon_engine::core::research::FlowSnapshot::default(),
+            flow_loading: false,
+            show_regime: false,
+            regime_symbol: String::new(),
+            regime_snapshot: typhoon_engine::core::research::RegimeSnapshot::default(),
+            regime_loading: false,
+            show_relvol: false,
+            relvol_symbol: String::new(),
+            relvol_snapshot: typhoon_engine::core::research::RelVolSnapshot::default(),
+            relvol_loading: false,
+            show_margins: false,
+            margins_symbol: String::new(),
+            margins_snapshot: typhoon_engine::core::research::MarginsSnapshot::default(),
+            margins_loading: false,
             bottom_tab: BottomTab::Log,
             log,
             log_filter: LogFilter::All,
@@ -18620,6 +18787,98 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = writeln!(p);
                         }
                     }
+
+                    // ── ADR-121 Round 14 blocks ────────────────────────────
+                    if let Ok(Some(gw)) = rx::get_growm(&conn, &sym_upper) {
+                        if gw.inputs_available > 0 {
+                            let _ = writeln!(p, "### GARP Composite — GROWM (as of {})", gw.as_of);
+                            let _ = writeln!(p, "- {} · composite {:.1}/100 · {}/3 inputs",
+                                gw.garp_label, gw.composite_score, gw.inputs_available);
+                            let _ = writeln!(p, "- Momentum: {} ({:.1}) · Earnings: {} ({:.1}) · Dividend CAGR 3y: {:.2}% ({})",
+                                gw.momentum_regime, gw.momentum_score,
+                                gw.earnings_label, gw.earnings_momentum_score,
+                                gw.dividend_cagr_3y_pct, gw.dividend_trend);
+                            if !gw.components.is_empty() {
+                                let _ = writeln!(p, "- Components:");
+                                for c in gw.components.iter().take(5) {
+                                    let _ = writeln!(p, "  - {}: {} · score {:.1} · weight {:.0}% · contrib {:.1}",
+                                        c.name, c.value, c.score, c.weight, c.contribution);
+                                }
+                            }
+                            if !gw.note.is_empty() { let _ = writeln!(p, "- Note: {}", gw.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(fl)) = rx::get_flow(&conn, &sym_upper) {
+                        if fl.insider_trade_count > 0 || fl.institutional_holders_tracked > 0 {
+                            let _ = writeln!(p, "### Smart-Money Flow — FLOW ({}d, as of {})", fl.window_days, fl.as_of);
+                            let _ = writeln!(p, "- {} · composite {:.1}/100 · insider {:.1} · institutional {:.1}",
+                                fl.flow_label, fl.composite_score, fl.insider_score, fl.institutional_score);
+                            let _ = writeln!(p, "- Insiders: {} trades / {} unique · buy ${:.0} · sell ${:.0} · net ${:+.0}",
+                                fl.insider_trade_count, fl.unique_insiders,
+                                fl.insider_buy_value_usd, fl.insider_sell_value_usd, fl.insider_net_value_usd);
+                            let _ = writeln!(p, "- Institutional: {} buyers / {} sellers / {} tracked · net ratio {:+.2} · share delta {:+.0}",
+                                fl.institutional_buyers, fl.institutional_sellers, fl.institutional_holders_tracked,
+                                fl.institutional_net_ratio, fl.institutional_share_delta);
+                            if !fl.note.is_empty() { let _ = writeln!(p, "- Note: {}", fl.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(rg)) = rx::get_regime(&conn, &sym_upper) {
+                        if rg.inputs_available > 0 {
+                            let _ = writeln!(p, "### Market Regime — REGIME (as of {})", rg.as_of);
+                            let _ = writeln!(p, "- {} · composite {:.1}/100 · {}/3 inputs",
+                                rg.regime_label, rg.composite_score, rg.inputs_available);
+                            let _ = writeln!(p, "- Realized vol: {:.2}% ({}) · ADX: {:.1} ({}) · 1Y return {:+.2}% · Sharpe {:.2}",
+                                rg.realized_vol_pct, rg.vol_source,
+                                rg.adx_value, rg.trend_summary,
+                                rg.return_1y_pct, rg.sharpe_ratio);
+                            let _ = writeln!(p, "- Sub-scores: trend {:.1} · volatility {:.1} · return {:.1}",
+                                rg.trend_strength_score, rg.volatility_score, rg.return_score);
+                            if !rg.note.is_empty() { let _ = writeln!(p, "- Note: {}", rg.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(rv)) = rx::get_relvol(&conn, &sym_upper) {
+                        if rv.activity_label != "INSUFFICIENT_DATA" && !rv.activity_label.is_empty() {
+                            let _ = writeln!(p, "### Relative Volume — RELVOL (as of {})", rv.as_of);
+                            let _ = writeln!(p, "- {} · {} · rel-vol 5d/20d/60d {:.2}×/{:.2}×/{:.2}×",
+                                rv.activity_label, rv.direction_label,
+                                rv.rel_volume_5d, rv.rel_volume_20d, rv.rel_volume_60d);
+                            let _ = writeln!(p, "- Current {:.0} · avg 5d/20d/60d {:.0}/{:.0}/{:.0}",
+                                rv.current_volume, rv.avg_volume_5d, rv.avg_volume_20d, rv.avg_volume_60d);
+                            let _ = writeln!(p, "- 5d-vs-20d trend {:+.2}% · 60d percentile {:.0}",
+                                rv.volume_trend_5d_pct, rv.volume_percentile_60d);
+                            if !rv.note.is_empty() { let _ = writeln!(p, "- Note: {}", rv.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(mg)) = rx::get_margins(&conn, &sym_upper) {
+                        if mg.periods_used > 0 {
+                            let _ = writeln!(p, "### Margin Trajectory — MARGINS ({} basis, as of {})", mg.basis, mg.as_of);
+                            let _ = writeln!(p, "- Overall: {} · quality {} · latest period {}",
+                                mg.overall_trend_label, mg.quality_label, mg.latest_period);
+                            let _ = writeln!(p, "- Gross: {:.2}% (prior {:.2}%, Δ{:+.2}pp, {}) · Op: {:.2}% (prior {:.2}%, Δ{:+.2}pp, {}) · Net: {:.2}% (prior {:.2}%, Δ{:+.2}pp, {})",
+                                mg.latest_gross_margin_pct, mg.prior_gross_margin_pct, mg.gross_margin_change_pct, mg.gross_trend_label,
+                                mg.latest_operating_margin_pct, mg.prior_operating_margin_pct, mg.operating_margin_change_pct, mg.operating_trend_label,
+                                mg.latest_net_margin_pct, mg.prior_net_margin_pct, mg.net_margin_change_pct, mg.net_trend_label);
+                            let _ = writeln!(p, "- Avg gross/op/net {:.2}%/{:.2}%/{:.2}% · periods used {}",
+                                mg.avg_gross_margin_pct, mg.avg_operating_margin_pct, mg.avg_net_margin_pct, mg.periods_used);
+                            if !mg.periods.is_empty() {
+                                let _ = writeln!(p, "- Per-period (gross/op/net %):");
+                                for row in mg.periods.iter().take(6) {
+                                    let _ = writeln!(p, "  - {}: {:.2} / {:.2} / {:.2}",
+                                        row.period, row.gross_margin_pct, row.operating_margin_pct, row.net_margin_pct);
+                                }
+                            }
+                            if !mg.note.is_empty() { let _ = writeln!(p, "- Note: {}", mg.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
                 }
             }
 
@@ -20290,6 +20549,86 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         if let Ok(conn) = cache.connection() {
                             if let Ok(Some(snap)) = typhoon_engine::core::research::get_credit(&conn, &self.credit_symbol) {
                                 self.credit_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "GROWM" | "GARP" | "GROWTH" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.growm_symbol = sym; }
+                self.show_growm = true;
+                if self.growm_snapshot.symbol.is_empty() && !self.growm_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_growm(&conn, &self.growm_symbol) {
+                                self.growm_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "FLOW" | "SMART_MONEY" | "INSIDER_FLOW" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.flow_symbol = sym; }
+                self.show_flow = true;
+                if self.flow_snapshot.symbol.is_empty() && !self.flow_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_flow(&conn, &self.flow_symbol) {
+                                self.flow_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "REGIME" | "MARKET_REGIME" | "REGIME_CLASSIFIER" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.regime_symbol = sym; }
+                self.show_regime = true;
+                if self.regime_snapshot.symbol.is_empty() && !self.regime_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_regime(&conn, &self.regime_symbol) {
+                                self.regime_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "RELVOL" | "REL_VOLUME" | "RELATIVE_VOLUME" | "RELVOLUME" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.relvol_symbol = sym; }
+                self.show_relvol = true;
+                if self.relvol_snapshot.symbol.is_empty() && !self.relvol_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_relvol(&conn, &self.relvol_symbol) {
+                                self.relvol_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "MARGINS" | "MARGIN_TRAJECTORY" | "MARGIN_TREND" | "MARGIN_HISTORY" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.margins_symbol = sym; }
+                self.show_margins = true;
+                if self.margins_snapshot.symbol.is_empty() && !self.margins_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_margins(&conn, &self.margins_symbol) {
+                                self.margins_snapshot = snap;
                             }
                         }
                     }
@@ -34300,7 +34639,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     ui.label(egui::RichText::new(&c.name).monospace().small());
                                     ui.label(egui::RichText::new(&c.value).monospace().small());
                                     ui.label(egui::RichText::new(format!("{:.1}", c.score)).monospace().small());
-                                    ui.label(egui::RichText::new(format!("{:.0}%", c.weight * 100.0)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.0}%", c.weight)).monospace().small());
                                     ui.label(egui::RichText::new(format!("{:.1}", c.contribution)).monospace().small());
                                     ui.end_row();
                                 }
@@ -34309,6 +34648,481 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     }
                 });
             self.show_credit = open;
+        }
+
+        // GROWM — Growth at a Reasonable Price (GARP) composite
+        if self.show_growm {
+            if self.growm_symbol.is_empty() { self.growm_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_growm;
+            egui::Window::new("GROWM — GARP Composite (MOM + EARM + DIVG)")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([620.0, 420.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.growm_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.growm_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.growm_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_growm(&conn, &sym_u) {
+                                        self.growm_snapshot = snap;
+                                        self.growm_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.growm_symbol.to_uppercase();
+                            self.growm_loading = true;
+                            self.growm_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeGrowmSnapshot { symbol: sym });
+                        }
+                        if self.growm_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.growm_snapshot;
+                    if snap.symbol.is_empty() || snap.inputs_available == 0 {
+                        ui.label(egui::RichText::new("No data — run MOM, EARM and/or DIVG for this symbol first, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.garp_label.as_str() {
+                            "GARP" | "GROWTH" => UP,
+                            "SPECULATIVE" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — composite: {:.1} / 100 — as of {}",
+                            snap.symbol, snap.garp_label, snap.composite_score, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("growm_sub").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Momentum regime").small().strong());
+                            ui.label(egui::RichText::new(format!("{} ({:.1})", snap.momentum_regime, snap.momentum_score)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Earnings trend").small().strong());
+                            ui.label(egui::RichText::new(format!("{} ({:.1})", snap.earnings_label, snap.earnings_momentum_score)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Dividend CAGR 3y").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}% ({})", snap.dividend_cagr_3y_pct, snap.dividend_trend)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Inputs available").small().strong());
+                            ui.label(egui::RichText::new(format!("{} / 3", snap.inputs_available)).small().monospace());
+                            ui.end_row();
+                        });
+                        if !snap.components.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new("Component contributions").strong().small().color(AXIS_TEXT));
+                            egui::Grid::new("growm_grid").striped(true).num_columns(5).spacing([14.0, 3.0]).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Component").strong().small());
+                                ui.label(egui::RichText::new("Value").strong().small());
+                                ui.label(egui::RichText::new("Score").strong().small());
+                                ui.label(egui::RichText::new("Weight").strong().small());
+                                ui.label(egui::RichText::new("Contribution").strong().small());
+                                ui.end_row();
+                                for c in &snap.components {
+                                    ui.label(egui::RichText::new(&c.name).monospace().small());
+                                    ui.label(egui::RichText::new(&c.value).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.1}", c.score)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.0}%", c.weight)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.1}", c.contribution)).monospace().small());
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                    }
+                });
+            self.show_growm = open;
+        }
+
+        // FLOW — Insider + Institutional flow score
+        if self.show_flow {
+            if self.flow_symbol.is_empty() { self.flow_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_flow;
+            egui::Window::new("FLOW — Insider + Institutional Flow")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([620.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.flow_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.flow_symbol = chart_sym_research.clone(); }
+                        ui.label(egui::RichText::new("Window (days):").color(AXIS_TEXT));
+                        ui.add(egui::DragValue::new(&mut self.flow_window_days).range(7..=365).speed(1));
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.flow_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_flow(&conn, &sym_u) {
+                                        self.flow_snapshot = snap;
+                                        self.flow_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.flow_symbol.to_uppercase();
+                            self.flow_loading = true;
+                            self.flow_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeFlowSnapshot {
+                                symbol: sym, window_days: self.flow_window_days,
+                            });
+                        }
+                        if self.flow_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.flow_snapshot;
+                    if snap.symbol.is_empty() || (snap.insider_trade_count == 0 && snap.institutional_holders_tracked == 0) {
+                        ui.label(egui::RichText::new("No data — run INS (insider trades) and/or HDS (institutional holders) for this symbol, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.flow_label.as_str() {
+                            "STRONG_BUY" | "BUY" => UP,
+                            "SELL" | "STRONG_SELL" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — composite: {:.1} / 100 — {}d window — as of {}",
+                            snap.symbol, snap.flow_label, snap.composite_score, snap.window_days, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("flow_sub").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Insider score").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1}", snap.insider_score)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Insider buys (USD)").small().strong());
+                            ui.label(egui::RichText::new(format!("${:.0}", snap.insider_buy_value_usd)).small().monospace().color(UP));
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Insider sells (USD)").small().strong());
+                            ui.label(egui::RichText::new(format!("${:.0}", snap.insider_sell_value_usd)).small().monospace().color(DOWN));
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Insider net (USD)").small().strong());
+                            let nc = if snap.insider_net_value_usd > 0.0 { UP } else if snap.insider_net_value_usd < 0.0 { DOWN } else { AXIS_TEXT };
+                            ui.label(egui::RichText::new(format!("${:+.0}", snap.insider_net_value_usd)).small().monospace().color(nc));
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Insider trades / unique insiders").small().strong());
+                            ui.label(egui::RichText::new(format!("{} / {}", snap.insider_trade_count, snap.unique_insiders)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Institutional score").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1}", snap.institutional_score)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Institutional buyers / sellers").small().strong());
+                            ui.label(egui::RichText::new(format!("{} / {}", snap.institutional_buyers, snap.institutional_sellers)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Holders tracked").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.institutional_holders_tracked)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Inst. net ratio").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.2}", snap.institutional_net_ratio)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Inst. share delta (net)").small().strong());
+                            let nc2 = if snap.institutional_share_delta > 0.0 { UP } else if snap.institutional_share_delta < 0.0 { DOWN } else { AXIS_TEXT };
+                            ui.label(egui::RichText::new(format!("{:+.0}", snap.institutional_share_delta)).small().monospace().color(nc2));
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_flow = open;
+        }
+
+        // REGIME — Market regime classifier
+        if self.show_regime {
+            if self.regime_symbol.is_empty() { self.regime_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_regime;
+            egui::Window::new("REGIME — Market Regime Classifier (VOLE + TECH + HRA)")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([600.0, 380.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.regime_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.regime_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.regime_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_regime(&conn, &sym_u) {
+                                        self.regime_snapshot = snap;
+                                        self.regime_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.regime_symbol.to_uppercase();
+                            self.regime_loading = true;
+                            self.regime_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeRegimeSnapshot { symbol: sym });
+                        }
+                        if self.regime_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.regime_snapshot;
+                    if snap.symbol.is_empty() || snap.inputs_available == 0 {
+                        ui.label(egui::RichText::new("No data — run VOLE, TECH and/or HRA for this symbol, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.regime_label.as_str() {
+                            "TRENDING" => UP,
+                            "VOLATILE" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — composite: {:.1} / 100 — as of {}",
+                            snap.symbol, snap.regime_label, snap.composite_score, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("regime_sub").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Realized vol").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}% ({})", snap.realized_vol_pct, snap.vol_source)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("ADX").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1} — {}", snap.adx_value, snap.trend_summary)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("1Y return").small().strong());
+                            let rc = if snap.return_1y_pct > 0.0 { UP } else if snap.return_1y_pct < 0.0 { DOWN } else { AXIS_TEXT };
+                            ui.label(egui::RichText::new(format!("{:+.2}%", snap.return_1y_pct)).small().monospace().color(rc));
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Sharpe").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.sharpe_ratio)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Trend strength score").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1} / 100", snap.trend_strength_score)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Volatility score").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1} / 100", snap.volatility_score)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Return score").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1} / 100", snap.return_score)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Inputs available").small().strong());
+                            ui.label(egui::RichText::new(format!("{} / 3", snap.inputs_available)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_regime = open;
+        }
+
+        // RELVOL — Relative volume
+        if self.show_relvol {
+            if self.relvol_symbol.is_empty() { self.relvol_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_relvol;
+            egui::Window::new("RELVOL — Relative Volume")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([580.0, 360.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.relvol_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.relvol_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.relvol_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_relvol(&conn, &sym_u) {
+                                        self.relvol_snapshot = snap;
+                                        self.relvol_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.relvol_symbol.to_uppercase();
+                            self.relvol_loading = true;
+                            self.relvol_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeRelvolSnapshot { symbol: sym });
+                        }
+                        if self.relvol_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.relvol_snapshot;
+                    if snap.symbol.is_empty() || snap.activity_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — run HP (historical prices, ≥20 bars) for this symbol, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.activity_label.as_str() {
+                            "EXTREME" | "HIGH" => UP,
+                            "LOW" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — {} — {:.2}× (20d) — as of {}",
+                            snap.symbol, snap.activity_label, snap.direction_label,
+                            snap.rel_volume_20d, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("relvol_sub").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Current volume").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.0}", snap.current_volume)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Avg volume (5d / 20d / 60d)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.0} / {:.0} / {:.0}",
+                                snap.avg_volume_5d, snap.avg_volume_20d, snap.avg_volume_60d)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Rel volume (5d / 20d / 60d)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}× / {:.2}× / {:.2}×",
+                                snap.rel_volume_5d, snap.rel_volume_20d, snap.rel_volume_60d)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Vol trend (5d vs 20d)").small().strong());
+                            let tc = if snap.volume_trend_5d_pct > 0.0 { UP } else if snap.volume_trend_5d_pct < 0.0 { DOWN } else { AXIS_TEXT };
+                            ui.label(egui::RichText::new(format!("{:+.2}%", snap.volume_trend_5d_pct)).small().monospace().color(tc));
+                            ui.end_row();
+                            ui.label(egui::RichText::new("60d percentile").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.0}", snap.volume_percentile_60d)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Bars used").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.bars_used)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_relvol = open;
+        }
+
+        // MARGINS — Margin trajectory
+        if self.show_margins {
+            if self.margins_symbol.is_empty() { self.margins_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_margins;
+            egui::Window::new("MARGINS — Margin Trajectory (Gross / Op / Net)")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 460.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.margins_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.margins_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.margins_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_margins(&conn, &sym_u) {
+                                        self.margins_snapshot = snap;
+                                        self.margins_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.margins_symbol.to_uppercase();
+                            self.margins_loading = true;
+                            self.margins_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeMarginsSnapshot { symbol: sym });
+                        }
+                        if self.margins_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.margins_snapshot;
+                    if snap.symbol.is_empty() || snap.periods_used == 0 {
+                        ui.label(egui::RichText::new("No data — run FA (financial statements) for this symbol, then click Compute.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.overall_trend_label.as_str() {
+                            "EXPANDING" => UP,
+                            "CONTRACTING" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — overall: {} — quality: {} — basis: {} — latest: {} — as of {}",
+                            snap.symbol, snap.overall_trend_label, snap.quality_label,
+                            snap.basis, snap.latest_period, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("margins_sub").striped(true).num_columns(4).min_col_width(140.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Metric").strong().small());
+                            ui.label(egui::RichText::new("Latest").strong().small());
+                            ui.label(egui::RichText::new("Prior").strong().small());
+                            ui.label(egui::RichText::new("Change / Trend").strong().small());
+                            ui.end_row();
+                            let cc_g = if snap.gross_margin_change_pct > 0.0 { UP } else if snap.gross_margin_change_pct < 0.0 { DOWN } else { AXIS_TEXT };
+                            ui.label(egui::RichText::new("Gross margin").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.latest_gross_margin_pct)).small().monospace());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.prior_gross_margin_pct)).small().monospace());
+                            ui.label(egui::RichText::new(format!("{:+.2}pp — {}",
+                                snap.gross_margin_change_pct, snap.gross_trend_label)).small().monospace().color(cc_g));
+                            ui.end_row();
+                            let cc_o = if snap.operating_margin_change_pct > 0.0 { UP } else if snap.operating_margin_change_pct < 0.0 { DOWN } else { AXIS_TEXT };
+                            ui.label(egui::RichText::new("Operating margin").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.latest_operating_margin_pct)).small().monospace());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.prior_operating_margin_pct)).small().monospace());
+                            ui.label(egui::RichText::new(format!("{:+.2}pp — {}",
+                                snap.operating_margin_change_pct, snap.operating_trend_label)).small().monospace().color(cc_o));
+                            ui.end_row();
+                            let cc_n = if snap.net_margin_change_pct > 0.0 { UP } else if snap.net_margin_change_pct < 0.0 { DOWN } else { AXIS_TEXT };
+                            ui.label(egui::RichText::new("Net margin").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.latest_net_margin_pct)).small().monospace());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.prior_net_margin_pct)).small().monospace());
+                            ui.label(egui::RichText::new(format!("{:+.2}pp — {}",
+                                snap.net_margin_change_pct, snap.net_trend_label)).small().monospace().color(cc_n));
+                            ui.end_row();
+                        });
+                        ui.separator();
+                        egui::Grid::new("margins_avg").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Average gross (periods)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.avg_gross_margin_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Average operating").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.avg_operating_margin_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Average net").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.avg_net_margin_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Periods used").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.periods_used)).small().monospace());
+                            ui.end_row();
+                        });
+                        if !snap.periods.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new("Per-period history").strong().small().color(AXIS_TEXT));
+                            egui::Grid::new("margins_grid").striped(true).num_columns(4).spacing([14.0, 3.0]).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Period").strong().small());
+                                ui.label(egui::RichText::new("Gross %").strong().small());
+                                ui.label(egui::RichText::new("Op %").strong().small());
+                                ui.label(egui::RichText::new("Net %").strong().small());
+                                ui.end_row();
+                                for row in &snap.periods {
+                                    ui.label(egui::RichText::new(&row.period).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.2}", row.gross_margin_pct)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.2}", row.operating_margin_pct)).monospace().small());
+                                    ui.label(egui::RichText::new(format!("{:.2}", row.net_margin_pct)).monospace().small());
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                    }
+                });
+            self.show_margins = open;
         }
 
         // GY — Treasury Yield Curve
@@ -41785,6 +42599,66 @@ impl eframe::App for TyphooNApp {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let _ = typhoon_engine::core::research::upsert_credit(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::GrowmSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.growm_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.growm_snapshot = snap.clone();
+                        self.growm_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_growm(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::FlowSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.flow_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.flow_snapshot = snap.clone();
+                        self.flow_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_flow(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::RegimeSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.regime_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.regime_snapshot = snap.clone();
+                        self.regime_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_regime(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::RelvolSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.relvol_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.relvol_snapshot = snap.clone();
+                        self.relvol_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_relvol(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::MarginsSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.margins_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.margins_snapshot = snap.clone();
+                        self.margins_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_margins(&conn, &sym_u, &snap);
                         }
                     }
                 }

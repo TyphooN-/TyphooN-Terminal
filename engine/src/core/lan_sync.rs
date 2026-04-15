@@ -196,6 +196,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_breakout",
     "research_cash_cycle",
     "research_credit",
+    // ── ADR-121 Round 14 ────────────────────────────
+    "research_growm",
+    "research_flow",
+    "research_regime",
+    "research_relvol",
+    "research_margins",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -748,6 +754,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_growm" => Some(
+            "CREATE TABLE IF NOT EXISTS research_growm (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_flow" => Some(
+            "CREATE TABLE IF NOT EXISTS research_flow (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_regime" => Some(
+            "CREATE TABLE IF NOT EXISTS research_regime (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_relvol" => Some(
+            "CREATE TABLE IF NOT EXISTS research_relvol (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_margins" => Some(
+            "CREATE TABLE IF NOT EXISTS research_margins (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -821,6 +862,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_breakout" => Some("updated_at"),
         "research_cash_cycle" => Some("updated_at"),
         "research_credit" => Some("updated_at"),
+        "research_growm" => Some("updated_at"),
+        "research_flow" => Some("updated_at"),
+        "research_regime" => Some("updated_at"),
+        "research_relvol" => Some("updated_at"),
+        "research_margins" => Some("updated_at"),
         _ => None,
     }
 }
