@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**eighty-two sub-blocks**, each of which is skipped silently when its data
+**eighty-seven sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -1055,7 +1055,79 @@ length + type, longest beat and miss streaks, avg surprise %, and
 latest event date + label + surprise %. Requires ≥4 events to
 move out of INSUFFICIENT_DATA. Source: ADR-125 SURPSTK window.
 
-#### 2.82 Sector peer comparison
+#### 2.82 Dividend Growth Rank (DVDRANK — ADR-126)
+
+Pulled from `research::get_dvdrank`. Sector-relative percentile
+rank of **`DivgSnapshot.cagr_3y_pct`** from the Round 12 DIVG
+cache. Higher CAGR = higher rank. Peers whose
+`trend_label = "NO_HISTORY"` are filtered so the cohort captures
+only names with enough history to compute a meaningful CAGR.
+Header line gives the standard **rank_label** (TOP_DECILE ... →
+BOTTOM_DECILE / NO_DATA / INSUFFICIENT_DATA), the subject's 3y
+CAGR, consecutive_growth_years, and DIVG trend_label. Body block
+reports subject 3y CAGR, rank position within sector cohort,
+sector median / p25 / p75 CAGR, and peers_considered /
+peers_with_data. Source: ADR-126 DVDRANK window.
+
+#### 2.83 Earnings Momentum Rank (EARMRANK — ADR-126)
+
+Pulled from `research::get_earmrank`. Sector-relative percentile
+rank of **`EarmSnapshot.composite_score`** from the Round 12 EARM
+cache. The natural rank overlay for the earnings-momentum composite
+that fuses EPS surprise history + revision trend + growth slope.
+Header line gives the standard **rank_label** and the subject's
+`momentum_label` (ACCELERATING / STABLE / DECELERATING /
+INSUFFICIENT_DATA). Body block reports subject composite, rank
+position, sector median / p25 / p75 composite, and peers_considered
+/ peers_with_data. Filters peers whose
+`momentum_label != "INSUFFICIENT_DATA"`. Source: ADR-126 EARMRANK
+window.
+
+#### 2.84 Upgrade/Downgrade Rank (UPDGRANK — ADR-126)
+
+Pulled from `research::get_updgrank`. Sector-relative percentile
+rank of **`UpdmSnapshot.net_90d`** from the Round 12 UPDM cache —
+the net sell-side upgrade-minus-downgrade count over the trailing
+90 days. Higher net = more analyst conviction = higher rank. Header
+line gives the standard **rank_label** and the subject's
+`bias_label` (BULLISH / NEUTRAL / BEARISH / NO_COVERAGE). Body
+block reports subject net 90d, rank position, sector median / p25
+/ p75 net, and peers_considered / peers_with_data. Filters peers
+whose `bias_label != "NO_COVERAGE"` so the cohort captures
+sell-side-active names only. Source: ADR-126 UPDGRANK window.
+
+#### 2.85 Gap Yearly (GY — ADR-126)
+
+Pulled from `research::get_gy`. Pure symbol-local time-series stat
+over the most recent **253 bars** of the HP cache — no sector, no
+peer cross-join. For each adjacent pair, computes the overnight
+gap as `(open − prev_close) / prev_close × 100`, skips gaps below
+the 0.01% noise floor, and bins the remaining gaps at 2% / 5% /
+10% thresholds in both directions. Header line gives the
+**gap_label** (EXPLOSIVE / GAPPY / NORMAL / SMOOTH /
+INSUFFICIENT_DATA), bars used, and total gaps. Body block reports
+the 2/5/10% bin counts in each direction, largest up gap + date,
+largest down gap + date, and average absolute gap %. Useful as an
+event-driven risk measure. Requires ≥20 HP bars to emit. Source:
+ADR-126 GY window.
+
+#### 2.86 Daily Event Streak (DES — ADR-126)
+
+Pulled from `research::get_des`. Pure symbol-local time-series stat
+over the same 253-bar HP window as GY. Classifies each
+close-over-close move as UP / DOWN / FLAT, computes the longest
+up-streak and down-streak over the window, the current trailing
+streak, the up-day rate (excluding flat days from the denominator),
+and the average up-day and down-day move %. Header line gives the
+**streak_label** (STRONG_UPTREND / UPTREND_BIAS / NEUTRAL /
+DOWNTREND_BIAS / STRONG_DOWNTREND / INSUFFICIENT_DATA), the up-day
+rate %, and the current streak `type × length`. Body block reports
+bars used, up / down / flat day counts, longest up and down
+streaks, and avg up / down move %. Complements SURPSTK (earnings
+streak) with a price-action streak. Requires ≥20 HP bars to emit.
+Source: ADR-126 DES window.
+
+#### 2.87 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1166,21 +1238,26 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 | FQM rank fields (ADR-125 FQMRANK) | 3 k/v rows | Subject FQM composite + operator label + sector median/p25/p75 + percentile + rank position |
 | Liquidity rank fields (ADR-125 LIQRANK) | 3 k/v rows | Subject ADV$ in $M + tier label + sector median/p25/p75 ADV$ + percentile + rank position |
 | Earnings surprise streak fields (ADR-125 SURPSTK) | 4 k/v rows | Events breakdown + beat rate + current/longest streaks + avg surprise + latest event |
+| Dividend growth rank fields (ADR-126 DVDRANK) | 4 k/v rows | Subject 3y CAGR + consecutive growth years + trend label + sector median/p25/p75 CAGR + percentile + rank position |
+| Earnings momentum rank fields (ADR-126 EARMRANK) | 3 k/v rows | Subject composite score + momentum label + sector median/p25/p75 + percentile + rank position |
+| Upgrade/downgrade rank fields (ADR-126 UPDGRANK) | 3 k/v rows | Subject net_90d + bias label + sector median/p25/p75 net + percentile + rank position |
+| Gap yearly fields (ADR-126 GY) | 5 k/v rows | 253-bar gap census: 2/5/10% gap bins up+down + largest up/down with date + avg |gap| + label |
+| Daily event streak fields (ADR-126 DES) | 4 k/v rows | 253-bar up/down/flat census + longest up/down streaks + current streak + up-day rate + avg up/down move |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **32-61 KB**
-(up from 30-58 KB after ADR-124; ADR-125 added five per-symbol blocks —
-LEVRANK / OPERANK / FQMRANK / LIQRANK / SURPSTK — covering a
-sector-relative leverage rank (risk-inverted with a NEGATIVE_EQUITY
-short-circuit), a standalone operating-margin rank that isolates
-pricing power from the fused FQM/QUAL composites, a rank overlay on
-the Round 17 FQM operator composite, a sector-relative ADV$
-liquidity rank, and a pure-time-series earnings surprise streak stat
-that needs no peer cross-join — all pure compute over cached Round
-7-17 snapshots with zero new API dependencies); a 10-symbol basket
-lands near **310-620 KB** (the global context is emitted only once,
-so multi-symbol overhead is still bounded by the per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **34-64 KB**
+(up from 32-61 KB after ADR-125; ADR-126 added five per-symbol blocks —
+DVDRANK / EARMRANK / UPDGRANK / GY / DES — covering three new
+sector-rank overlays on Round 12 factors (dividend growth CAGR,
+earnings momentum composite, and upgrade/downgrade net_90d) plus
+two new pure-time-series HP stats (Gap Yearly 253-bar gap census
+and Daily Event Streak up/down/flat distribution with longest
+streaks) — all pure compute over cached Round 7-18 snapshots and
+the existing HP cache with zero new API dependencies); a 10-symbol
+basket lands near **330-660 KB** (the global context is emitted only
+once, so multi-symbol overhead is still bounded by the per-symbol
+blocks).
 
 ---
 
@@ -1400,6 +1477,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_fqmrank` | SQLite `research_fqmrank` | ADR-125 FQMRANK window (sector percentile rank of FQM composite) |
 | `research::get_liqrank` | SQLite `research_liqrank` | ADR-125 LIQRANK window (sector percentile rank of ADV$) |
 | `research::get_surpstk` | SQLite `research_surpstk` | ADR-125 SURPSTK window (earnings surprise streak stat from cached EarningsSurprise rows) |
+| `research::get_dvdrank` | SQLite `research_dvdrank` | ADR-126 DVDRANK window (sector percentile rank of 3y dividend CAGR) |
+| `research::get_earmrank` | SQLite `research_earmrank` | ADR-126 EARMRANK window (sector percentile rank of EARM composite score) |
+| `research::get_updgrank` | SQLite `research_updgrank` | ADR-126 UPDGRANK window (sector percentile rank of UPDM net_90d) |
+| `research::get_gy` | SQLite `research_gy` | ADR-126 GY window (253-bar gap yearly stat from cached HP bars) |
+| `research::get_des` | SQLite `research_des` | ADR-126 DES window (253-bar daily event streak stat from cached HP bars) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -1436,4 +1518,4 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 — Godel parity research surfaces

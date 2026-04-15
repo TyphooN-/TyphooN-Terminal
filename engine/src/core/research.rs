@@ -2095,6 +2095,118 @@ pub struct EarningsSurpriseStreakSnapshot {
     pub note: String,
 }
 
+// ── ADR-126 Round 19 — dividend/earnings/rating rank overlays + gap/streak ─
+
+/// DVDRANK — Dividend Growth Rank vs Sector Peers.
+/// Percentile rank of `DivgSnapshot.cagr_3y_pct` within the same sector.
+/// Higher CAGR = higher rank.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DividendGrowthRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub cagr_3y_pct: f64,             // subject's 3y dividend CAGR (copied from DIVG)
+    pub consecutive_growth_years: usize,
+    pub trend_label: String,          // subject's DIVG trend (copied, e.g. "GROWING")
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_cagr_pct: f64,
+    pub sector_p25_cagr_pct: f64,
+    pub sector_p75_cagr_pct: f64,
+    pub percentile_rank: f64,
+    pub rank_position: usize,
+    pub rank_label: String,           // standard decile ladder
+    pub note: String,
+}
+
+/// EARMRANK — Earnings Momentum Rank vs Sector Peers.
+/// Percentile rank of `EarmSnapshot.composite_score` within the same sector.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EarningsMomentumRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub composite_score: f64,
+    pub momentum_label: String,       // subject's EARM label (copied)
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_score: f64,
+    pub sector_p25: f64,
+    pub sector_p75: f64,
+    pub percentile_rank: f64,
+    pub rank_position: usize,
+    pub rank_label: String,
+    pub note: String,
+}
+
+/// UPDGRANK — Upgrade/Downgrade Rank vs Sector Peers.
+/// Percentile rank of `UpdmSnapshot.net_90d` within the same sector. A higher
+/// net (more upgrades than downgrades) earns a higher rank. No-coverage peers
+/// are filtered out so the cohort captures sell-side conviction only.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UpgradeDowngradeRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub net_90d: i32,                 // subject's UPDM net_90d (copied)
+    pub bias_label: String,           // subject's UPDM bias (copied)
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_net_90d: f64,
+    pub sector_p25_net_90d: f64,
+    pub sector_p75_net_90d: f64,
+    pub percentile_rank: f64,
+    pub rank_position: usize,
+    pub rank_label: String,
+    pub note: String,
+}
+
+/// GY — Gap Yearly snapshot. Pure time-series stat over the cached HP daily
+/// bars. Counts overnight gaps (today's open vs yesterday's close) binned by
+/// magnitude, and emits a "gappiness" label.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GapYearlySnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,             // sessions actually scanned (<=252)
+    pub gaps_total: usize,            // non-zero gaps seen
+    pub gaps_up_2pct: usize,          // |gap| >= 2% and positive
+    pub gaps_down_2pct: usize,
+    pub gaps_up_5pct: usize,
+    pub gaps_down_5pct: usize,
+    pub gaps_up_10pct: usize,
+    pub gaps_down_10pct: usize,
+    pub largest_up_gap_pct: f64,      // biggest positive gap seen (signed)
+    pub largest_up_gap_date: String,
+    pub largest_down_gap_pct: f64,    // biggest negative gap seen (signed, negative)
+    pub largest_down_gap_date: String,
+    pub avg_abs_gap_pct: f64,         // mean |gap| across all non-zero gaps
+    pub gap_label: String,            // "EXPLOSIVE" | "GAPPY" | "NORMAL" | "SMOOTH" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// DES — Daily Event Streak snapshot. Pure time-series stat over the cached
+/// HP daily bars. Tracks the current up/down close-over-close streak, the
+/// longest up and down streaks in the window, plus a directional bias label.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DailyEventStreakSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,             // sessions actually scanned (<=252)
+    pub current_streak_type: String,  // "UP" | "DOWN" | "FLAT" | "NONE"
+    pub current_streak_len: usize,
+    pub longest_up_streak: usize,
+    pub longest_down_streak: usize,
+    pub up_days: usize,
+    pub down_days: usize,
+    pub flat_days: usize,
+    pub up_day_rate_pct: f64,         // up_days / (up+down) × 100
+    pub avg_up_move_pct: f64,         // mean % change on up days
+    pub avg_down_move_pct: f64,
+    pub streak_label: String,         // "STRONG_UPTREND" | "UPTREND_BIAS" | "NEUTRAL" | "DOWNTREND_BIAS" | "STRONG_DOWNTREND" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -10607,6 +10719,440 @@ pub fn compute_surpstk_snapshot(
     }
 }
 
+// ── ADR-126 Round 19 compute fns ──────────────────────────────────────────
+
+pub fn compute_dvdrank_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject: Option<&DivgSnapshot>,
+    peers: &[&DivgSnapshot],
+) -> DividendGrowthRankSnapshot {
+    let subj = match subject {
+        Some(s) if s.trend_label != "NO_HISTORY" && !s.trend_label.is_empty() => s,
+        _ => {
+            return DividendGrowthRankSnapshot {
+                symbol: symbol.to_string(),
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "No DIVG snapshot cached for subject".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let peer_cagr: Vec<f64> = peers
+        .iter()
+        .filter(|p| !p.symbol.eq_ignore_ascii_case(symbol))
+        .filter(|p| p.trend_label != "NO_HISTORY" && !p.trend_label.is_empty())
+        .map(|p| p.cagr_3y_pct)
+        .collect();
+    let peers_considered = peers.len();
+    let peers_with_data = peer_cagr.len();
+    if peer_cagr.len() < 3 {
+        return DividendGrowthRankSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            cagr_3y_pct: subj.cagr_3y_pct,
+            consecutive_growth_years: subj.consecutive_growth_years,
+            trend_label: subj.trend_label.clone(),
+            peers_considered,
+            peers_with_data,
+            rank_label: "INSUFFICIENT_DATA".into(),
+            note: format!("Only {} DIVG peers with history in sector {} (need ≥3)", peer_cagr.len(), sector),
+            ..Default::default()
+        };
+    }
+    let mut sorted = peer_cagr.clone();
+    sorted.push(subj.cagr_3y_pct);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    let pct = percentile_rank_score(subj.cagr_3y_pct, &peer_cagr, true);
+    let better = peer_cagr.iter().filter(|&&p| p > subj.cagr_3y_pct).count();
+    let label = rank_label_for_percentile(pct);
+    DividendGrowthRankSnapshot {
+        symbol: symbol.to_string(),
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        cagr_3y_pct: subj.cagr_3y_pct,
+        consecutive_growth_years: subj.consecutive_growth_years,
+        trend_label: subj.trend_label.clone(),
+        peers_considered,
+        peers_with_data,
+        sector_median_cagr_pct: median,
+        sector_p25_cagr_pct: p25,
+        sector_p75_cagr_pct: p75,
+        percentile_rank: pct,
+        rank_position: better + 1,
+        rank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+pub fn compute_earmrank_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject: Option<&EarmSnapshot>,
+    peers: &[&EarmSnapshot],
+) -> EarningsMomentumRankSnapshot {
+    let subj = match subject {
+        Some(s) if s.momentum_label != "INSUFFICIENT_DATA" && !s.momentum_label.is_empty() => s,
+        _ => {
+            return EarningsMomentumRankSnapshot {
+                symbol: symbol.to_string(),
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "No EARM snapshot cached for subject".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let peer_scores: Vec<f64> = peers
+        .iter()
+        .filter(|p| !p.symbol.eq_ignore_ascii_case(symbol))
+        .filter(|p| p.momentum_label != "INSUFFICIENT_DATA" && !p.momentum_label.is_empty())
+        .map(|p| p.composite_score)
+        .collect();
+    let peers_considered = peers.len();
+    let peers_with_data = peer_scores.len();
+    if peer_scores.len() < 3 {
+        return EarningsMomentumRankSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            composite_score: subj.composite_score,
+            momentum_label: subj.momentum_label.clone(),
+            peers_considered,
+            peers_with_data,
+            rank_label: "INSUFFICIENT_DATA".into(),
+            note: format!("Only {} EARM peers with data in sector {} (need ≥3)", peer_scores.len(), sector),
+            ..Default::default()
+        };
+    }
+    let mut sorted = peer_scores.clone();
+    sorted.push(subj.composite_score);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    let pct = percentile_rank_score(subj.composite_score, &peer_scores, true);
+    let better = peer_scores.iter().filter(|&&p| p > subj.composite_score).count();
+    let label = rank_label_for_percentile(pct);
+    EarningsMomentumRankSnapshot {
+        symbol: symbol.to_string(),
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        composite_score: subj.composite_score,
+        momentum_label: subj.momentum_label.clone(),
+        peers_considered,
+        peers_with_data,
+        sector_median_score: median,
+        sector_p25: p25,
+        sector_p75: p75,
+        percentile_rank: pct,
+        rank_position: better + 1,
+        rank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+pub fn compute_updgrank_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject: Option<&UpdmSnapshot>,
+    peers: &[&UpdmSnapshot],
+) -> UpgradeDowngradeRankSnapshot {
+    let subj = match subject {
+        Some(s) if s.bias_label != "NO_COVERAGE" && !s.bias_label.is_empty() => s,
+        _ => {
+            return UpgradeDowngradeRankSnapshot {
+                symbol: symbol.to_string(),
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "No UPDM snapshot cached for subject".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let peer_nets: Vec<f64> = peers
+        .iter()
+        .filter(|p| !p.symbol.eq_ignore_ascii_case(symbol))
+        .filter(|p| p.bias_label != "NO_COVERAGE" && !p.bias_label.is_empty())
+        .map(|p| p.net_90d as f64)
+        .collect();
+    let peers_considered = peers.len();
+    let peers_with_data = peer_nets.len();
+    if peer_nets.len() < 3 {
+        return UpgradeDowngradeRankSnapshot {
+            symbol: symbol.to_string(),
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            net_90d: subj.net_90d,
+            bias_label: subj.bias_label.clone(),
+            peers_considered,
+            peers_with_data,
+            rank_label: "INSUFFICIENT_DATA".into(),
+            note: format!("Only {} UPDM peers with coverage in sector {} (need ≥3)", peer_nets.len(), sector),
+            ..Default::default()
+        };
+    }
+    let subj_f = subj.net_90d as f64;
+    let mut sorted = peer_nets.clone();
+    sorted.push(subj_f);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = quantile_f64(&sorted, 0.5);
+    let p25 = quantile_f64(&sorted, 0.25);
+    let p75 = quantile_f64(&sorted, 0.75);
+    let pct = percentile_rank_score(subj_f, &peer_nets, true);
+    let better = peer_nets.iter().filter(|&&p| p > subj_f).count();
+    let label = rank_label_for_percentile(pct);
+    UpgradeDowngradeRankSnapshot {
+        symbol: symbol.to_string(),
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        net_90d: subj.net_90d,
+        bias_label: subj.bias_label.clone(),
+        peers_considered,
+        peers_with_data,
+        sector_median_net_90d: median,
+        sector_p25_net_90d: p25,
+        sector_p75_net_90d: p75,
+        percentile_rank: pct,
+        rank_position: better + 1,
+        rank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+pub fn compute_gy_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> GapYearlySnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 2 {
+        return GapYearlySnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: bars.len(),
+            gap_label: "INSUFFICIENT_DATA".into(),
+            note: "need ≥2 bars for gap calc".into(),
+            ..Default::default()
+        };
+    }
+    // Caller passes newest-first or oldest-first; we want to scan the last
+    // 252 sessions worth of "today's open vs yesterday's close" gaps. Sort by
+    // date ascending (oldest first) so pairs (i-1, i) go in calendar order.
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let start = if sorted.len() > 253 { sorted.len() - 253 } else { 0 };
+    let window = &sorted[start..];
+    let bars_used = window.len();
+    let mut gaps_total = 0usize;
+    let mut gaps_up_2 = 0usize;
+    let mut gaps_down_2 = 0usize;
+    let mut gaps_up_5 = 0usize;
+    let mut gaps_down_5 = 0usize;
+    let mut gaps_up_10 = 0usize;
+    let mut gaps_down_10 = 0usize;
+    let mut sum_abs = 0.0f64;
+    let mut largest_up = 0.0f64;
+    let mut largest_up_date = String::new();
+    let mut largest_down = 0.0f64;
+    let mut largest_down_date = String::new();
+    for i in 1..window.len() {
+        let prev_close = window[i - 1].close;
+        let open = window[i].open;
+        if prev_close <= 0.0 || open <= 0.0 { continue; }
+        let gap_pct = (open - prev_close) / prev_close * 100.0;
+        if gap_pct.abs() < 0.01 { continue; } // treat <0.01% as no gap
+        gaps_total += 1;
+        sum_abs += gap_pct.abs();
+        if gap_pct >= 2.0 { gaps_up_2 += 1; }
+        if gap_pct <= -2.0 { gaps_down_2 += 1; }
+        if gap_pct >= 5.0 { gaps_up_5 += 1; }
+        if gap_pct <= -5.0 { gaps_down_5 += 1; }
+        if gap_pct >= 10.0 { gaps_up_10 += 1; }
+        if gap_pct <= -10.0 { gaps_down_10 += 1; }
+        if gap_pct > largest_up {
+            largest_up = gap_pct;
+            largest_up_date = window[i].date.clone();
+        }
+        if gap_pct < largest_down {
+            largest_down = gap_pct;
+            largest_down_date = window[i].date.clone();
+        }
+    }
+    let avg_abs = if gaps_total > 0 { sum_abs / gaps_total as f64 } else { 0.0 };
+    // Gap-label ladder:
+    // - EXPLOSIVE: any 10% gap OR ≥ 4 gaps at the 5% band
+    // - GAPPY: ≥ 12 gaps at the 2% band OR ≥ 2 gaps at the 5% band
+    // - SMOOTH: < 6 gaps at the 2% band
+    // - NORMAL: anything between
+    let gap_2_total = gaps_up_2 + gaps_down_2;
+    let gap_5_total = gaps_up_5 + gaps_down_5;
+    let gap_10_total = gaps_up_10 + gaps_down_10;
+    let gap_label = if bars_used < 20 {
+        "INSUFFICIENT_DATA"
+    } else if gap_10_total >= 1 || gap_5_total >= 4 {
+        "EXPLOSIVE"
+    } else if gap_2_total >= 12 || gap_5_total >= 2 {
+        "GAPPY"
+    } else if gap_2_total < 6 {
+        "SMOOTH"
+    } else {
+        "NORMAL"
+    };
+    GapYearlySnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used,
+        gaps_total,
+        gaps_up_2pct: gaps_up_2,
+        gaps_down_2pct: gaps_down_2,
+        gaps_up_5pct: gaps_up_5,
+        gaps_down_5pct: gaps_down_5,
+        gaps_up_10pct: gaps_up_10,
+        gaps_down_10pct: gaps_down_10,
+        largest_up_gap_pct: largest_up,
+        largest_up_gap_date: largest_up_date,
+        largest_down_gap_pct: largest_down,
+        largest_down_gap_date: largest_down_date,
+        avg_abs_gap_pct: avg_abs,
+        gap_label: gap_label.to_string(),
+        note: String::new(),
+    }
+}
+
+pub fn compute_des_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> DailyEventStreakSnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 2 {
+        return DailyEventStreakSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: bars.len(),
+            streak_label: "INSUFFICIENT_DATA".into(),
+            note: "need ≥2 bars for streak calc".into(),
+            ..Default::default()
+        };
+    }
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let start = if sorted.len() > 253 { sorted.len() - 253 } else { 0 };
+    let window = &sorted[start..];
+    let bars_used = window.len();
+    let mut up_days = 0usize;
+    let mut down_days = 0usize;
+    let mut flat_days = 0usize;
+    let mut sum_up = 0.0f64;
+    let mut sum_down = 0.0f64;
+    let mut dirs: Vec<i8> = Vec::with_capacity(window.len());
+    for i in 1..window.len() {
+        let prev = window[i - 1].close;
+        let cur = window[i].close;
+        if prev <= 0.0 || cur <= 0.0 { dirs.push(0); continue; }
+        let pct = (cur - prev) / prev * 100.0;
+        if pct > 0.0 {
+            up_days += 1;
+            sum_up += pct;
+            dirs.push(1);
+        } else if pct < 0.0 {
+            down_days += 1;
+            sum_down += pct;
+            dirs.push(-1);
+        } else {
+            flat_days += 1;
+            dirs.push(0);
+        }
+    }
+    let mut longest_up = 0usize;
+    let mut longest_down = 0usize;
+    let mut run_up = 0usize;
+    let mut run_down = 0usize;
+    for d in &dirs {
+        match *d {
+            1 => {
+                run_up += 1;
+                run_down = 0;
+                if run_up > longest_up { longest_up = run_up; }
+            }
+            -1 => {
+                run_down += 1;
+                run_up = 0;
+                if run_down > longest_down { longest_down = run_down; }
+            }
+            _ => {
+                run_up = 0;
+                run_down = 0;
+            }
+        }
+    }
+    // Current streak: trailing run at the end of `dirs`.
+    let (current_type, current_len) = if let Some(last) = dirs.last().copied() {
+        let mut len = 0usize;
+        if last != 0 {
+            for d in dirs.iter().rev() {
+                if *d == last { len += 1; } else { break; }
+            }
+        }
+        match last {
+            1 => ("UP".to_string(), len),
+            -1 => ("DOWN".to_string(), len),
+            0 => ("FLAT".to_string(), 0usize),
+            _ => ("NONE".to_string(), 0usize),
+        }
+    } else {
+        ("NONE".to_string(), 0usize)
+    };
+    let total_directional = up_days + down_days;
+    let up_day_rate = if total_directional > 0 {
+        up_days as f64 / total_directional as f64 * 100.0
+    } else { 0.0 };
+    let avg_up = if up_days > 0 { sum_up / up_days as f64 } else { 0.0 };
+    let avg_down = if down_days > 0 { sum_down / down_days as f64 } else { 0.0 };
+    let streak_label = if bars_used < 20 {
+        "INSUFFICIENT_DATA"
+    } else if up_day_rate >= 60.0 && longest_up >= 5 {
+        "STRONG_UPTREND"
+    } else if up_day_rate >= 55.0 {
+        "UPTREND_BIAS"
+    } else if up_day_rate <= 40.0 && longest_down >= 5 {
+        "STRONG_DOWNTREND"
+    } else if up_day_rate <= 45.0 {
+        "DOWNTREND_BIAS"
+    } else {
+        "NEUTRAL"
+    };
+    DailyEventStreakSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used,
+        current_streak_type: current_type,
+        current_streak_len: current_len,
+        longest_up_streak: longest_up,
+        longest_down_streak: longest_down,
+        up_days,
+        down_days,
+        flat_days,
+        up_day_rate_pct: up_day_rate,
+        avg_up_move_pct: avg_up,
+        avg_down_move_pct: avg_down,
+        streak_label: streak_label.to_string(),
+        note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -13173,6 +13719,198 @@ pub fn get_all_liquidity(conn: &Connection) -> Result<Vec<LiquiditySnapshot>, St
         .map_err(|e| format!("query_map get_all_liquidity: {e}"))?
         .filter_map(|r| r.ok())
         .filter_map(|j| serde_json::from_str::<LiquiditySnapshot>(&j).ok())
+        .collect();
+    Ok(rows)
+}
+
+// ── ADR-126 Round 19 schema + wrappers ────────────────────────────────────
+
+pub fn create_research_tables_v19(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v18(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_dvdrank (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_dvdrank_updated ON research_dvdrank(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_earmrank (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_earmrank_updated ON research_earmrank(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_updgrank (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_updgrank_updated ON research_updgrank(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_gy (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_gy_updated ON research_gy(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_des (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_des_updated ON research_des(updated_at);",
+    ).map_err(|e| format!("create v19 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_dvdrank(conn: &Connection, symbol: &str, snap: &DividendGrowthRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v19(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("dvdrank json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_dvdrank(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert dvdrank: {e}"))?;
+    Ok(())
+}
+
+pub fn get_dvdrank(conn: &Connection, symbol: &str) -> Result<Option<DividendGrowthRankSnapshot>, String> {
+    let _ = create_research_tables_v19(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_dvdrank WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_dvdrank: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_dvdrank: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_dvdrank: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_earmrank(conn: &Connection, symbol: &str, snap: &EarningsMomentumRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v19(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("earmrank json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_earmrank(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert earmrank: {e}"))?;
+    Ok(())
+}
+
+pub fn get_earmrank(conn: &Connection, symbol: &str) -> Result<Option<EarningsMomentumRankSnapshot>, String> {
+    let _ = create_research_tables_v19(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_earmrank WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_earmrank: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_earmrank: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_earmrank: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_updgrank(conn: &Connection, symbol: &str, snap: &UpgradeDowngradeRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v19(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("updgrank json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_updgrank(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert updgrank: {e}"))?;
+    Ok(())
+}
+
+pub fn get_updgrank(conn: &Connection, symbol: &str) -> Result<Option<UpgradeDowngradeRankSnapshot>, String> {
+    let _ = create_research_tables_v19(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_updgrank WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_updgrank: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_updgrank: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_updgrank: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_gy(conn: &Connection, symbol: &str, snap: &GapYearlySnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v19(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("gy json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_gy(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert gy: {e}"))?;
+    Ok(())
+}
+
+pub fn get_gy(conn: &Connection, symbol: &str) -> Result<Option<GapYearlySnapshot>, String> {
+    let _ = create_research_tables_v19(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_gy WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_gy: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_gy: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_gy: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_des(conn: &Connection, symbol: &str, snap: &DailyEventStreakSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v19(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("des json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_des(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert des: {e}"))?;
+    Ok(())
+}
+
+pub fn get_des(conn: &Connection, symbol: &str) -> Result<Option<DailyEventStreakSnapshot>, String> {
+    let _ = create_research_tables_v19(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_des WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_des: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_des: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_des: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+/// Whole-table scan of `research_divg`. Used by DVDRANK.
+pub fn get_all_divg(conn: &Connection) -> Result<Vec<DivgSnapshot>, String> {
+    let _ = create_research_tables_v12(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_divg")
+        .map_err(|e| format!("prepare get_all_divg: {e}"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query_map get_all_divg: {e}"))?
+        .filter_map(|r| r.ok())
+        .filter_map(|j| serde_json::from_str::<DivgSnapshot>(&j).ok())
+        .collect();
+    Ok(rows)
+}
+
+/// Whole-table scan of `research_earm`. Used by EARMRANK.
+pub fn get_all_earm(conn: &Connection) -> Result<Vec<EarmSnapshot>, String> {
+    let _ = create_research_tables_v12(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_earm")
+        .map_err(|e| format!("prepare get_all_earm: {e}"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query_map get_all_earm: {e}"))?
+        .filter_map(|r| r.ok())
+        .filter_map(|j| serde_json::from_str::<EarmSnapshot>(&j).ok())
+        .collect();
+    Ok(rows)
+}
+
+/// Whole-table scan of `research_updm`. Used by UPDGRANK.
+pub fn get_all_updm(conn: &Connection) -> Result<Vec<UpdmSnapshot>, String> {
+    let _ = create_research_tables_v12(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_updm")
+        .map_err(|e| format!("prepare get_all_updm: {e}"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query_map get_all_updm: {e}"))?
+        .filter_map(|r| r.ok())
+        .filter_map(|j| serde_json::from_str::<UpdmSnapshot>(&j).ok())
         .collect();
     Ok(rows)
 }
@@ -17456,6 +18194,288 @@ mod tests {
     #[test]
     fn compute_surpstk_insufficient_data() {
         let snap = compute_surpstk_snapshot("NIL", "2026-04-15", &[]);
+        assert_eq!(snap.streak_label, "INSUFFICIENT_DATA");
+    }
+
+    // ── ADR-126 Round 19 tests ────────────────────────────────────────────
+
+    fn mk_divg(sym: &str, cagr3: f64, trend: &str) -> DivgSnapshot {
+        DivgSnapshot {
+            symbol: sym.into(),
+            as_of: "2026-04-15".into(),
+            total_payments: 12,
+            years_covered: 10,
+            cagr_3y_pct: cagr3,
+            consecutive_growth_years: 5,
+            trend_label: trend.into(),
+            ..Default::default()
+        }
+    }
+
+    fn mk_earm(sym: &str, score: f64, label: &str) -> EarmSnapshot {
+        EarmSnapshot {
+            symbol: sym.into(),
+            as_of: "2026-04-15".into(),
+            quarters_used: 8,
+            composite_score: score,
+            momentum_label: label.into(),
+            ..Default::default()
+        }
+    }
+
+    fn mk_updm(sym: &str, net90: i32, bias: &str) -> UpdmSnapshot {
+        UpdmSnapshot {
+            symbol: sym.into(),
+            as_of: "2026-04-15".into(),
+            total_actions: 10,
+            net_90d: net90,
+            bias_label: bias.into(),
+            ..Default::default()
+        }
+    }
+
+    fn mk_hp(date: &str, open: f64, high: f64, low: f64, close: f64) -> HistoricalPriceRow {
+        HistoricalPriceRow {
+            date: date.into(),
+            open,
+            high,
+            low,
+            close,
+            adj_close: close,
+            volume: 1_000_000.0,
+            change: close - open,
+            change_pct: 0.0,
+        }
+    }
+
+    #[test]
+    fn dvdrank_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v19(&c).unwrap();
+        let snap = DividendGrowthRankSnapshot {
+            symbol: "AAA".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Tech".into(),
+            cagr_3y_pct: 12.5,
+            rank_label: "TOP_DECILE".into(),
+            ..Default::default()
+        };
+        upsert_dvdrank(&c, "AAA", &snap).unwrap();
+        let got = get_dvdrank(&c, "AAA").unwrap().unwrap();
+        assert_eq!(got.rank_label, "TOP_DECILE");
+    }
+
+    #[test]
+    fn earmrank_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v19(&c).unwrap();
+        let snap = EarningsMomentumRankSnapshot {
+            symbol: "AAA".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Tech".into(),
+            composite_score: 72.0,
+            rank_label: "ABOVE_MEDIAN".into(),
+            ..Default::default()
+        };
+        upsert_earmrank(&c, "AAA", &snap).unwrap();
+        let got = get_earmrank(&c, "AAA").unwrap().unwrap();
+        assert_eq!(got.rank_label, "ABOVE_MEDIAN");
+    }
+
+    #[test]
+    fn updgrank_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v19(&c).unwrap();
+        let snap = UpgradeDowngradeRankSnapshot {
+            symbol: "AAA".into(),
+            as_of: "2026-04-15".into(),
+            sector: "Tech".into(),
+            net_90d: 5,
+            rank_label: "BELOW_MEDIAN".into(),
+            ..Default::default()
+        };
+        upsert_updgrank(&c, "AAA", &snap).unwrap();
+        let got = get_updgrank(&c, "AAA").unwrap().unwrap();
+        assert_eq!(got.net_90d, 5);
+    }
+
+    #[test]
+    fn gy_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v19(&c).unwrap();
+        let snap = GapYearlySnapshot {
+            symbol: "AAA".into(),
+            as_of: "2026-04-15".into(),
+            gaps_total: 8,
+            gap_label: "NORMAL".into(),
+            ..Default::default()
+        };
+        upsert_gy(&c, "AAA", &snap).unwrap();
+        let got = get_gy(&c, "AAA").unwrap().unwrap();
+        assert_eq!(got.gap_label, "NORMAL");
+    }
+
+    #[test]
+    fn des_snapshot_roundtrip() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        create_research_tables_v19(&c).unwrap();
+        let snap = DailyEventStreakSnapshot {
+            symbol: "AAA".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 252,
+            current_streak_type: "UP".into(),
+            current_streak_len: 3,
+            streak_label: "STRONG_UPTREND".into(),
+            ..Default::default()
+        };
+        upsert_des(&c, "AAA", &snap).unwrap();
+        let got = get_des(&c, "AAA").unwrap().unwrap();
+        assert_eq!(got.streak_label, "STRONG_UPTREND");
+    }
+
+    #[test]
+    fn compute_dvdrank_top_decile() {
+        let subj = mk_divg("AAA", 15.0, "GROWING");
+        let p1 = mk_divg("BBB", 3.0, "GROWING");
+        let p2 = mk_divg("CCC", 5.0, "GROWING");
+        let p3 = mk_divg("DDD", 2.0, "STABLE");
+        let p4 = mk_divg("EEE", 1.0, "GROWING");
+        let peers = vec![&p1, &p2, &p3, &p4];
+        let snap = compute_dvdrank_snapshot("AAA", "2026-04-15", "Tech", Some(&subj), &peers);
+        assert_eq!(snap.rank_label, "TOP_DECILE");
+        assert!(snap.percentile_rank >= 90.0);
+    }
+
+    #[test]
+    fn compute_dvdrank_no_history_filtered() {
+        let subj = mk_divg("AAA", 5.0, "GROWING");
+        let bad = mk_divg("BBB", 0.0, "NO_HISTORY");
+        let ok1 = mk_divg("CCC", 3.0, "STABLE");
+        let ok2 = mk_divg("DDD", 2.0, "GROWING");
+        let ok3 = mk_divg("EEE", 4.0, "STABLE");
+        let peers = vec![&bad, &ok1, &ok2, &ok3];
+        let snap = compute_dvdrank_snapshot("AAA", "2026-04-15", "Tech", Some(&subj), &peers);
+        assert_eq!(snap.peers_considered, 4);
+        assert_eq!(snap.peers_with_data, 3);
+        assert!(snap.rank_label != "INSUFFICIENT_DATA");
+        assert!(snap.rank_label != "NO_DATA");
+    }
+
+    #[test]
+    fn compute_earmrank_above_median() {
+        let subj = mk_earm("AAA", 75.0, "ACCELERATING");
+        let p1 = mk_earm("BBB", 40.0, "STABLE");
+        let p2 = mk_earm("CCC", 50.0, "STABLE");
+        let p3 = mk_earm("DDD", 60.0, "ACCELERATING");
+        let p4 = mk_earm("EEE", 30.0, "DECELERATING");
+        let peers = vec![&p1, &p2, &p3, &p4];
+        let snap = compute_earmrank_snapshot("AAA", "2026-04-15", "Tech", Some(&subj), &peers);
+        assert!(snap.percentile_rank > 50.0);
+        assert_eq!(snap.composite_score, 75.0);
+    }
+
+    #[test]
+    fn compute_earmrank_insufficient_filtered() {
+        let subj = mk_earm("AAA", 65.0, "STABLE");
+        let bad = mk_earm("BBB", 0.0, "INSUFFICIENT_DATA");
+        let peers = vec![&bad];
+        let snap = compute_earmrank_snapshot("AAA", "2026-04-15", "Tech", Some(&subj), &peers);
+        assert_eq!(snap.rank_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_updgrank_bullish() {
+        let subj = mk_updm("AAA", 8, "BULLISH");
+        let p1 = mk_updm("BBB", -2, "BEARISH");
+        let p2 = mk_updm("CCC", 1, "NEUTRAL");
+        let p3 = mk_updm("DDD", 3, "BULLISH");
+        let p4 = mk_updm("EEE", -5, "BEARISH");
+        let peers = vec![&p1, &p2, &p3, &p4];
+        let snap = compute_updgrank_snapshot("AAA", "2026-04-15", "Tech", Some(&subj), &peers);
+        assert_eq!(snap.net_90d, 8);
+        assert!(snap.percentile_rank > 60.0);
+    }
+
+    #[test]
+    fn compute_updgrank_no_coverage_filtered() {
+        let subj = mk_updm("AAA", 3, "BULLISH");
+        let bad = mk_updm("BBB", 0, "NO_COVERAGE");
+        let ok = mk_updm("CCC", 0, "NEUTRAL");
+        let peers = vec![&bad, &ok];
+        let snap = compute_updgrank_snapshot("AAA", "2026-04-15", "Tech", Some(&subj), &peers);
+        assert_eq!(snap.peers_with_data, 1);
+    }
+
+    #[test]
+    fn compute_gy_normal() {
+        // 30-bar window, one small up gap, one small down gap, rest flat.
+        let mut bars = Vec::new();
+        for i in 0..30 {
+            let date = format!("2025-01-{:02}", i + 1);
+            // Day 5: prev close 100, today open 102.5 → +2.5% gap
+            // Day 10: prev close 100, today open 97.5 → -2.5% gap
+            let open = if i == 5 { 102.5 } else if i == 10 { 97.5 } else { 100.0 };
+            bars.push(mk_hp(&date, open, open + 1.0, open - 1.0, 100.0));
+        }
+        let snap = compute_gy_snapshot("AAA", "2026-04-15", &bars);
+        assert!(snap.bars_used >= 20);
+        assert!(snap.gaps_up_2pct >= 1);
+        assert!(snap.gaps_down_2pct >= 1);
+    }
+
+    #[test]
+    fn compute_gy_explosive() {
+        // 30-bar window with a single 12% gap up → EXPLOSIVE via 10% band.
+        let mut bars = Vec::new();
+        for i in 0..30 {
+            let date = format!("2025-02-{:02}", i + 1);
+            let open = if i == 15 { 112.0 } else { 100.0 };
+            bars.push(mk_hp(&date, open, open + 1.0, open - 1.0, 100.0));
+        }
+        let snap = compute_gy_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.gap_label, "EXPLOSIVE");
+        assert_eq!(snap.gaps_up_10pct, 1);
+    }
+
+    #[test]
+    fn compute_gy_insufficient() {
+        let bars = vec![mk_hp("2025-03-01", 100.0, 101.0, 99.0, 100.0)];
+        let snap = compute_gy_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.gap_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn compute_des_uptrend() {
+        // 30 bars, strictly rising close each day → STRONG_UPTREND.
+        let mut bars = Vec::new();
+        for i in 0..30 {
+            let date = format!("2025-04-{:02}", i + 1);
+            let close = 100.0 + i as f64;
+            bars.push(mk_hp(&date, close - 0.5, close + 0.5, close - 0.5, close));
+        }
+        let snap = compute_des_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.streak_label, "STRONG_UPTREND");
+        assert_eq!(snap.current_streak_type, "UP");
+        assert!(snap.longest_up_streak >= 5);
+    }
+
+    #[test]
+    fn compute_des_downtrend() {
+        let mut bars = Vec::new();
+        for i in 0..30 {
+            let date = format!("2025-05-{:02}", i + 1);
+            let close = 200.0 - i as f64;
+            bars.push(mk_hp(&date, close + 0.5, close + 0.5, close - 0.5, close));
+        }
+        let snap = compute_des_snapshot("AAA", "2026-04-15", &bars);
+        assert_eq!(snap.streak_label, "STRONG_DOWNTREND");
+        assert_eq!(snap.current_streak_type, "DOWN");
+    }
+
+    #[test]
+    fn compute_des_insufficient() {
+        let bars = vec![mk_hp("2025-06-01", 100.0, 101.0, 99.0, 100.0)];
+        let snap = compute_des_snapshot("AAA", "2026-04-15", &bars);
         assert_eq!(snap.streak_label, "INSUFFICIENT_DATA");
     }
 }

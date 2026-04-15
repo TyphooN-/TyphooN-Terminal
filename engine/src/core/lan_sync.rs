@@ -226,6 +226,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_fqmrank",
     "research_liqrank",
     "research_surpstk",
+    // ── ADR-126 Round 19 ────────────────────────────
+    "research_dvdrank",
+    "research_earmrank",
+    "research_updgrank",
+    "research_gy",
+    "research_des",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -948,6 +954,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
         ),
         "research_surpstk" => Some(
             "CREATE TABLE IF NOT EXISTS research_surpstk (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_dvdrank" => Some(
+            "CREATE TABLE IF NOT EXISTS research_dvdrank (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_earmrank" => Some(
+            "CREATE TABLE IF NOT EXISTS research_earmrank (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_updgrank" => Some(
+            "CREATE TABLE IF NOT EXISTS research_updgrank (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_gy" => Some(
+            "CREATE TABLE IF NOT EXISTS research_gy (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_des" => Some(
+            "CREATE TABLE IF NOT EXISTS research_des (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
