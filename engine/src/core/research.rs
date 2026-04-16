@@ -3088,6 +3088,109 @@ pub struct RollSpreadSnapshot {
     pub note: String,
 }
 
+// ── ADR-136 Round 28 — HP range-vol / Garman-Klass / Rogers-Satchell / CVaR / dow-effect ──
+
+/// PARKINSON — Parkinson (1980) high-low range-based volatility estimator.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// `σ² = (1/(4·ln(2)·n)) · Σ (ln(H/L))²`. Uses only H and L — but
+/// by virtue of being range-based is ~5.2× more statistically
+/// efficient than close-to-close vol. Reported as annualized vol
+/// percentage (daily σ × √252 × 100).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ParkinsonVolSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub daily_vol_pct: f64,             // daily σ × 100
+    pub annualized_vol_pct: f64,        // daily σ × √252 × 100
+    pub mean_hl_log_ratio: f64,         // mean of ln(H/L) across window
+    pub vol_label: String,              // "VERY_LOW" | "LOW" | "NORMAL" | "HIGH" | "VERY_HIGH" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// GKVOL — Garman-Klass (1980) OHLC volatility estimator.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// `σ² = (1/n) · Σ [0.5·(ln(H/L))² - (2ln2 - 1)·(ln(C/O))²]`.
+/// Combines the H-L range with the C-O drift to achieve ~7.4×
+/// efficiency over close-to-close. The most commonly used
+/// range-based vol estimator in practice.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GarmanKlassVolSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub daily_vol_pct: f64,
+    pub annualized_vol_pct: f64,
+    pub range_component: f64,           // mean 0.5·(ln H/L)²
+    pub co_component: f64,              // mean (2ln2-1)·(ln C/O)²
+    pub vol_label: String,              // "VERY_LOW" | "LOW" | "NORMAL" | "HIGH" | "VERY_HIGH" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// RSVOL — Rogers-Satchell (1991) drift-independent OHLC volatility estimator.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// `σ² = (1/n) · Σ [ln(H/C)·ln(H/O) + ln(L/C)·ln(L/O)]`.
+/// Unlike Parkinson and Garman-Klass, Rogers-Satchell is **unbiased
+/// under non-zero drift** — it correctly estimates variance even
+/// when the underlying series has a non-zero mean log-return per bar.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RogersSatchellVolSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub daily_vol_pct: f64,
+    pub annualized_vol_pct: f64,
+    pub vol_label: String,              // 5-bucket vol label (same scheme as PARKINSON/GKVOL)
+    pub note: String,
+}
+
+/// CVAR — Conditional Value-at-Risk / Expected Shortfall at 5%.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Identifies the 5th percentile of daily log returns (VaR) and
+/// reports the *mean* of returns that are ≤ that threshold (ES).
+/// Distinct from TAILR (which reports the quantile ratio) and
+/// DOWNVOL (variance of negative returns): CVaR answers
+/// "given we're in the worst 5% of days, what's the *average* loss?"
+/// — the coherent downside-risk measure preferred by Basel III and
+/// most modern risk frameworks.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CVaRSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub var_5pct_ret_pct: f64,          // 5th percentile daily return, as %
+    pub cvar_5pct_ret_pct: f64,         // mean of returns ≤ VaR(5%), as %
+    pub var_1pct_ret_pct: f64,          // 1st percentile daily return, as %
+    pub cvar_1pct_ret_pct: f64,         // mean of returns ≤ VaR(1%), as %
+    pub tail_days_5pct: usize,          // count of days in the 5% tail
+    pub tail_days_1pct: usize,
+    pub cvar_label: String,             // "MINIMAL" | "LOW" | "MODERATE" | "HIGH" | "EXTREME" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// DOWEFFECT — Day-of-week seasonality hit rate + mean return.
+/// Pure symbol-local HP stat over the *full* HP cache (not 253-windowed).
+/// For each weekday (Mon-Fri) reports hit rate (share of that weekday
+/// which closed positive intraday, O→C) and mean intraday return %.
+/// Calendar companion to MONTHSEAS: captures Monday-effect, Friday-rally,
+/// Wednesday-weakness etc. that only a day-of-week lens can see.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DayOfWeekEffectSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub weeks_covered: usize,
+    pub dow_hit_pct: [f64; 5],          // hit rate per Mon..Fri, share of positive O→C
+    pub dow_mean_ret_pct: [f64; 5],     // mean intraday % return per Mon..Fri
+    pub dow_sample_count: [usize; 5],   // count of samples per weekday
+    pub best_dow_idx: usize,            // 0=Mon..4=Fri
+    pub worst_dow_idx: usize,
+    pub best_dow_hit_pct: f64,
+    pub worst_dow_hit_pct: f64,
+    pub dow_label: String,              // "STRONG_EFFECT" | "MILD_EFFECT" | "NEUTRAL" | "INCONSISTENT" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -15132,6 +15235,227 @@ pub fn compute_rollsprd_snapshot(
     }
 }
 
+// ── ADR-136 Round 28 computes ──
+
+fn annualized_vol_label(annualized_pct: f64) -> &'static str {
+    if annualized_pct < 10.0 { "VERY_LOW" }
+    else if annualized_pct < 20.0 { "LOW" }
+    else if annualized_pct < 40.0 { "NORMAL" }
+    else if annualized_pct < 60.0 { "HIGH" }
+    else { "VERY_HIGH" }
+}
+
+pub fn compute_parkinson_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ParkinsonVolSnapshot {
+    let sym = symbol.to_uppercase();
+    let window: Vec<&HistoricalPriceRow> = bars.iter().rev().take(253).collect::<Vec<_>>().into_iter().rev().collect();
+    if window.len() < 30 {
+        return ParkinsonVolSnapshot { symbol: sym, as_of: as_of.into(), vol_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 bars, got {}", window.len()), ..Default::default() };
+    }
+    let mut sum_sq = 0.0_f64;
+    let mut sum_ln = 0.0_f64;
+    let mut n = 0usize;
+    for b in &window {
+        if b.high <= 0.0 || b.low <= 0.0 || b.high < b.low { continue; }
+        let r = (b.high / b.low).ln();
+        sum_sq += r * r;
+        sum_ln += r;
+        n += 1;
+    }
+    if n < 30 {
+        return ParkinsonVolSnapshot { symbol: sym, as_of: as_of.into(), vol_label: "INSUFFICIENT_DATA".into(), note: format!("valid bars {n} < 30"), ..Default::default() };
+    }
+    let variance = sum_sq / (4.0 * 2f64.ln() * n as f64);
+    let daily_sigma = variance.max(0.0).sqrt();
+    let daily_pct = daily_sigma * 100.0;
+    let annualized_pct = daily_sigma * (252.0_f64).sqrt() * 100.0;
+    let mean_hl = sum_ln / n as f64;
+    ParkinsonVolSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        daily_vol_pct: daily_pct, annualized_vol_pct: annualized_pct,
+        mean_hl_log_ratio: mean_hl,
+        vol_label: annualized_vol_label(annualized_pct).into(),
+        note: String::new(),
+    }
+}
+
+pub fn compute_gkvol_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> GarmanKlassVolSnapshot {
+    let sym = symbol.to_uppercase();
+    let window: Vec<&HistoricalPriceRow> = bars.iter().rev().take(253).collect::<Vec<_>>().into_iter().rev().collect();
+    if window.len() < 30 {
+        return GarmanKlassVolSnapshot { symbol: sym, as_of: as_of.into(), vol_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 bars, got {}", window.len()), ..Default::default() };
+    }
+    let k = 2.0 * 2f64.ln() - 1.0;
+    let mut sum_range = 0.0_f64;
+    let mut sum_co = 0.0_f64;
+    let mut n = 0usize;
+    for b in &window {
+        if b.high <= 0.0 || b.low <= 0.0 || b.open <= 0.0 || b.close <= 0.0 || b.high < b.low { continue; }
+        let hl = (b.high / b.low).ln();
+        let co = (b.close / b.open).ln();
+        sum_range += 0.5 * hl * hl;
+        sum_co += k * co * co;
+        n += 1;
+    }
+    if n < 30 {
+        return GarmanKlassVolSnapshot { symbol: sym, as_of: as_of.into(), vol_label: "INSUFFICIENT_DATA".into(), note: format!("valid bars {n} < 30"), ..Default::default() };
+    }
+    let nf = n as f64;
+    let range_component = sum_range / nf;
+    let co_component = sum_co / nf;
+    let variance = (range_component - co_component).max(0.0);
+    let daily_sigma = variance.sqrt();
+    let daily_pct = daily_sigma * 100.0;
+    let annualized_pct = daily_sigma * (252.0_f64).sqrt() * 100.0;
+    GarmanKlassVolSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        daily_vol_pct: daily_pct, annualized_vol_pct: annualized_pct,
+        range_component, co_component,
+        vol_label: annualized_vol_label(annualized_pct).into(),
+        note: String::new(),
+    }
+}
+
+pub fn compute_rsvol_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> RogersSatchellVolSnapshot {
+    let sym = symbol.to_uppercase();
+    let window: Vec<&HistoricalPriceRow> = bars.iter().rev().take(253).collect::<Vec<_>>().into_iter().rev().collect();
+    if window.len() < 30 {
+        return RogersSatchellVolSnapshot { symbol: sym, as_of: as_of.into(), vol_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 bars, got {}", window.len()), ..Default::default() };
+    }
+    let mut sum = 0.0_f64;
+    let mut n = 0usize;
+    for b in &window {
+        if b.high <= 0.0 || b.low <= 0.0 || b.open <= 0.0 || b.close <= 0.0 || b.high < b.low { continue; }
+        let hc = (b.high / b.close).ln();
+        let ho = (b.high / b.open).ln();
+        let lc = (b.low / b.close).ln();
+        let lo = (b.low / b.open).ln();
+        sum += hc * ho + lc * lo;
+        n += 1;
+    }
+    if n < 30 {
+        return RogersSatchellVolSnapshot { symbol: sym, as_of: as_of.into(), vol_label: "INSUFFICIENT_DATA".into(), note: format!("valid bars {n} < 30"), ..Default::default() };
+    }
+    let variance = (sum / n as f64).max(0.0);
+    let daily_sigma = variance.sqrt();
+    let daily_pct = daily_sigma * 100.0;
+    let annualized_pct = daily_sigma * (252.0_f64).sqrt() * 100.0;
+    RogersSatchellVolSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        daily_vol_pct: daily_pct, annualized_vol_pct: annualized_pct,
+        vol_label: annualized_vol_label(annualized_pct).into(),
+        note: String::new(),
+    }
+}
+
+pub fn compute_cvar_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CVaRSnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, log_rets) = trailing_log_returns(bars);
+    if window.len() < 100 || log_rets.len() < 100 {
+        return CVaRSnapshot { symbol: sym, as_of: as_of.into(), cvar_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥100 log returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let mut sorted: Vec<f64> = log_rets.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = sorted.len();
+    let idx5 = ((n as f64) * 0.05).floor() as usize;
+    let idx1 = ((n as f64) * 0.01).floor() as usize;
+    let idx5 = idx5.max(1).min(n - 1);
+    let idx1 = idx1.max(1).min(n - 1);
+    let var5 = sorted[idx5];
+    let var1 = sorted[idx1];
+    let tail5: Vec<f64> = sorted.iter().take(idx5 + 1).copied().collect();
+    let tail1: Vec<f64> = sorted.iter().take(idx1 + 1).copied().collect();
+    let cvar5 = if tail5.is_empty() { 0.0 } else { tail5.iter().sum::<f64>() / tail5.len() as f64 };
+    let cvar1 = if tail1.is_empty() { 0.0 } else { tail1.iter().sum::<f64>() / tail1.len() as f64 };
+    let cvar5_pct = (cvar5.exp() - 1.0) * 100.0;
+    let cvar1_pct = (cvar1.exp() - 1.0) * 100.0;
+    let var5_pct = (var5.exp() - 1.0) * 100.0;
+    let var1_pct = (var1.exp() - 1.0) * 100.0;
+    let abs5 = cvar5_pct.abs();
+    let label = if abs5 < 1.0 { "MINIMAL" }
+        else if abs5 < 2.5 { "LOW" }
+        else if abs5 < 5.0 { "MODERATE" }
+        else if abs5 < 10.0 { "HIGH" }
+        else { "EXTREME" };
+    CVaRSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: window.len(),
+        var_5pct_ret_pct: var5_pct, cvar_5pct_ret_pct: cvar5_pct,
+        var_1pct_ret_pct: var1_pct, cvar_1pct_ret_pct: cvar1_pct,
+        tail_days_5pct: tail5.len(), tail_days_1pct: tail1.len(),
+        cvar_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_doweffect_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> DayOfWeekEffectSnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 100 {
+        return DayOfWeekEffectSnapshot { symbol: sym, as_of: as_of.into(), dow_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥100 bars, got {}", bars.len()), ..Default::default() };
+    }
+    use chrono::{NaiveDate, Datelike};
+    let mut hits: [usize; 5] = [0; 5];
+    let mut counts: [usize; 5] = [0; 5];
+    let mut sum_ret: [f64; 5] = [0.0; 5];
+    let mut used = 0usize;
+    let mut min_date: Option<NaiveDate> = None;
+    let mut max_date: Option<NaiveDate> = None;
+    for b in bars {
+        let d = match NaiveDate::parse_from_str(&b.date, "%Y-%m-%d") { Ok(d) => d, Err(_) => continue };
+        let w = d.weekday().num_days_from_monday();
+        if w >= 5 { continue; } // Skip weekends defensively
+        let wi = w as usize;
+        if b.open <= 0.0 || b.close <= 0.0 { continue; }
+        let r = (b.close / b.open - 1.0) * 100.0;
+        sum_ret[wi] += r;
+        counts[wi] += 1;
+        if r > 0.0 { hits[wi] += 1; }
+        used += 1;
+        min_date = Some(min_date.map_or(d, |m| m.min(d)));
+        max_date = Some(max_date.map_or(d, |m| m.max(d)));
+    }
+    if used < 100 || counts.iter().any(|c| *c < 10) {
+        return DayOfWeekEffectSnapshot { symbol: sym, as_of: as_of.into(), dow_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥100 bars and ≥10 per weekday, used {used}"), ..Default::default() };
+    }
+    let mut dow_hit_pct = [0.0_f64; 5];
+    let mut dow_mean = [0.0_f64; 5];
+    for i in 0..5 {
+        if counts[i] > 0 {
+            dow_hit_pct[i] = hits[i] as f64 / counts[i] as f64 * 100.0;
+            dow_mean[i] = sum_ret[i] / counts[i] as f64;
+        }
+    }
+    let mut best = 0usize;
+    let mut worst = 0usize;
+    for i in 1..5 {
+        if dow_hit_pct[i] > dow_hit_pct[best] || (dow_hit_pct[i] == dow_hit_pct[best] && dow_mean[i] > dow_mean[best]) { best = i; }
+        if dow_hit_pct[i] < dow_hit_pct[worst] || (dow_hit_pct[i] == dow_hit_pct[worst] && dow_mean[i] < dow_mean[worst]) { worst = i; }
+    }
+    let spread = dow_hit_pct[best] - dow_hit_pct[worst];
+    let label = if spread >= 20.0 { "STRONG_EFFECT" }
+        else if spread >= 10.0 { "MILD_EFFECT" }
+        else if spread >= 5.0 { "NEUTRAL" }
+        else { "INCONSISTENT" };
+    let weeks_covered = match (min_date, max_date) {
+        (Some(a), Some(b)) => ((b - a).num_days().max(0) / 7) as usize,
+        _ => 0,
+    };
+    DayOfWeekEffectSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: used, weeks_covered,
+        dow_hit_pct, dow_mean_ret_pct: dow_mean, dow_sample_count: counts,
+        best_dow_idx: best, worst_dow_idx: worst,
+        best_dow_hit_pct: dow_hit_pct[best], worst_dow_hit_pct: dow_hit_pct[worst],
+        dow_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -19269,6 +19593,159 @@ pub fn get_rollsprd(conn: &Connection, symbol: &str) -> Result<Option<RollSpread
         .map_err(|e| format!("prepare get_rollsprd: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_rollsprd: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_rollsprd: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-136 Round 28 schema v29 ──
+
+pub fn create_research_tables_v29(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v28(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_parkinson (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_parkinson_updated ON research_parkinson(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_gkvol (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_gkvol_updated ON research_gkvol(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_rsvol (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_rsvol_updated ON research_rsvol(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cvar (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cvar_updated ON research_cvar(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_doweffect (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_doweffect_updated ON research_doweffect(updated_at);",
+    ).map_err(|e| format!("create v29 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_parkinson(conn: &Connection, symbol: &str, snap: &ParkinsonVolSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v29(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("parkinson json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_parkinson(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert parkinson: {e}"))?;
+    Ok(())
+}
+
+pub fn get_parkinson(conn: &Connection, symbol: &str) -> Result<Option<ParkinsonVolSnapshot>, String> {
+    let _ = create_research_tables_v29(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_parkinson WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_parkinson: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_parkinson: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_parkinson: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_gkvol(conn: &Connection, symbol: &str, snap: &GarmanKlassVolSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v29(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("gkvol json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_gkvol(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert gkvol: {e}"))?;
+    Ok(())
+}
+
+pub fn get_gkvol(conn: &Connection, symbol: &str) -> Result<Option<GarmanKlassVolSnapshot>, String> {
+    let _ = create_research_tables_v29(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_gkvol WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_gkvol: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_gkvol: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_gkvol: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_rsvol(conn: &Connection, symbol: &str, snap: &RogersSatchellVolSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v29(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("rsvol json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_rsvol(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert rsvol: {e}"))?;
+    Ok(())
+}
+
+pub fn get_rsvol(conn: &Connection, symbol: &str) -> Result<Option<RogersSatchellVolSnapshot>, String> {
+    let _ = create_research_tables_v29(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_rsvol WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_rsvol: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_rsvol: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_rsvol: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cvar(conn: &Connection, symbol: &str, snap: &CVaRSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v29(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cvar json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cvar(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cvar: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cvar(conn: &Connection, symbol: &str) -> Result<Option<CVaRSnapshot>, String> {
+    let _ = create_research_tables_v29(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cvar WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_cvar: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_cvar: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_cvar: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_doweffect(conn: &Connection, symbol: &str, snap: &DayOfWeekEffectSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v29(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("doweffect json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_doweffect(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert doweffect: {e}"))?;
+    Ok(())
+}
+
+pub fn get_doweffect(conn: &Connection, symbol: &str) -> Result<Option<DayOfWeekEffectSnapshot>, String> {
+    let _ = create_research_tables_v29(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_doweffect WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_doweffect: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_doweffect: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_doweffect: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -25837,5 +26314,225 @@ Trailing text.
         assert_ne!(snap.roll_label, "INVALID_POSITIVE_COV");
         assert!(snap.implicit_spread > 0.0);
         assert!(snap.implicit_spread_bps > 0.0);
+    }
+
+    // ── ADR-136 Round 28 tests ──
+
+    fn synthetic_ohlc_bars_150() -> Vec<HistoricalPriceRow> {
+        // 150 dated bars with non-trivial intraday ranges and a mild
+        // drift — enough for all Round 28 vol estimators (>=30) and
+        // CVAR (>=100).
+        (0..150).map(|i| {
+            let close = 100.0 + (i as f64) * 0.3;
+            let open = close - 0.2;
+            let range = 1.0 + ((i % 7) as f64) * 0.1;
+            let high = close + range * 0.5;
+            let low = close - range * 0.5;
+            let month = 1 + (i / 25) as u32;
+            let day = 1 + (i % 25) as u32;
+            HistoricalPriceRow {
+                date: format!("2024-{:02}-{:02}", month, day),
+                open, high, low, close, adj_close: close,
+                volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+            }
+        }).collect()
+    }
+
+    #[test]
+    fn parkinson_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = ParkinsonVolSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 200,
+            daily_vol_pct: 1.2, annualized_vol_pct: 19.0, mean_hl_log_ratio: 0.01,
+            vol_label: "LOW".into(), note: String::new(),
+        };
+        upsert_parkinson(&c, "TEST", &snap).unwrap();
+        let back = get_parkinson(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.vol_label, "LOW");
+        assert!((back.annualized_vol_pct - 19.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parkinson_compute_insufficient() {
+        let snap = compute_parkinson_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.vol_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn parkinson_compute_rising() {
+        let bars = synthetic_ohlc_bars_150();
+        let snap = compute_parkinson_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.vol_label, "INSUFFICIENT_DATA");
+        assert!(snap.annualized_vol_pct > 0.0);
+        assert!(snap.daily_vol_pct > 0.0);
+        assert!(snap.bars_used >= 30);
+    }
+
+    #[test]
+    fn gkvol_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = GarmanKlassVolSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 200,
+            daily_vol_pct: 1.0, annualized_vol_pct: 15.9,
+            range_component: 0.0002, co_component: 0.00005,
+            vol_label: "LOW".into(), note: String::new(),
+        };
+        upsert_gkvol(&c, "TEST", &snap).unwrap();
+        let back = get_gkvol(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.vol_label, "LOW");
+        assert!((back.annualized_vol_pct - 15.9).abs() < 1e-9);
+    }
+
+    #[test]
+    fn gkvol_compute_insufficient() {
+        let snap = compute_gkvol_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.vol_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn gkvol_compute_rising() {
+        let bars = synthetic_ohlc_bars_150();
+        let snap = compute_gkvol_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.vol_label, "INSUFFICIENT_DATA");
+        assert!(snap.annualized_vol_pct > 0.0);
+        assert!(snap.range_component > 0.0);
+        assert!(snap.bars_used >= 30);
+    }
+
+    #[test]
+    fn rsvol_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = RogersSatchellVolSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 150,
+            daily_vol_pct: 1.1, annualized_vol_pct: 17.5,
+            vol_label: "LOW".into(), note: String::new(),
+        };
+        upsert_rsvol(&c, "TEST", &snap).unwrap();
+        let back = get_rsvol(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.vol_label, "LOW");
+        assert!((back.annualized_vol_pct - 17.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rsvol_compute_insufficient() {
+        let snap = compute_rsvol_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.vol_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn rsvol_compute_rising() {
+        let bars = synthetic_ohlc_bars_150();
+        let snap = compute_rsvol_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.vol_label, "INSUFFICIENT_DATA");
+        assert!(snap.annualized_vol_pct >= 0.0);
+        assert!(snap.bars_used >= 30);
+    }
+
+    #[test]
+    fn cvar_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = CVaRSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 200,
+            var_5pct_ret_pct: -2.1, cvar_5pct_ret_pct: -3.0,
+            var_1pct_ret_pct: -4.1, cvar_1pct_ret_pct: -5.5,
+            tail_days_5pct: 10, tail_days_1pct: 2,
+            cvar_label: "MODERATE".into(), note: String::new(),
+        };
+        upsert_cvar(&c, "TEST", &snap).unwrap();
+        let back = get_cvar(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.cvar_label, "MODERATE");
+        assert!((back.cvar_5pct_ret_pct - (-3.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cvar_compute_insufficient() {
+        let snap = compute_cvar_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.cvar_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn cvar_compute_tailed() {
+        // Construct 150 bars with a deterministic fat left tail: most
+        // moves are +0.1%, but every 10th bar drops 5%.
+        let mut bars: Vec<HistoricalPriceRow> = Vec::with_capacity(150);
+        let mut price: f64 = 100.0;
+        for i in 0..150 {
+            let new_price = if i % 10 == 9 { price * 0.95 } else { price * 1.001 };
+            let month = 1 + (i / 25) as u32;
+            let day = 1 + (i % 25) as u32;
+            bars.push(HistoricalPriceRow {
+                date: format!("2024-{:02}-{:02}", month, day),
+                open: price, high: new_price.max(price) + 0.1,
+                low: new_price.min(price) - 0.1, close: new_price, adj_close: new_price,
+                volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+            });
+            price = new_price;
+        }
+        let snap = compute_cvar_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.cvar_label, "INSUFFICIENT_DATA");
+        assert!(snap.var_5pct_ret_pct < 0.0);
+        assert!(snap.cvar_5pct_ret_pct <= snap.var_5pct_ret_pct);
+        assert!(snap.tail_days_5pct >= 1);
+    }
+
+    #[test]
+    fn doweffect_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = DayOfWeekEffectSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 250, weeks_covered: 52,
+            dow_hit_pct: [55.0, 48.0, 52.0, 60.0, 57.0],
+            dow_mean_ret_pct: [0.1, -0.05, 0.02, 0.15, 0.1],
+            dow_sample_count: [52, 50, 51, 50, 50],
+            best_dow_idx: 3, worst_dow_idx: 1,
+            best_dow_hit_pct: 60.0, worst_dow_hit_pct: 48.0,
+            dow_label: "MILD_EFFECT".into(), note: String::new(),
+        };
+        upsert_doweffect(&c, "TEST", &snap).unwrap();
+        let back = get_doweffect(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.dow_label, "MILD_EFFECT");
+        assert_eq!(back.best_dow_idx, 3);
+    }
+
+    #[test]
+    fn doweffect_compute_insufficient() {
+        let snap = compute_doweffect_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.dow_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn doweffect_compute_dated_series() {
+        // 2 years of real-calendar weekdays starting 2022-01-03 (Monday).
+        // Walk calendar, skip weekends. Inject a "Friday rally" pattern:
+        // Fridays close above open; Mondays close below.
+        use chrono::{NaiveDate, Duration, Datelike};
+        let mut d = NaiveDate::from_ymd_opt(2022, 1, 3).unwrap();
+        let mut bars: Vec<HistoricalPriceRow> = Vec::new();
+        let mut i = 0_i32;
+        while bars.len() < 500 {
+            let w = d.weekday().num_days_from_monday();
+            if w < 5 {
+                let open = 100.0 + (i as f64) * 0.01;
+                let close = match w {
+                    0 => open * 0.995,   // Monday: down
+                    4 => open * 1.010,   // Friday: up
+                    _ => open * (1.0 + ((i % 3) as f64 - 1.0) * 0.001),
+                };
+                bars.push(HistoricalPriceRow {
+                    date: d.format("%Y-%m-%d").to_string(),
+                    open, high: open.max(close) + 0.1, low: open.min(close) - 0.1,
+                    close, adj_close: close,
+                    volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+                });
+                i += 1;
+            }
+            d = d + Duration::days(1);
+        }
+        let snap = compute_doweffect_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.dow_label, "INSUFFICIENT_DATA");
+        // Friday (idx 4) should dominate hit rate; Monday (idx 0) should trail.
+        assert_eq!(snap.best_dow_idx, 4);
+        assert_eq!(snap.worst_dow_idx, 0);
+        assert!(snap.best_dow_hit_pct > snap.worst_dow_hit_pct);
+        assert!(snap.dow_sample_count.iter().all(|c| *c >= 10));
     }
 }

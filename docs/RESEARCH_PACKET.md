@@ -1706,7 +1706,75 @@ VERY_WIDE ≥75 / INVALID_POSITIVE_COV / INSUFFICIENT_DATA). Body
 reports first_lag_cov, mean_price, implicit_spread, and
 implicit_spread_bps. Source: ADR-135 ROLLSPRD window.
 
-#### 2.127 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.127 Parkinson H-L Volatility (PARKINSON — ADR-136)
+
+Pulled from `research::get_parkinson`. Parkinson (1980)
+range-based volatility estimator `σ² = (1/(4·ln2·n)) · Σ(ln(H/L))²`
+computed over the trailing 253-session window on the HP cache.
+~5.2× more statistically efficient than close-to-close vol by
+virtue of using the daily High-Low range. Header reports regime
+bucket (VERY_LOW <10% / LOW <20% / NORMAL <40% / HIGH <60% /
+VERY_HIGH ≥60% annualized σ / INSUFFICIENT_DATA). Body reports
+daily_vol_pct, annualized_vol_pct, and mean_hl_log_ratio.
+Source: ADR-136 PARKINSON window.
+
+#### 2.128 Garman-Klass OHLC Volatility (GKVOL — ADR-136)
+
+Pulled from `research::get_gkvol`. Garman-Klass (1980) OHLC
+volatility estimator `σ² = (1/n)·Σ[0.5·(ln H/L)² - (2ln2-1)·(ln C/O)²]`
+over the trailing 253-session window. Combines the H-L range with
+the C-O drift component for ~7.4× efficiency — the most commonly
+deployed range-vol estimator in practice. Header reports the same
+regime buckets as PARKINSON. Body reports daily_vol_pct,
+annualized_vol_pct, range_component, and co_component (making the
+two contributions visible separately). Source: ADR-136 GKVOL
+window.
+
+#### 2.129 Rogers-Satchell Drift-Free Volatility (RSVOL — ADR-136)
+
+Pulled from `research::get_rsvol`. Rogers-Satchell (1991)
+drift-independent OHLC vol estimator
+`σ² = (1/n)·Σ[ln(H/C)·ln(H/O) + ln(L/C)·ln(L/O)]` over the
+trailing 253-session window. Unlike PARKINSON and GKVOL (which
+assume zero drift), RSVOL is **unbiased under non-zero drift** —
+so a large gap between GKVOL and RSVOL annualized σ is itself a
+signal that the window has material drift. Header reports the
+same regime buckets as PARKINSON/GKVOL. Body reports
+daily_vol_pct and annualized_vol_pct. Source: ADR-136 RSVOL
+window.
+
+#### 2.130 Conditional VaR / Expected Shortfall (CVAR — ADR-136)
+
+Pulled from `research::get_cvar`. CVaR / Expected Shortfall at 5%
+and 1% levels computed over the trailing 253-session window on the
+HP cache. VaR(p) is the p-th percentile of daily log returns; CVaR
+is the **mean** of returns ≤ VaR — the coherent downside-risk
+measure preferred by Basel III (satisfies subadditivity, which
+plain VaR does not). Distinct from TAILR (quantile ratio — shape)
+and DOWNVOL (variance of negative returns — scale): CVAR answers
+"given we're in the worst 5% of days, what's the *average* loss?"
+Header reports regime bucket (MINIMAL |ES(5%)|<1% / LOW <2.5% /
+MODERATE <5% / HIGH <10% / EXTREME ≥10% / INSUFFICIENT_DATA). Body
+reports var_5pct_ret_pct, cvar_5pct_ret_pct, var_1pct_ret_pct,
+cvar_1pct_ret_pct, tail_days_5pct, and tail_days_1pct. Source:
+ADR-136 CVAR window.
+
+#### 2.131 Day-of-Week Seasonality (DOWEFFECT — ADR-136)
+
+Pulled from `research::get_doweffect`. Day-of-week intraday (O→C)
+seasonality hit rate + mean return computed over the **full** HP
+cache (not 253-windowed). For each weekday (Mon-Fri) reports hit
+rate (share of that weekday which closed positive intraday) and
+mean intraday % return. Companion to MONTHSEAS on the weekday axis:
+captures Monday-effect, Friday-rally, Wednesday-weakness etc.
+backed by long-horizon academic literature (French 1980, Ariel
+1987). Header reports regime bucket (STRONG_EFFECT best-worst hit
+spread ≥20% / MILD_EFFECT ≥10% / NEUTRAL ≥5% / INCONSISTENT <5% /
+INSUFFICIENT_DATA). Body reports best/worst weekday, hit_pct and
+mean_ret_pct per weekday, sample counts per weekday, and weeks
+covered. Source: ADR-136 DOWEFFECT window.
+
+#### 2.132 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -1722,7 +1790,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.128 Sector peer comparison
+#### 2.133 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1753,7 +1821,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.127 above.
+articles to the per-symbol bag consumed by sub-block 2.132 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -1918,22 +1986,30 @@ Question section, not per-symbol.
 | Burke ratio fields (ADR-135 BURKE) | 2 k/v rows | Bars used + annualized return + dd event count + Σdd² + worst event dd + burke ratio + burke label |
 | Monthly seasonality fields (ADR-135 MONTHSEAS) | 3-4 k/v rows | Years covered + best/worst month + full 12-cell month grid (hit % + mean ret %) + season label |
 | Roll implicit spread fields (ADR-135 ROLLSPRD) | 2 k/v rows | Bars used + first-lag cov + mean price + implicit spread + implicit spread (bps) + roll label |
+| Parkinson vol fields (ADR-136 PARKINSON) | 2 k/v rows | Bars used + daily σ + annualized σ + mean ln(H/L) + vol label |
+| Garman-Klass vol fields (ADR-136 GKVOL) | 2 k/v rows | Bars used + daily σ + annualized σ + range/C-O components + vol label |
+| Rogers-Satchell vol fields (ADR-136 RSVOL) | 2 k/v rows | Bars used + daily σ + annualized σ (drift-independent) + vol label |
+| CVaR / Expected Shortfall fields (ADR-136 CVAR) | 2 k/v rows | Bars used + VaR/ES(5%) + VaR/ES(1%) + tail day counts + cvar label |
+| Day-of-week seasonality fields (ADR-136 DOWEFFECT) | 2-3 k/v rows | Bars used + weeks covered + best/worst weekday + full 5-cell weekday grid (hit % + mean ret %) + dow label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **50-98 KB**
-(up from 48-94 KB after ADR-134; ADR-135 adds five optional per-symbol
-blocks — OMEGA / DFA / BURKE / MONTHSEAS / ROLLSPRD — each
-measuring ~2-4 k/v rows and adding ~300-900 bytes when populated
-(MONTHSEAS is the heaviest due to its 12-month grid),
-for a typical +2 KB per symbol and +4 KB worst case; all five reuse
-the existing `research_historical_price` HP cache and the standard
-research-table LAN sync path with zero new API dependencies; DFA is
-the first non-stationarity-robust persistence estimator; MONTHSEAS
-introduces the first calendar-axis surface; ROLLSPRD is the second
-pure microstructure scalar after AMIHUD); a
-10-symbol basket now lands near **490-980 KB** when every symbol
+symbols. A single S&P 500 symbol now produces a packet around **52-102 KB**
+(up from 50-98 KB after ADR-135; ADR-136 adds five optional per-symbol
+blocks — PARKINSON / GKVOL / RSVOL / CVAR / DOWEFFECT — each
+measuring ~2-3 k/v rows and adding ~300-700 bytes when populated
+(DOWEFFECT is the heaviest due to its 5-weekday grid plus sample
+counts), for a typical +2 KB per symbol and +4 KB worst case; all
+five reuse the existing `research_historical_price` HP cache and
+the standard research-table LAN sync path with zero new API
+dependencies; PARKINSON/GKVOL/RSVOL complete the canonical OHLC
+range-vol family (zero-drift, efficiency-optimal, drift-independent
+respectively); CVAR is the first coherent tail-loss measure
+(Expected Shortfall), distinct from TAILR (shape) and DOWNVOL
+(scale); DOWEFFECT completes the calendar-axis pair started by
+MONTHSEAS); a
+10-symbol basket now lands near **510-1020 KB** when every symbol
 has a fully populated ingest bag (the global context and the Return
 Path footer are each emitted exactly once, so multi-symbol overhead
 is still bounded by the per-symbol blocks).
@@ -2201,6 +2277,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_burke` | SQLite `research_burke` | ADR-135 BURKE window (Burke ratio — event-weighted drawdown-adjusted annualized return with 5-way label) |
 | `research::get_monthseas` | SQLite `research_monthseas` | ADR-135 MONTHSEAS window (monthly seasonality — 12-month hit rate + mean return grid; full-HP-cache scan, not 253-window) |
 | `research::get_rollsprd` | SQLite `research_rollsprd` | ADR-135 ROLLSPRD window (Roll's 1984 implicit bid-ask spread in bps — microstructure companion to AMIHUD) |
+| `research::get_parkinson` | SQLite `research_parkinson` | ADR-136 PARKINSON window (Parkinson 1980 H-L range-based vol — 5.2× more efficient than close-to-close; first entry of the OHLC-vol family) |
+| `research::get_gkvol` | SQLite `research_gkvol` | ADR-136 GKVOL window (Garman-Klass 1980 OHLC vol — H-L range + C-O drift, 7.4× efficiency; the textbook industrial range-vol estimator) |
+| `research::get_rsvol` | SQLite `research_rsvol` | ADR-136 RSVOL window (Rogers-Satchell 1991 drift-independent OHLC vol — unbiased under non-zero drift; completes the OHLC-vol family) |
+| `research::get_cvar` | SQLite `research_cvar` | ADR-136 CVAR window (Conditional VaR / Expected Shortfall at 5% and 1% — coherent Basel III downside-risk measure distinct from TAILR shape + DOWNVOL scale) |
+| `research::get_doweffect` | SQLite `research_doweffect` | ADR-136 DOWEFFECT window (day-of-week intraday O→C seasonality — weekday calendar companion to MONTHSEAS; full-HP-cache scan) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -2238,5 +2319,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)
