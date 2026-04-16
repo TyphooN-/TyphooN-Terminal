@@ -342,6 +342,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_kappa3",
     "research_lyapunov",
     "research_rankac",
+    // ── ADR-146 Round 38 ────────────────────────────
+    "research_bnsjump",
+    "research_pproot",
+    "research_mfdfa",
+    "research_hillks",
+    "research_tsi",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -1757,6 +1763,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-146 Round 38 ──
+        "research_bnsjump" => Some(
+            "CREATE TABLE IF NOT EXISTS research_bnsjump (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_pproot" => Some(
+            "CREATE TABLE IF NOT EXISTS research_pproot (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_mfdfa" => Some(
+            "CREATE TABLE IF NOT EXISTS research_mfdfa (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_hillks" => Some(
+            "CREATE TABLE IF NOT EXISTS research_hillks (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_tsi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_tsi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -1963,6 +2005,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_kappa3" => Some("updated_at"),
         "research_lyapunov" => Some("updated_at"),
         "research_rankac" => Some("updated_at"),
+        // ── ADR-146 Round 38 ──
+        "research_bnsjump" => Some("updated_at"),
+        "research_pproot" => Some("updated_at"),
+        "research_mfdfa" => Some("updated_at"),
+        "research_hillks" => Some("updated_at"),
+        "research_tsi" => Some("updated_at"),
         _ => None,
     }
 }

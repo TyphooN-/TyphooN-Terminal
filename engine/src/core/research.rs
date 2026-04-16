@@ -4080,6 +4080,80 @@ pub struct RankacSnapshot {
     pub note: String,
 }
 
+/// BNSJUMP — Barndorff-Nielsen & Shephard 2006 jump-detection Z-statistic.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct BnsjumpSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub realized_variance: f64,     // RV = Σ r_i²
+    pub bipower_variance: f64,      // BV = (π/2) · Σ |r_i|·|r_{i-1}|
+    pub jump_ratio: f64,            // (RV − BV) / RV  (zero if pure-diffusion)
+    pub jump_z_stat: f64,           // (RV − BV) / sqrt(θ · Σ r_i⁴)  (standardised)
+    pub p_value: f64,               // 1 − Φ(|z|) (approx)
+    pub bnsjump_label: String,      // STRONG_JUMP / MODERATE_JUMP / WEAK_JUMP / NO_JUMP / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// PPROOT — Phillips-Perron 1988 nonparametric unit-root test.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PprootSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub rho_hat: f64,               // OLS estimate of ρ in y_t = ρ·y_{t-1} + ε
+    pub t_rho: f64,                 // raw t-statistic for ρ = 1
+    pub z_rho: f64,                 // Phillips-Perron Z(ρ) statistic (newey-west corrected)
+    pub z_t: f64,                   // Phillips-Perron Z(t) statistic
+    pub lag_truncation: usize,      // bandwidth q for the long-run variance
+    pub pproot_label: String,       // STATIONARY_STRONG / STATIONARY_WEAK / BORDERLINE / UNIT_ROOT / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// MFDFA — Multifractal Detrended Fluctuation Analysis at q ∈ {-2, 0, +2}.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MfdfaSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub h_q_neg2: f64,              // generalised Hurst exponent at q = −2
+    pub h_q_zero: f64,              // generalised Hurst exponent at q = 0 (median-walk)
+    pub h_q_pos2: f64,              // generalised Hurst exponent at q = +2
+    pub delta_h: f64,               // h(−2) − h(+2), width of the multifractal spectrum
+    pub scales_used: usize,         // number of scales included in the fit
+    pub mfdfa_label: String,        // STRONG_MULTIFRACTAL / MODERATE_MULTIFRACTAL / WEAK_MULTIFRACTAL / MONOFRACTAL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// HILLKS — Kolmogorov-Smirnov goodness-of-fit for the Hill-tail Pareto model.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct HillksSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub k_order: usize,             // order-stat cutoff used by the Hill estimator
+    pub alpha_hat: f64,             // Hill tail index α̂
+    pub ks_statistic: f64,          // supremum |F_n − F_pareto| over the tail sample
+    pub ks_critical_5pct: f64,      // 1.36 / sqrt(k) conventional 5% critical value
+    pub hillks_label: String,       // GOOD_FIT / ACCEPTABLE_FIT / POOR_FIT / REJECT / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TSI — Blau 1991 True Strength Index (double-smoothed momentum oscillator).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct TsiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ema_long: usize,            // long EMA period (default 25)
+    pub ema_short: usize,           // short EMA period (default 13)
+    pub tsi_value: f64,             // 100 × EMA_short(EMA_long(ΔP)) / EMA_short(EMA_long(|ΔP|))
+    pub signal_value: f64,          // EMA_short(tsi_value)
+    pub tsi_minus_signal: f64,      // tsi − signal (momentum-of-momentum)
+    pub tsi_label: String,          // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -18721,6 +18795,327 @@ pub fn compute_rankac_snapshot(
     }
 }
 
+// ── ADR-146 Round 38 computes ────────────────────────────────────────────
+
+/// BNSJUMP compute: Barndorff-Nielsen & Shephard 2006 jump-test Z-statistic.
+pub fn compute_bnsjump_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> BnsjumpSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return BnsjumpSnapshot { symbol: sym, as_of: as_of.into(), bnsjump_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    // Realized variance RV = Σ r_i²
+    let rv: f64 = log_rets.iter().map(|r| r * r).sum();
+    // Bipower variation BV = (π/2) · Σ |r_i|·|r_{i-1}|
+    let mu1_sq_inv = std::f64::consts::FRAC_PI_2; // 1/μ₁² for normal μ₁=√(2/π)
+    let mut bv_sum = 0.0f64;
+    for i in 1..n { bv_sum += log_rets[i - 1].abs() * log_rets[i].abs(); }
+    let bv = mu1_sq_inv * bv_sum;
+    if rv < f64::EPSILON {
+        return BnsjumpSnapshot { symbol: sym, as_of: as_of.into(), bnsjump_label: "INSUFFICIENT_DATA".into(), note: "zero realised variance".into(), ..Default::default() };
+    }
+    let jump_ratio = ((rv - bv) / rv).max(0.0);
+    // Quarticity proxy for standardisation: (π²/4 + π − 5) · Σ r_i⁴
+    let theta = (std::f64::consts::PI * std::f64::consts::PI) / 4.0 + std::f64::consts::PI - 5.0;
+    let qv: f64 = log_rets.iter().map(|r| r.powi(4)).sum();
+    let var_term = theta * qv;
+    let z_stat = if var_term > f64::EPSILON { (rv - bv) / var_term.sqrt() } else { 0.0 };
+    // Approx p-value using a rough normal CDF (Abramowitz-Stegun 26.2.17)
+    fn norm_cdf(x: f64) -> f64 {
+        let t = 1.0 / (1.0 + 0.2316419 * x.abs());
+        let d = (-x * x / 2.0).exp() / (2.0 * std::f64::consts::PI).sqrt();
+        let poly = (((1.330274429 * t - 1.821255978) * t + 1.781477937) * t - 0.356563782) * t + 0.319381530;
+        let rhs = d * poly * t;
+        if x >= 0.0 { 1.0 - rhs } else { rhs }
+    }
+    let p_value = (1.0 - norm_cdf(z_stat.abs())).max(0.0).min(1.0);
+    let label = if z_stat > 3.09 { "STRONG_JUMP" }
+        else if z_stat > 2.33 { "MODERATE_JUMP" }
+        else if z_stat > 1.65 { "WEAK_JUMP" }
+        else { "NO_JUMP" };
+    BnsjumpSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        realized_variance: rv, bipower_variance: bv, jump_ratio,
+        jump_z_stat: z_stat, p_value,
+        bnsjump_label: label.into(), note: String::new(),
+    }
+}
+
+/// PPROOT compute: Phillips-Perron 1988 nonparametric unit-root test.
+pub fn compute_pproot_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PprootSnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 30 {
+        return PprootSnapshot { symbol: sym, as_of: as_of.into(), pproot_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 bars, got {}", bars.len()), ..Default::default() };
+    }
+    // Use log-price series (the level process that might contain a unit root).
+    let prices: Vec<f64> = bars.iter().filter_map(|b| if b.close > 0.0 { Some(b.close.ln()) } else { None }).collect();
+    if prices.len() < 30 {
+        return PprootSnapshot { symbol: sym, as_of: as_of.into(), pproot_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 positive closes, got {}", prices.len()), ..Default::default() };
+    }
+    let n = prices.len();
+    // OLS: Δy_t = (ρ − 1)·y_{t-1} + u_t  — estimate ρ directly from y_t on y_{t-1}
+    let mut sum_xy = 0.0f64; let mut sum_xx = 0.0f64;
+    for t in 1..n {
+        let yl = prices[t - 1]; let yc = prices[t];
+        sum_xy += yl * yc; sum_xx += yl * yl;
+    }
+    if sum_xx < f64::EPSILON {
+        return PprootSnapshot { symbol: sym, as_of: as_of.into(), pproot_label: "INSUFFICIENT_DATA".into(), note: "degenerate regressor".into(), ..Default::default() };
+    }
+    let rho_hat = sum_xy / sum_xx;
+    let m = (n - 1) as f64;
+    // Residuals û_t
+    let mut resid: Vec<f64> = Vec::with_capacity(n - 1);
+    let mut rss = 0.0f64;
+    for t in 1..n {
+        let u = prices[t] - rho_hat * prices[t - 1];
+        rss += u * u;
+        resid.push(u);
+    }
+    let sigma2 = rss / m;
+    let se_rho = (sigma2 / sum_xx).sqrt().max(f64::EPSILON);
+    let t_rho = (rho_hat - 1.0) / se_rho;
+    // Long-run variance via Newey-West / Bartlett kernel, lag truncation q = floor(4·(n/100)^0.25)
+    let q = ((4.0 * (m / 100.0).powf(0.25)).floor() as usize).max(1);
+    let gamma0 = sigma2;
+    let mut sigma2_lr = gamma0;
+    for j in 1..=q {
+        if j >= resid.len() { break; }
+        let mut gamma_j = 0.0f64;
+        for t in j..resid.len() { gamma_j += resid[t] * resid[t - j]; }
+        gamma_j /= m;
+        let w = 1.0 - (j as f64) / ((q + 1) as f64);
+        sigma2_lr += 2.0 * w * gamma_j;
+    }
+    let sigma2_lr = sigma2_lr.max(f64::EPSILON);
+    // PP Z(ρ) and Z(t) corrections
+    let z_rho = m * (rho_hat - 1.0) - 0.5 * m * m * (sigma2_lr - gamma0) / sum_xx;
+    let z_t = (gamma0 / sigma2_lr).sqrt() * t_rho
+        - 0.5 * (sigma2_lr - gamma0) * (m * se_rho / sigma2_lr.sqrt()) / sigma2_lr.sqrt();
+    // Dickey-Fuller critical values for Z(t), no-trend case
+    let label = if z_t < -3.43 { "STATIONARY_STRONG" }
+        else if z_t < -2.86 { "STATIONARY_WEAK" }
+        else if z_t < -2.57 { "BORDERLINE" }
+        else { "UNIT_ROOT" };
+    PprootSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        rho_hat, t_rho, z_rho, z_t, lag_truncation: q,
+        pproot_label: label.into(), note: String::new(),
+    }
+}
+
+/// MFDFA compute: Multifractal DFA at q ∈ {−2, 0, +2}.
+pub fn compute_mfdfa_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MfdfaSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 120 {
+        return MfdfaSnapshot { symbol: sym, as_of: as_of.into(), mfdfa_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥120 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    // Cumulative-sum walk Y_k = Σ_{i≤k} (r_i − r̄)
+    let rbar: f64 = log_rets.iter().sum::<f64>() / (n as f64);
+    let mut y = Vec::with_capacity(n);
+    let mut cum = 0.0f64;
+    for &r in &log_rets { cum += r - rbar; y.push(cum); }
+    // Scales: s = 8, 12, 16, 24, 32, 48, 64 (bounded by n/4)
+    let scales: Vec<usize> = [8usize, 12, 16, 24, 32, 48, 64].iter().copied().filter(|&s| s * 4 <= n).collect();
+    if scales.len() < 3 {
+        return MfdfaSnapshot { symbol: sym, as_of: as_of.into(), mfdfa_label: "INSUFFICIENT_DATA".into(), note: "too few viable scales".into(), ..Default::default() };
+    }
+    // For each scale, split walk into non-overlapping windows, fit linear detrend, compute F²(s,v).
+    // Then aggregate: F_q(s) = { (1/N_s) Σ [F²(s,v)]^(q/2) }^(1/q)  (q ≠ 0)
+    //                 F_0(s) = exp{ (1/(2 N_s)) Σ ln F²(s,v) }     (q = 0)
+    // Fit h(q) as slope of ln F_q(s) vs ln s.
+    let compute_hq = |q: f64| -> Option<f64> {
+        let mut log_s = Vec::new();
+        let mut log_f = Vec::new();
+        for &s in &scales {
+            let ns = n / s;
+            if ns < 4 { continue; }
+            let mut f2_vals = Vec::with_capacity(ns * 2);
+            for direction in 0..2usize {
+                for v in 0..ns {
+                    let offset = if direction == 0 { v * s } else { n - (v + 1) * s };
+                    // Linear detrend over y[offset..offset+s]
+                    let sf = s as f64;
+                    let mut sx = 0.0f64; let mut sy = 0.0f64;
+                    for k in 0..s { sx += k as f64; sy += y[offset + k]; }
+                    let mx = sx / sf; let my = sy / sf;
+                    let mut sxx = 0.0f64; let mut sxy = 0.0f64;
+                    for k in 0..s {
+                        let dx = (k as f64) - mx;
+                        let dy = y[offset + k] - my;
+                        sxx += dx * dx; sxy += dx * dy;
+                    }
+                    let slope = if sxx > f64::EPSILON { sxy / sxx } else { 0.0 };
+                    let intercept = my - slope * mx;
+                    let mut ss = 0.0f64;
+                    for k in 0..s {
+                        let fitted = intercept + slope * (k as f64);
+                        let d = y[offset + k] - fitted;
+                        ss += d * d;
+                    }
+                    f2_vals.push((ss / sf).max(f64::EPSILON));
+                }
+            }
+            if f2_vals.is_empty() { continue; }
+            let nv = f2_vals.len() as f64;
+            let fq = if q.abs() < f64::EPSILON {
+                (f2_vals.iter().map(|v| v.ln()).sum::<f64>() / (2.0 * nv)).exp()
+            } else {
+                let m: f64 = f2_vals.iter().map(|v| v.powf(q / 2.0)).sum::<f64>() / nv;
+                m.powf(1.0 / q)
+            };
+            if fq.is_finite() && fq > 0.0 {
+                log_s.push((s as f64).ln());
+                log_f.push(fq.ln());
+            }
+        }
+        if log_s.len() < 3 { return None; }
+        let ln = log_s.len() as f64;
+        let mx = log_s.iter().sum::<f64>() / ln;
+        let my = log_f.iter().sum::<f64>() / ln;
+        let mut sxx = 0.0f64; let mut sxy = 0.0f64;
+        for i in 0..log_s.len() {
+            let dx = log_s[i] - mx; let dy = log_f[i] - my;
+            sxx += dx * dx; sxy += dx * dy;
+        }
+        if sxx < f64::EPSILON { None } else { Some(sxy / sxx) }
+    };
+    let h_neg2 = compute_hq(-2.0);
+    let h_zero = compute_hq(0.0);
+    let h_pos2 = compute_hq(2.0);
+    let (h_n, h_0, h_p) = match (h_neg2, h_zero, h_pos2) {
+        (Some(a), Some(b), Some(c)) => (a, b, c),
+        _ => return MfdfaSnapshot { symbol: sym, as_of: as_of.into(), mfdfa_label: "INSUFFICIENT_DATA".into(), note: "h(q) regression failed".into(), ..Default::default() },
+    };
+    let delta_h = h_n - h_p;
+    let label = if delta_h > 0.30 { "STRONG_MULTIFRACTAL" }
+        else if delta_h > 0.15 { "MODERATE_MULTIFRACTAL" }
+        else if delta_h > 0.05 { "WEAK_MULTIFRACTAL" }
+        else { "MONOFRACTAL" };
+    MfdfaSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        h_q_neg2: h_n, h_q_zero: h_0, h_q_pos2: h_p,
+        delta_h, scales_used: scales.len(),
+        mfdfa_label: label.into(), note: String::new(),
+    }
+}
+
+/// HILLKS compute: KS goodness-of-fit for Hill-tail Pareto.
+pub fn compute_hillks_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> HillksSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 50 {
+        return HillksSnapshot { symbol: sym, as_of: as_of.into(), hillks_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥50 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    // Use absolute log-returns as tail sample (two-sided symmetric tail model).
+    let mut abs_r: Vec<f64> = log_rets.iter().map(|r| r.abs()).filter(|v| *v > f64::EPSILON).collect();
+    abs_r.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)); // descending
+    let k = (n as f64 * 0.10).floor() as usize;
+    if k < 10 || k >= abs_r.len() {
+        return HillksSnapshot { symbol: sym, as_of: as_of.into(), hillks_label: "INSUFFICIENT_DATA".into(), note: "tail sample too small".into(), ..Default::default() };
+    }
+    // Hill estimator of α: 1/α̂ = (1/k) Σ_{i=1..k} ln(x_i / x_{k+1})
+    let threshold = abs_r[k];
+    if threshold < f64::EPSILON {
+        return HillksSnapshot { symbol: sym, as_of: as_of.into(), hillks_label: "INSUFFICIENT_DATA".into(), note: "zero threshold".into(), ..Default::default() };
+    }
+    let mut inv_alpha = 0.0f64;
+    for i in 0..k { inv_alpha += (abs_r[i] / threshold).ln(); }
+    inv_alpha /= k as f64;
+    if inv_alpha < f64::EPSILON {
+        return HillksSnapshot { symbol: sym, as_of: as_of.into(), hillks_label: "INSUFFICIENT_DATA".into(), note: "degenerate tail".into(), ..Default::default() };
+    }
+    let alpha = 1.0 / inv_alpha;
+    // KS statistic between empirical CDF of (x_i / threshold) for i=1..k and Pareto(α) CDF F(y) = 1 − y^{−α}.
+    // Sort tail sample x_1..x_k in ascending order.
+    let mut tail: Vec<f64> = abs_r[..k].to_vec();
+    tail.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut d_max = 0.0f64;
+    for (i, &x) in tail.iter().enumerate() {
+        let y = x / threshold;
+        if y < 1.0 - f64::EPSILON { continue; }
+        let f_model = 1.0 - y.powf(-alpha);
+        let f_emp_lo = i as f64 / k as f64;
+        let f_emp_hi = (i + 1) as f64 / k as f64;
+        d_max = d_max.max((f_emp_lo - f_model).abs()).max((f_emp_hi - f_model).abs());
+    }
+    let ks_crit = 1.36 / (k as f64).sqrt();
+    let label = if d_max < ks_crit * 0.50 { "GOOD_FIT" }
+        else if d_max < ks_crit * 0.90 { "ACCEPTABLE_FIT" }
+        else if d_max < ks_crit * 1.30 { "POOR_FIT" }
+        else { "REJECT" };
+    HillksSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        k_order: k, alpha_hat: alpha,
+        ks_statistic: d_max, ks_critical_5pct: ks_crit,
+        hillks_label: label.into(), note: String::new(),
+    }
+}
+
+/// TSI compute: Blau 1991 True Strength Index.
+pub fn compute_tsi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> TsiSnapshot {
+    let sym = symbol.to_uppercase();
+    let closes: Vec<f64> = bars.iter().filter_map(|b| if b.close > 0.0 { Some(b.close) } else { None }).collect();
+    if closes.len() < 60 {
+        return TsiSnapshot { symbol: sym, as_of: as_of.into(), tsi_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥60 closes, got {}", closes.len()), ..Default::default() };
+    }
+    let n = closes.len();
+    let long_p = 25usize; let short_p = 13usize;
+    let diffs: Vec<f64> = (1..n).map(|i| closes[i] - closes[i - 1]).collect();
+    let abs_diffs: Vec<f64> = diffs.iter().map(|d| d.abs()).collect();
+    // EMA helper: EMA(x, p) where α = 2/(p+1); seed with first value.
+    fn ema_series(x: &[f64], p: usize) -> Vec<f64> {
+        if x.is_empty() { return Vec::new(); }
+        let alpha = 2.0 / ((p + 1) as f64);
+        let mut out = Vec::with_capacity(x.len());
+        out.push(x[0]);
+        for i in 1..x.len() {
+            out.push(alpha * x[i] + (1.0 - alpha) * out[i - 1]);
+        }
+        out
+    }
+    let long_smooth_num = ema_series(&diffs, long_p);
+    let double_num = ema_series(&long_smooth_num, short_p);
+    let long_smooth_den = ema_series(&abs_diffs, long_p);
+    let double_den = ema_series(&long_smooth_den, short_p);
+    let last = diffs.len() - 1;
+    let den = double_den[last];
+    if den.abs() < f64::EPSILON {
+        return TsiSnapshot { symbol: sym, as_of: as_of.into(), tsi_label: "INSUFFICIENT_DATA".into(), note: "flat tape".into(), ..Default::default() };
+    }
+    let tsi_series: Vec<f64> = double_num.iter().zip(double_den.iter())
+        .map(|(n, d)| if d.abs() < f64::EPSILON { 0.0 } else { 100.0 * n / d })
+        .collect();
+    let signal_series = ema_series(&tsi_series, short_p);
+    let tsi = tsi_series[last];
+    let signal = signal_series[last];
+    let diff = tsi - signal;
+    let label = if tsi > 25.0 { "STRONG_BULL" }
+        else if tsi > 0.0 { "BULL" }
+        else if tsi > -25.0 { if tsi > -5.0 && tsi < 5.0 { "NEUTRAL" } else { "BEAR" } }
+        else { "STRONG_BEAR" };
+    TsiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        ema_long: long_p, ema_short: short_p,
+        tsi_value: tsi, signal_value: signal, tsi_minus_signal: diff,
+        tsi_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -24388,6 +24783,159 @@ pub fn get_rankac(conn: &Connection, symbol: &str) -> Result<Option<RankacSnapsh
         .map_err(|e| format!("prepare get_rankac: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_rankac: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_rankac: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+/// ADR-146 Round 38 schema v39: adds `research_bnsjump`, `research_pproot`,
+/// `research_mfdfa`, `research_hillks`, `research_tsi`. Additive over v38.
+pub fn create_research_tables_v39(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v38(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_bnsjump (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_bnsjump_updated ON research_bnsjump(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_pproot (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_pproot_updated ON research_pproot(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_mfdfa (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_mfdfa_updated ON research_mfdfa(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_hillks (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_hillks_updated ON research_hillks(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_tsi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_tsi_updated ON research_tsi(updated_at);",
+    ).map_err(|e| format!("create v39 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_bnsjump(conn: &Connection, symbol: &str, snap: &BnsjumpSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v39(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("bnsjump json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_bnsjump(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert bnsjump: {e}"))?;
+    Ok(())
+}
+
+pub fn get_bnsjump(conn: &Connection, symbol: &str) -> Result<Option<BnsjumpSnapshot>, String> {
+    let _ = create_research_tables_v39(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_bnsjump WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_bnsjump: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_bnsjump: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_bnsjump: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_pproot(conn: &Connection, symbol: &str, snap: &PprootSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v39(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("pproot json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_pproot(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert pproot: {e}"))?;
+    Ok(())
+}
+
+pub fn get_pproot(conn: &Connection, symbol: &str) -> Result<Option<PprootSnapshot>, String> {
+    let _ = create_research_tables_v39(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_pproot WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_pproot: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_pproot: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_pproot: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_mfdfa(conn: &Connection, symbol: &str, snap: &MfdfaSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v39(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("mfdfa json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_mfdfa(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert mfdfa: {e}"))?;
+    Ok(())
+}
+
+pub fn get_mfdfa(conn: &Connection, symbol: &str) -> Result<Option<MfdfaSnapshot>, String> {
+    let _ = create_research_tables_v39(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_mfdfa WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_mfdfa: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_mfdfa: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_mfdfa: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_hillks(conn: &Connection, symbol: &str, snap: &HillksSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v39(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("hillks json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_hillks(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert hillks: {e}"))?;
+    Ok(())
+}
+
+pub fn get_hillks(conn: &Connection, symbol: &str) -> Result<Option<HillksSnapshot>, String> {
+    let _ = create_research_tables_v39(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_hillks WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_hillks: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_hillks: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_hillks: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_tsi(conn: &Connection, symbol: &str, snap: &TsiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v39(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("tsi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_tsi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert tsi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_tsi(conn: &Connection, symbol: &str) -> Result<Option<TsiSnapshot>, String> {
+    let _ = create_research_tables_v39(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_tsi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_tsi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_tsi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_tsi: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -32586,5 +33134,147 @@ Trailing text.
         assert!(snap.rho_lag10.is_finite());
         assert!(snap.rho_lag1 >= -1.0 && snap.rho_lag1 <= 1.0);
         assert!(snap.max_abs_rho >= snap.mean_abs_rho);
+    }
+
+    // ── Round 38 (ADR-146) ─────────────────────────────────────────────────
+
+    #[test]
+    fn bnsjump_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = BnsjumpSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            realized_variance: 0.0012, bipower_variance: 0.0009, jump_ratio: 0.25,
+            jump_z_stat: 2.1, p_value: 0.018,
+            bnsjump_label: "MODERATE_JUMP".into(), note: String::new(),
+        };
+        upsert_bnsjump(&conn, "TEST", &snap).unwrap();
+        let got = get_bnsjump(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.bnsjump_label, "MODERATE_JUMP");
+        assert!((got.jump_z_stat - 2.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bnsjump_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_bnsjump_snapshot("T", "2026-04-16", &bars);
+        assert!(matches!(snap.bnsjump_label.as_str(),
+            "STRONG_JUMP" | "MODERATE_JUMP" | "WEAK_JUMP" | "NO_JUMP" | "INSUFFICIENT_DATA"));
+        if snap.bnsjump_label != "INSUFFICIENT_DATA" {
+            assert!(snap.realized_variance.is_finite());
+            assert!(snap.bipower_variance.is_finite());
+            assert!(snap.jump_z_stat.is_finite());
+            assert!(snap.p_value >= 0.0 && snap.p_value <= 1.0);
+        }
+    }
+
+    #[test]
+    fn pproot_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = PprootSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            rho_hat: 0.997, t_rho: -0.8, z_rho: -0.9, z_t: -1.1, lag_truncation: 5,
+            pproot_label: "UNIT_ROOT".into(), note: String::new(),
+        };
+        upsert_pproot(&conn, "TEST", &snap).unwrap();
+        let got = get_pproot(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.pproot_label, "UNIT_ROOT");
+        assert!((got.rho_hat - 0.997).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pproot_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_pproot_snapshot("T", "2026-04-16", &bars);
+        assert!(matches!(snap.pproot_label.as_str(),
+            "STATIONARY_STRONG" | "STATIONARY_WEAK" | "BORDERLINE" | "UNIT_ROOT" | "INSUFFICIENT_DATA"));
+        if snap.pproot_label != "INSUFFICIENT_DATA" {
+            assert!(snap.rho_hat.is_finite());
+            assert!(snap.z_t.is_finite());
+            assert!(snap.lag_truncation >= 1);
+        }
+    }
+
+    #[test]
+    fn mfdfa_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MfdfaSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            h_q_neg2: 0.62, h_q_zero: 0.55, h_q_pos2: 0.48, delta_h: 0.14,
+            scales_used: 7,
+            mfdfa_label: "WEAK_MULTIFRACTAL".into(), note: String::new(),
+        };
+        upsert_mfdfa(&conn, "TEST", &snap).unwrap();
+        let got = get_mfdfa(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.mfdfa_label, "WEAK_MULTIFRACTAL");
+        assert!((got.delta_h - 0.14).abs() < 1e-9);
+    }
+
+    #[test]
+    fn mfdfa_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_mfdfa_snapshot("T", "2026-04-16", &bars);
+        assert!(matches!(snap.mfdfa_label.as_str(),
+            "STRONG_MULTIFRACTAL" | "MODERATE_MULTIFRACTAL" | "WEAK_MULTIFRACTAL" | "MONOFRACTAL" | "INSUFFICIENT_DATA"));
+        if snap.mfdfa_label != "INSUFFICIENT_DATA" {
+            assert!(snap.h_q_neg2.is_finite());
+            assert!(snap.h_q_zero.is_finite());
+            assert!(snap.h_q_pos2.is_finite());
+            assert!(snap.scales_used >= 3);
+        }
+    }
+
+    #[test]
+    fn hillks_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = HillksSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            k_order: 25, alpha_hat: 3.2, ks_statistic: 0.12, ks_critical_5pct: 0.272,
+            hillks_label: "ACCEPTABLE_FIT".into(), note: String::new(),
+        };
+        upsert_hillks(&conn, "TEST", &snap).unwrap();
+        let got = get_hillks(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.hillks_label, "ACCEPTABLE_FIT");
+        assert!((got.alpha_hat - 3.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hillks_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_hillks_snapshot("T", "2026-04-16", &bars);
+        assert!(matches!(snap.hillks_label.as_str(),
+            "GOOD_FIT" | "ACCEPTABLE_FIT" | "POOR_FIT" | "REJECT" | "INSUFFICIENT_DATA"));
+        if snap.hillks_label != "INSUFFICIENT_DATA" {
+            assert!(snap.alpha_hat.is_finite());
+            assert!(snap.ks_statistic >= 0.0);
+            assert!(snap.ks_critical_5pct > 0.0);
+        }
+    }
+
+    #[test]
+    fn tsi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = TsiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            ema_long: 25, ema_short: 13,
+            tsi_value: 18.5, signal_value: 12.3, tsi_minus_signal: 6.2,
+            tsi_label: "BULL".into(), note: String::new(),
+        };
+        upsert_tsi(&conn, "TEST", &snap).unwrap();
+        let got = get_tsi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.tsi_label, "BULL");
+        assert!((got.tsi_value - 18.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn tsi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_tsi_snapshot("T", "2026-04-16", &bars);
+        assert!(matches!(snap.tsi_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.tsi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.tsi_value.is_finite());
+            assert!(snap.signal_value.is_finite());
+            assert!(snap.ema_long == 25 && snap.ema_short == 13);
+        }
     }
 }

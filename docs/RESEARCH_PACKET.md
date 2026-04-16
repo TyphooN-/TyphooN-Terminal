@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**one hundred and seventy-eight sub-blocks**, each of which is skipped silently when its data
+**one hundred and eighty-three sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -2455,7 +2455,81 @@ robust counterpart to PACF; disagreement between the two suggests
 heavy-tail-driven spurious Pearson ACF signal. Source: ADR-145
 RANKAC window.
 
-#### 2.177 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.177 Barndorff-Nielsen-Shephard Jump Test (BNSJUMP — ADR-146)
+
+Pulled from `research::get_bnsjump`. BNS 2006 Z-statistic for the null
+hypothesis of no jumps vs the alternative of jump-augmented diffusion:
+z = (RV − BV) / sqrt(θ · Σr⁴) where RV = Σr_i² is the realised
+variance, BV = (π/2) · Σ|r_{i-1}·r_i| is the bipower variation (which
+converges to the diffusive component only under the jump alternative),
+and θ = π²/4 + π − 5 standardises under the null. Header gives
+**bnsjump_label** (STRONG_JUMP z>3.09 / MODERATE_JUMP >2.33 /
+WEAK_JUMP >1.65 / NO_JUMP / INSUFFICIENT_DATA). Body reports
+bars_used, realized_variance, bipower_variance, jump_ratio
+(RV−BV)/RV, jump_z_stat, p_value (approx 1−Φ(|z|)). Formal
+hypothesis-test version of Round 30's raw BIPOWER surface. Source:
+ADR-146 BNSJUMP window.
+
+#### 2.178 Phillips-Perron Unit-Root Test (PPROOT — ADR-146)
+
+Pulled from `research::get_pproot`. Third stationarity surface
+alongside ADF (ADR-126) and KPSS (ADR-144). Phillips & Perron (1988)
+nonparametric: estimate ρ from y_t = ρ·y_{t-1} + ε_t via OLS, then
+apply Newey-West corrections using a Bartlett kernel with lag
+truncation q = floor(4·(n/100)^0.25) per Schwert 1989. Header gives
+**pproot_label** (STATIONARY_STRONG Z(t)<−3.43 / STATIONARY_WEAK
+<−2.86 / BORDERLINE <−2.57 / UNIT_ROOT / INSUFFICIENT_DATA). Body
+reports bars_used, rho_hat, t_rho (raw), z_rho (PP Z(ρ)), z_t (PP
+Z(t)), lag_truncation. Robust to conditional heteroscedasticity —
+three-way ADF/KPSS/PP agreement is a strong stationarity call.
+Source: ADR-146 PPROOT window.
+
+#### 2.179 Multifractal DFA (MFDFA — ADR-146)
+
+Pulled from `research::get_mfdfa`. Kantelhardt 2002 generalisation of
+DFA: at each of 7 scales s ∈ {8, 12, 16, 24, 32, 48, 64} (bounded by
+n/4), split the cumulative return walk into non-overlapping windows,
+linearly detrend each window to get F²(s,v), then aggregate via the
+q-order moment: F_q(s) = [(1/N_s) Σ F²(s,v)^(q/2)]^(1/q) for q≠0,
+F_0(s) = exp[(1/2N_s) Σ ln F²(s,v)]. Fit h(q) = slope of ln F_q(s) vs
+ln s. Header gives **mfdfa_label** (STRONG_MULTIFRACTAL Δh>0.30 /
+MODERATE_MULTIFRACTAL >0.15 / WEAK_MULTIFRACTAL >0.05 / MONOFRACTAL /
+INSUFFICIENT_DATA for n<120). Body reports bars_used, h_q_neg2,
+h_q_zero, h_q_pos2, delta_h, scales_used. First multifractal
+spectrum surface — complements monofractal HURST/DFA/HIGUCHI.
+Source: ADR-146 MFDFA window.
+
+#### 2.180 Hill-Tail KS Goodness-of-Fit (HILLKS — ADR-146)
+
+Pulled from `research::get_hillks`. KS test between the empirical
+tail distribution and the fitted Pareto model implicit in the Hill
+estimator. Take the top k = floor(n·0.10) absolute log-returns, fit
+α̂ via the standard Hill formula 1/α̂ = (1/k) Σ ln(x_i/x_{k+1}), then
+compute D = sup|F_n(y) − (1 − y^{−α̂})| over the tail sample where
+y = x/x_{k+1}. Critical value is 1.36/√k at 5%. Header gives
+**hillks_label** (GOOD_FIT D<0.5·crit / ACCEPTABLE_FIT <0.9·crit /
+POOR_FIT <1.3·crit / REJECT / INSUFFICIENT_DATA for n<50). Body
+reports bars_used, k_order, alpha_hat, ks_statistic,
+ks_critical_5pct. Catches cases where HILLTAIL's α̂ is
+quantitative nonsense because the tail shape doesn't actually fit a
+Pareto. Source: ADR-146 HILLKS window.
+
+#### 2.181 True Strength Index (TSI — ADR-146)
+
+Pulled from `research::get_tsi`. Blau 1991 double-smoothed momentum
+oscillator: TSI = 100 · EMA_short(EMA_long(ΔP)) /
+EMA_short(EMA_long(|ΔP|)) with classical 25/13 periods. Zero-line
+crossovers signal momentum flips; TSI−signal (where signal is a
+second 13-period EMA of TSI itself) triggers entries on
+momentum-of-momentum. Header gives **tsi_label** (STRONG_BULL
+TSI>25 / BULL >0 / NEUTRAL |TSI|<5 / BEAR >−25 / STRONG_BEAR /
+INSUFFICIENT_DATA for n<60). Body reports bars_used, ema_long,
+ema_short, tsi_value, signal_value, tsi_minus_signal. Cleaner
+zero-line behaviour than RSI; less noisy than MACD; distinct from
+CCI by using dual-EMA smoothing rather than mean deviation. Source:
+ADR-146 TSI window.
+
+#### 2.182 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -2471,7 +2545,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.178 Sector peer comparison
+#### 2.183 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -2502,7 +2576,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.177 above.
+articles to the per-symbol bag consumed by sub-block 2.182 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -2717,37 +2791,47 @@ Question section, not per-symbol.
 | Kappa-3 ratio fields (ADR-145 KAPPA3) | 2 k/v rows | Returns used + MAR + excess μ + LPM3 + LPM3^(1/3) + κ3 + Sortino reference + kappa3 label |
 | Lyapunov exponent fields (ADR-145 LYAPUNOV) | 2 k/v rows | Returns used + m + τ + λ_max + R² + steps used + lyapunov label |
 | Spearman rank autocorrelation (ADR-145 RANKAC) | 2 k/v rows | Returns used + ρ(1) + ρ(5) + ρ(10) + mean\|ρ\| + max\|ρ\| + rankac label |
+| BNS jump-test Z fields (ADR-146 BNSJUMP) | 2 k/v rows | Returns used + RV + BV + jump ratio + z-statistic + approx p-value + bnsjump label |
+| Phillips-Perron fields (ADR-146 PPROOT) | 2 k/v rows | Bars used + ρ̂ + raw t + PP Z(ρ) + PP Z(t) + auto-picked lag truncation q + pproot label |
+| Multifractal DFA fields (ADR-146 MFDFA) | 2 k/v rows | Returns used + h(−2) + h(0) + h(+2) + Δh + scales used + mfdfa label |
+| Hill-tail KS fields (ADR-146 HILLKS) | 2 k/v rows | Returns used + k (tail size) + Hill α̂ + KS D statistic + KS 5% critical + hillks label |
+| True Strength Index fields (ADR-146 TSI) | 2 k/v rows | Bars used + EMA long/short periods + TSI value + signal value + TSI−signal + tsi label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **63-127 KB**
-(up from 63-125 KB after ADR-144; ADR-145 adds five optional per-symbol
-blocks — HIGUCHI / PICKANDS / KAPPA3 / LYAPUNOV / RANKAC — each
-measuring ~2-7 k/v rows and adding ~200-600 bytes when populated, for
-a typical +1-2 KB per symbol and +2 KB worst case; all five reuse the
+symbols. A single S&P 500 symbol now produces a packet around **64-129 KB**
+(up from 63-127 KB after ADR-145; ADR-146 adds five optional per-symbol
+blocks — BNSJUMP / PPROOT / MFDFA / HILLKS / TSI — each
+measuring ~2 k/v rows and adding ~200-500 bytes when populated, for
+a typical +1 KB per symbol and +2 KB worst case; all five reuse the
 existing `research_historical_price` HP cache and the standard
 research-table LAN sync path with zero new API dependencies;
-HIGUCHI computes the Higuchi 1988 fractal dimension of the cumulative
-log-return walk at k_max=10, classifying the series as SMOOTH /
-PERSISTENT / RANDOM / ROUGH — the first direct geometric FD surface,
-complementing Hurst via H = 2 − FD under Brownian assumptions;
-PICKANDS computes the 1975 extreme-value γ̂ estimator valid across
-all three EV domains (Fréchet / Gumbel / Weibull), providing a
-Hill/Pickands cross-check that detects misspecified tail models;
-KAPPA3 computes the Kaplan-Knowles 2004 generalised-Sortino κ3 =
-(μ−MAR) / LPM3^(1/3) annualised — the first third-moment downside
-ratio, more sensitive to rare extreme losses than the LPM2-based
-Sortino, with Sortino reference included so regression between the
-two is diagnostic of downside asymmetry; LYAPUNOV computes the
-Rosenstein 1993 largest Lyapunov exponent on an m=3 embedded series
-with Theiler window=10, distinguishing CHAOTIC / PERIODIC / STABLE
-regimes — the first nonlinear-dynamics chaos surface, answering
-questions neither RUNS nor PACF can reach; RANKAC computes Spearman
-rank autocorrelation at lags 1/5/10 with average-rank ties — the
-robust nonparametric counterpart to PACF, directly comparable for
-flagging fat-tail-driven spurious Pearson ACF signal); a 10-symbol
-basket now lands near **630-1270 KB**
+BNSJUMP computes the Barndorff-Nielsen-Shephard 2006 jump-test
+Z-statistic z = (RV − BV) / sqrt(θ · Σr⁴) with an approximate p-value,
+the first formal jump-detection hypothesis test (complementing Round
+30's raw BIPOWER two-statistic comparison) — STRONG_JUMP / MODERATE /
+WEAK / NO_JUMP labels driven by conventional normal critical values;
+PPROOT computes the Phillips-Perron 1988 nonparametric unit-root
+test via Newey-West corrections to OLS with Schwert-rule auto lag
+q = floor(4·(n/100)^0.25), adding a third stationarity axis alongside
+ADF and KPSS that is robust to conditional heteroscedasticity —
+three-way ADF/KPSS/PP agreement is a much stronger stationarity
+signal than any single test; MFDFA computes the Kantelhardt 2002
+multifractal DFA spectrum h(q) at q ∈ {−2, 0, +2} over 7 scales
+{8,12,16,24,32,48,64}, giving Δh = h(−2) − h(+2) as a width
+diagnostic — the first multifractal-spectrum surface, complementing
+monofractal HURST / DFA / HIGUCHI; HILLKS computes the KS
+goodness-of-fit between the empirical tail distribution and the
+Pareto model fitted by the Hill estimator at k = floor(n·0.10),
+catching cases where HILLTAIL's α̂ is quantitative nonsense because
+the tail shape doesn't actually fit a Pareto — GOOD_FIT /
+ACCEPTABLE_FIT / POOR_FIT / REJECT labels driven by the 1.36/√k
+critical value at 5%; TSI computes the Blau 1991 True Strength Index
+= 100 · EMA₁₃(EMA₂₅(ΔP)) / EMA₁₃(EMA₂₅(|ΔP|)) with a short-EMA signal
+line, providing a double-smoothed momentum oscillator with cleaner
+zero-line behaviour than RSI and less lag than MACD); a 10-symbol
+basket now lands near **640-1290 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).
@@ -3065,6 +3149,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_kappa3` | SQLite `research_kappa3` | ADR-145 KAPPA3 window (Kaplan-Knowles 2004 κ3 = (μ−MAR)/LPM3^(1/3) annualised with Sortino reference — first third-moment downside ratio) |
 | `research::get_lyapunov` | SQLite `research_lyapunov` | ADR-145 LYAPUNOV window (Rosenstein 1993 largest Lyapunov exponent λ₁ with m=3 embedding, Theiler=10 — first chaos/nonlinear-dynamics surface) |
 | `research::get_rankac` | SQLite `research_rankac` | ADR-145 RANKAC window (Spearman rank autocorrelation at lags 1/5/10 via average-rank tie handling — robust nonparametric counterpart to PACF) |
+| `research::get_bnsjump` | SQLite `research_bnsjump` | ADR-146 BNSJUMP window (Barndorff-Nielsen-Shephard 2006 jump-test Z-statistic with approximate p-value — formal hypothesis-test version of Round 30's raw BIPOWER surface) |
+| `research::get_pproot` | SQLite `research_pproot` | ADR-146 PPROOT window (Phillips-Perron 1988 nonparametric unit-root test with Schwert-rule auto lag truncation — third stationarity axis alongside ADF and KPSS, robust to conditional heteroscedasticity) |
+| `research::get_mfdfa` | SQLite `research_mfdfa` | ADR-146 MFDFA window (Kantelhardt 2002 multifractal DFA at q ∈ {−2, 0, +2} over 7 scales with Δh spectrum width — first multifractal-spectrum surface) |
+| `research::get_hillks` | SQLite `research_hillks` | ADR-146 HILLKS window (KS goodness-of-fit for Hill-tail Pareto model with k=floor(n·0.10) tail size — catches misspecified tail assumptions that HILLTAIL alone cannot) |
+| `research::get_tsi` | SQLite `research_tsi` | ADR-146 TSI window (Blau 1991 True Strength Index = 100·EMA₁₃(EMA₂₅(ΔP))/EMA₁₃(EMA₂₅(|ΔP|)) — first double-smoothed momentum oscillator) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -3102,5 +3191,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 / 142 / 143 / 144 / 145 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 / 142 / 143 / 144 / 145 / 146 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)
