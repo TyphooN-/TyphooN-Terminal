@@ -1288,6 +1288,42 @@ impl SqliteCache {
         Ok(())
     }
 
+    /// Read BarCacheWriter's heartbeat row (if present). Returns the JSON
+    /// payload string for the given account tag, and the row's timestamp
+    /// column (seconds since epoch, set by the EA via TimeCurrent()).
+    ///
+    /// Heartbeat key format: `mt5:__HEARTBEAT__:{accountId}`
+    /// JSON payload includes ts, rotation_offset, sym_count, cycle_ms,
+    /// init_burst_active, cycle_count, exported, skipped, track_count,
+    /// demand_count, version. Added in BarCacheWriter v1.447.
+    ///
+    /// If `account_tag` is empty, returns the first heartbeat found (useful
+    /// when the caller does not know which account the source DB is bound to).
+    pub fn read_mt5_heartbeat(&self, account_tag: &str) -> Result<Option<(String, i64)>, String> {
+        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let key_pattern = if account_tag.is_empty() {
+            "mt5:__HEARTBEAT__:%".to_string()
+        } else {
+            format!("mt5:__HEARTBEAT__:{}", account_tag)
+        };
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT data, timestamp FROM bar_cache WHERE key LIKE ?1 ORDER BY timestamp DESC LIMIT 1",
+            )
+            .map_err(|e| format!("Prepare heartbeat query failed: {e}"))?;
+        let mut rows = stmt
+            .query(params![key_pattern])
+            .map_err(|e| format!("Query heartbeat failed: {e}"))?;
+        if let Some(row) = rows.next().map_err(|e| format!("Row next failed: {e}"))? {
+            let blob: Vec<u8> = row.get(0).map_err(|e| format!("Heartbeat blob get failed: {e}"))?;
+            let ts: i64 = row.get(1).map_err(|e| format!("Heartbeat ts get failed: {e}"))?;
+            let json = String::from_utf8(blob).map_err(|e| format!("Heartbeat not UTF-8: {e}"))?;
+            Ok(Some((json, ts)))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Read all bid/ask quotes from the bid_ask table (BarCacheWriter live prices).
     /// Returns Vec of (symbol, bid, ask, spread).
     pub fn read_bid_ask(&self) -> Result<Vec<(String, f64, f64, f64)>, String> {
