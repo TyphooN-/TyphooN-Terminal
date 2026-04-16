@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**one hundred and sixty-three sub-blocks**, each of which is skipped silently when its data
+**one hundred and sixty-eight sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -2229,7 +2229,81 @@ Body reports bars_used, num_freqs, spectral_entropy_raw,
 spectral_entropy_norm, peak_freq_idx, peak_power_share.
 Source: ADR-142 SPECENT window.
 
-#### 2.162 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.162 Robust Volatility (ROBVOL — ADR-143)
+
+Pulled from `research::get_robvol`. Computes three annualized σ
+estimators on trailing daily log returns: classical sample σ, MAD
+σ = MAD/0.6745 (Hampel 1974), and IQR σ = IQR/1.349. Also reports
+MAD/classical and IQR/classical ratios. When classical σ is inflated
+by a small number of extreme returns, the robust ratios drop below
+1; values near or above 1 indicate a clean (or sub-Gaussian) tail.
+Complements the purely-classical realized-vol family (RV, Parkinson,
+EWMA). Header gives **robvol_label** (HEAVY_OUTLIERS avg ratio < 0.60
+/ MODERATE_OUTLIERS < 0.80 / CLEAN < 1.10 / LIGHT_TAILS ≥ 1.10 /
+INSUFFICIENT_DATA). Body reports bars_used, classical_sigma, mad_sigma,
+iqr_sigma, mad_ratio, iqr_ratio. Source: ADR-143 ROBVOL window.
+
+#### 2.163 Rényi Entropy α=2 (RENYIENT — ADR-143)
+
+Pulled from `research::get_renyient`. Computes Rényi entropy of order
+α=2 (collision entropy, Rényi 1961) over a Sturges-sized histogram
+of trailing log returns: H₂ = −log₂(Σ pᵢ²). The collision probability
+Σ pᵢ² directly answers "how likely are two random returns to fall in
+the same bin?" — a classical concentration measure. Differs from
+Shannon entropy (α=1) by weighting high-probability bins quadratically
+rather than logarithmically, emphasising concentration more sharply.
+Header gives **renyient_label** (CONCENTRATED H_norm < 0.50 /
+MODERATE < 0.70 / DISPERSED < 0.85 / HIGHLY_DISPERSED ≥ 0.85 /
+INSUFFICIENT_DATA). Body reports bars_used, num_bins, alpha,
+renyi_raw, renyi_normalised, collision_prob.
+Source: ADR-143 RENYIENT window.
+
+#### 2.164 Return Quantile Profile (RETQUANT — ADR-143)
+
+Pulled from `research::get_retquant`. Reports the full 9-point
+empirical quantile profile of trailing daily log returns: P1, P5,
+P10, P25, P50 (median), P75, P90, P95, P99 (all as percents). Also
+computes IQR = P75 − P25 and a tail asymmetry ratio (P99+P01)/(P99−P01)
+— positive ⇒ right tail extends further; negative ⇒ left tail
+dominates. Dense non-parametric snapshot complementing single-point
+TAILR/CVAR and the parametric RETSKEW. Header gives **retquant_label**
+(LEFT_TAIL_HEAVY asymm < −0.30 / RIGHT_TAIL_HEAVY > 0.30 / WIDE_IQR
+IQR > 4% daily / SYMMETRIC). Body reports all nine percentiles, IQR,
+and tail_asymmetry. Source: ADR-143 RETQUANT window.
+
+#### 2.165 Multiscale Entropy (MSENT — ADR-143)
+
+Pulled from `research::get_msent`. Computes Sample Entropy (SampEn)
+on coarse-grained series at scales τ=1 through τ=5 (Costa, Goldberger,
+Peng 2005). Scale τ=1 is the raw series; scale τ=k averages each
+block of k consecutive returns. A tolerance r = 0.2·σ of the raw
+series is held fixed across scales so SampEn values are comparable.
+A decaying MSE curve indicates short-scale noise; sustained or
+increasing curves indicate genuine long-range structure. The integral
+Σ SampEn(τ) is the Complexity Index. Complements single-scale
+APEN/SAMPEN by exposing scale-dependent structure. Header gives
+**msent_label** (LONG_RANGE_REGULAR all τ SampEn < 0.3 / DECAYING
+τ=5 < 0.7·τ=1 / INCREASING τ=5 > 1.3·τ=1 / SUSTAINED otherwise /
+INSUFFICIENT_DATA needs ≥100 returns). Body reports bars_used,
+embed_dim, tolerance, max_scale, sampen_scale1..5, msent_complexity_index.
+Source: ADR-143 MSENT window.
+
+#### 2.166 EWMA Volatility (EWMAVOL — ADR-143)
+
+Pulled from `research::get_ewmavol`. Computes the RiskMetrics (J.P.
+Morgan 1996) exponentially-weighted moving volatility with λ=0.94:
+σ²_t = λ·σ²_{t−1} + (1−λ)·r²_t. Effective lookback ≈ 1/(1−λ) ≈ 17
+days; recent returns dominate. Reports daily and annualized EWMA σ
+alongside the classical sample σ (annualised ×√252) and their ratio
+— a regime flag for recent-vs-average volatility. Complements the
+equal-weighted RV and the AR(1) half-life from VARHALF. Header gives
+**ewmavol_label** (ELEVATED ratio > 1.20 / SUPPRESSED < 0.80 /
+NORMAL / INSUFFICIENT_DATA). Body reports bars_used, lambda,
+ewma_variance, ewma_sigma_daily, ewma_sigma_annual,
+classical_sigma_annual, ewma_to_classical.
+Source: ADR-143 EWMAVOL window.
+
+#### 2.167 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -2245,7 +2319,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.163 Sector peer comparison
+#### 2.168 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -2276,7 +2350,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.162 above.
+articles to the per-symbol bag consumed by sub-block 2.167 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -2476,37 +2550,43 @@ Question section, not per-symbol.
 | Recovery factor fields (ADR-142 RECFACT) | 2 k/v rows | Bars used + cum return % + max dd % + recovery factor + recfact label |
 | KPSS stationarity fields (ADR-142 KPSS) | 2 k/v rows | Returns used + η_μ + lag ℓ + crit 10/5/1% + reject_stationary + kpss label |
 | Spectral entropy fields (ADR-142 SPECENT) | 2 k/v rows | Returns used + freq bins + H_raw + H_norm + peak idx + peak share + specent label |
+| Robust volatility fields (ADR-143 ROBVOL) | 2 k/v rows | Returns used + classical/MAD/IQR σ (annual) + MAD ratio + IQR ratio + robvol label |
+| Rényi entropy fields (ADR-143 RENYIENT) | 2 k/v rows | Returns used + bins + α + H₂ raw + H₂ normalised + collision_prob + renyient label |
+| Return quantile profile fields (ADR-143 RETQUANT) | 2 k/v rows | Returns used + P1/P5/P10/P25/P50/P75/P90/P95/P99 + IQR + tail asymmetry + retquant label |
+| Multiscale entropy fields (ADR-143 MSENT) | 2 k/v rows | Returns used + m + r + τ_max + SampEn τ=1..5 + complexity index + msent label |
+| EWMA volatility fields (ADR-143 EWMAVOL) | 2 k/v rows | Returns used + λ + variance + σ daily/annual + classical σ annual + ewma/classical ratio + ewmavol label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **61-120 KB**
-(up from 60-118 KB after ADR-141; ADR-142 adds five optional per-symbol
-blocks — SAMPEN / PERMEN / RECFACT / KPSS / SPECENT — each measuring
-~2 k/v rows and adding ~200-600 bytes when populated, for a
-typical +1 KB per symbol and +2 KB worst case; all five reuse the
+symbols. A single S&P 500 symbol now produces a packet around **62-123 KB**
+(up from 61-120 KB after ADR-142; ADR-143 adds five optional per-symbol
+blocks — ROBVOL / RENYIENT / RETQUANT / MSENT / EWMAVOL — each measuring
+~2 k/v rows and adding ~200-800 bytes when populated, for a
+typical +1 KB per symbol and +3 KB worst case; all five reuse the
 existing `research_historical_price` HP cache and the standard
 research-table LAN sync path with zero new API dependencies;
-SAMPEN computes Sample Entropy (Richman & Moorman 2000) with m=2,
-r=0.2·σ, excluding self-matches — the modern standard improvement
-over APEN for time-series regularity measurement; PERMEN computes
-Permutation Entropy (Bandt & Pompe 2002) over ordinal patterns
-with m=3 — captures temporal ordering structure invisible to
-ENTROPY (value histogram), APEN/SAMPEN (template matching), and
-SPECENT (frequency domain); RECFACT computes the Recovery Factor =
-cumulative return / |max drawdown| — first raw-cumulative
-recovery metric, distinct from CALMAR/BURKE/STERLING/PAINRATIO
-which all annualize; KPSS computes the Kwiatkowski-Phillips-
-Schmidt-Shin (1992) stationarity test — the formal complement to
-ADF, testing H₀: stationary vs ADF's H₀: non-stationary, with
-Newey-West Bartlett-kernel HAC estimator; SPECENT computes
-Spectral Entropy = Shannon entropy of normalised PSD via DFT —
-first frequency-domain periodicity measure, revealing cyclical
-structure invisible to all time-domain methods); a 10-symbol
-basket now lands near **600-1200 KB** when every symbol has a
-fully populated ingest bag (the global context and the Return Path
-footer are each emitted exactly once, so multi-symbol overhead is
-still bounded by the per-symbol blocks).
+ROBVOL computes three annualised σ estimators — classical sample σ,
+MAD σ = MAD/0.6745 (Hampel 1974), and IQR σ = IQR/1.349 — the first
+outlier-resistant vol surface, exposing how much of quoted RV is
+driven by a few extreme days; RENYIENT computes Rényi entropy at
+α=2 (collision entropy, Rényi 1961) — the first quadratic-order
+entropy measure, weighting high-probability bins more sharply than
+Shannon and reporting collision probability Σ pᵢ² directly;
+RETQUANT emits the full 9-point empirical quantile profile (P1/P5/
+P10/P25/P50/P75/P90/P95/P99) plus IQR and tail asymmetry ratio —
+the first dense non-parametric distribution snapshot, complementing
+single-point TAILR/CVAR; MSENT computes multiscale Sample Entropy
+(Costa, Goldberger, Peng 2005) at scales τ=1..5 with fixed tolerance
+— the first scale-dependent complexity measure, revealing
+long-range structure invisible to single-scale APEN/SAMPEN;
+EWMAVOL computes the RiskMetrics exponentially-weighted vol with
+λ=0.94 (J.P. Morgan 1996) — the first adaptive-weighted vol
+surface, with a ratio-to-classical flag for recent-vs-average
+regime detection); a 10-symbol basket now lands near **610-1230 KB**
+when every symbol has a fully populated ingest bag (the global
+context and the Return Path footer are each emitted exactly once,
+so multi-symbol overhead is still bounded by the per-symbol blocks).
 
 ---
 
@@ -2806,6 +2886,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_recfact` | SQLite `research_recfact` | ADR-142 RECFACT window (Recovery Factor = cum return / \|max dd\| — first raw-cumulative recovery metric distinct from annualized ratios) |
 | `research::get_kpss` | SQLite `research_kpss` | ADR-142 KPSS window (Kwiatkowski-Phillips-Schmidt-Shin 1992 stationarity test — formal complement to ADF unit-root test) |
 | `research::get_specent` | SQLite `research_specent` | ADR-142 SPECENT window (Spectral Entropy via DFT — Shannon entropy of normalised PSD, first frequency-domain periodicity measure) |
+| `research::get_robvol` | SQLite `research_robvol` | ADR-143 ROBVOL window (MAD/0.6745 + IQR/1.349 robust σ + classical σ — first outlier-resistant vol surface, exposes classical-σ inflation by extreme days) |
+| `research::get_renyient` | SQLite `research_renyient` | ADR-143 RENYIENT window (Rényi entropy at α=2, collision entropy, Σ pᵢ² concentration — first quadratic-order entropy, quadratic probability weighting vs Shannon's log) |
+| `research::get_retquant` | SQLite `research_retquant` | ADR-143 RETQUANT window (9-point return quantile profile P1..P99 + IQR + tail asymmetry — first dense non-parametric distribution snapshot) |
+| `research::get_msent` | SQLite `research_msent` | ADR-143 MSENT window (Costa-Goldberger-Peng 2005 Multiscale SampEn at τ=1..5 with fixed tolerance — first scale-dependent complexity measure) |
+| `research::get_ewmavol` | SQLite `research_ewmavol` | ADR-143 EWMAVOL window (RiskMetrics EWMA variance with λ=0.94 — first adaptive-weighted vol surface with ewma/classical ratio as regime flag) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -2843,5 +2928,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 / 142 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 / 142 / 143 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)
