@@ -1774,7 +1774,89 @@ INSUFFICIENT_DATA). Body reports best/worst weekday, hit_pct and
 mean_ret_pct per weekday, sample counts per weekday, and weeks
 covered. Source: ADR-136 DOWEFFECT window.
 
-#### 2.132 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.132 Sterling Ratio (STERLING — ADR-137)
+
+Pulled from `research::get_sterling`. Annualized return divided by
+the arithmetic mean of the **N worst distinct drawdown events**
+(canonical N=5) over the trailing 253-session window. Textbook
+middle ground between CALMAR (single worst dd — fragile to
+one-off tail outliers) and BURKE (sum-of-squared drawdowns —
+quadratic penalty that over-weights clusters). Large
+CALMAR/STERLING gap ⇒ one outlier drawdown dominated; CALMAR ≈
+STERLING ⇒ top-5 drawdowns are similar magnitude. Header reports
+regime bucket (VERY_POOR ratio<−0.5 / POOR <0 / NEUTRAL <0.5 /
+GOOD <1.5 / EXCELLENT ≥1.5 / INSUFFICIENT_DATA). Body reports
+bars_used, annualized_return_pct, worst_n, dd_event_count,
+mean_worst_dd_pct, and sterling_ratio. Source: ADR-137 STERLING
+window.
+
+#### 2.133 Kelly Fraction (KELLYF — ADR-137)
+
+Pulled from `research::get_kellyf`. Classical Kelly position-sizing
+scalar `f* = (b·p − q) / b` where p=win rate, q=1−p,
+b=avg_win/avg_loss over the trailing 253-session window (log
+returns converted back to simple %). First packet surface that is
+forward-looking (optimization target) rather than realized
+risk-adjusted performance. Pairs with CALMAR/BURKE/STERLING:
+those answer "how did it perform?"; KELLYF answers "how much
+weight should it get?". Header reports regime bucket
+(SKIP f*≤0 / MARGINAL <0.10 / MODERATE <0.25 / AGGRESSIVE <0.50
+/ ALL_IN ≥0.50 / INSUFFICIENT_DATA). Practitioners typically
+use `half_kelly` (f*/2); ALL_IN is usually a sign of sample
+noise, not a real signal. Body reports win_rate, loss_rate,
+avg_win_pct, avg_loss_pct, win_loss_ratio, kelly_fraction, and
+half_kelly. Source: ADR-137 KELLYF window.
+
+#### 2.134 Ljung-Box Joint Autocorrelation (LJUNGB — ADR-137)
+
+Pulled from `research::get_ljungb`. Portmanteau Q-statistic
+`Q = n(n+2)·Σ(ρ_k²/(n−k))` for k=1..h (h=10) testing whether
+returns are white noise. Under the null `Q ~ χ²(h)`, so a small
+p-value rejects the "returns are uncorrelated across lags 1..h"
+hypothesis — the canonical econometrics test for model adequacy.
+Complements AUTOCOR (per-lag ρ_k at k=1/5/10/20 — four separate
+numbers) with a single joint-significance p-value. Header
+reports regime bucket (WHITE_NOISE p≥0.10 / WEAK_DEP ≥0.05 /
+MODERATE_DEP ≥0.01 / STRONG_DEP <0.01 / INSUFFICIENT_DATA).
+Body reports bars_used, lag_h, q_statistic, p_value, and
+reject_white_noise. P-value uses Wilson-Hilferty cube-root
+approximation to χ²(h) — accurate at label-bucket granularity;
+documented in ADR-137. Source: ADR-137 LJUNGB window.
+
+#### 2.135 Wald-Wolfowitz Runs Test (RUNSTEST — ADR-137)
+
+Pulled from `research::get_runstest`. Formal inferential test of
+the sign sequence: given n₁ positive-return days and n₂ negative
+among n signed days, the number of runs has null mean
+`2n₁n₂/n + 1` and variance `2n₁n₂(2n₁n₂−n)/(n²(n−1))`. A
+z-statistic and two-sided p-value reject (or not) the null of
+random sign ordering. Complements RUNLEN (descriptive —
+longest/mean streak) with inferential significance. Header
+reports regime bucket (RANDOM / ANTI_CLUST z>0 reject / 
+SLIGHT_CLUST z<0 p≥0.01 / MOD_CLUST p≥0.001 / STRONG_CLUST
+p<0.001 / INSUFFICIENT_DATA). Body reports bars_used,
+positive_days, negative_days, runs_observed, runs_expected,
+runs_std, z_statistic, p_value, and reject_randomness. P-value
+uses Abramowitz & Stegun 7.1.26 rational approximation to the
+standard normal CDF. Source: ADR-137 RUNSTEST window.
+
+#### 2.136 Zero-Return-Day Fraction (ZERORET — ADR-137)
+
+Pulled from `research::get_zeroret`. Lesmond-Ogden-Trzcinka
+(1999) liquidity proxy: fraction of bars with
+`|log_return| < 1e-6` (i.e. exactly unchanged close) over the
+trailing 253-session window. Illiquid securities show more
+zero-return days (dealers don't update the close because nobody
+traded). Third foundational microstructure scalar, distinct from
+AMIHUD (price impact per $ of volume) and ROLLSPRD (implicit
+bid-ask spread). Together AMIHUD + ROLLSPRD + ZERORET cover the
+three canonical academic liquidity proxies. Header reports
+regime bucket (HIGHLY_LIQUID <1% / LIQUID <5% / MODERATE <15% /
+ILLIQUID <30% / VERY_ILLIQUID ≥30% / INSUFFICIENT_DATA). Body
+reports bars_used, zero_day_count, zero_day_pct,
+longest_zero_streak, and epsilon. Source: ADR-137 ZERORET window.
+
+#### 2.137 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -1790,7 +1872,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.133 Sector peer comparison
+#### 2.138 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1821,7 +1903,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.132 above.
+articles to the per-symbol bag consumed by sub-block 2.137 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -1991,28 +2073,35 @@ Question section, not per-symbol.
 | Rogers-Satchell vol fields (ADR-136 RSVOL) | 2 k/v rows | Bars used + daily σ + annualized σ (drift-independent) + vol label |
 | CVaR / Expected Shortfall fields (ADR-136 CVAR) | 2 k/v rows | Bars used + VaR/ES(5%) + VaR/ES(1%) + tail day counts + cvar label |
 | Day-of-week seasonality fields (ADR-136 DOWEFFECT) | 2-3 k/v rows | Bars used + weeks covered + best/worst weekday + full 5-cell weekday grid (hit % + mean ret %) + dow label |
+| Sterling ratio fields (ADR-137 STERLING) | 2 k/v rows | Bars used + annualized return + worst_n + dd event count + mean worst-N dd + sterling ratio + sterling label |
+| Kelly fraction fields (ADR-137 KELLYF) | 2 k/v rows | Bars used + win/loss rate + avg win/loss % + b ratio + f* + half_kelly + kelly label |
+| Ljung-Box fields (ADR-137 LJUNGB) | 2 k/v rows | Bars used + lag h + Q-statistic + p-value + reject white noise + ljungb label |
+| Runs test fields (ADR-137 RUNSTEST) | 2 k/v rows | Bars used + positive/negative days + runs observed/expected/std + z-stat + p-value + reject randomness + runs label |
+| Zero-return fields (ADR-137 ZERORET) | 2 k/v rows | Bars used + zero day count + zero day % + longest zero streak + epsilon + zero label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **52-102 KB**
-(up from 50-98 KB after ADR-135; ADR-136 adds five optional per-symbol
-blocks — PARKINSON / GKVOL / RSVOL / CVAR / DOWEFFECT — each
-measuring ~2-3 k/v rows and adding ~300-700 bytes when populated
-(DOWEFFECT is the heaviest due to its 5-weekday grid plus sample
-counts), for a typical +2 KB per symbol and +4 KB worst case; all
-five reuse the existing `research_historical_price` HP cache and
-the standard research-table LAN sync path with zero new API
-dependencies; PARKINSON/GKVOL/RSVOL complete the canonical OHLC
-range-vol family (zero-drift, efficiency-optimal, drift-independent
-respectively); CVAR is the first coherent tail-loss measure
-(Expected Shortfall), distinct from TAILR (shape) and DOWNVOL
-(scale); DOWEFFECT completes the calendar-axis pair started by
-MONTHSEAS); a
-10-symbol basket now lands near **510-1020 KB** when every symbol
-has a fully populated ingest bag (the global context and the Return
-Path footer are each emitted exactly once, so multi-symbol overhead
-is still bounded by the per-symbol blocks).
+symbols. A single S&P 500 symbol now produces a packet around **54-106 KB**
+(up from 52-102 KB after ADR-136; ADR-137 adds five optional per-symbol
+blocks — STERLING / KELLYF / LJUNGB / RUNSTEST / ZERORET — each
+measuring ~2 k/v rows and adding ~300-700 bytes when populated,
+for a typical +2 KB per symbol and +3 KB worst case; all five
+reuse the existing `research_historical_price` HP cache and the
+standard research-table LAN sync path with zero new API
+dependencies; STERLING completes the drawdown-ratio family (with
+CALMAR single-worst and BURKE sum-of-squares — mean of N worst
+is the middle ground); KELLYF is the first forward-looking
+position-sizing scalar (versus the realized-performance ratios
+of SHARPR / CALMAR / BURKE / STERLING / OMEGA); LJUNGB adds a
+joint-lag white-noise test to complement AUTOCOR's per-lag view;
+RUNSTEST adds a formal randomness test to complement RUNLEN's
+descriptive streak stats; ZERORET completes the microstructure
+liquidity trio (AMIHUD impact + ROLLSPRD spread + ZERORET
+trade-frequency)); a 10-symbol basket now lands near **530-1060 KB**
+when every symbol has a fully populated ingest bag (the global
+context and the Return Path footer are each emitted exactly once,
+so multi-symbol overhead is still bounded by the per-symbol blocks).
 
 ---
 
@@ -2282,6 +2371,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_rsvol` | SQLite `research_rsvol` | ADR-136 RSVOL window (Rogers-Satchell 1991 drift-independent OHLC vol — unbiased under non-zero drift; completes the OHLC-vol family) |
 | `research::get_cvar` | SQLite `research_cvar` | ADR-136 CVAR window (Conditional VaR / Expected Shortfall at 5% and 1% — coherent Basel III downside-risk measure distinct from TAILR shape + DOWNVOL scale) |
 | `research::get_doweffect` | SQLite `research_doweffect` | ADR-136 DOWEFFECT window (day-of-week intraday O→C seasonality — weekday calendar companion to MONTHSEAS; full-HP-cache scan) |
+| `research::get_sterling` | SQLite `research_sterling` | ADR-137 STERLING window (Sterling ratio — annualized return over mean of N worst distinct drawdown events; middle ground between CALMAR single-worst and BURKE sum-of-squares) |
+| `research::get_kellyf` | SQLite `research_kellyf` | ADR-137 KELLYF window (Kelly fraction `(b·p − q)/b` — forward-looking optimal-leverage scalar; first non-realized packet surface) |
+| `research::get_ljungb` | SQLite `research_ljungb` | ADR-137 LJUNGB window (Ljung-Box Q at lag 10 — joint autocorrelation / white-noise test with Wilson-Hilferty χ²(10) p-value) |
+| `research::get_runstest` | SQLite `research_runstest` | ADR-137 RUNSTEST window (Wald-Wolfowitz runs test — formal inferential randomness test on sign sequence with z-stat + two-sided p-value via A&S 7.1.26 normal CDF) |
+| `research::get_zeroret` | SQLite `research_zeroret` | ADR-137 ZERORET window (Lesmond-Ogden-Trzcinka zero-return-day fraction — microstructure liquidity proxy distinct from AMIHUD impact + ROLLSPRD spread) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -2319,5 +2413,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)

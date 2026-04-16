@@ -3191,6 +3191,118 @@ pub struct DayOfWeekEffectSnapshot {
     pub note: String,
 }
 
+// ── ADR-137 Round 29 — HP Sterling / Kelly / Ljung-Box / runs test / zero-return ──
+
+/// STERLING — Sterling ratio: annualized return / average of N worst drawdowns.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Distinct drawdown ratio family completion: CALMAR uses only max-dd,
+/// ULCER is RMS of all continuous dd points, BURKE sums squared event
+/// drawdowns — STERLING uses the *arithmetic mean* of the top-N (default 5)
+/// worst distinct drawdown events. This gives the most directly interpretable
+/// "average of my worst N drawdowns" reading.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SterlingRatioSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub annualized_return_pct: f64,
+    pub worst_n: usize,                 // N worst distinct dd events used (default 5)
+    pub dd_event_count: usize,          // total distinct dd events in window
+    pub mean_worst_dd_pct: f64,         // mean of worst N event drawdowns, as %
+    pub sterling_ratio: f64,            // annualized_return / mean_worst_dd (magnitudes)
+    pub sterling_label: String,         // "VERY_POOR" | "POOR" | "NEUTRAL" | "GOOD" | "EXCELLENT" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// KELLYF — Kelly fraction / optimal leverage.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Classical position-sizing scalar: `f* = (b·p − q) / b` where
+/// p=win rate, q=1−p, b=avg_win/avg_loss. First packet surface in the
+/// position-sizing axis — SHARPR/DOWNVOL/CALMAR etc all measure
+/// realized risk-adjusted performance; KELLYF gives a forward-looking
+/// optimal-stake scalar derived from the same return distribution.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KellyFractionSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub win_rate: f64,                  // p, fraction of positive-return days
+    pub loss_rate: f64,                 // q = 1 − p (positive-return days exclude zero)
+    pub avg_win_pct: f64,               // mean of positive daily returns (%), 0 if none
+    pub avg_loss_pct: f64,              // mean of |negative| daily returns (%), 0 if none
+    pub win_loss_ratio: f64,            // b = avg_win / avg_loss, ∞-handling emits 0.0
+    pub kelly_fraction: f64,            // f* = (b·p − q) / b; can be negative (skip) or capped
+    pub half_kelly: f64,                // kelly/2, conservative practitioner default
+    pub kelly_label: String,            // "SKIP" | "MARGINAL" | "MODERATE" | "AGGRESSIVE" | "ALL_IN" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// LJUNGB — Ljung-Box Q-statistic at lag 10 (portmanteau autocorrelation test).
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Complements AUTOCOR (which reports individual-lag ACFs at 1/5/10/20)
+/// with a *joint* test: `Q = n(n+2) · Σ(ρ_k²/(n−k))` for k=1..h, with
+/// `Q ~ χ²(h)` under the null. Gives a single combined-lag p-value for
+/// the "returns are white noise" hypothesis — the canonical
+/// econometrics test for model adequacy.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LjungBoxSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub lag_h: usize,                   // h, usually 10
+    pub q_statistic: f64,               // Q
+    pub p_value: f64,                   // P(χ²(h) ≥ Q)
+    pub reject_white_noise: bool,       // p < 0.05
+    pub ljungb_label: String,           // "WHITE_NOISE" | "WEAK_DEP" | "MODERATE_DEP" | "STRONG_DEP" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// RUNSTEST — Wald-Wolfowitz runs test for randomness of the sign sequence.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Given the sequence of positive/negative daily returns, counts the
+/// number of runs (blocks of consecutive same-signed returns) and
+/// compares to its null distribution (mean = 2n₁n₂/n + 1,
+/// variance = 2n₁n₂(2n₁n₂−n) / (n²(n−1))). Distinct from RUNLEN, which
+/// is descriptive (longest/mean streak); RUNSTEST is inferential (z-stat +
+/// p-value against the "sign sequence is random" null).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RunsTestSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub positive_days: usize,
+    pub negative_days: usize,
+    pub runs_observed: usize,
+    pub runs_expected: f64,
+    pub runs_std: f64,
+    pub z_statistic: f64,
+    pub p_value: f64,                   // two-sided
+    pub reject_randomness: bool,        // p < 0.05
+    pub runs_label: String,             // "RANDOM" | "SLIGHT_CLUST" | "MOD_CLUST" | "STRONG_CLUST" | "ANTI_CLUST" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// ZERORET — Lesmond-Ogden-Trzcinka zero-return-day fraction.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Fraction of bars with |log_return| < epsilon (default 1e-6, i.e.
+/// exactly unchanged close) as a canonical academic liquidity proxy:
+/// illiquid securities show more zero-return days (dealers don't update
+/// the close because nobody traded). Distinct from AMIHUD (price
+/// impact per $) and ROLLSPRD (implicit bid-ask spread) — ZERORET is
+/// the third foundational microstructure scalar.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ZeroReturnSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub zero_day_count: usize,
+    pub zero_day_pct: f64,              // 100 * zero_count / bars_used
+    pub longest_zero_streak: usize,     // longest run of consecutive zero-return bars
+    pub epsilon: f64,                   // threshold used (default 1e-6)
+    pub zero_label: String,             // "HIGHLY_LIQUID" | "LIQUID" | "MODERATE" | "ILLIQUID" | "VERY_ILLIQUID" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -15456,6 +15568,288 @@ pub fn compute_doweffect_snapshot(
     }
 }
 
+// ── ADR-137 Round 29 computes ──
+
+/// Standard normal CDF via Abramowitz & Stegun 7.1.26 rational erf approximation.
+/// Max error ~1.5e-7 — plenty for label-granularity p-values.
+fn std_normal_cdf(z: f64) -> f64 {
+    let a1 = 0.254829592_f64; let a2 = -0.284496736_f64; let a3 = 1.421413741_f64;
+    let a4 = -1.453152027_f64; let a5 = 1.061405429_f64; let p_c = 0.3275911_f64;
+    let sign = if z < 0.0 { -1.0 } else { 1.0 };
+    let x = z.abs() / (2.0_f64).sqrt();
+    let t = 1.0 / (1.0 + p_c * x);
+    let y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * (-x * x).exp();
+    0.5 * (1.0 + sign * y)
+}
+
+/// Chi-squared upper-tail P(χ²(df) ≥ q) via Wilson-Hilferty cube-root normal approximation.
+/// Accurate to ~1% for df ≥ 3 — more than sufficient for label thresholds.
+fn chi2_upper_tail(q: f64, df: usize) -> f64 {
+    if df == 0 || q <= 0.0 { return 1.0; }
+    let k = df as f64;
+    let cube = (q / k).cbrt();
+    let mean_term = 1.0 - 2.0 / (9.0 * k);
+    let var_term = (2.0 / (9.0 * k)).sqrt();
+    let z = (cube - mean_term) / var_term;
+    1.0 - std_normal_cdf(z)
+}
+
+fn drawdown_events_from_window(window: &[&HistoricalPriceRow]) -> Vec<f64> {
+    let first = window.first().map(|b| b.close).unwrap_or(0.0);
+    let mut peak = first;
+    let mut in_dd = false;
+    let mut worst_in_ep = 0.0_f64;
+    let mut events: Vec<f64> = Vec::new();
+    for b in window.iter().skip(1) {
+        let p = b.close;
+        if p >= peak {
+            if in_dd {
+                if worst_in_ep > 0.0 { events.push(worst_in_ep); }
+                in_dd = false;
+                worst_in_ep = 0.0;
+            }
+            peak = p;
+        } else {
+            in_dd = true;
+            if peak > f64::EPSILON {
+                let dd = (peak - p) / peak * 100.0;
+                if dd > worst_in_ep { worst_in_ep = dd; }
+            }
+        }
+    }
+    if in_dd && worst_in_ep > 0.0 { events.push(worst_in_ep); }
+    events
+}
+
+pub fn compute_sterling_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> SterlingRatioSnapshot {
+    let sym = symbol.to_uppercase();
+    let window: Vec<&HistoricalPriceRow> = bars.iter().rev().take(253).collect::<Vec<_>>().into_iter().rev().collect();
+    if window.len() < 30 {
+        return SterlingRatioSnapshot { symbol: sym, as_of: as_of.into(), sterling_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 bars, got {}", window.len()), ..Default::default() };
+    }
+    let first = window.first().map(|b| b.close).unwrap_or(0.0);
+    let last = window.last().map(|b| b.close).unwrap_or(0.0);
+    if first < f64::EPSILON {
+        return SterlingRatioSnapshot { symbol: sym, as_of: as_of.into(), sterling_label: "INSUFFICIENT_DATA".into(), note: "zero starting price".into(), ..Default::default() };
+    }
+    let total_ret = (last / first - 1.0) * 100.0;
+    let ann_ret = total_ret * (252.0 / window.len() as f64);
+    let mut events = drawdown_events_from_window(&window);
+    if events.is_empty() {
+        let label = if ann_ret > 0.0 { "EXCELLENT" } else { "NEUTRAL" };
+        return SterlingRatioSnapshot {
+            symbol: sym, as_of: as_of.into(), bars_used: window.len(),
+            annualized_return_pct: ann_ret,
+            worst_n: 0, dd_event_count: 0, mean_worst_dd_pct: 0.0,
+            sterling_ratio: 0.0, sterling_label: label.into(),
+            note: "no drawdown events in window".into(),
+        };
+    }
+    // Sort descending by magnitude (all positive %).
+    events.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let worst_n = 5usize.min(events.len());
+    let mean_worst: f64 = events.iter().take(worst_n).sum::<f64>() / worst_n as f64;
+    let ratio = if mean_worst < f64::EPSILON { 0.0 } else { ann_ret / mean_worst };
+    let label = if ratio < -0.5 {
+        "VERY_POOR"
+    } else if ratio < 0.0 {
+        "POOR"
+    } else if ratio < 0.5 {
+        "NEUTRAL"
+    } else if ratio < 1.5 {
+        "GOOD"
+    } else {
+        "EXCELLENT"
+    };
+    SterlingRatioSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: window.len(),
+        annualized_return_pct: ann_ret,
+        worst_n, dd_event_count: events.len(),
+        mean_worst_dd_pct: mean_worst,
+        sterling_ratio: ratio,
+        sterling_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_kellyf_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> KellyFractionSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return KellyFractionSnapshot { symbol: sym, as_of: as_of.into(), kelly_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    // Convert log returns back to simple returns in % for Kelly inputs.
+    let simple_pct: Vec<f64> = log_rets.iter().map(|r| (r.exp() - 1.0) * 100.0).collect();
+    let mut wins: Vec<f64> = Vec::new();
+    let mut losses: Vec<f64> = Vec::new();
+    for r in &simple_pct {
+        if *r > 0.0 { wins.push(*r); }
+        else if *r < 0.0 { losses.push(-*r); }
+    }
+    if wins.is_empty() || losses.is_empty() {
+        return KellyFractionSnapshot { symbol: sym, as_of: as_of.into(), kelly_label: "INSUFFICIENT_DATA".into(), note: "need both win and loss days".into(), ..Default::default() };
+    }
+    let avg_win = wins.iter().sum::<f64>() / wins.len() as f64;
+    let avg_loss = losses.iter().sum::<f64>() / losses.len() as f64;
+    let n_dir = (wins.len() + losses.len()) as f64;
+    let p = wins.len() as f64 / n_dir;
+    let q = 1.0 - p;
+    let b = if avg_loss < f64::EPSILON { 0.0 } else { avg_win / avg_loss };
+    let kelly = if b < f64::EPSILON { 0.0 } else { (b * p - q) / b };
+    let half = kelly / 2.0;
+    let label = if kelly <= 0.0 {
+        "SKIP"
+    } else if kelly < 0.10 {
+        "MARGINAL"
+    } else if kelly < 0.25 {
+        "MODERATE"
+    } else if kelly < 0.50 {
+        "AGGRESSIVE"
+    } else {
+        "ALL_IN"
+    };
+    KellyFractionSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: log_rets.len(),
+        win_rate: p, loss_rate: q,
+        avg_win_pct: avg_win, avg_loss_pct: avg_loss,
+        win_loss_ratio: b,
+        kelly_fraction: kelly, half_kelly: half,
+        kelly_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_ljungb_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> LjungBoxSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let h = 10usize;
+    if log_rets.len() < 30 + h {
+        return LjungBoxSnapshot { symbol: sym, as_of: as_of.into(), lag_h: h, ljungb_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥{} returns, got {}", 30 + h, log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let nf = n as f64;
+    let mean = log_rets.iter().sum::<f64>() / nf;
+    let centered: Vec<f64> = log_rets.iter().map(|r| r - mean).collect();
+    let var = centered.iter().map(|d| d * d).sum::<f64>() / nf;
+    if var < f64::EPSILON {
+        return LjungBoxSnapshot { symbol: sym, as_of: as_of.into(), lag_h: h, ljungb_label: "INSUFFICIENT_DATA".into(), note: "zero variance".into(), ..Default::default() };
+    }
+    let mut q_stat = 0.0_f64;
+    for k in 1..=h {
+        let mut num = 0.0_f64;
+        for i in k..n { num += centered[i] * centered[i - k]; }
+        let rho_k = num / (nf * var);
+        let denom = nf - k as f64;
+        if denom > 0.0 {
+            q_stat += rho_k * rho_k / denom;
+        }
+    }
+    q_stat *= nf * (nf + 2.0);
+    let p_value = chi2_upper_tail(q_stat, h);
+    let reject = p_value < 0.05;
+    let label = if p_value >= 0.10 { "WHITE_NOISE" }
+        else if p_value >= 0.05 { "WEAK_DEP" }
+        else if p_value >= 0.01 { "MODERATE_DEP" }
+        else { "STRONG_DEP" };
+    LjungBoxSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, lag_h: h,
+        q_statistic: q_stat, p_value, reject_white_noise: reject,
+        ljungb_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_runstest_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> RunsTestSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return RunsTestSnapshot { symbol: sym, as_of: as_of.into(), runs_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let signs: Vec<i8> = log_rets.iter().filter_map(|r| {
+        if *r > 0.0 { Some(1) } else if *r < 0.0 { Some(-1) } else { None }
+    }).collect();
+    let n = signs.len();
+    if n < 20 {
+        return RunsTestSnapshot { symbol: sym, as_of: as_of.into(), runs_label: "INSUFFICIENT_DATA".into(), note: format!("fewer than 20 signed returns: {n}"), ..Default::default() };
+    }
+    let n1 = signs.iter().filter(|s| **s > 0).count();
+    let n2 = n - n1;
+    if n1 == 0 || n2 == 0 {
+        return RunsTestSnapshot { symbol: sym, as_of: as_of.into(), runs_label: "INSUFFICIENT_DATA".into(), note: "need both positive and negative signs".into(), ..Default::default() };
+    }
+    let mut runs = 1usize;
+    for i in 1..n { if signs[i] != signs[i - 1] { runs += 1; } }
+    let nf = n as f64;
+    let n1f = n1 as f64;
+    let n2f = n2 as f64;
+    let expected = 2.0 * n1f * n2f / nf + 1.0;
+    let variance = 2.0 * n1f * n2f * (2.0 * n1f * n2f - nf) / (nf * nf * (nf - 1.0));
+    let std = variance.max(0.0).sqrt();
+    let z = if std < f64::EPSILON { 0.0 } else { (runs as f64 - expected) / std };
+    // Two-sided p-value
+    let p_value = 2.0 * (1.0 - std_normal_cdf(z.abs()));
+    let reject = p_value < 0.05;
+    let label = if !reject {
+        "RANDOM"
+    } else if z > 0.0 {
+        "ANTI_CLUST"
+    } else if p_value >= 0.01 {
+        "SLIGHT_CLUST"
+    } else if p_value >= 0.001 {
+        "MOD_CLUST"
+    } else {
+        "STRONG_CLUST"
+    };
+    RunsTestSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        positive_days: n1, negative_days: n2,
+        runs_observed: runs, runs_expected: expected, runs_std: std,
+        z_statistic: z, p_value, reject_randomness: reject,
+        runs_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_zeroret_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ZeroReturnSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return ZeroReturnSnapshot { symbol: sym, as_of: as_of.into(), zero_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let epsilon = 1e-6_f64;
+    let n = log_rets.len();
+    let mut zero_count = 0usize;
+    let mut longest = 0usize;
+    let mut current = 0usize;
+    for r in &log_rets {
+        if r.abs() < epsilon {
+            zero_count += 1;
+            current += 1;
+            if current > longest { longest = current; }
+        } else {
+            current = 0;
+        }
+    }
+    let pct = zero_count as f64 / n as f64 * 100.0;
+    let label = if pct < 1.0 { "HIGHLY_LIQUID" }
+        else if pct < 5.0 { "LIQUID" }
+        else if pct < 15.0 { "MODERATE" }
+        else if pct < 30.0 { "ILLIQUID" }
+        else { "VERY_ILLIQUID" };
+    ZeroReturnSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        zero_day_count: zero_count, zero_day_pct: pct,
+        longest_zero_streak: longest, epsilon,
+        zero_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -19746,6 +20140,159 @@ pub fn get_doweffect(conn: &Connection, symbol: &str) -> Result<Option<DayOfWeek
         .map_err(|e| format!("prepare get_doweffect: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_doweffect: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_doweffect: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-137 Round 29: STERLING / KELLYF / LJUNGB / RUNSTEST / ZERORET ──
+
+pub fn create_research_tables_v30(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v29(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_sterling (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_sterling_updated ON research_sterling(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_kellyf (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_kellyf_updated ON research_kellyf(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_ljungb (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ljungb_updated ON research_ljungb(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_runstest (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_runstest_updated ON research_runstest(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_zeroret (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_zeroret_updated ON research_zeroret(updated_at);",
+    ).map_err(|e| format!("create v30 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_sterling(conn: &Connection, symbol: &str, snap: &SterlingRatioSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v30(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("sterling json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_sterling(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert sterling: {e}"))?;
+    Ok(())
+}
+
+pub fn get_sterling(conn: &Connection, symbol: &str) -> Result<Option<SterlingRatioSnapshot>, String> {
+    let _ = create_research_tables_v30(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_sterling WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_sterling: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_sterling: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_sterling: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_kellyf(conn: &Connection, symbol: &str, snap: &KellyFractionSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v30(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("kellyf json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_kellyf(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert kellyf: {e}"))?;
+    Ok(())
+}
+
+pub fn get_kellyf(conn: &Connection, symbol: &str) -> Result<Option<KellyFractionSnapshot>, String> {
+    let _ = create_research_tables_v30(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_kellyf WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_kellyf: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_kellyf: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_kellyf: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ljungb(conn: &Connection, symbol: &str, snap: &LjungBoxSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v30(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ljungb json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ljungb(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ljungb: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ljungb(conn: &Connection, symbol: &str) -> Result<Option<LjungBoxSnapshot>, String> {
+    let _ = create_research_tables_v30(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ljungb WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_ljungb: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_ljungb: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_ljungb: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_runstest(conn: &Connection, symbol: &str, snap: &RunsTestSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v30(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("runstest json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_runstest(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert runstest: {e}"))?;
+    Ok(())
+}
+
+pub fn get_runstest(conn: &Connection, symbol: &str) -> Result<Option<RunsTestSnapshot>, String> {
+    let _ = create_research_tables_v30(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_runstest WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_runstest: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_runstest: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_runstest: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_zeroret(conn: &Connection, symbol: &str, snap: &ZeroReturnSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v30(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("zeroret json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_zeroret(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert zeroret: {e}"))?;
+    Ok(())
+}
+
+pub fn get_zeroret(conn: &Connection, symbol: &str) -> Result<Option<ZeroReturnSnapshot>, String> {
+    let _ = create_research_tables_v30(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_zeroret WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_zeroret: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_zeroret: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_zeroret: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -26534,5 +27081,215 @@ Trailing text.
         assert_eq!(snap.worst_dow_idx, 0);
         assert!(snap.best_dow_hit_pct > snap.worst_dow_hit_pct);
         assert!(snap.dow_sample_count.iter().all(|c| *c >= 10));
+    }
+
+    // ── ADR-137 Round 29 tests ──
+
+    fn synthetic_oscillating_bars_150() -> Vec<HistoricalPriceRow> {
+        // 150 bars alternating up/down ~0.5% so we have both positive and
+        // negative log returns (required for KELLYF and RUNSTEST), plus
+        // non-trivial variance for LJUNGB.
+        let mut out = Vec::with_capacity(150);
+        let mut price: f64 = 100.0;
+        for i in 0..150 {
+            let next = if i % 2 == 0 { price * 1.005 } else { price * 0.995 };
+            let month = 1 + (i / 25) as u32;
+            let day = 1 + (i % 25) as u32;
+            out.push(HistoricalPriceRow {
+                date: format!("2024-{:02}-{:02}", month, day),
+                open: price, high: next.max(price) + 0.1,
+                low: next.min(price) - 0.1, close: next, adj_close: next,
+                volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+            });
+            price = next;
+        }
+        out
+    }
+
+    fn synthetic_drops_bars_150() -> Vec<HistoricalPriceRow> {
+        // 150 bars with mostly small gains + periodic 5% drops so Sterling
+        // sees real drawdown events.
+        let mut out = Vec::with_capacity(150);
+        let mut price: f64 = 100.0;
+        for i in 0..150 {
+            let next = if i % 10 == 9 { price * 0.95 } else { price * 1.001 };
+            let month = 1 + (i / 25) as u32;
+            let day = 1 + (i % 25) as u32;
+            out.push(HistoricalPriceRow {
+                date: format!("2024-{:02}-{:02}", month, day),
+                open: price, high: next.max(price) + 0.1,
+                low: next.min(price) - 0.1, close: next, adj_close: next,
+                volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+            });
+            price = next;
+        }
+        out
+    }
+
+    #[test]
+    fn sterling_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = SterlingRatioSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 253,
+            annualized_return_pct: 12.0, worst_n: 5, dd_event_count: 9,
+            mean_worst_dd_pct: 8.0, sterling_ratio: 1.5,
+            sterling_label: "EXCELLENT".into(), note: String::new(),
+        };
+        upsert_sterling(&c, "TEST", &snap).unwrap();
+        let back = get_sterling(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.sterling_label, "EXCELLENT");
+        assert!((back.sterling_ratio - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sterling_compute_insufficient() {
+        let snap = compute_sterling_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.sterling_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn sterling_compute_with_drawdowns() {
+        let bars = synthetic_drops_bars_150();
+        let snap = compute_sterling_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.sterling_label, "INSUFFICIENT_DATA");
+        assert!(snap.dd_event_count >= 1);
+        assert!(snap.mean_worst_dd_pct > 0.0);
+        assert!(snap.worst_n <= 5);
+    }
+
+    #[test]
+    fn kellyf_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = KellyFractionSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 200,
+            win_rate: 0.55, loss_rate: 0.45,
+            avg_win_pct: 1.2, avg_loss_pct: 0.9, win_loss_ratio: 1.333,
+            kelly_fraction: 0.213, half_kelly: 0.1065,
+            kelly_label: "MODERATE".into(), note: String::new(),
+        };
+        upsert_kellyf(&c, "TEST", &snap).unwrap();
+        let back = get_kellyf(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.kelly_label, "MODERATE");
+        assert!((back.kelly_fraction - 0.213).abs() < 1e-9);
+    }
+
+    #[test]
+    fn kellyf_compute_insufficient() {
+        let snap = compute_kellyf_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.kelly_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn kellyf_compute_mixed() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_kellyf_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.kelly_label, "INSUFFICIENT_DATA");
+        assert!(snap.win_rate > 0.0);
+        assert!(snap.loss_rate > 0.0);
+        assert!(snap.avg_win_pct > 0.0);
+        assert!(snap.avg_loss_pct > 0.0);
+    }
+
+    #[test]
+    fn ljungb_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = LjungBoxSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 252,
+            lag_h: 10, q_statistic: 22.5, p_value: 0.013,
+            reject_white_noise: true,
+            ljungb_label: "MODERATE_DEP".into(), note: String::new(),
+        };
+        upsert_ljungb(&c, "TEST", &snap).unwrap();
+        let back = get_ljungb(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.ljungb_label, "MODERATE_DEP");
+        assert_eq!(back.lag_h, 10);
+    }
+
+    #[test]
+    fn ljungb_compute_insufficient() {
+        let snap = compute_ljungb_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.ljungb_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn ljungb_compute_oscillating() {
+        // Perfect +0.5%/-0.5% alternation should exhibit strong negative
+        // lag-1 autocorrelation → reject white noise at h=10.
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ljungb_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.ljungb_label, "INSUFFICIENT_DATA");
+        assert!(snap.q_statistic > 0.0);
+        assert_eq!(snap.lag_h, 10);
+        assert!((0.0..=1.0).contains(&snap.p_value));
+    }
+
+    #[test]
+    fn runstest_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = RunsTestSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 200,
+            positive_days: 110, negative_days: 90, runs_observed: 95,
+            runs_expected: 100.0, runs_std: 7.0,
+            z_statistic: -0.71, p_value: 0.48,
+            reject_randomness: false,
+            runs_label: "RANDOM".into(), note: String::new(),
+        };
+        upsert_runstest(&c, "TEST", &snap).unwrap();
+        let back = get_runstest(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.runs_label, "RANDOM");
+        assert_eq!(back.positive_days, 110);
+    }
+
+    #[test]
+    fn runstest_compute_insufficient() {
+        let snap = compute_runstest_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.runs_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn runstest_compute_oscillating() {
+        // Alternating +/- returns produce maximal runs → large positive
+        // z-statistic → ANTI_CLUST (anti-clustering) label.
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_runstest_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.runs_label, "INSUFFICIENT_DATA");
+        assert!(snap.positive_days > 0);
+        assert!(snap.negative_days > 0);
+        assert!(snap.runs_observed >= 2);
+        assert!(snap.runs_std >= 0.0);
+    }
+
+    #[test]
+    fn zeroret_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = ZeroReturnSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 250,
+            zero_day_count: 3, zero_day_pct: 1.2, longest_zero_streak: 2,
+            epsilon: 1e-6,
+            zero_label: "LIQUID".into(), note: String::new(),
+        };
+        upsert_zeroret(&c, "TEST", &snap).unwrap();
+        let back = get_zeroret(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.zero_label, "LIQUID");
+        assert!((back.epsilon - 1e-6).abs() < 1e-15);
+    }
+
+    #[test]
+    fn zeroret_compute_insufficient() {
+        let snap = compute_zeroret_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.zero_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn zeroret_compute_liquid_series() {
+        // synthetic_ohlc_bars_150 has monotonically increasing close so
+        // every log return is ≫ 1e-6 — expect HIGHLY_LIQUID.
+        let bars = synthetic_ohlc_bars_150();
+        let snap = compute_zeroret_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.zero_label, "INSUFFICIENT_DATA");
+        assert_eq!(snap.zero_day_count, 0);
+        assert_eq!(snap.longest_zero_streak, 0);
+        assert_eq!(snap.zero_label, "HIGHLY_LIQUID");
+        assert!((snap.epsilon - 1e-6).abs() < 1e-15);
     }
 }
