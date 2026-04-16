@@ -306,6 +306,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_painratio",
     "research_cusum",
     "research_cfvar",
+    // ── ADR-140 Round 32 ────────────────────────────
+    "research_entropy",
+    "research_rachev",
+    "research_gpr",
+    "research_pacf",
+    "research_apen",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -1505,6 +1511,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-140 Round 32 ──
+        "research_entropy" => Some(
+            "CREATE TABLE IF NOT EXISTS research_entropy (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_rachev" => Some(
+            "CREATE TABLE IF NOT EXISTS research_rachev (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_gpr" => Some(
+            "CREATE TABLE IF NOT EXISTS research_gpr (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_pacf" => Some(
+            "CREATE TABLE IF NOT EXISTS research_pacf (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_apen" => Some(
+            "CREATE TABLE IF NOT EXISTS research_apen (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -1675,6 +1717,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_painratio" => Some("updated_at"),
         "research_cusum" => Some("updated_at"),
         "research_cfvar" => Some("updated_at"),
+        // ── ADR-140 Round 32 ──
+        "research_entropy" => Some("updated_at"),
+        "research_rachev" => Some("updated_at"),
+        "research_gpr" => Some("updated_at"),
+        "research_pacf" => Some("updated_at"),
+        "research_apen" => Some("updated_at"),
         _ => None,
     }
 }

@@ -2037,7 +2037,76 @@ excess_kurtosis, gauss_var_5pct_pct, cf_var_5pct_pct,
 gauss_var_1pct_pct, cf_var_1pct_pct, cf_adjustment_5pct_pct,
 skew_term_5pct, and kurt_term_5pct. Source: ADR-139 CFVAR window.
 
-#### 2.147 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.147 Shannon Return Entropy (ENTROPY — ADR-140)
+
+Pulled from `research::get_entropy`. Computes Shannon entropy
+H = −Σ pᵢ log₂(pᵢ) over a histogram of daily log-returns with
+bins = ceil(√n). Normalised entropy H/H_max ∈ [0,1] enables
+cross-symbol comparison. Low entropy ⇒ concentrated / predictable
+returns; high entropy ⇒ dispersed / unpredictable. First
+information-theoretic distributional measure in the packet —
+orthogonal to moment-based (KURT, SKEW) and test-based (JBNORM)
+diagnostics. Header gives **entropy_label** (LOW_ENTROPY normalised
+< 0.50 / MODERATE_ENTROPY < 0.70 / HIGH_ENTROPY < 0.85 /
+VERY_HIGH_ENTROPY ≥ 0.85 / INSUFFICIENT_DATA). Body reports
+bars_used, num_bins, entropy_bits, max_entropy_bits, and
+normalised_entropy. Source: ADR-140 ENTROPY window.
+
+#### 2.148 Rachev Ratio (RACHEV — ADR-140)
+
+Pulled from `research::get_rachev`. Computes the Rachev ratio =
+ES_α(+R) / ES_α(−R) — ratio of right-tail expected gain to
+left-tail expected loss at matching confidence levels (5% and 1%).
+Rachev > 1 ⇒ upside tail outweighs downside tail. Complements
+TAILR (quantile ratio), CVAR (left-tail ES only), and CFVAR
+(parametric moment-adjusted). Header gives **rachev_label**
+(STRONG_LEFT_TAIL R₅% < 0.5 / LEFT_HEAVY < 0.8 / SYMMETRIC
+0.8–1.2 / RIGHT_HEAVY > 1.2 / STRONG_RIGHT_TAIL > 2.0 /
+INSUFFICIENT_DATA). Body reports bars_used, es_right_5pct,
+es_left_5pct, rachev_5pct, es_right_1pct, es_left_1pct, and
+rachev_1pct. Source: ADR-140 RACHEV window.
+
+#### 2.149 Gain-to-Pain Ratio (GPR — ADR-140)
+
+Pulled from `research::get_gpr`. Computes GPR = Σ rₜ / Σ |min(rₜ,0)|
+(Schwager) — net return per unit of total realized loss. Also reports
+Profit Factor = Σ max(rₜ,0) / Σ |min(rₜ,0)| = GPR + 1 (gross gain
+per gross loss). Distinct axis from Pain Ratio (drawdown-based) and
+Omega (threshold integration). Header gives **gpr_label** (DEEP_PAIN
+GPR < −0.5 / NEGATIVE < 0 / MODEST < 0.5 / GOOD < 1.5 / EXCELLENT
+≥ 1.5 / INSUFFICIENT_DATA). Body reports bars_used,
+sum_all_returns_pct, sum_gains_pct, sum_losses_pct, gain_to_pain,
+profit_factor, win_count, and loss_count. Source: ADR-140 GPR window.
+
+#### 2.150 Partial Autocorrelation (PACF — ADR-140)
+
+Pulled from `research::get_pacf`. Computes partial autocorrelation at
+lags 1–5 via the Durbin-Levinson recursion on the sample ACF. Reports
+individual PACF values plus Bartlett 95% critical band ±1.96/√n.
+Decomposes the joint autocorrelation tested by LJUNGB into lag-specific
+contributions — tells an agent whether lag-1 mean reversion, lag-2
+momentum, or longer-lag calendar effects are present. Header gives
+**pacf_label** (NO_STRUCTURE none significant / LAG1_DOMINANT only
+lag 1 / LAG_STRUCTURE multiple / STRONG_STRUCTURE max |PACF| > 2×
+critical / INSUFFICIENT_DATA). Body reports bars_used, pacf_lag1..5,
+bartlett_crit_95, significant_lags, max_abs_pacf, and max_abs_lag.
+Source: ADR-140 PACF window.
+
+#### 2.151 Approximate Entropy (APEN — ADR-140)
+
+Pulled from `research::get_apen`. Computes approximate entropy
+(Pincus 1991) with m=2, r=0.2·σ — measures regularity /
+predictability of the return time series. Low ApEn ⇒ regular,
+self-similar patterns (returns repeat); high ApEn ⇒ irregular,
+complex dynamics. Captures nonlinear short-range structure invisible
+to HURST (long-range), DFA (trend), LJUNGB (linear), and RUNSTEST
+(sign-only). ApEn is clamped to max(0, φ^m − φ^{m+1}) to handle
+self-match edge effects. Header gives **apen_label** (REGULAR ApEn
+< 0.3 / MODERATE < 0.7 / COMPLEX < 1.2 / HIGHLY_COMPLEX ≥ 1.2 /
+INSUFFICIENT_DATA). Body reports bars_used, embed_dim, tolerance,
+phi_m, phi_m1, and apen. Source: ADR-140 APEN window.
+
+#### 2.152 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -2053,7 +2122,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.148 Sector peer comparison
+#### 2.153 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -2084,7 +2153,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.147 above.
+articles to the per-symbol bag consumed by sub-block 2.152 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -2269,39 +2338,42 @@ Question section, not per-symbol.
 | Pain ratio fields (ADR-139 PAINRATIO) | 2 k/v rows | Bars used + pain index (mean\|dd\|) + annualized return + pain ratio + max dd + pain label |
 | CUSUM break fields (ADR-139 CUSUM) | 2 k/v rows | Returns used + max\|S_t\| + D=max\|S_t\|/√n + bar at max + direction + crit 10/5/1% + reject stability + cusum label |
 | Cornish-Fisher VaR fields (ADR-139 CFVAR) | 2 k/v rows | Returns used + mean/σ returns + skew γ₃ + excess kurt γ₄ + Gauss/CF VaR 5%+1% + adj 5% + skew/kurt term contributions + cfvar label |
+| Shannon entropy fields (ADR-140 ENTROPY) | 2 k/v rows | Returns used + bins + H bits + H_max bits + normalised H/H_max + entropy label |
+| Rachev ratio fields (ADR-140 RACHEV) | 2 k/v rows | Returns used + ES right/left 5% + Rachev 5% + ES right/left 1% + Rachev 1% + rachev label |
+| Gain-to-Pain fields (ADR-140 GPR) | 2 k/v rows | Returns used + Σ all/gains/\|losses\| % + GPR + profit factor + wins/losses + gpr label |
+| PACF fields (ADR-140 PACF) | 2 k/v rows | Returns used + PACF lags 1-5 + Bartlett 95% crit + sig lags + max \|PACF\| + max lag + pacf label |
+| Approximate entropy fields (ADR-140 APEN) | 2 k/v rows | Returns used + m + r + Φ^m + Φ^(m+1) + ApEn + apen label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **58-114 KB**
-(up from 56-110 KB after ADR-138; ADR-139 adds five optional per-symbol
-blocks — HILLTAIL / ARCHLM / PAINRATIO / CUSUM / CFVAR — each measuring
-~2 k/v rows and adding ~300-700 bytes when populated, for a
-typical +2 KB per symbol and +3 KB worst case; all five reuse the
+symbols. A single S&P 500 symbol now produces a packet around **59-116 KB**
+(up from 58-114 KB after ADR-139; ADR-140 adds five optional per-symbol
+blocks — ENTROPY / RACHEV / GPR / PACF / APEN — each measuring
+~2 k/v rows and adding ~200-600 bytes when populated, for a
+typical +1 KB per symbol and +2 KB worst case; all five reuse the
 existing `research_historical_price` HP cache and the standard
 research-table LAN sync path with zero new API dependencies;
-HILLTAIL reports the Hill (1975) tail-index estimator α on |r|
-plus separate left/right-tail α — first nonparametric tail-index
-surface in the packet, well-defined even when fourth-moment-based
-diagnostics (KURT/JBNORM) become meaningless under infinite-variance
-heavy tails; ARCHLM is the Engle (1982) ARCH Lagrange-multiplier
-test at q=5 — first formal conditional-heteroskedasticity test,
-distinguishing volatility clustering (reject) from iid magnitude
-(accept); PAINRATIO reports the Zephyr/FIBA Pain Index (mean|dd|)
-and Pain Ratio (ann_return/pain_index) — completes the drawdown
-magnitude-norm sextet {sup/CALMAR, L²/BURKE, worst-N/STERLING,
-RMS/ULCER, duration/DDDUR, L¹/PAINRATIO}; CUSUM is the
-Brown-Durbin-Evans (1975) OLS CUSUM structural-break test with
-Kolmogorov-Smirnov critical values {10%=1.22, 5%=1.36, 1%=1.63} —
-first formal mean-stability test in the packet; CFVAR is the
-Cornish-Fisher (1938) modified VaR adjusting the Gauss quantile for
-γ₃ and γ₄ — first higher-moment-adjusted parametric VaR, with
-skew-term vs kurt-term attribution so an agent sees which moment
-drives any departure from Gauss); a 10-symbol basket now lands near
-**570-1140 KB** when every symbol has a fully populated ingest bag
-(the global context and the Return Path footer are each emitted
-exactly once, so multi-symbol overhead is still bounded by the
-per-symbol blocks).
+ENTROPY computes Shannon entropy H = −Σ pᵢ log₂(pᵢ) over a
+histogram of daily log-returns — first information-theoretic
+distributional measure, orthogonal to moment-based (KURT/SKEW)
+and test-based (JBNORM) diagnostics; RACHEV computes the Rachev
+ratio = ES_α(+R)/ES_α(−R) at 5% and 1% — first asymmetric tail
+comparison, answering whether the upside tail compensates the
+downside tail; GPR computes the Gain-to-Pain Ratio (Schwager) =
+Σ rₜ / Σ |min(rₜ,0)| plus Profit Factor — first return-per-
+realized-loss metric, distinct from drawdown-based Pain Ratio and
+threshold-based Omega; PACF computes partial autocorrelation at
+lags 1–5 via Durbin-Levinson with Bartlett 95% band — first
+lag-specific dependence structure, decomposing the joint
+autocorrelation tested by LJUNGB; APEN computes approximate
+entropy (Pincus 1991, m=2, r=0.2·σ) — first nonlinear
+predictability measure, capturing short-range pattern regularity
+invisible to HURST/DFA/LJUNGB/RUNSTEST); a 10-symbol basket now
+lands near **580-1160 KB** when every symbol has a fully populated
+ingest bag (the global context and the Return Path footer are each
+emitted exactly once, so multi-symbol overhead is still bounded by
+the per-symbol blocks).
 
 ---
 
@@ -2586,6 +2658,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_painratio` | SQLite `research_painratio` | ADR-139 PAINRATIO window (Zephyr/FIBA Pain Index = mean\|dd\|, Pain Ratio = ann_return/pain_index — L¹ drawdown norm completing the magnitude-norm sextet with CALMAR/BURKE/STERLING/ULCER/DDDUR) |
 | `research::get_cusum` | SQLite `research_cusum` | ADR-139 CUSUM window (Brown-Durbin-Evans 1975 OLS CUSUM structural-break test — first formal mean-stability test in the packet with KS critical values {10%=1.22, 5%=1.36, 1%=1.63}) |
 | `research::get_cfvar` | SQLite `research_cfvar` | ADR-139 CFVAR window (Cornish-Fisher 1938 modified VaR — Gauss quantile adjusted for skew γ₃ and excess kurt γ₄ with skew-term vs kurt-term attribution) |
+| `research::get_entropy` | SQLite `research_entropy` | ADR-140 ENTROPY window (Shannon entropy H = −Σ pᵢ log₂(pᵢ) over return histogram — first information-theoretic distributional measure with normalised H/H_max ∈ [0,1]) |
+| `research::get_rachev` | SQLite `research_rachev` | ADR-140 RACHEV window (Rachev ratio = ES_α(+R)/ES_α(−R) at 5% and 1% — first asymmetric tail comparison ratio; Rachev > 1 ⇒ upside tail outweighs downside) |
+| `research::get_gpr` | SQLite `research_gpr` | ADR-140 GPR window (Gain-to-Pain Ratio = Σ rₜ / Σ \|min(rₜ,0)\| + Profit Factor — Schwager's return-per-realized-loss metric, distinct from drawdown-based Pain Ratio) |
+| `research::get_pacf` | SQLite `research_pacf` | ADR-140 PACF window (partial autocorrelation at lags 1–5 via Durbin-Levinson with Bartlett 95% band — first lag-specific dependence decomposition of LJUNGB joint autocorrelation) |
+| `research::get_apen` | SQLite `research_apen` | ADR-140 APEN window (Pincus 1991 approximate entropy, m=2, r=0.2·σ — first nonlinear predictability measure capturing short-range pattern regularity) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -2623,5 +2700,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)

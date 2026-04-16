@@ -10201,6 +10201,17 @@ enum BrokerCmd {
     ComputeCusumSnapshot { symbol: String },
     /// CFVAR — Cornish-Fisher modified Value-at-Risk.
     ComputeCfvarSnapshot { symbol: String },
+    // ── ADR-140 Round 32 ──
+    /// ENTROPY — Shannon entropy of return distribution.
+    ComputeEntropySnapshot { symbol: String },
+    /// RACHEV — Rachev ratio (conditional tail expectation ratio).
+    ComputeRachevSnapshot { symbol: String },
+    /// GPR — Gain-to-Pain Ratio (Schwager).
+    ComputeGprSnapshot { symbol: String },
+    /// PACF — Partial autocorrelation function lags 1-5.
+    ComputePacfSnapshot { symbol: String },
+    /// APEN — Approximate entropy (Pincus 1991).
+    ComputeApenSnapshot { symbol: String },
     // ── ADR-130 web article ingestion ──
     /// Parse an AI agent reply, extract any `===TYPHOON_INGEST===` fenced
     /// blocks, and merge the discovered articles into the per-symbol
@@ -10615,6 +10626,12 @@ enum BrokerMsg {
     PainratioSnapshotMsg(String, typhoon_engine::core::research::PainRatioSnapshot),
     CusumSnapshotMsg(String, typhoon_engine::core::research::CusumBreakSnapshot),
     CfvarSnapshotMsg(String, typhoon_engine::core::research::CornishFisherSnapshot),
+    // ── ADR-140 Round 32 ──
+    EntropySnapshotMsg(String, typhoon_engine::core::research::EntropySnapshot),
+    RachevSnapshotMsg(String, typhoon_engine::core::research::RachevSnapshot),
+    GprSnapshotMsg(String, typhoon_engine::core::research::GprSnapshot),
+    PacfSnapshotMsg(String, typhoon_engine::core::research::PacfSnapshot),
+    ApenSnapshotMsg(String, typhoon_engine::core::research::ApenSnapshot),
     // ── ADR-130 ──
     /// Result of an INGEST_RESEARCH operation: per-symbol counts of
     /// newly-added articles plus any parser/write errors encountered.
@@ -12240,6 +12257,28 @@ pub struct TyphooNApp {
     cfvar_symbol: String,
     cfvar_snapshot: typhoon_engine::core::research::CornishFisherSnapshot,
     cfvar_loading: bool,
+
+    // ── ADR-140 Round 32 ──
+    show_entropy: bool,
+    entropy_symbol: String,
+    entropy_snapshot: typhoon_engine::core::research::EntropySnapshot,
+    entropy_loading: bool,
+    show_rachev: bool,
+    rachev_symbol: String,
+    rachev_snapshot: typhoon_engine::core::research::RachevSnapshot,
+    rachev_loading: bool,
+    show_gpr: bool,
+    gpr_symbol: String,
+    gpr_snapshot: typhoon_engine::core::research::GprSnapshot,
+    gpr_loading: bool,
+    show_pacf: bool,
+    pacf_symbol: String,
+    pacf_snapshot: typhoon_engine::core::research::PacfSnapshot,
+    pacf_loading: bool,
+    show_apen: bool,
+    apen_symbol: String,
+    apen_snapshot: typhoon_engine::core::research::ApenSnapshot,
+    apen_loading: bool,
 
     // ── ADR-130 Web article ingestion + packet viewer ──
     /// INGEST_RESEARCH — paste-in window where the user drops an AI
@@ -16376,6 +16415,82 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::CfvarSnapshotMsg(symbol, snap));
                         });
                     }
+                    // ── ADR-140 Round 32 handlers ──
+                    BrokerCmd::ComputeEntropySnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_entropy_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::EntropySnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeRachevSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_rachev_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::RachevSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeGprSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_gpr_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::GprSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputePacfSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_pacf_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::PacfSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeApenSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_apen_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::ApenSnapshotMsg(symbol, snap));
+                        });
+                    }
                     // ── ADR-130 web article ingestion handler ──
                     BrokerCmd::IngestResearchArticles { text, agent_override } => {
                         use typhoon_engine::core::research;
@@ -19217,6 +19332,27 @@ When the question touches recent news, sentiment, or prices, combine the researc
             cfvar_symbol: String::new(),
             cfvar_snapshot: typhoon_engine::core::research::CornishFisherSnapshot::default(),
             cfvar_loading: false,
+            // ── ADR-140 Round 32 defaults ──
+            show_entropy: false,
+            entropy_symbol: String::new(),
+            entropy_snapshot: typhoon_engine::core::research::EntropySnapshot::default(),
+            entropy_loading: false,
+            show_rachev: false,
+            rachev_symbol: String::new(),
+            rachev_snapshot: typhoon_engine::core::research::RachevSnapshot::default(),
+            rachev_loading: false,
+            show_gpr: false,
+            gpr_symbol: String::new(),
+            gpr_snapshot: typhoon_engine::core::research::GprSnapshot::default(),
+            gpr_loading: false,
+            show_pacf: false,
+            pacf_symbol: String::new(),
+            pacf_snapshot: typhoon_engine::core::research::PacfSnapshot::default(),
+            pacf_loading: false,
+            show_apen: false,
+            apen_symbol: String::new(),
+            apen_snapshot: typhoon_engine::core::research::ApenSnapshot::default(),
+            apen_loading: false,
             // ── ADR-130 defaults ──
             show_ingest_research: false,
             ingest_research_text: String::new(),
@@ -22906,6 +23042,63 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                     }
 
+                    // ── ADR-140 Round 32 packet blocks ──
+                    if let Ok(Some(en)) = rx::get_entropy(&conn, &sym_upper) {
+                        if en.entropy_label != "INSUFFICIENT_DATA" && !en.entropy_label.is_empty() {
+                            let _ = writeln!(p, "### Shannon Entropy of Returns — ENTROPY ({}, as of {})", en.entropy_label, en.as_of);
+                            let _ = writeln!(p, "- Returns {} · {} bins · H {:.3} bits · H_max {:.3} bits · normalised {:.3}",
+                                en.bars_used, en.num_bins, en.entropy_bits, en.max_entropy_bits, en.normalised_entropy);
+                            if !en.note.is_empty() { let _ = writeln!(p, "- Note: {}", en.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(rv)) = rx::get_rachev(&conn, &sym_upper) {
+                        if rv.rachev_label != "INSUFFICIENT_DATA" && !rv.rachev_label.is_empty() {
+                            let _ = writeln!(p, "### Rachev Ratio — RACHEV ({}, as of {})", rv.rachev_label, rv.as_of);
+                            let _ = writeln!(p, "- Returns {} · ES right 5% {:+.3}% · ES left 5% {:+.3}% · Rachev 5% {:.3}",
+                                rv.bars_used, rv.es_right_5pct, rv.es_left_5pct, rv.rachev_5pct);
+                            let _ = writeln!(p, "- ES right 1% {:+.3}% · ES left 1% {:+.3}% · Rachev 1% {:.3}",
+                                rv.es_right_1pct, rv.es_left_1pct, rv.rachev_1pct);
+                            if !rv.note.is_empty() { let _ = writeln!(p, "- Note: {}", rv.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(gp)) = rx::get_gpr(&conn, &sym_upper) {
+                        if gp.gpr_label != "INSUFFICIENT_DATA" && !gp.gpr_label.is_empty() {
+                            let _ = writeln!(p, "### Gain-to-Pain Ratio — GPR ({}, as of {})", gp.gpr_label, gp.as_of);
+                            let _ = writeln!(p, "- Returns {} · Σ all {:+.3}% · Σ gains {:.3}% · Σ |losses| {:.3}%",
+                                gp.bars_used, gp.sum_all_returns_pct, gp.sum_gains_pct, gp.sum_losses_pct);
+                            let _ = writeln!(p, "- GPR {:+.3} · Profit Factor {:.3} · wins {} · losses {}",
+                                gp.gain_to_pain, gp.profit_factor, gp.win_count, gp.loss_count);
+                            if !gp.note.is_empty() { let _ = writeln!(p, "- Note: {}", gp.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(pc)) = rx::get_pacf(&conn, &sym_upper) {
+                        if pc.pacf_label != "INSUFFICIENT_DATA" && !pc.pacf_label.is_empty() {
+                            let _ = writeln!(p, "### Partial Autocorrelation — PACF ({}, as of {})", pc.pacf_label, pc.as_of);
+                            let _ = writeln!(p, "- Returns {} · crit 95% ±{:.4} · sig lags {} · max |PACF| {:.4} at lag {}",
+                                pc.bars_used, pc.bartlett_crit_95, pc.significant_lags, pc.max_abs_pacf, pc.max_abs_lag);
+                            let _ = writeln!(p, "- PACF lag 1..5: {:.4} / {:.4} / {:.4} / {:.4} / {:.4}",
+                                pc.pacf_lag1, pc.pacf_lag2, pc.pacf_lag3, pc.pacf_lag4, pc.pacf_lag5);
+                            if !pc.note.is_empty() { let _ = writeln!(p, "- Note: {}", pc.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(ap)) = rx::get_apen(&conn, &sym_upper) {
+                        if ap.apen_label != "INSUFFICIENT_DATA" && !ap.apen_label.is_empty() {
+                            let _ = writeln!(p, "### Approximate Entropy — APEN ({}, as of {})", ap.apen_label, ap.as_of);
+                            let _ = writeln!(p, "- Returns {} · m={} · r={:.6} · Φ^m {:.4} · Φ^{{m+1}} {:.4} · ApEn {:.4}",
+                                ap.bars_used, ap.embed_dim, ap.tolerance, ap.phi_m, ap.phi_m1, ap.apen);
+                            if !ap.note.is_empty() { let _ = writeln!(p, "- Note: {}", ap.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
                     // ── ADR-130 prior-ingested web research (if any) ──
                     if let Ok(Some(ing)) = rx::get_ingested_articles(&conn, &sym_upper) {
                         if !ing.articles.is_empty() {
@@ -26104,6 +26297,87 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         if let Ok(conn) = cache.connection() {
                             if let Ok(Some(snap)) = typhoon_engine::core::research::get_cfvar(&conn, &self.cfvar_symbol) {
                                 self.cfvar_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            // ── ADR-140 Round 32 palette ──
+            "ENTROPY" | "SHANNON" | "SHANNON_ENTROPY" | "SHANNONENTROPY" | "RETURN_ENTROPY" | "RETURNENTROPY" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.entropy_symbol = sym; }
+                self.show_entropy = true;
+                if self.entropy_snapshot.symbol.is_empty() && !self.entropy_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_entropy(&conn, &self.entropy_symbol) {
+                                self.entropy_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "RACHEV" | "RACHEV_RATIO" | "RACHEVRATIO" | "ETL_RATIO" | "ETLRATIO" | "TAIL_EXPECTATION_RATIO" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.rachev_symbol = sym; }
+                self.show_rachev = true;
+                if self.rachev_snapshot.symbol.is_empty() && !self.rachev_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_rachev(&conn, &self.rachev_symbol) {
+                                self.rachev_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "GPR" | "GAIN_TO_PAIN" | "GAINTOPAIN" | "GAIN_PAIN" | "GAINPAIN" | "PROFIT_FACTOR" | "PROFITFACTOR" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.gpr_symbol = sym; }
+                self.show_gpr = true;
+                if self.gpr_snapshot.symbol.is_empty() && !self.gpr_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_gpr(&conn, &self.gpr_symbol) {
+                                self.gpr_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "PACF" | "PARTIAL_ACF" | "PARTIALACF" | "PARTIAL_AUTOCORRELATION" | "PARTIALAUTOCORRELATION" | "PACF_LAG" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.pacf_symbol = sym; }
+                self.show_pacf = true;
+                if self.pacf_snapshot.symbol.is_empty() && !self.pacf_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_pacf(&conn, &self.pacf_symbol) {
+                                self.pacf_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "APEN" | "APPROX_ENTROPY" | "APPROXENTROPY" | "APPROXIMATE_ENTROPY" | "APPROXIMATEENTROPY" | "PINCUS" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.apen_symbol = sym; }
+                self.show_apen = true;
+                if self.apen_snapshot.symbol.is_empty() && !self.apen_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_apen(&conn, &self.apen_symbol) {
+                                self.apen_snapshot = snap;
                             }
                         }
                     }
@@ -47188,6 +47462,367 @@ When the question touches recent news, sentiment, or prices, combine the researc
             self.show_cfvar = open;
         }
 
+        // ── ADR-140 Round 32 windows ──
+        if self.show_entropy {
+            if self.entropy_symbol.is_empty() { self.entropy_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_entropy;
+            egui::Window::new("ENTROPY — Shannon Return Entropy")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([520.0, 300.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.entropy_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.entropy_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.entropy_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_entropy(&conn, &sym_u) {
+                                        self.entropy_snapshot = snap;
+                                        self.entropy_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.entropy_symbol.to_uppercase();
+                            self.entropy_loading = true;
+                            self.entropy_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeEntropySnapshot { symbol: sym });
+                        }
+                        if self.entropy_loading { ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small()); }
+                    });
+                    ui.separator();
+                    let snap = &self.entropy_snapshot;
+                    if snap.symbol.is_empty() || snap.entropy_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 returns.").color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() { ui.label(egui::RichText::new(&snap.note).color(DOWN).small()); }
+                    } else {
+                        let color = match snap.entropy_label.as_str() {
+                            "LOW_ENTROPY" => UP,
+                            "VERY_HIGH_ENTROPY" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — H={:.3} bits — norm {:.3} — as of {}",
+                            snap.symbol, snap.entropy_label, snap.entropy_bits, snap.normalised_entropy, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("entropy_summary").striped(true).num_columns(2).min_col_width(180.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Returns used").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.bars_used)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Bins").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.num_bins)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Entropy H (bits)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.entropy_bits)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Max entropy (bits)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.max_entropy_bits)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Normalised H/H_max").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.normalised_entropy)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_entropy = open;
+        }
+
+        if self.show_rachev {
+            if self.rachev_symbol.is_empty() { self.rachev_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_rachev;
+            egui::Window::new("RACHEV — Conditional Tail Expectation Ratio")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([560.0, 350.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.rachev_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.rachev_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.rachev_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_rachev(&conn, &sym_u) {
+                                        self.rachev_snapshot = snap;
+                                        self.rachev_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.rachev_symbol.to_uppercase();
+                            self.rachev_loading = true;
+                            self.rachev_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeRachevSnapshot { symbol: sym });
+                        }
+                        if self.rachev_loading { ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small()); }
+                    });
+                    ui.separator();
+                    let snap = &self.rachev_snapshot;
+                    if snap.symbol.is_empty() || snap.rachev_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 returns.").color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() { ui.label(egui::RichText::new(&snap.note).color(DOWN).small()); }
+                    } else {
+                        let color = match snap.rachev_label.as_str() {
+                            "RIGHT_HEAVY" | "STRONG_RIGHT_TAIL" => UP,
+                            "STRONG_LEFT_TAIL" | "LEFT_HEAVY" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — Rachev(5%)={:.3} — as of {}",
+                            snap.symbol, snap.rachev_label, snap.rachev_5pct, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("rachev_summary").striped(true).num_columns(2).min_col_width(200.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Returns used").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.bars_used)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("ES right 5% (%)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.4}", snap.es_right_5pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("ES left 5% (%)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.4}", snap.es_left_5pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Rachev 5%").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.rachev_5pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("ES right 1% (%)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.4}", snap.es_right_1pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("ES left 1% (%)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.4}", snap.es_left_1pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Rachev 1%").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.rachev_1pct)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_rachev = open;
+        }
+
+        if self.show_gpr {
+            if self.gpr_symbol.is_empty() { self.gpr_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_gpr;
+            egui::Window::new("GPR — Gain-to-Pain Ratio")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([520.0, 350.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.gpr_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.gpr_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.gpr_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_gpr(&conn, &sym_u) {
+                                        self.gpr_snapshot = snap;
+                                        self.gpr_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.gpr_symbol.to_uppercase();
+                            self.gpr_loading = true;
+                            self.gpr_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeGprSnapshot { symbol: sym });
+                        }
+                        if self.gpr_loading { ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small()); }
+                    });
+                    ui.separator();
+                    let snap = &self.gpr_snapshot;
+                    if snap.symbol.is_empty() || snap.gpr_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 returns.").color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() { ui.label(egui::RichText::new(&snap.note).color(DOWN).small()); }
+                    } else {
+                        let color = match snap.gpr_label.as_str() {
+                            "GOOD" | "EXCELLENT" => UP,
+                            "DEEP_PAIN" | "NEGATIVE" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — GPR {:+.3} — PF {:.3} — as of {}",
+                            snap.symbol, snap.gpr_label, snap.gain_to_pain, snap.profit_factor, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("gpr_summary").striped(true).num_columns(2).min_col_width(180.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Returns used").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.bars_used)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Sum all returns (%)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.4}", snap.sum_all_returns_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Sum gains (%)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.sum_gains_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Sum |losses| (%)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.sum_losses_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Gain-to-Pain").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.4}", snap.gain_to_pain)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Profit Factor").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.profit_factor)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Wins / Losses").small().strong());
+                            ui.label(egui::RichText::new(format!("{} / {}", snap.win_count, snap.loss_count)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_gpr = open;
+        }
+
+        if self.show_pacf {
+            if self.pacf_symbol.is_empty() { self.pacf_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_pacf;
+            egui::Window::new("PACF — Partial Autocorrelation")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([560.0, 380.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.pacf_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.pacf_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.pacf_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_pacf(&conn, &sym_u) {
+                                        self.pacf_snapshot = snap;
+                                        self.pacf_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.pacf_symbol.to_uppercase();
+                            self.pacf_loading = true;
+                            self.pacf_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputePacfSnapshot { symbol: sym });
+                        }
+                        if self.pacf_loading { ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small()); }
+                    });
+                    ui.separator();
+                    let snap = &self.pacf_snapshot;
+                    if snap.symbol.is_empty() || snap.pacf_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 returns.").color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() { ui.label(egui::RichText::new(&snap.note).color(DOWN).small()); }
+                    } else {
+                        let color = match snap.pacf_label.as_str() {
+                            "NO_STRUCTURE" => UP,
+                            "STRONG_STRUCTURE" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — {} sig lags — max |PACF| {:.4} at lag {} — as of {}",
+                            snap.symbol, snap.pacf_label, snap.significant_lags, snap.max_abs_pacf, snap.max_abs_lag, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("pacf_summary").striped(true).num_columns(2).min_col_width(200.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Returns used").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.bars_used)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Bartlett 95% crit").small().strong());
+                            ui.label(egui::RichText::new(format!("±{:.4}", snap.bartlett_crit_95)).small().monospace());
+                            ui.end_row();
+                            let pacfs = [snap.pacf_lag1, snap.pacf_lag2, snap.pacf_lag3, snap.pacf_lag4, snap.pacf_lag5];
+                            for (i, &v) in pacfs.iter().enumerate() {
+                                let sig = v.abs() > snap.bartlett_crit_95;
+                                let lbl = format!("PACF lag {}", i + 1);
+                                let val_str = format!("{:+.4}{}", v, if sig { " *" } else { "" });
+                                ui.label(egui::RichText::new(lbl).small().strong());
+                                ui.label(egui::RichText::new(val_str).small().monospace().color(if sig { DOWN } else { AXIS_TEXT }));
+                                ui.end_row();
+                            }
+                        });
+                    }
+                });
+            self.show_pacf = open;
+        }
+
+        if self.show_apen {
+            if self.apen_symbol.is_empty() { self.apen_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_apen;
+            egui::Window::new("APEN — Approximate Entropy")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([520.0, 300.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.apen_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.apen_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.apen_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_apen(&conn, &sym_u) {
+                                        self.apen_snapshot = snap;
+                                        self.apen_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.apen_symbol.to_uppercase();
+                            self.apen_loading = true;
+                            self.apen_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeApenSnapshot { symbol: sym });
+                        }
+                        if self.apen_loading { ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small()); }
+                    });
+                    ui.separator();
+                    let snap = &self.apen_snapshot;
+                    if snap.symbol.is_empty() || snap.apen_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 returns.").color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() { ui.label(egui::RichText::new(&snap.note).color(DOWN).small()); }
+                    } else {
+                        let color = match snap.apen_label.as_str() {
+                            "REGULAR" => UP,
+                            "HIGHLY_COMPLEX" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — ApEn {:.4} — as of {}",
+                            snap.symbol, snap.apen_label, snap.apen, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("apen_summary").striped(true).num_columns(2).min_col_width(180.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Returns used").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.bars_used)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Embedding dim m").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.embed_dim)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Tolerance r").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.6}", snap.tolerance)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Phi^m").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.phi_m)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Phi^(m+1)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.phi_m1)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("ApEn").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.apen)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_apen = open;
+        }
+
         // ── ADR-130 INGEST_RESEARCH window ──
         if self.show_ingest_research {
             let mut open = self.show_ingest_research;
@@ -55955,6 +56590,67 @@ impl eframe::App for TyphooNApp {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let _ = typhoon_engine::core::research::upsert_cfvar(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                // ── ADR-140 Round 32 receive ──
+                BrokerMsg::EntropySnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.entropy_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.entropy_snapshot = snap.clone();
+                        self.entropy_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_entropy(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::RachevSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.rachev_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.rachev_snapshot = snap.clone();
+                        self.rachev_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_rachev(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::GprSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.gpr_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.gpr_snapshot = snap.clone();
+                        self.gpr_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_gpr(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::PacfSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.pacf_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.pacf_snapshot = snap.clone();
+                        self.pacf_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_pacf(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::ApenSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.apen_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.apen_snapshot = snap.clone();
+                        self.apen_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_apen(&conn, &sym_u, &snap);
                         }
                     }
                 }

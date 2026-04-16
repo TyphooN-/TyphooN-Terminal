@@ -3571,6 +3571,103 @@ pub struct CornishFisherSnapshot {
     pub note: String,
 }
 
+// ── ADR-140 Round 32 structs ──────────────────────────────────────────────
+
+/// ENTROPY — Shannon entropy of the return distribution.
+/// H = −Σ pᵢ log₂(pᵢ) over a histogram of daily log-returns
+/// (bins = ceil(√n)). Low H → concentrated/predictable returns;
+/// high H → dispersed/unpredictable.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct EntropySnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub num_bins: usize,
+    pub entropy_bits: f64,             // H in bits (log base 2)
+    pub max_entropy_bits: f64,         // log₂(num_bins) — uniform distribution
+    pub normalised_entropy: f64,       // H / H_max ∈ [0,1]
+    pub entropy_label: String,         // LOW_ENTROPY / MODERATE_ENTROPY / HIGH_ENTROPY / VERY_HIGH_ENTROPY / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// RACHEV — Rachev ratio = ES_α(+R) / ES_α(−R).
+/// Compares right-tail expected gain to left-tail expected loss
+/// at matching confidence levels (5% and 1%). Rachev > 1 ⇒
+/// upside tail outweighs downside tail.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct RachevSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub es_right_5pct: f64,            // mean of top 5% returns (×100 ⇒ pct)
+    pub es_left_5pct: f64,             // mean of bottom 5% returns (×100 ⇒ pct, negative)
+    pub rachev_5pct: f64,              // |es_right_5pct| / |es_left_5pct|
+    pub es_right_1pct: f64,
+    pub es_left_1pct: f64,
+    pub rachev_1pct: f64,
+    pub rachev_label: String,          // STRONG_LEFT_TAIL / LEFT_HEAVY / SYMMETRIC / RIGHT_HEAVY / STRONG_RIGHT_TAIL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// GPR — Gain-to-Pain Ratio (Schwager).
+/// GPR = Σ rₜ / Σ |min(rₜ, 0)|. Also reports Profit Factor =
+/// Σ max(rₜ,0) / Σ |min(rₜ, 0)| = GPR + 1.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct GprSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub sum_all_returns_pct: f64,      // Σ rₜ × 100
+    pub sum_losses_pct: f64,           // Σ |min(rₜ, 0)| × 100 (positive number)
+    pub sum_gains_pct: f64,            // Σ max(rₜ, 0) × 100
+    pub gain_to_pain: f64,             // GPR = sum_all / sum_losses
+    pub profit_factor: f64,            // PF = sum_gains / sum_losses = GPR + 1
+    pub win_count: usize,
+    pub loss_count: usize,
+    pub gpr_label: String,             // DEEP_PAIN / NEGATIVE / MODEST / GOOD / EXCELLENT / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// PACF — Partial autocorrelation function at lags 1-5.
+/// Uses the Durbin-Levinson recursion to compute PACF from
+/// the sample autocorrelation function. Reports individual lag
+/// values plus Bartlett 95% critical band ±1.96/√n.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct PacfSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pacf_lag1: f64,
+    pub pacf_lag2: f64,
+    pub pacf_lag3: f64,
+    pub pacf_lag4: f64,
+    pub pacf_lag5: f64,
+    pub bartlett_crit_95: f64,         // ±1.96/√n
+    pub significant_lags: usize,       // count of lags where |PACF| > crit
+    pub max_abs_pacf: f64,
+    pub max_abs_lag: usize,            // lag number of max |PACF|
+    pub pacf_label: String,            // NO_STRUCTURE / LAG1_DOMINANT / LAG_STRUCTURE / STRONG_STRUCTURE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// APEN — Approximate entropy (Pincus 1991).
+/// Measures regularity/predictability of a time series.
+/// Low ApEn → regular, self-similar patterns; high ApEn →
+/// irregular, complex dynamics. Parameters: m=2, r=0.2·σ.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ApenSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub embed_dim: usize,              // m (always 2)
+    pub tolerance: f64,                // r = 0.2 × std
+    pub phi_m: f64,                    // Φ^m(r)
+    pub phi_m1: f64,                   // Φ^{m+1}(r)
+    pub apen: f64,                     // Φ^m − Φ^{m+1}
+    pub apen_label: String,            // REGULAR / MODERATE / COMPLEX / HIGHLY_COMPLEX / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -16692,6 +16789,257 @@ pub fn compute_cfvar_snapshot(
     }
 }
 
+// ── ADR-140 Round 32 compute fns ──────────────────────────────────────────
+
+/// ENTROPY compute: Shannon entropy over a histogram of daily log-returns.
+pub fn compute_entropy_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> EntropySnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return EntropySnapshot { symbol: sym, as_of: as_of.into(), entropy_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let num_bins = (n as f64).sqrt().ceil() as usize;
+    let min_r = log_rets.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max_r = log_rets.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let range = max_r - min_r;
+    if range < f64::EPSILON {
+        return EntropySnapshot { symbol: sym, as_of: as_of.into(), entropy_label: "INSUFFICIENT_DATA".into(), note: "zero range".into(), ..Default::default() };
+    }
+    let bin_width = range / num_bins as f64;
+    let mut counts = vec![0usize; num_bins];
+    for &r in &log_rets {
+        let idx = ((r - min_r) / bin_width).floor() as usize;
+        let idx = idx.min(num_bins - 1);
+        counts[idx] += 1;
+    }
+    let nf = n as f64;
+    let mut h = 0.0_f64;
+    for &c in &counts {
+        if c > 0 {
+            let p = c as f64 / nf;
+            h -= p * p.log2();
+        }
+    }
+    let h_max = (num_bins as f64).log2();
+    let norm = if h_max > f64::EPSILON { h / h_max } else { 0.0 };
+    let label = if norm < 0.50 { "LOW_ENTROPY" }
+        else if norm < 0.70 { "MODERATE_ENTROPY" }
+        else if norm < 0.85 { "HIGH_ENTROPY" }
+        else { "VERY_HIGH_ENTROPY" };
+    EntropySnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        num_bins, entropy_bits: h, max_entropy_bits: h_max,
+        normalised_entropy: norm, entropy_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// RACHEV compute: right-tail ES / left-tail ES at 5% and 1%.
+pub fn compute_rachev_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> RachevSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return RachevSnapshot { symbol: sym, as_of: as_of.into(), rachev_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let mut sorted = log_rets.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    fn tail_es(sorted: &[f64], frac: f64, right: bool) -> f64 {
+        let k = ((sorted.len() as f64 * frac).ceil() as usize).max(1);
+        if right {
+            let start = sorted.len() - k;
+            sorted[start..].iter().sum::<f64>() / k as f64
+        } else {
+            sorted[..k].iter().sum::<f64>() / k as f64
+        }
+    }
+    let esr5 = tail_es(&sorted, 0.05, true) * 100.0;
+    let esl5 = tail_es(&sorted, 0.05, false) * 100.0;
+    let esr1 = tail_es(&sorted, 0.01, true) * 100.0;
+    let esl1 = tail_es(&sorted, 0.01, false) * 100.0;
+    let r5 = if esl5.abs() > f64::EPSILON { esr5.abs() / esl5.abs() } else { 0.0 };
+    let r1 = if esl1.abs() > f64::EPSILON { esr1.abs() / esl1.abs() } else { 0.0 };
+    let label = if r5 < 0.5 { "STRONG_LEFT_TAIL" }
+        else if r5 < 0.8 { "LEFT_HEAVY" }
+        else if r5 <= 1.2 { "SYMMETRIC" }
+        else if r5 <= 2.0 { "RIGHT_HEAVY" }
+        else { "STRONG_RIGHT_TAIL" };
+    RachevSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        es_right_5pct: esr5, es_left_5pct: esl5, rachev_5pct: r5,
+        es_right_1pct: esr1, es_left_1pct: esl1, rachev_1pct: r1,
+        rachev_label: label.into(), note: String::new(),
+    }
+}
+
+/// GPR compute: Gain-to-Pain Ratio = Σ rₜ / Σ |min(rₜ,0)|.
+pub fn compute_gpr_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> GprSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return GprSnapshot { symbol: sym, as_of: as_of.into(), gpr_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let mut sum_all = 0.0_f64;
+    let mut sum_gains = 0.0_f64;
+    let mut sum_losses = 0.0_f64;
+    let mut wins = 0usize;
+    let mut losses = 0usize;
+    for &r in &log_rets {
+        sum_all += r;
+        if r > 0.0 { sum_gains += r; wins += 1; }
+        else if r < 0.0 { sum_losses += r.abs(); losses += 1; }
+    }
+    let gpr = if sum_losses > f64::EPSILON { sum_all / sum_losses } else { 0.0 };
+    let pf = if sum_losses > f64::EPSILON { sum_gains / sum_losses } else { 0.0 };
+    let label = if gpr < -0.5 { "DEEP_PAIN" }
+        else if gpr < 0.0 { "NEGATIVE" }
+        else if gpr < 0.5 { "MODEST" }
+        else if gpr < 1.5 { "GOOD" }
+        else { "EXCELLENT" };
+    GprSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        sum_all_returns_pct: sum_all * 100.0,
+        sum_losses_pct: sum_losses * 100.0,
+        sum_gains_pct: sum_gains * 100.0,
+        gain_to_pain: gpr, profit_factor: pf,
+        win_count: wins, loss_count: losses,
+        gpr_label: label.into(), note: String::new(),
+    }
+}
+
+/// PACF compute: partial autocorrelation at lags 1-5 via Durbin-Levinson.
+pub fn compute_pacf_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PacfSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return PacfSnapshot { symbol: sym, as_of: as_of.into(), pacf_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let nf = n as f64;
+    let mean = log_rets.iter().sum::<f64>() / nf;
+    let centered: Vec<f64> = log_rets.iter().map(|r| r - mean).collect();
+    let c0: f64 = centered.iter().map(|d| d * d).sum::<f64>() / nf;
+    if c0 < f64::EPSILON {
+        return PacfSnapshot { symbol: sym, as_of: as_of.into(), pacf_label: "INSUFFICIENT_DATA".into(), note: "zero variance".into(), ..Default::default() };
+    }
+    let max_lag = 5usize;
+    let mut acf = vec![0.0_f64; max_lag + 1];
+    for k in 1..=max_lag {
+        let mut s = 0.0;
+        for t in k..n {
+            s += centered[t] * centered[t - k];
+        }
+        acf[k] = s / (nf * c0);
+    }
+    // Durbin-Levinson recursion
+    let mut pacf_vals = vec![0.0_f64; max_lag + 1];
+    let mut phi: Vec<Vec<f64>> = vec![vec![0.0; max_lag + 1]; max_lag + 1];
+    phi[1][1] = acf[1];
+    pacf_vals[1] = acf[1];
+    for k in 2..=max_lag {
+        let mut num = acf[k];
+        for j in 1..k {
+            num -= phi[k - 1][j] * acf[k - j];
+        }
+        let mut den = 1.0;
+        for j in 1..k {
+            den -= phi[k - 1][j] * acf[j];
+        }
+        if den.abs() < f64::EPSILON {
+            break;
+        }
+        phi[k][k] = num / den;
+        pacf_vals[k] = phi[k][k];
+        for j in 1..k {
+            phi[k][j] = phi[k - 1][j] - phi[k][k] * phi[k - 1][k - j];
+        }
+    }
+    let crit = 1.96 / nf.sqrt();
+    let pacfs = [pacf_vals[1], pacf_vals[2], pacf_vals[3], pacf_vals[4], pacf_vals[5]];
+    let sig_count = pacfs.iter().filter(|p| p.abs() > crit).count();
+    let (max_abs, max_lag_idx) = pacfs.iter().enumerate()
+        .max_by(|(_, a), (_, b)| a.abs().partial_cmp(&b.abs()).unwrap())
+        .map(|(i, v)| (v.abs(), i + 1))
+        .unwrap_or((0.0, 0));
+    let label = if sig_count == 0 { "NO_STRUCTURE" }
+        else if sig_count == 1 && pacfs[0].abs() > crit { "LAG1_DOMINANT" }
+        else if max_abs > 2.0 * crit { "STRONG_STRUCTURE" }
+        else { "LAG_STRUCTURE" };
+    PacfSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pacf_lag1: pacfs[0], pacf_lag2: pacfs[1], pacf_lag3: pacfs[2],
+        pacf_lag4: pacfs[3], pacf_lag5: pacfs[4],
+        bartlett_crit_95: crit, significant_lags: sig_count,
+        max_abs_pacf: max_abs, max_abs_lag: max_lag_idx,
+        pacf_label: label.into(), note: String::new(),
+    }
+}
+
+/// APEN compute: approximate entropy (Pincus 1991), m=2, r=0.2·σ.
+pub fn compute_apen_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ApenSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return ApenSnapshot { symbol: sym, as_of: as_of.into(), apen_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let nf = n as f64;
+    let mean = log_rets.iter().sum::<f64>() / nf;
+    let var = log_rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / nf;
+    if var < f64::EPSILON {
+        return ApenSnapshot { symbol: sym, as_of: as_of.into(), apen_label: "INSUFFICIENT_DATA".into(), note: "zero variance".into(), ..Default::default() };
+    }
+    let std = var.sqrt();
+    let m = 2usize;
+    let r = 0.2 * std;
+    fn phi_func(data: &[f64], m: usize, r: f64) -> f64 {
+        let n = data.len();
+        let nm = n - m + 1;
+        if nm == 0 { return 0.0; }
+        let mut sum = 0.0_f64;
+        for i in 0..nm {
+            let mut count = 0usize;
+            for j in 0..nm {
+                let mut matched = true;
+                for k in 0..m {
+                    if (data[i + k] - data[j + k]).abs() > r {
+                        matched = false;
+                        break;
+                    }
+                }
+                if matched { count += 1; }
+            }
+            sum += (count as f64 / nm as f64).ln();
+        }
+        sum / nm as f64
+    }
+    let phi_m = phi_func(&log_rets, m, r);
+    let phi_m1 = phi_func(&log_rets, m + 1, r);
+    let apen = (phi_m - phi_m1).max(0.0);
+    let label = if apen < 0.3 { "REGULAR" }
+        else if apen < 0.7 { "MODERATE" }
+        else if apen < 1.2 { "COMPLEX" }
+        else { "HIGHLY_COMPLEX" };
+    ApenSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        embed_dim: m, tolerance: r,
+        phi_m, phi_m1, apen,
+        apen_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -21441,6 +21789,159 @@ pub fn get_cfvar(conn: &Connection, symbol: &str) -> Result<Option<CornishFisher
         .map_err(|e| format!("prepare get_cfvar: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_cfvar: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_cfvar: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-140 Round 32 schema v33 + upsert/get ─────────────────────────────
+
+pub fn create_research_tables_v33(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v32(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_entropy (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_entropy_updated ON research_entropy(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_rachev (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_rachev_updated ON research_rachev(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_gpr (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_gpr_updated ON research_gpr(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_pacf (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_pacf_updated ON research_pacf(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_apen (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_apen_updated ON research_apen(updated_at);",
+    ).map_err(|e| format!("create v33 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_entropy(conn: &Connection, symbol: &str, snap: &EntropySnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v33(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("entropy json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_entropy(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert entropy: {e}"))?;
+    Ok(())
+}
+
+pub fn get_entropy(conn: &Connection, symbol: &str) -> Result<Option<EntropySnapshot>, String> {
+    let _ = create_research_tables_v33(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_entropy WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_entropy: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_entropy: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_entropy: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_rachev(conn: &Connection, symbol: &str, snap: &RachevSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v33(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("rachev json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_rachev(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert rachev: {e}"))?;
+    Ok(())
+}
+
+pub fn get_rachev(conn: &Connection, symbol: &str) -> Result<Option<RachevSnapshot>, String> {
+    let _ = create_research_tables_v33(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_rachev WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_rachev: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_rachev: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_rachev: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_gpr(conn: &Connection, symbol: &str, snap: &GprSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v33(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("gpr json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_gpr(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert gpr: {e}"))?;
+    Ok(())
+}
+
+pub fn get_gpr(conn: &Connection, symbol: &str) -> Result<Option<GprSnapshot>, String> {
+    let _ = create_research_tables_v33(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_gpr WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_gpr: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_gpr: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_gpr: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_pacf(conn: &Connection, symbol: &str, snap: &PacfSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v33(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("pacf json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_pacf(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert pacf: {e}"))?;
+    Ok(())
+}
+
+pub fn get_pacf(conn: &Connection, symbol: &str) -> Result<Option<PacfSnapshot>, String> {
+    let _ = create_research_tables_v33(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_pacf WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_pacf: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_pacf: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_pacf: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_apen(conn: &Connection, symbol: &str, snap: &ApenSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v33(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("apen json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_apen(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert apen: {e}"))?;
+    Ok(())
+}
+
+pub fn get_apen(conn: &Connection, symbol: &str) -> Result<Option<ApenSnapshot>, String> {
+    let _ = create_research_tables_v33(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_apen WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_apen: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_apen: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_apen: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -28791,5 +29292,168 @@ Trailing text.
         assert!(snap.sigma_ret_pct > 0.0);
         // Gauss 5% VaR should be non-positive (loss side)
         assert!(snap.gauss_var_5pct_pct <= snap.mean_ret_pct);
+    }
+
+    // ── ADR-140 Round 32 tests ────────────────────────────────────────────
+
+    #[test]
+    fn entropy_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = EntropySnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(),
+            bars_used: 200, num_bins: 15, entropy_bits: 3.2, max_entropy_bits: 3.9,
+            normalised_entropy: 0.82, entropy_label: "HIGH_ENTROPY".into(), note: String::new(),
+        };
+        upsert_entropy(&c, "TEST", &snap).unwrap();
+        let back = get_entropy(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.entropy_label, "HIGH_ENTROPY");
+        assert!((back.entropy_bits - 3.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn entropy_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_entropy_snapshot("T", "2026-04-16", &bars);
+        assert_eq!(snap.entropy_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn entropy_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_entropy_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.entropy_label, "INSUFFICIENT_DATA");
+        assert!(snap.entropy_bits > 0.0);
+        assert!(snap.normalised_entropy > 0.0);
+        assert!(snap.normalised_entropy <= 1.0);
+    }
+
+    #[test]
+    fn rachev_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = RachevSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(),
+            bars_used: 200, es_right_5pct: 2.1, es_left_5pct: -1.8,
+            rachev_5pct: 1.167, es_right_1pct: 3.0, es_left_1pct: -2.5,
+            rachev_1pct: 1.2, rachev_label: "SYMMETRIC".into(), note: String::new(),
+        };
+        upsert_rachev(&c, "TEST", &snap).unwrap();
+        let back = get_rachev(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.rachev_label, "SYMMETRIC");
+        assert!((back.rachev_5pct - 1.167).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rachev_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_rachev_snapshot("T", "2026-04-16", &bars);
+        assert_eq!(snap.rachev_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn rachev_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_rachev_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.rachev_label, "INSUFFICIENT_DATA");
+        assert!(snap.rachev_5pct > 0.0);
+        assert!(snap.es_right_5pct > 0.0);
+        assert!(snap.es_left_5pct < 0.0);
+    }
+
+    #[test]
+    fn gpr_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = GprSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(),
+            bars_used: 200, sum_all_returns_pct: 5.0, sum_losses_pct: 10.0,
+            sum_gains_pct: 15.0, gain_to_pain: 0.5, profit_factor: 1.5,
+            win_count: 100, loss_count: 100, gpr_label: "MODEST".into(), note: String::new(),
+        };
+        upsert_gpr(&c, "TEST", &snap).unwrap();
+        let back = get_gpr(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.gpr_label, "MODEST");
+        assert!((back.gain_to_pain - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn gpr_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_gpr_snapshot("T", "2026-04-16", &bars);
+        assert_eq!(snap.gpr_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn gpr_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_gpr_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.gpr_label, "INSUFFICIENT_DATA");
+        assert!(snap.sum_losses_pct > 0.0);
+        assert!(snap.sum_gains_pct > 0.0);
+        assert!(snap.profit_factor > 0.0);
+    }
+
+    #[test]
+    fn pacf_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = PacfSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(),
+            bars_used: 200, pacf_lag1: -0.45, pacf_lag2: 0.02, pacf_lag3: -0.01,
+            pacf_lag4: 0.03, pacf_lag5: -0.02, bartlett_crit_95: 0.138,
+            significant_lags: 1, max_abs_pacf: 0.45, max_abs_lag: 1,
+            pacf_label: "LAG1_DOMINANT".into(), note: String::new(),
+        };
+        upsert_pacf(&c, "TEST", &snap).unwrap();
+        let back = get_pacf(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.pacf_label, "LAG1_DOMINANT");
+        assert!((back.pacf_lag1 - (-0.45)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pacf_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_pacf_snapshot("T", "2026-04-16", &bars);
+        assert_eq!(snap.pacf_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn pacf_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_pacf_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.pacf_label, "INSUFFICIENT_DATA");
+        assert!(snap.bartlett_crit_95 > 0.0);
+        // Oscillating ±0.5% should have strong negative lag-1 PACF
+        assert!(snap.pacf_lag1 < 0.0);
+    }
+
+    #[test]
+    fn apen_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = ApenSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(),
+            bars_used: 200, embed_dim: 2, tolerance: 0.001,
+            phi_m: -1.5, phi_m1: -2.0, apen: 0.5,
+            apen_label: "MODERATE".into(), note: String::new(),
+        };
+        upsert_apen(&c, "TEST", &snap).unwrap();
+        let back = get_apen(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.apen_label, "MODERATE");
+        assert!((back.apen - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apen_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_apen_snapshot("T", "2026-04-16", &bars);
+        assert_eq!(snap.apen_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn apen_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_apen_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.apen_label, "INSUFFICIENT_DATA");
+        assert!(snap.apen >= 0.0);
+        assert!(snap.tolerance > 0.0);
+        // Perfectly alternating ±0.5% is very regular → low ApEn expected
+        assert_eq!(snap.apen_label, "REGULAR");
     }
 }
