@@ -264,6 +264,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_volcluster",
     "research_closeplc",
     "research_mrhl",
+    // ── ADR-133 Round 25 ────────────────────────────
+    "research_downvol",
+    "research_sharpr",
+    "research_effratio",
+    "research_wickbias",
+    "research_volofvol",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -1211,6 +1217,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-133 Round 25 ──
+        "research_downvol" => Some(
+            "CREATE TABLE IF NOT EXISTS research_downvol (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_sharpr" => Some(
+            "CREATE TABLE IF NOT EXISTS research_sharpr (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_effratio" => Some(
+            "CREATE TABLE IF NOT EXISTS research_effratio (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_wickbias" => Some(
+            "CREATE TABLE IF NOT EXISTS research_wickbias (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_volofvol" => Some(
+            "CREATE TABLE IF NOT EXISTS research_volofvol (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -1340,6 +1382,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_volcluster" => Some("updated_at"),
         "research_closeplc" => Some("updated_at"),
         "research_mrhl" => Some("updated_at"),
+        "research_downvol" => Some("updated_at"),
+        "research_sharpr" => Some("updated_at"),
+        "research_effratio" => Some("updated_at"),
+        "research_wickbias" => Some("updated_at"),
+        "research_volofvol" => Some("updated_at"),
         _ => None,
     }
 }

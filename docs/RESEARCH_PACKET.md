@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**one hundred and thirteen sub-blocks**, each of which is skipped silently when its data
+**one hundred and eighteen sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -1495,7 +1495,74 @@ shock decay?". β ≤ 0 → FAST_REVERT with half-life 0 (same-period
 mean reversion); β ≥ 1 → INSUFFICIENT_DATA (explosive regime, should
 not occur on stationary log returns). Source: ADR-132 MRHL window.
 
-#### 2.112 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.112 Downside Deviation / Sortino (DOWNVOL — ADR-133)
+
+Pulled from `research::get_downvol`. Pure symbol-local HP stat over the
+trailing 253-session window. Iterates log returns accumulating
+`down_sq = Σ min(r,0)²` and `up_sq = Σ max(r,0)²`, then reports
+`downside_dev = √(down_sq / n)`, its annualized form `× √252`, the
+symmetric upside deviation, Sortino ratio `mean / downside_dev` (both
+raw and annualized), and `downside_pct_of_total` (what share of total
+variance comes from down moves). Header gives **sortino_label**
+(VERY_POOR annualized Sortino < -1 / POOR < 0 / NEUTRAL < 1 / GOOD < 2
+/ EXCELLENT ≥ 2 / INSUFFICIENT_DATA). Complements RVCONE (total vol)
+and TAILR (tail quantiles) with a pure downside-risk view. Source:
+ADR-133 DOWNVOL window.
+
+#### 2.113 Sharpe Ratio (SHARPR — ADR-133)
+
+Pulled from `research::get_sharpr`. Pure symbol-local HP stat over the
+trailing 253-session window. Classical `Sharpe = mean_return /
+stdev_return` with rf = 0 (the HP cache doesn't carry a risk-free
+series). Reports both raw daily and annualized (×√252) Sharpe, plus
+annualized mean and stdev of returns. Header gives **sharpe_label**
+(POOR < -0.5 / BELOW_AVG < 0.5 / NEUTRAL < 1 / GOOD < 2 / EXCELLENT
+≥ 2 / INSUFFICIENT_DATA). The single canonical risk-adjusted return
+scalar that every quantitative conversation starts with. Source:
+ADR-133 SHARPR window.
+
+#### 2.114 Kaufman Efficiency Ratio (EFFRATIO — ADR-133)
+
+Pulled from `research::get_effratio`. Pure symbol-local HP stat over the
+trailing 253-session window (requires ≥30 bars). `ER = |close_N -
+close_1| / Σ |close_t - close_{t-1}|` — the share of gross price
+travel that became net directional movement. Reports start/end closes,
+net change (signed + pct), sum of absolute daily close changes, ER, and
+`signed_efficiency = ER × sign(net_change)`. Header gives
+**efficiency_label** (CHOP < 0.10 / NOISY < 0.25 / MIXED < 0.40 /
+TRENDING < 0.60 / STRONG_TREND ≥ 0.60 / INSUFFICIENT_DATA). Sharper
+single-number "trending vs chopping" signal than HURST. Source:
+ADR-133 EFFRATIO window.
+
+#### 2.115 Wick Bias (WICKBIAS — ADR-133)
+
+Pulled from `research::get_wickbias`. Pure symbol-local HP stat over the
+trailing 253-session window. For each bar with `high > low`:
+`upper_wick = (high - max(o,c)) / range`, `lower_wick = (min(o,c) -
+low) / range`, `body = 1 - upper - lower`. Reports average and median
+upper/lower wick shares, average body share, and `bias_score =
+avg_lower - avg_upper` (positive = buyers defending). Requires ≥20
+non-flat bars. Header gives **bias_label** (SELLER_REJECT < -0.05 /
+SELLER_LEAN < -0.02 / NEUTRAL ≤ 0.02 / BUYER_LEAN ≤ 0.05 /
+BUYER_DEFEND > 0.05 / INSUFFICIENT_DATA). Natural partner to CLOSEPLC
+— CLOSEPLC shows *where the bar closes* within its range; WICKBIAS
+shows *how much of the range was rejection* above vs below. Source:
+ADR-133 WICKBIAS window.
+
+#### 2.116 Vol-of-Vol (VOLOFVOL — ADR-133)
+
+Pulled from `research::get_volofvol`. Pure symbol-local HP stat over the
+trailing 253-session window. Slides a 20-bar window over log returns
+computing realized vol at each step, producing ≥30 rolling RV20 points
+(requires ≥50 returns total). Reports mean / stdev / min / max / latest
+RV20, and `CV = stdev(rv20) / mean(rv20)` (coefficient of variation).
+Header gives **cv_label** (STABLE CV < 0.15 / MILD < 0.25 / MODERATE
+< 0.40 / UNSTABLE < 0.60 / CHAOTIC ≥ 0.60 / INSUFFICIENT_DATA).
+Captures "is the vol regime stable or does vol itself bounce?" —
+complements VOLCLUSTER (which tests vol *autocorrelation*, not vol
+*variability*). Source: ADR-133 VOLOFVOL window.
+
+#### 2.117 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -1511,7 +1578,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.113 Sector peer comparison
+#### 2.118 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1542,7 +1609,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.112 above.
+articles to the per-symbol bag consumed by sub-block 2.117 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -1692,19 +1759,24 @@ Question section, not per-symbol.
 | Volatility clustering fields (ADR-132 VOLCLUSTER) | 2 k/v rows | Bars used + |r| ACF lag 1/5/20 + r² ACF lag 1/5/20 + cluster label |
 | Close placement fields (ADR-132 CLOSEPLC) | 2 k/v rows | Bars used + avg/median/latest placement + near-high/near-low % + placement label |
 | Mean-reversion half-life fields (ADR-132 MRHL) | 2 k/v rows | Bars used + AR(1) β/α + R² + half-life days + regime label |
+| Downside deviation / Sortino fields (ADR-133 DOWNVOL) | 2 k/v rows | Bars used + mean log return + downside/upside dev + Sortino raw/ann + downside % of total var + sortino label |
+| Sharpe ratio fields (ADR-133 SHARPR) | 2 k/v rows | Bars used + mean/stdev log return + Sharpe raw/ann + mean/stdev ann + sharpe label |
+| Kaufman efficiency ratio fields (ADR-133 EFFRATIO) | 2 k/v rows | Bars used + start/end close + net change + Σ |Δclose| + ER + signed ER + efficiency label |
+| Wick bias fields (ADR-133 WICKBIAS) | 2 k/v rows | Bars used + avg/median upper/lower wick + body share + bias score + bias label |
+| Vol-of-vol fields (ADR-133 VOLOFVOL) | 2 k/v rows | RV points + mean/stdev/min/max/latest RV20 + CV + cv label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **44-86 KB**
-(up from 42-82 KB after ADR-131; ADR-132 adds five optional per-symbol
-blocks — DRAWUP / GAPSTATS / VOLCLUSTER / CLOSEPLC / MRHL — each
-measuring ~2-3 k/v rows and adding ~400-600 bytes when populated,
+symbols. A single S&P 500 symbol now produces a packet around **46-90 KB**
+(up from 44-86 KB after ADR-132; ADR-133 adds five optional per-symbol
+blocks — DOWNVOL / SHARPR / EFFRATIO / WICKBIAS / VOLOFVOL — each
+measuring ~2 k/v rows and adding ~400-600 bytes when populated,
 for a typical +2 KB per symbol and +4 KB worst case; all five reuse
 the existing `research_historical_price` HP cache and the standard
-research-table LAN sync path with zero new API dependencies; GAPSTATS
-is the first HP-derived surface to read the `bar.open` column); a
-10-symbol basket now lands near **430-860 KB** when every symbol
+research-table LAN sync path with zero new API dependencies; WICKBIAS
+is the second HP surface to read all four OHLC columns together); a
+10-symbol basket now lands near **450-900 KB** when every symbol
 has a fully populated ingest bag (the global context and the Return
 Path footer are each emitted exactly once, so multi-symbol overhead
 is still bounded by the per-symbol blocks).
@@ -1957,6 +2029,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_volcluster` | SQLite `research_volcluster` | ADR-132 VOLCLUSTER window (ACF of r² and |r| at lags 1/5/20 — canonical GARCH-effect volatility clustering test with 5-way label) |
 | `research::get_closeplc` | SQLite `research_closeplc` | ADR-132 CLOSEPLC window (average `(close-low)/(high-low)` bar-anatomy stat + near-high/near-low shares with bull/bear label) |
 | `research::get_mrhl` | SQLite `research_mrhl` | ADR-132 MRHL window (AR(1) mean-reversion half-life via OLS fit on log returns with fast-revert/persistent label) |
+| `research::get_downvol` | SQLite `research_downvol` | ADR-133 DOWNVOL window (downside deviation + Sortino ratio with 5-way risk-quality label) |
+| `research::get_sharpr` | SQLite `research_sharpr` | ADR-133 SHARPR window (Sharpe ratio rf=0 raw + annualized with 5-way performance label) |
+| `research::get_effratio` | SQLite `research_effratio` | ADR-133 EFFRATIO window (Kaufman efficiency ratio — net/gross price travel with trending/chopping label) |
+| `research::get_wickbias` | SQLite `research_wickbias` | ADR-133 WICKBIAS window (upper vs lower wick share asymmetry with buyer/seller rejection label) |
+| `research::get_volofvol` | SQLite `research_volofvol` | ADR-133 VOLOFVOL window (CV of rolling 20d realized vol — stable/chaotic vol-regime label) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -1994,5 +2071,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)

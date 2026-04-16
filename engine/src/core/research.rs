@@ -2753,6 +2753,135 @@ pub struct MeanReversionHalfLifeSnapshot {
     pub note: String,
 }
 
+// ── ADR-133 Round 25 — HP downside-vol / Sharpe / efficiency / wick / vol-of-vol ──
+//
+// Five more pure symbol-local HP surfaces computed from the trailing 253-
+// session window. DOWNVOL and SHARPR are classical return-distribution risk
+// metrics that AUTOCOR/HURST/GLASYM don't cover. EFFRATIO is Kaufman's
+// efficiency ratio — a clean "trend vs noise" signal complementary to HURST.
+// WICKBIAS pairs with CLOSEPLC on the bar-anatomy axis (wicks instead of
+// body placement). VOLOFVOL captures "is the vol regime stable?" and is
+// the textbook companion to VOLCLUSTER.
+
+/// DOWNVOL — Downside deviation + Sortino ratio.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Semi-deviation uses only negative log returns: `sqrt(mean(min(r,0)²))`.
+/// Sortino = `mean(r) / downside_dev` (dimensionless, same sign as mean
+/// return). Complements the full-stdev view in RSTATS by isolating
+/// "scary vol" from total vol. Label classifies Sortino into the
+/// standard VERY_POOR / POOR / NEUTRAL / GOOD / EXCELLENT bands.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DownsideVolSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub mean_log_return: f64,          // mean r over window
+    pub downside_dev: f64,              // sqrt(mean(min(r,0)²))
+    pub downside_dev_ann: f64,          // downside_dev × √252
+    pub upside_dev: f64,                // sqrt(mean(max(r,0)²))
+    pub sortino_ratio: f64,             // mean(r) / downside_dev
+    pub sortino_ratio_ann: f64,         // (mean × 252) / downside_dev_ann
+    pub downside_pct_of_total: f64,     // downside_dev² / total_var × 100
+    pub sortino_label: String,          // "VERY_POOR" | "POOR" | "NEUTRAL" | "GOOD" | "EXCELLENT" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// SHARPR — Sharpe ratio snapshot.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Classical Sharpe = `(mean_return - rf) / stdev_return`. We use `rf = 0`
+/// because the HP cache doesn't carry a risk-free series and most
+/// single-stock Sharpe conversations use the excess-above-zero
+/// formulation. Both raw and annualized forms are reported. Label
+/// classifies into POOR / BELOW_AVG / NEUTRAL / GOOD / EXCELLENT per
+/// the standard buckets on annualized Sharpe.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SharpeRatioSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub mean_log_return: f64,
+    pub stdev_log_return: f64,
+    pub sharpe_ratio: f64,              // raw daily
+    pub sharpe_ratio_ann: f64,          // × √252
+    pub mean_return_ann: f64,           // mean × 252
+    pub stdev_return_ann: f64,          // stdev × √252
+    pub sharpe_label: String,           // "POOR" | "BELOW_AVG" | "NEUTRAL" | "GOOD" | "EXCELLENT" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// EFFRATIO — Kaufman's efficiency ratio.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// `ER = |close_N - close_1| / Σ |close_t - close_{t-1}|`. Measures
+/// the "directness" of a price move — 1.0 → straight line, 0.0 → all
+/// chop with zero net movement. Complements HURST (multi-scale
+/// persistence) and MRHL (shock decay) with a cleaner single-number
+/// "signal-to-noise in price travel" view. Label: CHOP (<0.1) /
+/// NOISY (<0.25) / MIXED (<0.4) / TRENDING (<0.6) / STRONG_TREND (≥0.6).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EfficiencyRatioSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub start_close: f64,
+    pub end_close: f64,
+    pub net_change: f64,                // signed end - start
+    pub net_change_pct: f64,            // (end/start - 1) × 100
+    pub sum_abs_changes: f64,           // Σ |close_t - close_{t-1}|
+    pub efficiency_ratio: f64,          // |net| / sum_abs (signed direction separate)
+    pub signed_efficiency: f64,         // efficiency_ratio × sign(net_change)
+    pub efficiency_label: String,       // "CHOP" | "NOISY" | "MIXED" | "TRENDING" | "STRONG_TREND" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// WICKBIAS — Upper vs lower wick asymmetry.
+/// Pure symbol-local HP stat. For each bar with `high > low`:
+/// `upper_wick = (high - max(open, close)) / (high - low)`
+/// `lower_wick = (min(open, close) - low) / (high - low)`.
+/// Averaged over the window, this captures who rejected price at the
+/// extremes: long upper wicks = sellers rejecting the high; long
+/// lower wicks = buyers defending the low. Reports means, medians,
+/// and a bias score = `avg_lower - avg_upper` (positive = buyers).
+/// Complements CLOSEPLC (where the bar closes within its range) on
+/// the wick side (how far the bar traveled outside its body).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WickBiasSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,               // bars with high > low
+    pub avg_upper_wick: f64,            // mean upper wick share
+    pub avg_lower_wick: f64,            // mean lower wick share
+    pub median_upper_wick: f64,
+    pub median_lower_wick: f64,
+    pub avg_body_share: f64,            // 1 - upper - lower
+    pub wick_bias_score: f64,           // avg_lower - avg_upper
+    pub bias_label: String,             // "SELLER_REJECT" | "SELLER_LEAN" | "NEUTRAL" | "BUYER_LEAN" | "BUYER_DEFEND" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// VOLOFVOL — Standard deviation of rolling 20-day realized volatility.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// For each trailing window of 20 bars, compute realized vol = stdev of
+/// log returns; then report mean and stdev of the resulting series. This
+/// captures "is the vol regime stable, or does vol itself bounce?" —
+/// a name with high vol-of-vol has unpredictable risk even if its
+/// average vol is moderate. Label classifies `stdev(rv20) / mean(rv20)`
+/// (coefficient of variation) into STABLE / MILD / MODERATE /
+/// UNSTABLE / CHAOTIC buckets.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VolOfVolSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,               // bars with valid rv20 values
+    pub mean_rv20: f64,                 // mean of rolling 20d vol (daily)
+    pub stdev_rv20: f64,                // stdev of rolling 20d vol
+    pub min_rv20: f64,
+    pub max_rv20: f64,
+    pub latest_rv20: f64,
+    pub cv_rv20: f64,                   // stdev_rv20 / mean_rv20 (coefficient of variation)
+    pub cv_label: String,               // "STABLE" | "MILD" | "MODERATE" | "UNSTABLE" | "CHAOTIC" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -13783,6 +13912,388 @@ pub fn compute_mrhl_snapshot(
     }
 }
 
+// ── ADR-133 Round 25 computes (DOWNVOL / SHARPR / EFFRATIO / WICKBIAS / VOLOFVOL) ──
+
+/// DOWNVOL compute: semi-deviation + Sortino ratio.
+pub fn compute_downvol_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> DownsideVolSnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return DownsideVolSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            sortino_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} returns", log_rets.len()),
+            ..Default::default()
+        };
+    }
+    let n = log_rets.len();
+    let nf = n as f64;
+    let mean: f64 = log_rets.iter().sum::<f64>() / nf;
+    let mut down_sq = 0.0f64;
+    let mut up_sq = 0.0f64;
+    let mut total_sq = 0.0f64;
+    for &r in &log_rets {
+        let c = r - mean;
+        total_sq += c * c;
+        if r < 0.0 { down_sq += r * r; }
+        if r > 0.0 { up_sq += r * r; }
+    }
+    let total_var = total_sq / nf;
+    let down_dev = (down_sq / nf).sqrt();
+    let up_dev = (up_sq / nf).sqrt();
+    let sortino = if down_dev > f64::EPSILON { mean / down_dev } else { 0.0 };
+    let sqrt_252 = (252.0f64).sqrt();
+    let down_dev_ann = down_dev * sqrt_252;
+    let sortino_ann = if down_dev_ann > f64::EPSILON { (mean * 252.0) / down_dev_ann } else { 0.0 };
+    let downside_pct = if total_var > f64::EPSILON { (down_sq / nf) / total_var * 100.0 } else { 0.0 };
+    let label = if down_dev < f64::EPSILON && mean <= 0.0 {
+        "INSUFFICIENT_DATA"
+    } else if sortino_ann < -1.0 {
+        "VERY_POOR"
+    } else if sortino_ann < 0.0 {
+        "POOR"
+    } else if sortino_ann < 1.0 {
+        "NEUTRAL"
+    } else if sortino_ann < 2.0 {
+        "GOOD"
+    } else {
+        "EXCELLENT"
+    };
+    DownsideVolSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: n,
+        mean_log_return: mean,
+        downside_dev: down_dev,
+        downside_dev_ann: down_dev_ann,
+        upside_dev: up_dev,
+        sortino_ratio: sortino,
+        sortino_ratio_ann: sortino_ann,
+        downside_pct_of_total: downside_pct,
+        sortino_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// SHARPR compute: Sharpe ratio over trailing window (rf = 0).
+pub fn compute_sharpr_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> SharpeRatioSnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return SharpeRatioSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            sharpe_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} returns", log_rets.len()),
+            ..Default::default()
+        };
+    }
+    let n = log_rets.len();
+    let nf = n as f64;
+    let mean: f64 = log_rets.iter().sum::<f64>() / nf;
+    let var: f64 = log_rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / nf;
+    let stdev = var.sqrt();
+    if stdev < f64::EPSILON {
+        return SharpeRatioSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: n,
+            mean_log_return: mean,
+            stdev_log_return: stdev,
+            sharpe_label: "INSUFFICIENT_DATA".into(),
+            note: "zero variance".into(),
+            ..Default::default()
+        };
+    }
+    let sharpe = mean / stdev;
+    let sqrt_252 = (252.0f64).sqrt();
+    let sharpe_ann = sharpe * sqrt_252;
+    let mean_ann = mean * 252.0;
+    let stdev_ann = stdev * sqrt_252;
+    let label = if sharpe_ann < -0.5 {
+        "POOR"
+    } else if sharpe_ann < 0.5 {
+        "BELOW_AVG"
+    } else if sharpe_ann < 1.0 {
+        "NEUTRAL"
+    } else if sharpe_ann < 2.0 {
+        "GOOD"
+    } else {
+        "EXCELLENT"
+    };
+    SharpeRatioSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: n,
+        mean_log_return: mean,
+        stdev_log_return: stdev,
+        sharpe_ratio: sharpe,
+        sharpe_ratio_ann: sharpe_ann,
+        mean_return_ann: mean_ann,
+        stdev_return_ann: stdev_ann,
+        sharpe_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// EFFRATIO compute: Kaufman's efficiency ratio on closes.
+pub fn compute_effratio_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> EfficiencyRatioSnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.is_empty() {
+        return EfficiencyRatioSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            efficiency_label: "INSUFFICIENT_DATA".into(),
+            note: "no bars".into(),
+            ..Default::default()
+        };
+    }
+    let n = bars.len().min(253);
+    let window = &bars[bars.len().saturating_sub(n)..];
+    if window.len() < 30 {
+        return EfficiencyRatioSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            efficiency_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} bars", window.len()),
+            ..Default::default()
+        };
+    }
+    let start_close = window.first().map(|b| b.close).unwrap_or(0.0);
+    let end_close = window.last().map(|b| b.close).unwrap_or(0.0);
+    if start_close <= 0.0 {
+        return EfficiencyRatioSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            efficiency_label: "INSUFFICIENT_DATA".into(),
+            note: "start close ≤ 0".into(),
+            ..Default::default()
+        };
+    }
+    let net = end_close - start_close;
+    let net_pct = (end_close / start_close - 1.0) * 100.0;
+    let sum_abs: f64 = window.windows(2)
+        .map(|pair| (pair[1].close - pair[0].close).abs())
+        .sum();
+    if sum_abs < f64::EPSILON {
+        return EfficiencyRatioSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            start_close,
+            end_close,
+            net_change: net,
+            net_change_pct: net_pct,
+            sum_abs_changes: sum_abs,
+            efficiency_label: "INSUFFICIENT_DATA".into(),
+            note: "flat window".into(),
+            ..Default::default()
+        };
+    }
+    let er = net.abs() / sum_abs;
+    let signed_er = er * net.signum();
+    let label = if er < 0.10 {
+        "CHOP"
+    } else if er < 0.25 {
+        "NOISY"
+    } else if er < 0.40 {
+        "MIXED"
+    } else if er < 0.60 {
+        "TRENDING"
+    } else {
+        "STRONG_TREND"
+    };
+    EfficiencyRatioSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: window.len(),
+        start_close,
+        end_close,
+        net_change: net,
+        net_change_pct: net_pct,
+        sum_abs_changes: sum_abs,
+        efficiency_ratio: er,
+        signed_efficiency: signed_er,
+        efficiency_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// WICKBIAS compute: upper vs lower wick asymmetry (requires open column).
+pub fn compute_wickbias_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> WickBiasSnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.is_empty() {
+        return WickBiasSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bias_label: "INSUFFICIENT_DATA".into(),
+            note: "no bars".into(),
+            ..Default::default()
+        };
+    }
+    let n = bars.len().min(253);
+    let window = &bars[bars.len().saturating_sub(n)..];
+    let mut uppers: Vec<f64> = Vec::with_capacity(window.len());
+    let mut lowers: Vec<f64> = Vec::with_capacity(window.len());
+    let mut bodies: Vec<f64> = Vec::with_capacity(window.len());
+    for b in window {
+        let range = b.high - b.low;
+        if range <= f64::EPSILON { continue; }
+        let body_top = b.open.max(b.close);
+        let body_bot = b.open.min(b.close);
+        let upper = (b.high - body_top) / range;
+        let lower = (body_bot - b.low) / range;
+        let body = (body_top - body_bot) / range;
+        uppers.push(upper);
+        lowers.push(lower);
+        bodies.push(body);
+    }
+    if uppers.len() < 20 {
+        return WickBiasSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: uppers.len(),
+            bias_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} non-flat bars", uppers.len()),
+            ..Default::default()
+        };
+    }
+    let nf = uppers.len() as f64;
+    let avg_upper: f64 = uppers.iter().sum::<f64>() / nf;
+    let avg_lower: f64 = lowers.iter().sum::<f64>() / nf;
+    let avg_body: f64 = bodies.iter().sum::<f64>() / nf;
+    let median = |v: &mut Vec<f64>| -> f64 {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        v[v.len() / 2]
+    };
+    let mut up_copy = uppers.clone();
+    let mut lo_copy = lowers.clone();
+    let med_upper = median(&mut up_copy);
+    let med_lower = median(&mut lo_copy);
+    let bias = avg_lower - avg_upper;
+    let label = if bias < -0.05 {
+        "SELLER_REJECT"
+    } else if bias < -0.02 {
+        "SELLER_LEAN"
+    } else if bias <= 0.02 {
+        "NEUTRAL"
+    } else if bias <= 0.05 {
+        "BUYER_LEAN"
+    } else {
+        "BUYER_DEFEND"
+    };
+    WickBiasSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: uppers.len(),
+        avg_upper_wick: avg_upper,
+        avg_lower_wick: avg_lower,
+        median_upper_wick: med_upper,
+        median_lower_wick: med_lower,
+        avg_body_share: avg_body,
+        wick_bias_score: bias,
+        bias_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// VOLOFVOL compute: stdev of rolling 20-day realized vol.
+pub fn compute_volofvol_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+) -> VolOfVolSnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, log_rets) = trailing_log_returns(bars);
+    const RV_WINDOW: usize = 20;
+    if log_rets.len() < RV_WINDOW + 30 {
+        return VolOfVolSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: window.len(),
+            cv_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} returns", log_rets.len()),
+            ..Default::default()
+        };
+    }
+    let mut rv: Vec<f64> = Vec::with_capacity(log_rets.len().saturating_sub(RV_WINDOW - 1));
+    for i in (RV_WINDOW - 1)..log_rets.len() {
+        let slice = &log_rets[i + 1 - RV_WINDOW..=i];
+        let m: f64 = slice.iter().sum::<f64>() / (RV_WINDOW as f64);
+        let v: f64 = slice.iter().map(|r| (r - m).powi(2)).sum::<f64>() / (RV_WINDOW as f64);
+        rv.push(v.sqrt());
+    }
+    if rv.len() < 30 {
+        return VolOfVolSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            bars_used: rv.len(),
+            cv_label: "INSUFFICIENT_DATA".into(),
+            note: format!("only {} rv points", rv.len()),
+            ..Default::default()
+        };
+    }
+    let nf = rv.len() as f64;
+    let mean_rv: f64 = rv.iter().sum::<f64>() / nf;
+    let var_rv: f64 = rv.iter().map(|x| (x - mean_rv).powi(2)).sum::<f64>() / nf;
+    let stdev_rv = var_rv.sqrt();
+    let mut min_rv = f64::INFINITY;
+    let mut max_rv = f64::NEG_INFINITY;
+    for &x in &rv {
+        if x < min_rv { min_rv = x; }
+        if x > max_rv { max_rv = x; }
+    }
+    let latest_rv = *rv.last().unwrap_or(&0.0);
+    let cv = if mean_rv > f64::EPSILON { stdev_rv / mean_rv } else { 0.0 };
+    let label = if mean_rv < f64::EPSILON {
+        "INSUFFICIENT_DATA"
+    } else if cv < 0.15 {
+        "STABLE"
+    } else if cv < 0.25 {
+        "MILD"
+    } else if cv < 0.40 {
+        "MODERATE"
+    } else if cv < 0.60 {
+        "UNSTABLE"
+    } else {
+        "CHAOTIC"
+    };
+    VolOfVolSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        bars_used: rv.len(),
+        mean_rv20: mean_rv,
+        stdev_rv20: stdev_rv,
+        min_rv20: min_rv,
+        max_rv20: max_rv,
+        latest_rv20: latest_rv,
+        cv_rv20: cv,
+        cv_label: label.into(),
+        note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -17461,6 +17972,159 @@ pub fn get_mrhl(conn: &Connection, symbol: &str) -> Result<Option<MeanReversionH
         .map_err(|e| format!("prepare get_mrhl: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_mrhl: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_mrhl: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-133 Round 25 schema + upsert/get ──
+
+pub fn create_research_tables_v26(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v25(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_downvol (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_downvol_updated ON research_downvol(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_sharpr (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_sharpr_updated ON research_sharpr(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_effratio (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_effratio_updated ON research_effratio(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_wickbias (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_wickbias_updated ON research_wickbias(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_volofvol (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_volofvol_updated ON research_volofvol(updated_at);",
+    ).map_err(|e| format!("create v26 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_downvol(conn: &Connection, symbol: &str, snap: &DownsideVolSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v26(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("downvol json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_downvol(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert downvol: {e}"))?;
+    Ok(())
+}
+
+pub fn get_downvol(conn: &Connection, symbol: &str) -> Result<Option<DownsideVolSnapshot>, String> {
+    let _ = create_research_tables_v26(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_downvol WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_downvol: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_downvol: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_downvol: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_sharpr(conn: &Connection, symbol: &str, snap: &SharpeRatioSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v26(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("sharpr json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_sharpr(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert sharpr: {e}"))?;
+    Ok(())
+}
+
+pub fn get_sharpr(conn: &Connection, symbol: &str) -> Result<Option<SharpeRatioSnapshot>, String> {
+    let _ = create_research_tables_v26(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_sharpr WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_sharpr: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_sharpr: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_sharpr: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_effratio(conn: &Connection, symbol: &str, snap: &EfficiencyRatioSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v26(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("effratio json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_effratio(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert effratio: {e}"))?;
+    Ok(())
+}
+
+pub fn get_effratio(conn: &Connection, symbol: &str) -> Result<Option<EfficiencyRatioSnapshot>, String> {
+    let _ = create_research_tables_v26(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_effratio WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_effratio: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_effratio: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_effratio: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_wickbias(conn: &Connection, symbol: &str, snap: &WickBiasSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v26(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("wickbias json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_wickbias(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert wickbias: {e}"))?;
+    Ok(())
+}
+
+pub fn get_wickbias(conn: &Connection, symbol: &str) -> Result<Option<WickBiasSnapshot>, String> {
+    let _ = create_research_tables_v26(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_wickbias WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_wickbias: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_wickbias: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_wickbias: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_volofvol(conn: &Connection, symbol: &str, snap: &VolOfVolSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v26(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("volofvol json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_volofvol(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert volofvol: {e}"))?;
+    Ok(())
+}
+
+pub fn get_volofvol(conn: &Connection, symbol: &str) -> Result<Option<VolOfVolSnapshot>, String> {
+    let _ = create_research_tables_v26(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_volofvol WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_volofvol: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_volofvol: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_volofvol: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -23486,5 +24150,184 @@ Trailing text.
         let snap = compute_mrhl_snapshot("X", "2026-04-15", &bars);
         assert_ne!(snap.regime_label, "INSUFFICIENT_DATA");
         assert!(snap.beta.is_finite());
+    }
+
+    // ── ADR-133 Round 25 tests ──
+
+    #[test]
+    fn downvol_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = DownsideVolSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 252,
+            mean_log_return: 0.0008,
+            downside_dev: 0.012,
+            downside_dev_ann: 0.19,
+            upside_dev: 0.011,
+            sortino_ratio: 0.067,
+            sortino_ratio_ann: 1.06,
+            downside_pct_of_total: 50.5,
+            sortino_label: "GOOD".into(),
+            note: String::new(),
+        };
+        upsert_downvol(&c, "TEST", &snap).unwrap();
+        let got = get_downvol(&c, "TEST").unwrap().unwrap();
+        assert!((got.sortino_ratio_ann - 1.06).abs() < 1e-9);
+        assert_eq!(got.sortino_label, "GOOD");
+    }
+
+    #[test]
+    fn downvol_compute_insufficient() {
+        let snap = compute_downvol_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.sortino_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn downvol_compute_uptrend_is_good() {
+        let bars = synthetic_up_trend_bars();
+        let snap = compute_downvol_snapshot("X", "2026-04-15", &bars);
+        assert_ne!(snap.sortino_label, "INSUFFICIENT_DATA");
+        assert!(snap.mean_log_return > 0.0);
+    }
+
+    #[test]
+    fn sharpr_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = SharpeRatioSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 252,
+            mean_log_return: 0.0008,
+            stdev_log_return: 0.012,
+            sharpe_ratio: 0.067,
+            sharpe_ratio_ann: 1.06,
+            mean_return_ann: 0.2016,
+            stdev_return_ann: 0.19,
+            sharpe_label: "GOOD".into(),
+            note: String::new(),
+        };
+        upsert_sharpr(&c, "TEST", &snap).unwrap();
+        let got = get_sharpr(&c, "TEST").unwrap().unwrap();
+        assert!((got.sharpe_ratio_ann - 1.06).abs() < 1e-9);
+        assert_eq!(got.sharpe_label, "GOOD");
+    }
+
+    #[test]
+    fn sharpr_compute_insufficient() {
+        let snap = compute_sharpr_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.sharpe_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn sharpr_compute_uptrend_is_positive() {
+        let bars = synthetic_up_trend_bars();
+        let snap = compute_sharpr_snapshot("X", "2026-04-15", &bars);
+        assert_ne!(snap.sharpe_label, "INSUFFICIENT_DATA");
+        assert!(snap.sharpe_ratio > 0.0);
+    }
+
+    #[test]
+    fn effratio_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = EfficiencyRatioSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 252,
+            start_close: 100.0,
+            end_close: 130.0,
+            net_change: 30.0,
+            net_change_pct: 30.0,
+            sum_abs_changes: 50.0,
+            efficiency_ratio: 0.6,
+            signed_efficiency: 0.6,
+            efficiency_label: "STRONG_TREND".into(),
+            note: String::new(),
+        };
+        upsert_effratio(&c, "TEST", &snap).unwrap();
+        let got = get_effratio(&c, "TEST").unwrap().unwrap();
+        assert!((got.efficiency_ratio - 0.6).abs() < 1e-9);
+        assert_eq!(got.efficiency_label, "STRONG_TREND");
+    }
+
+    #[test]
+    fn effratio_compute_uptrend_is_trending() {
+        let bars = synthetic_up_trend_bars();
+        let snap = compute_effratio_snapshot("X", "2026-04-15", &bars);
+        assert_ne!(snap.efficiency_label, "INSUFFICIENT_DATA");
+        assert!(snap.efficiency_ratio > 0.5, "strictly monotone bars should be highly efficient, got {}", snap.efficiency_ratio);
+    }
+
+    #[test]
+    fn effratio_compute_chop_is_low() {
+        let bars = synthetic_mixed_bars();
+        let snap = compute_effratio_snapshot("X", "2026-04-15", &bars);
+        assert_ne!(snap.efficiency_label, "INSUFFICIENT_DATA");
+        assert!(snap.efficiency_ratio < 0.5, "alternating bars should be choppy, got {}", snap.efficiency_ratio);
+    }
+
+    #[test]
+    fn wickbias_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = WickBiasSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 252,
+            avg_upper_wick: 0.18,
+            avg_lower_wick: 0.22,
+            median_upper_wick: 0.15,
+            median_lower_wick: 0.2,
+            avg_body_share: 0.6,
+            wick_bias_score: 0.04,
+            bias_label: "BUYER_LEAN".into(),
+            note: String::new(),
+        };
+        upsert_wickbias(&c, "TEST", &snap).unwrap();
+        let got = get_wickbias(&c, "TEST").unwrap().unwrap();
+        assert!((got.wick_bias_score - 0.04).abs() < 1e-9);
+        assert_eq!(got.bias_label, "BUYER_LEAN");
+    }
+
+    #[test]
+    fn wickbias_compute_insufficient() {
+        let snap = compute_wickbias_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.bias_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn wickbias_compute_with_bars() {
+        let bars = synthetic_up_trend_bars();
+        let snap = compute_wickbias_snapshot("X", "2026-04-15", &bars);
+        assert_ne!(snap.bias_label, "INSUFFICIENT_DATA");
+        let total = snap.avg_upper_wick + snap.avg_lower_wick + snap.avg_body_share;
+        assert!((total - 1.0).abs() < 1e-6, "wick + body should sum to 1, got {}", total);
+    }
+
+    #[test]
+    fn volofvol_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = VolOfVolSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-15".into(),
+            bars_used: 233,
+            mean_rv20: 0.012,
+            stdev_rv20: 0.003,
+            min_rv20: 0.008,
+            max_rv20: 0.018,
+            latest_rv20: 0.013,
+            cv_rv20: 0.25,
+            cv_label: "MODERATE".into(),
+            note: String::new(),
+        };
+        upsert_volofvol(&c, "TEST", &snap).unwrap();
+        let got = get_volofvol(&c, "TEST").unwrap().unwrap();
+        assert!((got.cv_rv20 - 0.25).abs() < 1e-9);
+        assert_eq!(got.cv_label, "MODERATE");
+    }
+
+    #[test]
+    fn volofvol_compute_insufficient() {
+        let snap = compute_volofvol_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.cv_label, "INSUFFICIENT_DATA");
     }
 }
