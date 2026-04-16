@@ -3913,6 +3913,95 @@ pub struct EwmaVolSnapshot {
     pub note: String,
 }
 
+// ── ADR-144 Round 36 ──────────────────────────────────────────────────────
+
+/// KSNORM — Kolmogorov-Smirnov normality test (standardised returns vs N(0,1)).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct KsnormSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ks_statistic: f64,          // max |F_emp − Φ|
+    pub critical_10pct: f64,        // 1.22/√n
+    pub critical_5pct: f64,         // 1.36/√n
+    pub critical_1pct: f64,         // 1.63/√n
+    pub reject_10pct: bool,
+    pub reject_5pct: bool,
+    pub reject_1pct: bool,
+    pub mean: f64,                  // sample mean (standardisation)
+    pub sigma: f64,                 // sample σ (standardisation)
+    pub ksnorm_label: String,       // NORMAL / MILD_DEVIATION / MODERATE_DEVIATION / STRONG_NON_NORMAL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// ADTEST — Anderson-Darling normality test (tail-weighted, more powerful than KS).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AdtestSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ad_statistic: f64,          // A²
+    pub ad_adjusted: f64,           // A²·(1 + 0.75/n + 2.25/n²)
+    pub p_value_approx: f64,        // Stephens approximation
+    pub critical_10pct: f64,        // 0.631
+    pub critical_5pct: f64,         // 0.752
+    pub critical_1pct: f64,         // 1.035
+    pub reject_10pct: bool,
+    pub reject_5pct: bool,
+    pub reject_1pct: bool,
+    pub adtest_label: String,       // NORMAL / MILD_DEVIATION / MODERATE_DEVIATION / STRONG_NON_NORMAL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// LMOM — Hosking 1990 L-moments (robust alternatives to classical moments).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct LmomSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub l1_mean: f64,               // λ₁ = sample mean
+    pub l2_scale: f64,              // λ₂ = 0.5·E|X₁−X₂|
+    pub l3: f64,                    // λ₃ (third L-moment)
+    pub l4: f64,                    // λ₄ (fourth L-moment)
+    pub tau3_skew: f64,             // λ₃/λ₂ ∈ [−1,1]
+    pub tau4_kurt: f64,             // λ₄/λ₂ ∈ [−0.25, 1]
+    pub lmom_label: String,         // HEAVY_LEFT / HEAVY_RIGHT / HEAVY_TAILS / LIGHT_TAILS / NEAR_SYMMETRIC / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// KYLELAM — Kyle's daily price-impact λ (regression |Δp| on volume).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct KylelamSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub kyle_lambda: f64,           // cov(|Δp|, V) / var(V)
+    pub mean_abs_dp: f64,           // mean |Δp| ($ price change)
+    pub mean_volume: f64,           // mean V (shares)
+    pub correlation: f64,           // ρ(|Δp|, V)
+    pub r_squared: f64,             // ρ²
+    pub kylelam_label: String,      // HIGH_IMPACT / MODERATE_IMPACT / LOW_IMPACT / NO_SIGNAL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// PEAKOVER — Peaks-Over-Threshold (EVT/GPD foundation).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PeakoverSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub threshold_p95: f64,         // P95 of |returns|
+    pub threshold_p99: f64,         // P99 of |returns|
+    pub count_p95: usize,           // #|r| > P95
+    pub count_p99: usize,           // #|r| > P99
+    pub mean_excess_p95: f64,       // mean(|r|−P95 | |r|>P95)
+    pub mean_excess_p99: f64,       // mean(|r|−P99 | |r|>P99)
+    pub max_excess_p95: f64,        // max(|r|−P95)
+    pub max_excess_p99: f64,        // max(|r|−P99)
+    pub peakover_label: String,     // EXTREME_TAIL / HEAVY_TAIL / MODERATE_TAIL / LIGHT_TAIL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -17970,6 +18059,287 @@ pub fn compute_ewmavol_snapshot(
     }
 }
 
+// ── ADR-144 Round 36 computes ────────────────────────────────────────────
+
+/// Standard normal CDF via Abramowitz-Stegun 7.1.26 approximation.
+fn norm_cdf_as(z: f64) -> f64 {
+    let a1 = 0.254829592_f64;
+    let a2 = -0.284496736_f64;
+    let a3 = 1.421413741_f64;
+    let a4 = -1.453152027_f64;
+    let a5 = 1.061405429_f64;
+    let p = 0.3275911_f64;
+    let sign = if z < 0.0 { -1.0 } else { 1.0 };
+    let x = (z / std::f64::consts::SQRT_2).abs();
+    let t = 1.0 / (1.0 + p * x);
+    let y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * (-x * x).exp();
+    0.5 * (1.0 + sign * y)
+}
+
+/// KSNORM compute: Kolmogorov-Smirnov normality test.
+pub fn compute_ksnorm_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> KsnormSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return KsnormSnapshot { symbol: sym, as_of: as_of.into(), ksnorm_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let nf = n as f64;
+    let mean = log_rets.iter().sum::<f64>() / nf;
+    let var = log_rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / nf;
+    let sigma = var.sqrt();
+    if sigma < f64::EPSILON {
+        return KsnormSnapshot { symbol: sym, as_of: as_of.into(), ksnorm_label: "INSUFFICIENT_DATA".into(), note: "zero stdev".into(), ..Default::default() };
+    }
+    let mut z: Vec<f64> = log_rets.iter().map(|r| (r - mean) / sigma).collect();
+    z.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut d_stat = 0.0_f64;
+    for (i, &zi) in z.iter().enumerate() {
+        let f_emp_hi = (i as f64 + 1.0) / nf;
+        let f_emp_lo = i as f64 / nf;
+        let f_theor = norm_cdf_as(zi);
+        let d1 = (f_emp_hi - f_theor).abs();
+        let d2 = (f_theor - f_emp_lo).abs();
+        if d1 > d_stat { d_stat = d1; }
+        if d2 > d_stat { d_stat = d2; }
+    }
+    let sqrt_n = nf.sqrt();
+    let c10 = 1.22 / sqrt_n;
+    let c5 = 1.36 / sqrt_n;
+    let c1 = 1.63 / sqrt_n;
+    let r10 = d_stat > c10;
+    let r5 = d_stat > c5;
+    let r1 = d_stat > c1;
+    let label = if !r10 { "NORMAL" }
+        else if !r5 { "MILD_DEVIATION" }
+        else if !r1 { "MODERATE_DEVIATION" }
+        else { "STRONG_NON_NORMAL" };
+    KsnormSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        ks_statistic: d_stat,
+        critical_10pct: c10, critical_5pct: c5, critical_1pct: c1,
+        reject_10pct: r10, reject_5pct: r5, reject_1pct: r1,
+        mean, sigma,
+        ksnorm_label: label.into(), note: String::new(),
+    }
+}
+
+/// ADTEST compute: Anderson-Darling normality test (tail-weighted).
+pub fn compute_adtest_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AdtestSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return AdtestSnapshot { symbol: sym, as_of: as_of.into(), adtest_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let nf = n as f64;
+    let mean = log_rets.iter().sum::<f64>() / nf;
+    let var = log_rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (nf - 1.0).max(1.0);
+    let sigma = var.sqrt();
+    if sigma < f64::EPSILON {
+        return AdtestSnapshot { symbol: sym, as_of: as_of.into(), adtest_label: "INSUFFICIENT_DATA".into(), note: "zero stdev".into(), ..Default::default() };
+    }
+    let mut z: Vec<f64> = log_rets.iter().map(|r| (r - mean) / sigma).collect();
+    z.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut sum = 0.0_f64;
+    let eps = 1e-12_f64;
+    for (i, &zi) in z.iter().enumerate() {
+        let fi = norm_cdf_as(zi).clamp(eps, 1.0 - eps);
+        let j = n - 1 - i;
+        let fj = norm_cdf_as(z[j]).clamp(eps, 1.0 - eps);
+        let w = (2.0 * (i as f64 + 1.0) - 1.0) / nf;
+        sum += w * (fi.ln() + (1.0 - fj).ln());
+    }
+    let a2 = -nf - sum;
+    let a2_adj = a2 * (1.0 + 0.75 / nf + 2.25 / (nf * nf));
+    // Stephens (1986) p-value approximation for N(μ̂,σ̂²) case
+    let p_value = if a2_adj >= 0.600 {
+        (1.2937 - 5.709 * a2_adj + 0.0186 * a2_adj * a2_adj).exp()
+    } else if a2_adj >= 0.340 {
+        (0.9177 - 4.279 * a2_adj - 1.38 * a2_adj * a2_adj).exp()
+    } else if a2_adj >= 0.200 {
+        1.0 - (-8.318 + 42.796 * a2_adj - 59.938 * a2_adj * a2_adj).exp()
+    } else {
+        1.0 - (-13.436 + 101.14 * a2_adj - 223.73 * a2_adj * a2_adj).exp()
+    };
+    let p_value = p_value.clamp(0.0, 1.0);
+    let c10 = 0.631_f64;
+    let c5 = 0.752_f64;
+    let c1 = 1.035_f64;
+    let r10 = a2_adj > c10;
+    let r5 = a2_adj > c5;
+    let r1 = a2_adj > c1;
+    let label = if !r10 { "NORMAL" }
+        else if !r5 { "MILD_DEVIATION" }
+        else if !r1 { "MODERATE_DEVIATION" }
+        else { "STRONG_NON_NORMAL" };
+    AdtestSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        ad_statistic: a2, ad_adjusted: a2_adj, p_value_approx: p_value,
+        critical_10pct: c10, critical_5pct: c5, critical_1pct: c1,
+        reject_10pct: r10, reject_5pct: r5, reject_1pct: r1,
+        adtest_label: label.into(), note: String::new(),
+    }
+}
+
+/// LMOM compute: Hosking 1990 L-moments (unbiased PWM estimators).
+pub fn compute_lmom_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> LmomSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return LmomSnapshot { symbol: sym, as_of: as_of.into(), lmom_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let nf = n as f64;
+    let mut x: Vec<f64> = log_rets.clone();
+    x.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // Unbiased PWMs: b_r = (1/n) Σ_{i=1..n} C(i-1,r)/C(n-1,r) · x_(i)
+    let mut b0 = 0.0_f64;
+    let mut b1 = 0.0_f64;
+    let mut b2 = 0.0_f64;
+    let mut b3 = 0.0_f64;
+    for (k, &xi) in x.iter().enumerate() {
+        let i = k as f64 + 1.0;
+        b0 += xi;
+        if n >= 2 { b1 += (i - 1.0) / (nf - 1.0) * xi; }
+        if n >= 3 { b2 += (i - 1.0) * (i - 2.0) / ((nf - 1.0) * (nf - 2.0)) * xi; }
+        if n >= 4 { b3 += (i - 1.0) * (i - 2.0) * (i - 3.0) / ((nf - 1.0) * (nf - 2.0) * (nf - 3.0)) * xi; }
+    }
+    b0 /= nf; b1 /= nf; b2 /= nf; b3 /= nf;
+    let l1 = b0;
+    let l2 = 2.0 * b1 - b0;
+    let l3 = 6.0 * b2 - 6.0 * b1 + b0;
+    let l4 = 20.0 * b3 - 30.0 * b2 + 12.0 * b1 - b0;
+    if l2.abs() < f64::EPSILON {
+        return LmomSnapshot { symbol: sym, as_of: as_of.into(), lmom_label: "INSUFFICIENT_DATA".into(), note: "zero L-scale".into(), ..Default::default() };
+    }
+    let tau3 = l3 / l2;
+    let tau4 = l4 / l2;
+    let label = if tau3 < -0.30 { "HEAVY_LEFT" }
+        else if tau3 > 0.30 { "HEAVY_RIGHT" }
+        else if tau4 > 0.30 { "HEAVY_TAILS" }
+        else if tau4 < 0.05 { "LIGHT_TAILS" }
+        else { "NEAR_SYMMETRIC" };
+    LmomSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        l1_mean: l1, l2_scale: l2, l3, l4,
+        tau3_skew: tau3, tau4_kurt: tau4,
+        lmom_label: label.into(), note: String::new(),
+    }
+}
+
+/// KYLELAM compute: Kyle's daily price-impact λ (|Δp| on V regression).
+pub fn compute_kylelam_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> KylelamSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let window: Vec<&HistoricalPriceRow> = sorted.iter().rev().take(253).rev().copied().collect();
+    if window.len() < 30 {
+        return KylelamSnapshot { symbol: sym, as_of: as_of.into(), kylelam_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 bars, got {}", window.len()), ..Default::default() };
+    }
+    let mut abs_dp: Vec<f64> = Vec::with_capacity(window.len());
+    let mut vol: Vec<f64> = Vec::with_capacity(window.len());
+    for w in window.windows(2) {
+        let dp = (w[1].close - w[0].close).abs();
+        let v = w[1].volume;
+        if v > 0.0 {
+            abs_dp.push(dp);
+            vol.push(v);
+        }
+    }
+    let n = abs_dp.len();
+    if n < 30 {
+        return KylelamSnapshot { symbol: sym, as_of: as_of.into(), kylelam_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 valid pairs, got {}", n), ..Default::default() };
+    }
+    let nf = n as f64;
+    let mean_dp = abs_dp.iter().sum::<f64>() / nf;
+    let mean_v = vol.iter().sum::<f64>() / nf;
+    let mut cov = 0.0_f64;
+    let mut var_v = 0.0_f64;
+    let mut var_dp = 0.0_f64;
+    for i in 0..n {
+        let ddp = abs_dp[i] - mean_dp;
+        let dv = vol[i] - mean_v;
+        cov += ddp * dv;
+        var_v += dv * dv;
+        var_dp += ddp * ddp;
+    }
+    cov /= nf; var_v /= nf; var_dp /= nf;
+    if var_v < f64::EPSILON || var_dp < f64::EPSILON {
+        return KylelamSnapshot { symbol: sym, as_of: as_of.into(), kylelam_label: "INSUFFICIENT_DATA".into(), note: "zero variance".into(), ..Default::default() };
+    }
+    let lambda = cov / var_v;
+    let corr = cov / (var_dp.sqrt() * var_v.sqrt());
+    let r2 = corr * corr;
+    let label = if r2 < 0.02 { "NO_SIGNAL" }
+        else if lambda.abs() < 1e-8 { "LOW_IMPACT" }
+        else if r2 > 0.20 { "HIGH_IMPACT" }
+        else if r2 > 0.05 { "MODERATE_IMPACT" }
+        else { "LOW_IMPACT" };
+    KylelamSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        kyle_lambda: lambda, mean_abs_dp: mean_dp, mean_volume: mean_v,
+        correlation: corr, r_squared: r2,
+        kylelam_label: label.into(), note: String::new(),
+    }
+}
+
+/// PEAKOVER compute: Peaks-Over-Threshold (EVT/GPD foundation).
+pub fn compute_peakover_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PeakoverSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return PeakoverSnapshot { symbol: sym, as_of: as_of.into(), peakover_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let mut abs_r: Vec<f64> = log_rets.iter().map(|r| r.abs()).collect();
+    abs_r.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p95 = quantile_f64(&abs_r, 0.95);
+    let p99 = quantile_f64(&abs_r, 0.99);
+    if p95 < f64::EPSILON {
+        return PeakoverSnapshot { symbol: sym, as_of: as_of.into(), peakover_label: "INSUFFICIENT_DATA".into(), note: "zero P95".into(), ..Default::default() };
+    }
+    let mut count95 = 0usize; let mut count99 = 0usize;
+    let mut sum95 = 0.0_f64; let mut sum99 = 0.0_f64;
+    let mut max95 = 0.0_f64; let mut max99 = 0.0_f64;
+    for &r in &abs_r {
+        if r > p95 {
+            count95 += 1; let ex = r - p95; sum95 += ex;
+            if ex > max95 { max95 = ex; }
+        }
+        if r > p99 {
+            count99 += 1; let ex = r - p99; sum99 += ex;
+            if ex > max99 { max99 = ex; }
+        }
+    }
+    let mean95 = if count95 > 0 { sum95 / count95 as f64 } else { 0.0 };
+    let mean99 = if count99 > 0 { sum99 / count99 as f64 } else { 0.0 };
+    // Label by mean-excess / threshold ratio at P95 (Pickands' GPD shape proxy).
+    let ratio = if p95 > f64::EPSILON { mean95 / p95 } else { 0.0 };
+    let label = if ratio > 0.80 { "EXTREME_TAIL" }
+        else if ratio > 0.40 { "HEAVY_TAIL" }
+        else if ratio > 0.20 { "MODERATE_TAIL" }
+        else { "LIGHT_TAIL" };
+    PeakoverSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        threshold_p95: p95, threshold_p99: p99,
+        count_p95: count95, count_p99: count99,
+        mean_excess_p95: mean95, mean_excess_p99: mean99,
+        max_excess_p95: max95, max_excess_p99: max99,
+        peakover_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -23331,6 +23701,159 @@ pub fn get_ewmavol(conn: &Connection, symbol: &str) -> Result<Option<EwmaVolSnap
         .map_err(|e| format!("prepare get_ewmavol: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_ewmavol: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_ewmavol: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-144 Round 36 schema v37 ──
+
+pub fn create_research_tables_v37(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v36(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_ksnorm (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ksnorm_updated ON research_ksnorm(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_adtest (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_adtest_updated ON research_adtest(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_lmom (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_lmom_updated ON research_lmom(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_kylelam (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_kylelam_updated ON research_kylelam(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_peakover (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_peakover_updated ON research_peakover(updated_at);",
+    ).map_err(|e| format!("create v37 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_ksnorm(conn: &Connection, symbol: &str, snap: &KsnormSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v37(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ksnorm json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ksnorm(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ksnorm: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ksnorm(conn: &Connection, symbol: &str) -> Result<Option<KsnormSnapshot>, String> {
+    let _ = create_research_tables_v37(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ksnorm WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_ksnorm: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_ksnorm: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_ksnorm: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_adtest(conn: &Connection, symbol: &str, snap: &AdtestSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v37(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("adtest json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_adtest(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert adtest: {e}"))?;
+    Ok(())
+}
+
+pub fn get_adtest(conn: &Connection, symbol: &str) -> Result<Option<AdtestSnapshot>, String> {
+    let _ = create_research_tables_v37(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_adtest WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_adtest: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_adtest: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_adtest: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_lmom(conn: &Connection, symbol: &str, snap: &LmomSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v37(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("lmom json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_lmom(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert lmom: {e}"))?;
+    Ok(())
+}
+
+pub fn get_lmom(conn: &Connection, symbol: &str) -> Result<Option<LmomSnapshot>, String> {
+    let _ = create_research_tables_v37(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_lmom WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_lmom: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_lmom: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_lmom: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_kylelam(conn: &Connection, symbol: &str, snap: &KylelamSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v37(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("kylelam json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_kylelam(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert kylelam: {e}"))?;
+    Ok(())
+}
+
+pub fn get_kylelam(conn: &Connection, symbol: &str) -> Result<Option<KylelamSnapshot>, String> {
+    let _ = create_research_tables_v37(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_kylelam WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_kylelam: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_kylelam: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_kylelam: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_peakover(conn: &Connection, symbol: &str, snap: &PeakoverSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v37(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("peakover json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_peakover(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert peakover: {e}"))?;
+    Ok(())
+}
+
+pub fn get_peakover(conn: &Connection, symbol: &str) -> Result<Option<PeakoverSnapshot>, String> {
+    let _ = create_research_tables_v37(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_peakover WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_peakover: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_peakover: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_peakover: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -31269,5 +31792,138 @@ Trailing text.
         assert!(snap.classical_sigma_annual > 0.0);
         assert!(snap.ewma_to_classical > 0.0);
         assert!((snap.lambda - 0.94).abs() < 1e-9);
+    }
+
+    // ── ADR-144 Round 36 tests ────────────────────────────────────
+
+    #[test]
+    fn ksnorm_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = KsnormSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 200,
+            ks_statistic: 0.08, critical_10pct: 0.086, critical_5pct: 0.096, critical_1pct: 0.115,
+            reject_10pct: false, reject_5pct: false, reject_1pct: false,
+            mean: 0.0004, sigma: 0.012, ksnorm_label: "NORMAL".into(), note: String::new(),
+        };
+        upsert_ksnorm(&conn, "TEST", &snap).unwrap();
+        let got = get_ksnorm(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.ksnorm_label, "NORMAL");
+        assert!((got.ks_statistic - 0.08).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ksnorm_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ksnorm_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.ksnorm_label, "INSUFFICIENT_DATA");
+        assert!(snap.ks_statistic >= 0.0 && snap.ks_statistic <= 1.0);
+        assert!(snap.critical_10pct > 0.0);
+        assert!(snap.critical_5pct > snap.critical_10pct);
+        assert!(snap.critical_1pct > snap.critical_5pct);
+        assert!(snap.sigma > 0.0);
+    }
+
+    #[test]
+    fn adtest_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = AdtestSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 200,
+            ad_statistic: 0.50, ad_adjusted: 0.505, p_value_approx: 0.45,
+            critical_10pct: 0.631, critical_5pct: 0.752, critical_1pct: 1.035,
+            reject_10pct: false, reject_5pct: false, reject_1pct: false,
+            adtest_label: "NORMAL".into(), note: String::new(),
+        };
+        upsert_adtest(&conn, "TEST", &snap).unwrap();
+        let got = get_adtest(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.adtest_label, "NORMAL");
+        assert!((got.ad_adjusted - 0.505).abs() < 1e-9);
+    }
+
+    #[test]
+    fn adtest_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_adtest_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.adtest_label, "INSUFFICIENT_DATA");
+        assert!(snap.ad_adjusted >= 0.0);
+        assert!(snap.p_value_approx >= 0.0 && snap.p_value_approx <= 1.0);
+        assert!((snap.critical_5pct - 0.752).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lmom_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = LmomSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 200,
+            l1_mean: 0.0004, l2_scale: 0.007, l3: 0.0, l4: 0.001,
+            tau3_skew: 0.05, tau4_kurt: 0.14,
+            lmom_label: "NEAR_SYMMETRIC".into(), note: String::new(),
+        };
+        upsert_lmom(&conn, "TEST", &snap).unwrap();
+        let got = get_lmom(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.lmom_label, "NEAR_SYMMETRIC");
+        assert!((got.tau4_kurt - 0.14).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lmom_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_lmom_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.lmom_label, "INSUFFICIENT_DATA");
+        assert!(snap.l2_scale > 0.0);
+        assert!(snap.tau3_skew >= -1.0 && snap.tau3_skew <= 1.0);
+        // Bimodal oscillating fixture lies outside the continuous-distribution
+        // τ4 bounds — assert finiteness rather than the [-0.25,1] envelope.
+        assert!(snap.tau4_kurt.is_finite());
+    }
+
+    #[test]
+    fn kylelam_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = KylelamSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 200,
+            kyle_lambda: 1.2e-9, mean_abs_dp: 0.50, mean_volume: 1.0e6,
+            correlation: 0.32, r_squared: 0.1024,
+            kylelam_label: "MODERATE_IMPACT".into(), note: String::new(),
+        };
+        upsert_kylelam(&conn, "TEST", &snap).unwrap();
+        let got = get_kylelam(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.kylelam_label, "MODERATE_IMPACT");
+        assert!((got.r_squared - 0.1024).abs() < 1e-9);
+    }
+
+    #[test]
+    fn kylelam_compute_oscillating() {
+        // Fixture uses constant volume (1M), so var(V) = 0 → INSUFFICIENT_DATA.
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_kylelam_snapshot("T", "2026-04-16", &bars);
+        assert_eq!(snap.kylelam_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn peakover_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = PeakoverSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 200,
+            threshold_p95: 0.02, threshold_p99: 0.035,
+            count_p95: 9, count_p99: 2,
+            mean_excess_p95: 0.005, mean_excess_p99: 0.008,
+            max_excess_p95: 0.015, max_excess_p99: 0.020,
+            peakover_label: "HEAVY_TAIL".into(), note: String::new(),
+        };
+        upsert_peakover(&conn, "TEST", &snap).unwrap();
+        let got = get_peakover(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.peakover_label, "HEAVY_TAIL");
+        assert_eq!(got.count_p95, 9);
+    }
+
+    #[test]
+    fn peakover_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_peakover_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.peakover_label, "INSUFFICIENT_DATA");
+        assert!(snap.threshold_p95 > 0.0);
+        assert!(snap.threshold_p99 >= snap.threshold_p95);
+        assert!(snap.mean_excess_p95 >= 0.0);
+        assert!(snap.max_excess_p95 >= snap.mean_excess_p95);
     }
 }

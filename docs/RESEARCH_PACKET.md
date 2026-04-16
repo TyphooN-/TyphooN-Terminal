@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**one hundred and sixty-eight sub-blocks**, each of which is skipped silently when its data
+**one hundred and seventy-three sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -2303,7 +2303,84 @@ ewma_variance, ewma_sigma_daily, ewma_sigma_annual,
 classical_sigma_annual, ewma_to_classical.
 Source: ADR-143 EWMAVOL window.
 
-#### 2.167 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.167 Kolmogorov-Smirnov Normality Test (KSNORM — ADR-144)
+
+Pulled from `research::get_ksnorm`. Standardises the trailing ≤253
+log returns to z = (r−μ̂)/σ̂, sorts them, and computes the
+Kolmogorov-Smirnov D statistic = sup |F_emp(z) − Φ(z)|. Emits three
+rejection flags vs the classical Kolmogorov critical values
+(1.22/√n, 1.36/√n, 1.63/√n) for significance levels 10%/5%/1%. The
+sample μ̂ and σ̂ are included so the consumer can reproduce the
+standardisation. Header gives **ksnorm_label** (NORMAL fails-to-reject
+at 10% / MILD_DEVIATION rejects at 10% but not 5% / MODERATE_DEVIATION
+rejects at 5% but not 1% / STRONG_NON_NORMAL rejects at 1% /
+INSUFFICIENT_DATA). Body reports bars_used, ks_statistic,
+critical_10pct, critical_5pct, critical_1pct, reject booleans, mean,
+sigma.
+Source: ADR-144 KSNORM window.
+
+#### 2.168 Anderson-Darling Normality Test (ADTEST — ADR-144)
+
+Pulled from `research::get_adtest`. Tail-weighted goodness-of-fit test
+for N(μ̂,σ̂²): A² = −n − (1/n)·Σᵢ (2i−1)[ln(Φ(z_i)) +
+ln(1−Φ(z_{n+1−i}))], Stephens 1986 small-sample correction
+A²_adj = A²·(1 + 0.75/n + 2.25/n²). Compares to the fixed critical
+values 0.631/0.752/1.035 at the 10%/5%/1% levels. A p-value
+approximation (Stephens 1986 piecewise-exponential) is also emitted
+for convenience. Header gives **adtest_label** (same four-way
+rejection progression as KSNORM / INSUFFICIENT_DATA). Body reports
+bars_used, ad_statistic, ad_adjusted, p_value_approx, critical_10pct,
+critical_5pct, critical_1pct, reject booleans.
+Source: ADR-144 ADTEST window.
+
+#### 2.169 L-Moments (LMOM — ADR-144)
+
+Pulled from `research::get_lmom`. Computes Hosking's 1990 L-moments
+L1..L4 and L-ratios τ3 = L3/L2 (L-skewness) and τ4 = L4/L2 (L-kurtosis)
+using unbiased probability-weighted moments b_r =
+(1/n)·Σᵢ C(i−1,r)/C(n−1,r)·x_(i) on the trailing log returns. Robust
+alternative to classical skew/kurt that stays finite whenever the
+mean exists — essential for heavy-tailed financial series. τ3 is
+bounded in [−1,1] and τ4 in [−¼, 1] for continuous distributions,
+making cross-symbol comparison straightforward. Header gives
+**lmom_label** (HEAVY_LEFT τ3 < −0.30 / HEAVY_RIGHT τ3 > 0.30 /
+HEAVY_TAILS τ4 > 0.30 / LIGHT_TAILS τ4 < 0.05 / NEAR_SYMMETRIC /
+INSUFFICIENT_DATA). Body reports bars_used, l1_mean, l2_scale, l3,
+l4, tau3_skew, tau4_kurt.
+Source: ADR-144 LMOM window.
+
+#### 2.170 Kyle's Price-Impact λ (KYLELAM — ADR-144)
+
+Pulled from `research::get_kylelam`. Regression coefficient λ =
+cov(|Δp|, V) / var(V) on daily absolute close-to-close price change
+and share volume — Kyle's (1985) price-impact measure expressing how
+many dollars per share of order flow move price. Also reports the
+Pearson correlation ρ(|Δp|, V) and R² = ρ² for signal-quality
+assessment. Distinct from AMIHUD, which is |r|/$-volume (a scale-free
+ratio); KYLELAM is a linear-regression slope on shares with physical
+units $-per-share. Header gives **kylelam_label** (HIGH_IMPACT R² >
+0.20 / MODERATE_IMPACT R² > 0.05 / LOW_IMPACT / NO_SIGNAL R² < 0.02
+/ INSUFFICIENT_DATA). Body reports bars_used, kyle_lambda,
+mean_abs_dp, mean_volume, correlation, r_squared.
+Source: ADR-144 KYLELAM window.
+
+#### 2.171 Peaks-Over-Threshold (PEAKOVER — ADR-144)
+
+Pulled from `research::get_peakover`. Extreme-value / GPD foundation:
+takes |returns|, computes the P95 and P99 thresholds (linear
+interpolation, type-7), and reports for each threshold the count of
+exceedances, the mean excess |r|−u above the threshold (conditional
+on exceeding), and the max excess. The mean-excess / threshold ratio
+at P95 is Pickands' GPD-shape-parameter proxy: a high ratio indicates
+slowly decaying tails above the threshold. Pickands-Balkema-de Haan
+(1974/1975) motivates the threshold-exceedance framing. Header gives
+**peakover_label** (EXTREME_TAIL ratio > 0.80 / HEAVY_TAIL > 0.40 /
+MODERATE_TAIL > 0.20 / LIGHT_TAIL / INSUFFICIENT_DATA). Body reports
+bars_used, threshold_p95, threshold_p99, count_p95, count_p99,
+mean_excess_p95, mean_excess_p99, max_excess_p95, max_excess_p99.
+Source: ADR-144 PEAKOVER window.
+
+#### 2.172 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -2319,7 +2396,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.168 Sector peer comparison
+#### 2.173 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -2350,7 +2427,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.167 above.
+articles to the per-symbol bag consumed by sub-block 2.172 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -2555,35 +2632,41 @@ Question section, not per-symbol.
 | Return quantile profile fields (ADR-143 RETQUANT) | 2 k/v rows | Returns used + P1/P5/P10/P25/P50/P75/P90/P95/P99 + IQR + tail asymmetry + retquant label |
 | Multiscale entropy fields (ADR-143 MSENT) | 2 k/v rows | Returns used + m + r + τ_max + SampEn τ=1..5 + complexity index + msent label |
 | EWMA volatility fields (ADR-143 EWMAVOL) | 2 k/v rows | Returns used + λ + variance + σ daily/annual + classical σ annual + ewma/classical ratio + ewmavol label |
+| KS normality test fields (ADR-144 KSNORM) | 2 k/v rows | Returns used + D statistic + 10%/5%/1% criticals + reject flags + μ + σ + ksnorm label |
+| Anderson-Darling fields (ADR-144 ADTEST) | 2 k/v rows | Returns used + A² + A²_adj + p-value approx + 10%/5%/1% criticals + reject flags + adtest label |
+| L-moments fields (ADR-144 LMOM) | 2 k/v rows | Returns used + L1/L2/L3/L4 + τ3 skew + τ4 kurt + lmom label |
+| Kyle's λ fields (ADR-144 KYLELAM) | 2 k/v rows | Bars used + Kyle λ + mean \|Δp\| + mean V + correlation ρ + R² + kylelam label |
+| Peaks-over-threshold fields (ADR-144 PEAKOVER) | 3 k/v rows | Returns used + P95/P99 thresholds + counts + mean/max excesses (both P95 and P99) + peakover label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **62-123 KB**
-(up from 61-120 KB after ADR-142; ADR-143 adds five optional per-symbol
-blocks — ROBVOL / RENYIENT / RETQUANT / MSENT / EWMAVOL — each measuring
-~2 k/v rows and adding ~200-800 bytes when populated, for a
-typical +1 KB per symbol and +3 KB worst case; all five reuse the
+symbols. A single S&P 500 symbol now produces a packet around **63-125 KB**
+(up from 62-123 KB after ADR-143; ADR-144 adds five optional per-symbol
+blocks — KSNORM / ADTEST / LMOM / KYLELAM / PEAKOVER — each measuring
+~3-10 k/v rows and adding ~250-700 bytes when populated, for a
+typical +1-2 KB per symbol and +2.5 KB worst case; all five reuse the
 existing `research_historical_price` HP cache and the standard
 research-table LAN sync path with zero new API dependencies;
-ROBVOL computes three annualised σ estimators — classical sample σ,
-MAD σ = MAD/0.6745 (Hampel 1974), and IQR σ = IQR/1.349 — the first
-outlier-resistant vol surface, exposing how much of quoted RV is
-driven by a few extreme days; RENYIENT computes Rényi entropy at
-α=2 (collision entropy, Rényi 1961) — the first quadratic-order
-entropy measure, weighting high-probability bins more sharply than
-Shannon and reporting collision probability Σ pᵢ² directly;
-RETQUANT emits the full 9-point empirical quantile profile (P1/P5/
-P10/P25/P50/P75/P90/P95/P99) plus IQR and tail asymmetry ratio —
-the first dense non-parametric distribution snapshot, complementing
-single-point TAILR/CVAR; MSENT computes multiscale Sample Entropy
-(Costa, Goldberger, Peng 2005) at scales τ=1..5 with fixed tolerance
-— the first scale-dependent complexity measure, revealing
-long-range structure invisible to single-scale APEN/SAMPEN;
-EWMAVOL computes the RiskMetrics exponentially-weighted vol with
-λ=0.94 (J.P. Morgan 1996) — the first adaptive-weighted vol
-surface, with a ratio-to-classical flag for recent-vs-average
-regime detection); a 10-symbol basket now lands near **610-1230 KB**
+KSNORM computes the Kolmogorov-Smirnov one-sample normality test
+(Kolmogorov 1933) against N(μ̂,σ̂²), with three-way rejection flags
+at 10%/5%/1% significance — the first omnibus goodness-of-fit
+surface; ADTEST computes the Anderson-Darling tail-weighted
+normality test (Stephens 1986) with small-sample-corrected A² and
+p-value approximation — strictly more powerful than KS in the tail
+regions where financial returns most often deviate from Gaussian;
+LMOM computes Hosking's 1990 L-moments L1..L4 and L-ratios τ3 τ4
+via unbiased probability-weighted moments — a robust alternative to
+classical skew/kurt that stays finite whenever the mean exists and
+exposes bounded L-skew/L-kurt for cross-symbol comparability;
+KYLELAM computes Kyle's (1985) daily price-impact λ =
+cov(|Δp|, V)/var(V) as a regression slope on share volume — the
+first linear-regression liquidity surface, distinct from AMIHUD's
+return-scaled ratio; PEAKOVER computes Peaks-Over-Threshold
+statistics (Pickands-Balkema-de Haan 1974/1975) at the P95 and P99
+thresholds — exceedance counts, mean excesses, max excesses — the
+first EVT/GPD-foundation surface for extreme-tail inspection); a
+10-symbol basket now lands near **620-1250 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).
@@ -2891,6 +2974,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_retquant` | SQLite `research_retquant` | ADR-143 RETQUANT window (9-point return quantile profile P1..P99 + IQR + tail asymmetry — first dense non-parametric distribution snapshot) |
 | `research::get_msent` | SQLite `research_msent` | ADR-143 MSENT window (Costa-Goldberger-Peng 2005 Multiscale SampEn at τ=1..5 with fixed tolerance — first scale-dependent complexity measure) |
 | `research::get_ewmavol` | SQLite `research_ewmavol` | ADR-143 EWMAVOL window (RiskMetrics EWMA variance with λ=0.94 — first adaptive-weighted vol surface with ewma/classical ratio as regime flag) |
+| `research::get_ksnorm` | SQLite `research_ksnorm` | ADR-144 KSNORM window (Kolmogorov-Smirnov one-sample normality test against N(μ̂,σ̂²) with three-way 10%/5%/1% rejection flags — first omnibus goodness-of-fit surface) |
+| `research::get_adtest` | SQLite `research_adtest` | ADR-144 ADTEST window (Anderson-Darling tail-weighted normality test with Stephens 1986 small-sample-corrected A² and p-value approximation — first tail-focused normality surface) |
+| `research::get_lmom` | SQLite `research_lmom` | ADR-144 LMOM window (Hosking 1990 L-moments L1..L4 + L-ratios τ3 τ4 via unbiased probability-weighted moments — first robust-moment surface with bounded L-skew/L-kurt) |
+| `research::get_kylelam` | SQLite `research_kylelam` | ADR-144 KYLELAM window (Kyle 1985 price-impact λ = cov(\|Δp\|,V)/var(V) regression slope + correlation + R² — first linear-regression liquidity surface, distinct from AMIHUD ratio) |
+| `research::get_peakover` | SQLite `research_peakover` | ADR-144 PEAKOVER window (Peaks-Over-Threshold exceedance counts + mean/max excesses at P95 and P99 thresholds — first EVT/GPD-foundation surface) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -2928,5 +3016,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 / 142 / 143 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 / 142 / 143 / 144 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)

@@ -330,6 +330,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_retquant",
     "research_msent",
     "research_ewmavol",
+    // ── ADR-144 Round 36 ────────────────────────────
+    "research_ksnorm",
+    "research_adtest",
+    "research_lmom",
+    "research_kylelam",
+    "research_peakover",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -1673,6 +1679,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-144 Round 36 ──
+        "research_ksnorm" => Some(
+            "CREATE TABLE IF NOT EXISTS research_ksnorm (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_adtest" => Some(
+            "CREATE TABLE IF NOT EXISTS research_adtest (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_lmom" => Some(
+            "CREATE TABLE IF NOT EXISTS research_lmom (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_kylelam" => Some(
+            "CREATE TABLE IF NOT EXISTS research_kylelam (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_peakover" => Some(
+            "CREATE TABLE IF NOT EXISTS research_peakover (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -1867,6 +1909,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_retquant" => Some("updated_at"),
         "research_msent" => Some("updated_at"),
         "research_ewmavol" => Some("updated_at"),
+        // ── ADR-144 Round 36 ──
+        "research_ksnorm" => Some("updated_at"),
+        "research_adtest" => Some("updated_at"),
+        "research_lmom" => Some("updated_at"),
+        "research_kylelam" => Some("updated_at"),
+        "research_peakover" => Some("updated_at"),
         _ => None,
     }
 }
