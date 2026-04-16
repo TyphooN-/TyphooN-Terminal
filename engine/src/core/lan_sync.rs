@@ -294,6 +294,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_ljungb",
     "research_runstest",
     "research_zeroret",
+    // ── ADR-138 Round 30 ────────────────────────────
+    "research_psr",
+    "research_adf",
+    "research_mnkendall",
+    "research_bipower",
+    "research_dddur",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -1421,6 +1427,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-138 Round 30 ──
+        "research_psr" => Some(
+            "CREATE TABLE IF NOT EXISTS research_psr (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_adf" => Some(
+            "CREATE TABLE IF NOT EXISTS research_adf (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_mnkendall" => Some(
+            "CREATE TABLE IF NOT EXISTS research_mnkendall (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_bipower" => Some(
+            "CREATE TABLE IF NOT EXISTS research_bipower (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_dddur" => Some(
+            "CREATE TABLE IF NOT EXISTS research_dddur (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -1579,6 +1621,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_ljungb" => Some("updated_at"),
         "research_runstest" => Some("updated_at"),
         "research_zeroret" => Some("updated_at"),
+        // ── ADR-138 Round 30 ──
+        "research_psr" => Some("updated_at"),
+        "research_adf" => Some("updated_at"),
+        "research_mnkendall" => Some("updated_at"),
+        "research_bipower" => Some("updated_at"),
+        "research_dddur" => Some("updated_at"),
         _ => None,
     }
 }

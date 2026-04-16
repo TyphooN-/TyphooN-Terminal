@@ -3303,6 +3303,141 @@ pub struct ZeroReturnSnapshot {
     pub note: String,
 }
 
+// ── ADR-138 Round 30: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──────────────
+
+/// PSR — Probabilistic Sharpe Ratio (Lopez de Prado 2012).
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Addresses the well-known critique that the classical Sharpe
+/// ratio assumes normally-distributed returns. PSR(SR*) is the
+/// *probability* that the true Sharpe exceeds some benchmark SR*,
+/// computed as
+/// `PSR = Φ((SR − SR*)·√(n−1) / √(1 − γ₃·SR + (γ₄−1)/4·SR²))`
+/// where γ₃ = sample skewness, γ₄ = sample kurtosis (not excess).
+/// Higher PSR at SR*=0 means the positive Sharpe is unlikely to be
+/// a sampling fluke. First packet surface to correct a return-
+/// quality ratio for higher-order moments.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProbabilisticSharpeSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub sharpe: f64,                    // observed annualized Sharpe (same convention as SHARPR)
+    pub skewness: f64,                  // sample γ₃
+    pub kurtosis: f64,                  // sample γ₄ (not excess)
+    pub sr_benchmark: f64,              // SR* used (default 0)
+    pub psr: f64,                       // PSR(SR*) ∈ [0, 1]
+    pub psr_label: String,              // "VERY_LOW" <0.50 / "LOW" <0.75 / "MODERATE" <0.90 / "HIGH" <0.95 / "VERY_HIGH" ≥0.95 / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// ADF — Augmented Dickey-Fuller unit-root / stationarity test.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Applied to **log prices** (not returns). Regresses
+/// `Δlog(p)_t = α + β·log(p)_{t-1} + ε` and reports
+/// `t-stat = β̂ / se(β̂)` against Dickey-Fuller critical values
+/// (MacKinnon 1996 approximation). Rejection of H₀ (β=0) means
+/// the log-price series is stationary. Complements Hurst (long-
+/// memory exponent) and DFA (nonstationarity-robust persistence)
+/// with a formal unit-root hypothesis test. Note: this is the
+/// zero-lag DF test, not the augmented form — the lag-0 variant
+/// is standard in trading literature.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DickeyFullerSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub beta: f64,                      // OLS slope on lagged log-price
+    pub se_beta: f64,                   // standard error of β̂
+    pub t_statistic: f64,               // β̂ / se(β̂)
+    pub crit_1pct: f64,                 // -3.43 (constant-only)
+    pub crit_5pct: f64,                 // -2.86
+    pub crit_10pct: f64,                // -2.57
+    pub reject_unit_root: bool,         // t < crit_5pct
+    pub adf_label: String,              // "STATIONARY" / "BORDERLINE" / "NON_STATIONARY" / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// MNKENDALL — Mann-Kendall nonparametric trend test.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Applied to log prices. Counts sign(x_j − x_i) over all i<j to
+/// form `S = Σᵢ<ⱼ sign(x_j − x_i)`. Under H₀ (no trend), S is
+/// approximately normal with mean 0 and variance
+/// `n(n−1)(2n+5)/18` (no ties correction). Z-statistic and
+/// two-sided p-value via standard normal CDF. Distribution-free
+/// (does not assume linearity or normality) — complements
+/// Hurst/DFA (persistence) and ADF (stationarity) with a
+/// formal trend-presence test.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MannKendallSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub s_statistic: i64,               // Kendall S sum
+    pub variance: f64,                  // Var(S) under null
+    pub z_statistic: f64,
+    pub p_value: f64,                   // two-sided
+    pub tau: f64,                       // Kendall τ = S / (n·(n-1)/2)
+    pub reject_no_trend: bool,          // p < 0.05
+    pub mk_label: String,               // "STRONG_UP" / "UP" / "NO_TREND" / "DOWN" / "STRONG_DOWN" / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// BIPOWER — Bipower variation and realized-jump ratio.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Barndorff-Nielsen & Shephard (2004) decomposition: the realized
+/// variance `RV = Σr_t²` includes both continuous (diffusive)
+/// volatility and jumps. Bipower variation
+/// `BPV = (π/2)·Σ|r_t|·|r_{t-1}|` converges to the integrated
+/// variance of the continuous component *only*, under mild
+/// conditions. Jump ratio `1 − BPV/RV` ∈ [0, 1] estimates the
+/// share of realized variance attributable to jumps. Large
+/// jump ratio ⇒ returns are dominated by discrete events;
+/// small ⇒ classic diffusive behaviour. Distinct from the
+/// vol-level estimators (CLOSEVOL/PARKINSON/GKVOL/RSVOL) — this
+/// is a *composition* metric, not a magnitude.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BipowerVariationSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub realized_var: f64,              // Σ r_t²
+    pub bipower_var: f64,               // BPV
+    pub continuous_vol_ann_pct: f64,    // √(BPV · 252/n) × 100
+    pub realized_vol_ann_pct: f64,      // √(RV · 252/n) × 100 (close-to-close annualized)
+    pub jump_ratio: f64,                // max(0, 1 − BPV/RV), clamped to [0, 1]
+    pub jump_pct: f64,                  // 100 × jump_ratio
+    pub jump_label: String,             // "NO_JUMPS" <0.05 / "MILD_JUMPS" <0.20 / "NOTABLE_JUMPS" <0.40 / "HEAVY_JUMPS" ≥0.40 / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// DDDUR — Drawdown duration statistics.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Walks the closing-price series with a running-max tracker and
+/// records, for each *closed* drawdown event, the number of bars
+/// from peak to recovery. Complements the *magnitude*-focused
+/// CALMAR (single worst dd) / BURKE (sum-of-squares) / STERLING
+/// (mean of N worst) family with a *duration* axis: "how long
+/// am I underwater?" Reports max/mean/median event durations,
+/// total bars underwater in the window, % of time underwater, and
+/// (if a drawdown is still open at window end) a `currently_underwater`
+/// flag with `current_dd_duration`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DrawdownDurationSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub dd_event_count: usize,          // closed drawdowns recorded
+    pub max_dd_duration_bars: usize,
+    pub mean_dd_duration_bars: f64,
+    pub median_dd_duration_bars: f64,
+    pub total_bars_underwater: usize,   // including ongoing
+    pub pct_time_underwater: f64,       // 100 × total / bars_used
+    pub currently_underwater: bool,
+    pub current_dd_duration_bars: usize,
+    pub dddur_label: String,            // "MOSTLY_DRY" <20% / "FREQUENT_DD" <40% / "PERSISTENT_DD" <60% / "DEEP_WATER" ≥60% / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -15850,6 +15985,276 @@ pub fn compute_zeroret_snapshot(
     }
 }
 
+// ── ADR-138 Round 30 computes: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──
+
+pub fn compute_psr_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ProbabilisticSharpeSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return ProbabilisticSharpeSnapshot { symbol: sym, as_of: as_of.into(), psr_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let nf = n as f64;
+    let mean = log_rets.iter().sum::<f64>() / nf;
+    let centered: Vec<f64> = log_rets.iter().map(|r| r - mean).collect();
+    let var = centered.iter().map(|d| d * d).sum::<f64>() / nf;
+    if var < f64::EPSILON {
+        return ProbabilisticSharpeSnapshot { symbol: sym, as_of: as_of.into(), psr_label: "INSUFFICIENT_DATA".into(), note: "zero variance".into(), ..Default::default() };
+    }
+    let std = var.sqrt();
+    // Annualized Sharpe (zero risk-free assumption, 252 days/yr).
+    let sharpe = (mean / std) * (252.0_f64).sqrt();
+    let m3 = centered.iter().map(|d| d.powi(3)).sum::<f64>() / nf;
+    let m4 = centered.iter().map(|d| d.powi(4)).sum::<f64>() / nf;
+    let skew = m3 / (var.powi(3).sqrt());
+    let kurt = m4 / (var * var); // NOT excess — PSR uses γ₄ directly
+    let sr_star = 0.0_f64;
+    // Sharpe used in PSR formula must be in same units as skew/kurtosis of the
+    // per-period returns. Convert annualized back to per-period SR for the
+    // inside of the formula.
+    let sr_per = mean / std;
+    let denom_sq = 1.0 - skew * sr_per + (kurt - 1.0) / 4.0 * sr_per * sr_per;
+    let psr = if denom_sq > 0.0 && n > 1 {
+        let z = (sr_per - sr_star / (252.0_f64).sqrt()) * ((nf - 1.0).sqrt()) / denom_sq.sqrt();
+        std_normal_cdf(z)
+    } else {
+        0.0
+    };
+    let label = if psr < 0.50 { "VERY_LOW" }
+        else if psr < 0.75 { "LOW" }
+        else if psr < 0.90 { "MODERATE" }
+        else if psr < 0.95 { "HIGH" }
+        else { "VERY_HIGH" };
+    ProbabilisticSharpeSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        sharpe, skewness: skew, kurtosis: kurt,
+        sr_benchmark: sr_star, psr,
+        psr_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_adf_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> DickeyFullerSnapshot {
+    let sym = symbol.to_uppercase();
+    let window: Vec<&HistoricalPriceRow> = bars.iter().rev().take(253).collect::<Vec<_>>().into_iter().rev().collect();
+    if window.len() < 30 {
+        return DickeyFullerSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            crit_1pct: -3.43, crit_5pct: -2.86, crit_10pct: -2.57,
+            adf_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥30 bars, got {}", window.len()),
+            ..Default::default()
+        };
+    }
+    // Use log(close) to avoid scale/trend dependency issues.
+    let logp: Vec<f64> = window.iter().filter_map(|b| {
+        if b.close > 0.0 { Some(b.close.ln()) } else { None }
+    }).collect();
+    if logp.len() < 30 {
+        return DickeyFullerSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            crit_1pct: -3.43, crit_5pct: -2.86, crit_10pct: -2.57,
+            adf_label: "INSUFFICIENT_DATA".into(),
+            note: "not enough positive closes".into(),
+            ..Default::default()
+        };
+    }
+    // Regression: Δp_t = α + β · p_{t-1} + ε
+    let n = logp.len() - 1;
+    let nf = n as f64;
+    let x: Vec<f64> = logp[..logp.len() - 1].to_vec();
+    let dy: Vec<f64> = (1..logp.len()).map(|i| logp[i] - logp[i - 1]).collect();
+    let x_mean = x.iter().sum::<f64>() / nf;
+    let y_mean = dy.iter().sum::<f64>() / nf;
+    let sxx: f64 = x.iter().map(|v| (v - x_mean).powi(2)).sum();
+    let sxy: f64 = x.iter().zip(dy.iter()).map(|(xi, yi)| (xi - x_mean) * (yi - y_mean)).sum();
+    if sxx < f64::EPSILON {
+        return DickeyFullerSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            crit_1pct: -3.43, crit_5pct: -2.86, crit_10pct: -2.57,
+            adf_label: "INSUFFICIENT_DATA".into(),
+            note: "zero predictor variance".into(),
+            ..Default::default()
+        };
+    }
+    let beta = sxy / sxx;
+    let alpha = y_mean - beta * x_mean;
+    let residuals: Vec<f64> = x.iter().zip(dy.iter()).map(|(xi, yi)| yi - alpha - beta * xi).collect();
+    let k = 2.0; // parameters: intercept + slope
+    let rss: f64 = residuals.iter().map(|r| r * r).sum();
+    let sigma2 = rss / (nf - k);
+    let se_beta = (sigma2 / sxx).sqrt();
+    let t_stat = if se_beta < f64::EPSILON { 0.0 } else { beta / se_beta };
+    let crit_5 = -2.86_f64;
+    let crit_1 = -3.43_f64;
+    let crit_10 = -2.57_f64;
+    let reject = t_stat < crit_5;
+    let label = if t_stat < crit_1 { "STATIONARY" }
+        else if t_stat < crit_5 { "STATIONARY" }
+        else if t_stat < crit_10 { "BORDERLINE" }
+        else { "NON_STATIONARY" };
+    DickeyFullerSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: logp.len(),
+        beta, se_beta, t_statistic: t_stat,
+        crit_1pct: crit_1, crit_5pct: crit_5, crit_10pct: crit_10,
+        reject_unit_root: reject,
+        adf_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_mnkendall_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MannKendallSnapshot {
+    let sym = symbol.to_uppercase();
+    let window: Vec<&HistoricalPriceRow> = bars.iter().rev().take(253).collect::<Vec<_>>().into_iter().rev().collect();
+    if window.len() < 30 {
+        return MannKendallSnapshot { symbol: sym, as_of: as_of.into(), mk_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 bars, got {}", window.len()), ..Default::default() };
+    }
+    let x: Vec<f64> = window.iter().filter_map(|b| {
+        if b.close > 0.0 { Some(b.close.ln()) } else { None }
+    }).collect();
+    let n = x.len();
+    if n < 30 {
+        return MannKendallSnapshot { symbol: sym, as_of: as_of.into(), mk_label: "INSUFFICIENT_DATA".into(), note: "not enough positive closes".into(), ..Default::default() };
+    }
+    let mut s: i64 = 0;
+    for i in 0..n - 1 {
+        for j in (i + 1)..n {
+            let d = x[j] - x[i];
+            if d > 0.0 { s += 1; }
+            else if d < 0.0 { s -= 1; }
+        }
+    }
+    let nf = n as f64;
+    let var = nf * (nf - 1.0) * (2.0 * nf + 5.0) / 18.0;
+    let z = if s > 0 { (s as f64 - 1.0) / var.sqrt() }
+            else if s < 0 { (s as f64 + 1.0) / var.sqrt() }
+            else { 0.0 };
+    let p = 2.0 * (1.0 - std_normal_cdf(z.abs()));
+    let reject = p < 0.05;
+    let pairs = nf * (nf - 1.0) / 2.0;
+    let tau = if pairs > 0.0 { s as f64 / pairs } else { 0.0 };
+    let label = if !reject {
+        "NO_TREND"
+    } else if z > 0.0 {
+        if p < 0.001 { "STRONG_UP" } else { "UP" }
+    } else {
+        if p < 0.001 { "STRONG_DOWN" } else { "DOWN" }
+    };
+    MannKendallSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        s_statistic: s, variance: var, z_statistic: z, p_value: p,
+        tau, reject_no_trend: reject,
+        mk_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_bipower_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> BipowerVariationSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return BipowerVariationSnapshot { symbol: sym, as_of: as_of.into(), jump_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let rv: f64 = log_rets.iter().map(|r| r * r).sum();
+    let mut bpv: f64 = 0.0;
+    for i in 1..n {
+        bpv += log_rets[i].abs() * log_rets[i - 1].abs();
+    }
+    bpv *= std::f64::consts::FRAC_PI_2;
+    let cont_var_ann = bpv * 252.0 / n as f64;
+    let rv_ann = rv * 252.0 / n as f64;
+    let cont_vol_ann_pct = cont_var_ann.max(0.0).sqrt() * 100.0;
+    let rv_vol_ann_pct = rv_ann.max(0.0).sqrt() * 100.0;
+    let jump_ratio = if rv < f64::EPSILON { 0.0 } else { (1.0 - bpv / rv).max(0.0).min(1.0) };
+    let jump_pct = jump_ratio * 100.0;
+    let label = if jump_ratio < 0.05 { "NO_JUMPS" }
+        else if jump_ratio < 0.20 { "MILD_JUMPS" }
+        else if jump_ratio < 0.40 { "NOTABLE_JUMPS" }
+        else { "HEAVY_JUMPS" };
+    BipowerVariationSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        realized_var: rv, bipower_var: bpv,
+        continuous_vol_ann_pct: cont_vol_ann_pct,
+        realized_vol_ann_pct: rv_vol_ann_pct,
+        jump_ratio, jump_pct,
+        jump_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_dddur_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> DrawdownDurationSnapshot {
+    let sym = symbol.to_uppercase();
+    let window: Vec<&HistoricalPriceRow> = bars.iter().rev().take(253).collect::<Vec<_>>().into_iter().rev().collect();
+    if window.len() < 30 {
+        return DrawdownDurationSnapshot { symbol: sym, as_of: as_of.into(), dddur_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 bars, got {}", window.len()), ..Default::default() };
+    }
+    let n = window.len();
+    let mut durations: Vec<usize> = Vec::new();
+    let mut peak: f64 = window[0].close;
+    let mut in_dd = false;
+    let mut dd_start: usize = 0;
+    let mut total_underwater: usize = 0;
+    for (i, b) in window.iter().enumerate() {
+        let c = b.close;
+        if c > peak {
+            if in_dd {
+                // recovery
+                durations.push(i - dd_start);
+                in_dd = false;
+            }
+            peak = c;
+        } else if c < peak {
+            if !in_dd {
+                in_dd = true;
+                dd_start = i;
+            }
+            total_underwater += 1;
+        } else if in_dd {
+            total_underwater += 1;
+        }
+    }
+    let currently = in_dd;
+    let current_dur = if in_dd { n - dd_start } else { 0 };
+    let dd_event_count = durations.len();
+    let max_dur = durations.iter().copied().max().unwrap_or(0);
+    let mean_dur = if dd_event_count == 0 { 0.0 } else {
+        durations.iter().copied().sum::<usize>() as f64 / dd_event_count as f64
+    };
+    let median_dur = if durations.is_empty() { 0.0 } else {
+        let mut sorted = durations.clone();
+        sorted.sort_unstable();
+        let mid = sorted.len() / 2;
+        if sorted.len() % 2 == 0 {
+            (sorted[mid - 1] + sorted[mid]) as f64 / 2.0
+        } else {
+            sorted[mid] as f64
+        }
+    };
+    let pct_under = total_underwater as f64 / n as f64 * 100.0;
+    let label = if pct_under < 20.0 { "MOSTLY_DRY" }
+        else if pct_under < 40.0 { "FREQUENT_DD" }
+        else if pct_under < 60.0 { "PERSISTENT_DD" }
+        else { "DEEP_WATER" };
+    DrawdownDurationSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        dd_event_count, max_dd_duration_bars: max_dur,
+        mean_dd_duration_bars: mean_dur,
+        median_dd_duration_bars: median_dur,
+        total_bars_underwater: total_underwater,
+        pct_time_underwater: pct_under,
+        currently_underwater: currently,
+        current_dd_duration_bars: current_dur,
+        dddur_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -20293,6 +20698,159 @@ pub fn get_zeroret(conn: &Connection, symbol: &str) -> Result<Option<ZeroReturnS
         .map_err(|e| format!("prepare get_zeroret: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_zeroret: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_zeroret: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-138 Round 30: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──
+
+pub fn create_research_tables_v31(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v30(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_psr (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_psr_updated ON research_psr(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_adf (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_adf_updated ON research_adf(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_mnkendall (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_mnkendall_updated ON research_mnkendall(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_bipower (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_bipower_updated ON research_bipower(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_dddur (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_dddur_updated ON research_dddur(updated_at);",
+    ).map_err(|e| format!("create v31 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_psr(conn: &Connection, symbol: &str, snap: &ProbabilisticSharpeSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v31(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("psr json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_psr(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert psr: {e}"))?;
+    Ok(())
+}
+
+pub fn get_psr(conn: &Connection, symbol: &str) -> Result<Option<ProbabilisticSharpeSnapshot>, String> {
+    let _ = create_research_tables_v31(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_psr WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_psr: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_psr: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_psr: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_adf(conn: &Connection, symbol: &str, snap: &DickeyFullerSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v31(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("adf json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_adf(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert adf: {e}"))?;
+    Ok(())
+}
+
+pub fn get_adf(conn: &Connection, symbol: &str) -> Result<Option<DickeyFullerSnapshot>, String> {
+    let _ = create_research_tables_v31(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_adf WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_adf: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_adf: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_adf: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_mnkendall(conn: &Connection, symbol: &str, snap: &MannKendallSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v31(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("mnkendall json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_mnkendall(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert mnkendall: {e}"))?;
+    Ok(())
+}
+
+pub fn get_mnkendall(conn: &Connection, symbol: &str) -> Result<Option<MannKendallSnapshot>, String> {
+    let _ = create_research_tables_v31(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_mnkendall WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_mnkendall: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_mnkendall: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_mnkendall: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_bipower(conn: &Connection, symbol: &str, snap: &BipowerVariationSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v31(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("bipower json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_bipower(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert bipower: {e}"))?;
+    Ok(())
+}
+
+pub fn get_bipower(conn: &Connection, symbol: &str) -> Result<Option<BipowerVariationSnapshot>, String> {
+    let _ = create_research_tables_v31(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_bipower WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_bipower: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_bipower: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_bipower: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_dddur(conn: &Connection, symbol: &str, snap: &DrawdownDurationSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v31(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("dddur json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_dddur(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert dddur: {e}"))?;
+    Ok(())
+}
+
+pub fn get_dddur(conn: &Connection, symbol: &str) -> Result<Option<DrawdownDurationSnapshot>, String> {
+    let _ = create_research_tables_v31(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_dddur WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_dddur: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_dddur: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_dddur: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -27291,5 +27849,182 @@ Trailing text.
         assert_eq!(snap.longest_zero_streak, 0);
         assert_eq!(snap.zero_label, "HIGHLY_LIQUID");
         assert!((snap.epsilon - 1e-6).abs() < 1e-15);
+    }
+
+    // ── ADR-138 Round 30 tests: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──
+
+    #[test]
+    fn psr_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = ProbabilisticSharpeSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 250,
+            sharpe: 1.5, skewness: -0.3, kurtosis: 4.2,
+            sr_benchmark: 0.0, psr: 0.87,
+            psr_label: "MODERATE".into(), note: String::new(),
+        };
+        upsert_psr(&c, "TEST", &snap).unwrap();
+        let back = get_psr(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.psr_label, "MODERATE");
+        assert!((back.psr - 0.87).abs() < 1e-9);
+        assert!((back.sharpe - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn psr_compute_insufficient() {
+        let snap = compute_psr_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.psr_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn psr_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_psr_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.psr_label, "INSUFFICIENT_DATA");
+        assert!((0.0..=1.0).contains(&snap.psr));
+        assert!(snap.bars_used > 0);
+        assert!(snap.kurtosis > 0.0);
+    }
+
+    #[test]
+    fn adf_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = DickeyFullerSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 253,
+            beta: -0.12, se_beta: 0.035, t_statistic: -3.43,
+            crit_1pct: -3.43, crit_5pct: -2.86, crit_10pct: -2.57,
+            reject_unit_root: true,
+            adf_label: "STATIONARY".into(), note: String::new(),
+        };
+        upsert_adf(&c, "TEST", &snap).unwrap();
+        let back = get_adf(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.adf_label, "STATIONARY");
+        assert!(back.reject_unit_root);
+        assert!((back.crit_5pct - -2.86).abs() < 1e-9);
+    }
+
+    #[test]
+    fn adf_compute_insufficient() {
+        let snap = compute_adf_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.adf_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn adf_compute_oscillating() {
+        // Oscillating ±0.5% close prices are mean-reverting — ADF should
+        // produce a deeply negative t-statistic and reject the unit root.
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_adf_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.adf_label, "INSUFFICIENT_DATA");
+        assert!(snap.bars_used > 0);
+        assert!((snap.crit_5pct - -2.86).abs() < 1e-9);
+        assert!((snap.crit_1pct - -3.43).abs() < 1e-9);
+    }
+
+    #[test]
+    fn mnkendall_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = MannKendallSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 253,
+            s_statistic: 15000, variance: 2_100_000.0,
+            z_statistic: 10.35, p_value: 0.0,
+            tau: 0.47, reject_no_trend: true,
+            mk_label: "STRONG_UP".into(), note: String::new(),
+        };
+        upsert_mnkendall(&c, "TEST", &snap).unwrap();
+        let back = get_mnkendall(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.mk_label, "STRONG_UP");
+        assert_eq!(back.s_statistic, 15000);
+        assert!(back.reject_no_trend);
+    }
+
+    #[test]
+    fn mnkendall_compute_insufficient() {
+        let snap = compute_mnkendall_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.mk_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn mnkendall_compute_monotone_up() {
+        // synthetic_ohlc_bars_150 is monotonically rising → Mann-Kendall
+        // should fire STRONG_UP with high S.
+        let bars = synthetic_ohlc_bars_150();
+        let snap = compute_mnkendall_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.mk_label, "INSUFFICIENT_DATA");
+        assert!(snap.s_statistic > 0);
+        assert!(snap.z_statistic > 0.0);
+        assert!(snap.tau > 0.5);
+        assert!(snap.reject_no_trend);
+        assert_eq!(snap.mk_label, "STRONG_UP");
+    }
+
+    #[test]
+    fn bipower_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = BipowerVariationSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 250,
+            realized_var: 0.04, bipower_var: 0.034,
+            continuous_vol_ann_pct: 18.5,
+            realized_vol_ann_pct: 20.0,
+            jump_ratio: 0.15, jump_pct: 15.0,
+            jump_label: "MILD_JUMPS".into(), note: String::new(),
+        };
+        upsert_bipower(&c, "TEST", &snap).unwrap();
+        let back = get_bipower(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.jump_label, "MILD_JUMPS");
+        assert!((back.jump_ratio - 0.15).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bipower_compute_insufficient() {
+        let snap = compute_bipower_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.jump_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn bipower_compute_oscillating() {
+        // With smooth ±0.5% oscillations, adjacent products |r_t|·|r_{t-1}|
+        // ≈ r² → BPV ≈ (π/2)·RV so jump_ratio should be small / near zero.
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_bipower_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.jump_label, "INSUFFICIENT_DATA");
+        assert!((0.0..=1.0).contains(&snap.jump_ratio));
+        assert!(snap.realized_var > 0.0);
+        assert!(snap.realized_vol_ann_pct > 0.0);
+    }
+
+    #[test]
+    fn dddur_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = DrawdownDurationSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 253,
+            dd_event_count: 12, max_dd_duration_bars: 25,
+            mean_dd_duration_bars: 8.5, median_dd_duration_bars: 7.0,
+            total_bars_underwater: 110, pct_time_underwater: 43.5,
+            currently_underwater: true, current_dd_duration_bars: 4,
+            dddur_label: "PERSISTENT_DD".into(), note: String::new(),
+        };
+        upsert_dddur(&c, "TEST", &snap).unwrap();
+        let back = get_dddur(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.dddur_label, "PERSISTENT_DD");
+        assert_eq!(back.dd_event_count, 12);
+        assert!(back.currently_underwater);
+    }
+
+    #[test]
+    fn dddur_compute_insufficient() {
+        let snap = compute_dddur_snapshot("T", "2026-04-15", &[]);
+        assert_eq!(snap.dddur_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn dddur_compute_monotone_dry() {
+        // Monotonically rising series → no drawdowns, MOSTLY_DRY.
+        let bars = synthetic_ohlc_bars_150();
+        let snap = compute_dddur_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.dddur_label, "INSUFFICIENT_DATA");
+        assert_eq!(snap.dd_event_count, 0);
+        assert_eq!(snap.total_bars_underwater, 0);
+        assert!(!snap.currently_underwater);
+        assert_eq!(snap.dddur_label, "MOSTLY_DRY");
     }
 }

@@ -1856,7 +1856,90 @@ ILLIQUID <30% / VERY_ILLIQUID ≥30% / INSUFFICIENT_DATA). Body
 reports bars_used, zero_day_count, zero_day_pct,
 longest_zero_streak, and epsilon. Source: ADR-137 ZERORET window.
 
-#### 2.137 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.137 Probabilistic Sharpe Ratio (PSR — ADR-138)
+
+Pulled from `research::get_psr`. Lopez de Prado (2012):
+`PSR = Φ((SR − SR*)·√(n−1) / √(1 − γ₃·SR + (γ₄−1)/4·SR²))` —
+the probability that the true Sharpe exceeds a benchmark SR*,
+given sample size, sample skewness γ₃ and kurtosis γ₄. Corrects
+SHARPR for non-normal return distributions; unlike SHARPR which
+reports a magnitude, PSR reports a *probability*. A ticker with
+SR=1.2 and PSR=0.48 is statistically indistinguishable from
+noise, while the same SR with PSR=0.96 is a strong signal.
+First packet surface to apply higher-moment correction to a
+return-quality ratio. Header reports regime bucket
+(VERY_LOW <0.50 / LOW <0.75 / MODERATE <0.90 / HIGH <0.95 /
+VERY_HIGH ≥0.95 / INSUFFICIENT_DATA). Body reports bars_used,
+annualized Sharpe, skewness, kurtosis, SR benchmark, and PSR.
+Source: ADR-138 PSR window.
+
+#### 2.138 Dickey-Fuller Unit-Root Test (ADF — ADR-138)
+
+Pulled from `research::get_adf`. Regresses
+`Δlog(p)_t = α + β·log(p)_{t-1} + ε` and reports
+`t-stat = β̂/se(β̂)` against Dickey-Fuller critical values
+(MacKinnon 1996 constant-only): {−3.43, −2.86, −2.57} at
+1/5/10%. A sufficiently-negative t-statistic rejects the unit
+root, implying the log-price series is stationary / mean-
+reverting. Complements HURST (continuous persistence) and DFA
+(noise-robust persistence) with a binary reject/no-reject
+inferential statement. Header reports regime bucket
+(STATIONARY / BORDERLINE / NON_STATIONARY / INSUFFICIENT_DATA).
+Body reports bars_used, β, SE(β), t-statistic, the three
+critical values, and reject_unit_root. Source: ADR-138 ADF
+window.
+
+#### 2.139 Mann-Kendall Trend Test (MNKENDALL — ADR-138)
+
+Pulled from `research::get_mnkendall`. Nonparametric trend-
+presence test: `S = Σᵢ<ⱼ sign(x_j − x_i)` over all pairs of
+log-prices, with closed-form null variance
+`Var(S) = n(n−1)(2n+5)/18` (no ties correction). Distribution-
+free — unlike linear regression, it makes no assumption of
+linearity or normality, just tests whether observation *order*
+reflects a monotone trend. Pairs with ADF: ADF tests
+stationarity (unit root); MNKENDALL tests trend presence;
+together they distinguish drifting-and-stationary from
+drifting-and-non-stationary series. Header reports regime
+bucket (STRONG_UP / UP / NO_TREND / DOWN / STRONG_DOWN /
+INSUFFICIENT_DATA). Body reports bars_used, S-statistic,
+variance, z-statistic, p-value, Kendall τ, and
+reject_no_trend. Source: ADR-138 MNKENDALL window.
+
+#### 2.140 Bipower Variation / Jump Ratio (BIPOWER — ADR-138)
+
+Pulled from `research::get_bipower`. Barndorff-Nielsen & Shephard
+(2004) decomposition of realized variance: `BPV = (π/2)·Σ|r_t|·|r_{t-1}|`
+is a consistent estimator of the integrated *continuous*
+variance, so `1 − BPV/RV` is the share of realized variance
+attributable to jumps (discrete events). Distinct from the
+volatility-magnitude estimators (CLOSEVOL/PARKINSON/GKVOL/RSVOL/
+VOLOFVOL) — BIPOWER is a *composition* metric that separates
+diffusive from jump components. Useful for regime classification:
+heavy-jumps returns need different risk modeling than diffusive.
+Header reports regime bucket (NO_JUMPS <5% / MILD_JUMPS <20% /
+NOTABLE_JUMPS <40% / HEAVY_JUMPS ≥40% / INSUFFICIENT_DATA). Body
+reports bars_used, realized variance, bipower variation,
+annualized continuous vol %, annualized realized vol %, jump
+ratio, and jump %. Source: ADR-138 BIPOWER window.
+
+#### 2.141 Drawdown Duration Statistics (DDDUR — ADR-138)
+
+Pulled from `research::get_dddur`. Walks the closing-price series
+with a running-max tracker and records, for each closed drawdown
+event, the peak-to-recovery bar count. Complements the
+magnitude-focused drawdown trio (CALMAR single worst / BURKE
+sum-of-squares / STERLING mean of N worst) with a *duration*
+axis: "how long am I underwater?". Header reports regime bucket
+(MOSTLY_DRY <20% / FREQUENT_DD <40% / PERSISTENT_DD <60% /
+DEEP_WATER ≥60% / INSUFFICIENT_DATA). Body reports bars_used,
+dd_event_count (closed drawdowns), max/mean/median event
+durations in bars, total bars underwater, percentage of time
+underwater, currently_underwater flag, and current_dd_duration
+(if a drawdown is still open at window end). Source: ADR-138
+DDDUR window.
+
+#### 2.142 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -1872,7 +1955,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.138 Sector peer comparison
+#### 2.143 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1903,7 +1986,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.137 above.
+articles to the per-symbol bag consumed by sub-block 2.142 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -2078,27 +2161,32 @@ Question section, not per-symbol.
 | Ljung-Box fields (ADR-137 LJUNGB) | 2 k/v rows | Bars used + lag h + Q-statistic + p-value + reject white noise + ljungb label |
 | Runs test fields (ADR-137 RUNSTEST) | 2 k/v rows | Bars used + positive/negative days + runs observed/expected/std + z-stat + p-value + reject randomness + runs label |
 | Zero-return fields (ADR-137 ZERORET) | 2 k/v rows | Bars used + zero day count + zero day % + longest zero streak + epsilon + zero label |
+| Probabilistic Sharpe fields (ADR-138 PSR) | 2 k/v rows | Bars used + annualized Sharpe + skewness γ₃ + kurtosis γ₄ + SR benchmark + PSR + psr label |
+| Dickey-Fuller fields (ADR-138 ADF) | 2 k/v rows | Bars used + β + SE(β) + t-statistic + crit 1/5/10% + reject unit root + adf label |
+| Mann-Kendall fields (ADR-138 MNKENDALL) | 2 k/v rows | Bars used + S-statistic + variance + z-statistic + p-value + Kendall τ + reject no-trend + mk label |
+| Bipower fields (ADR-138 BIPOWER) | 2 k/v rows | Bars used + realized variance + bipower variation + continuous/realized ann vol % + jump ratio + jump % + jump label |
+| Drawdown duration fields (ADR-138 DDDUR) | 2 k/v rows | Bars used + event count + max/mean/median duration + total bars underwater + % underwater + currently underwater + current duration + dddur label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **54-106 KB**
-(up from 52-102 KB after ADR-136; ADR-137 adds five optional per-symbol
-blocks — STERLING / KELLYF / LJUNGB / RUNSTEST / ZERORET — each
-measuring ~2 k/v rows and adding ~300-700 bytes when populated,
-for a typical +2 KB per symbol and +3 KB worst case; all five
-reuse the existing `research_historical_price` HP cache and the
-standard research-table LAN sync path with zero new API
-dependencies; STERLING completes the drawdown-ratio family (with
-CALMAR single-worst and BURKE sum-of-squares — mean of N worst
-is the middle ground); KELLYF is the first forward-looking
-position-sizing scalar (versus the realized-performance ratios
-of SHARPR / CALMAR / BURKE / STERLING / OMEGA); LJUNGB adds a
-joint-lag white-noise test to complement AUTOCOR's per-lag view;
-RUNSTEST adds a formal randomness test to complement RUNLEN's
-descriptive streak stats; ZERORET completes the microstructure
-liquidity trio (AMIHUD impact + ROLLSPRD spread + ZERORET
-trade-frequency)); a 10-symbol basket now lands near **530-1060 KB**
+symbols. A single S&P 500 symbol now produces a packet around **56-110 KB**
+(up from 54-106 KB after ADR-137; ADR-138 adds five optional per-symbol
+blocks — PSR / ADF / MNKENDALL / BIPOWER / DDDUR — each measuring
+~2 k/v rows and adding ~300-700 bytes when populated, for a
+typical +2 KB per symbol and +3 KB worst case; all five reuse the
+existing `research_historical_price` HP cache and the standard
+research-table LAN sync path with zero new API dependencies;
+PSR adds higher-moment correction to the Sharpe ratio
+(Lopez de Prado 2012) — first packet surface to report a
+*probability* that a return-quality ratio is statistically real;
+ADF provides a formal unit-root / stationarity test (rejection =
+mean-reverting log-price); MNKENDALL provides a distribution-free
+trend-presence test complementary to ADF; BIPOWER decomposes
+realized variance into continuous + jump components
+(Barndorff-Nielsen & Shephard 2004); DDDUR completes the
+drawdown family by adding a duration axis (CALMAR/BURKE/STERLING
+cover magnitude)); a 10-symbol basket now lands near **550-1100 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).
@@ -2376,6 +2464,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_ljungb` | SQLite `research_ljungb` | ADR-137 LJUNGB window (Ljung-Box Q at lag 10 — joint autocorrelation / white-noise test with Wilson-Hilferty χ²(10) p-value) |
 | `research::get_runstest` | SQLite `research_runstest` | ADR-137 RUNSTEST window (Wald-Wolfowitz runs test — formal inferential randomness test on sign sequence with z-stat + two-sided p-value via A&S 7.1.26 normal CDF) |
 | `research::get_zeroret` | SQLite `research_zeroret` | ADR-137 ZERORET window (Lesmond-Ogden-Trzcinka zero-return-day fraction — microstructure liquidity proxy distinct from AMIHUD impact + ROLLSPRD spread) |
+| `research::get_psr` | SQLite `research_psr` | ADR-138 PSR window (Probabilistic Sharpe Ratio — Lopez de Prado 2012; corrects SHARPR for skewness/kurtosis and reports a probability the true SR exceeds a benchmark) |
+| `research::get_adf` | SQLite `research_adf` | ADR-138 ADF window (Dickey-Fuller unit-root test on log-price with hardcoded MacKinnon 1996 critical values; rejection ⇒ stationary / mean-reverting) |
+| `research::get_mnkendall` | SQLite `research_mnkendall` | ADR-138 MNKENDALL window (Mann-Kendall nonparametric trend test — distribution-free z-statistic over all i<j sign comparisons; complements ADF with trend-presence instead of stationarity) |
+| `research::get_bipower` | SQLite `research_bipower` | ADR-138 BIPOWER window (Barndorff-Nielsen & Shephard 2004 bipower variation; jump_ratio = 1 − BPV/RV decomposes realized variance into continuous + jump components) |
+| `research::get_dddur` | SQLite `research_dddur` | ADR-138 DDDUR window (drawdown duration statistics: event count + max/mean/median bar-duration + % of time underwater — duration-axis companion to CALMAR/BURKE/STERLING magnitude) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -2413,5 +2506,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)
