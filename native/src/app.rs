@@ -10146,6 +10146,17 @@ enum BrokerCmd {
     ComputeAmihudSnapshot { symbol: String },
     /// JBNORM — Jarque-Bera normality test.
     ComputeJbnormSnapshot { symbol: String },
+    // ── ADR-135 Round 27 ──
+    /// OMEGA — Omega ratio at threshold 0.
+    ComputeOmegaSnapshot { symbol: String },
+    /// DFA — Detrended fluctuation analysis (Hurst alternative).
+    ComputeDfaSnapshot { symbol: String },
+    /// BURKE — Burke ratio (sum-of-squared drawdowns adjusted return).
+    ComputeBurkeSnapshot { symbol: String },
+    /// MONTHSEAS — Monthly seasonality hit rate.
+    ComputeMonthseasSnapshot { symbol: String },
+    /// ROLLSPRD — Roll's (1984) implicit bid-ask spread.
+    ComputeRollsprdSnapshot { symbol: String },
     // ── ADR-130 web article ingestion ──
     /// Parse an AI agent reply, extract any `===TYPHOON_INGEST===` fenced
     /// blocks, and merge the discovered articles into the per-symbol
@@ -10530,6 +10541,12 @@ enum BrokerMsg {
     VarratioSnapshotMsg(String, typhoon_engine::core::research::VarianceRatioSnapshot),
     AmihudSnapshotMsg(String, typhoon_engine::core::research::AmihudIlliqSnapshot),
     JbnormSnapshotMsg(String, typhoon_engine::core::research::JarqueBeraSnapshot),
+    // ── ADR-135 Round 27 ──
+    OmegaSnapshotMsg(String, typhoon_engine::core::research::OmegaRatioSnapshot),
+    DfaSnapshotMsg(String, typhoon_engine::core::research::DetrendedFluctuationSnapshot),
+    BurkeSnapshotMsg(String, typhoon_engine::core::research::BurkeRatioSnapshot),
+    MonthseasSnapshotMsg(String, typhoon_engine::core::research::MonthlySeasonalitySnapshot),
+    RollsprdSnapshotMsg(String, typhoon_engine::core::research::RollSpreadSnapshot),
     // ── ADR-130 ──
     /// Result of an INGEST_RESEARCH operation: per-symbol counts of
     /// newly-added articles plus any parser/write errors encountered.
@@ -12045,6 +12062,28 @@ pub struct TyphooNApp {
     jbnorm_symbol: String,
     jbnorm_snapshot: typhoon_engine::core::research::JarqueBeraSnapshot,
     jbnorm_loading: bool,
+
+    // ── ADR-135 Round 27 ──
+    show_omega: bool,
+    omega_symbol: String,
+    omega_snapshot: typhoon_engine::core::research::OmegaRatioSnapshot,
+    omega_loading: bool,
+    show_dfa: bool,
+    dfa_symbol: String,
+    dfa_snapshot: typhoon_engine::core::research::DetrendedFluctuationSnapshot,
+    dfa_loading: bool,
+    show_burke: bool,
+    burke_symbol: String,
+    burke_snapshot: typhoon_engine::core::research::BurkeRatioSnapshot,
+    burke_loading: bool,
+    show_monthseas: bool,
+    monthseas_symbol: String,
+    monthseas_snapshot: typhoon_engine::core::research::MonthlySeasonalitySnapshot,
+    monthseas_loading: bool,
+    show_rollsprd: bool,
+    rollsprd_symbol: String,
+    rollsprd_snapshot: typhoon_engine::core::research::RollSpreadSnapshot,
+    rollsprd_loading: bool,
 
     // ── ADR-130 Web article ingestion + packet viewer ──
     /// INGEST_RESEARCH — paste-in window where the user drops an AI
@@ -15801,6 +15840,82 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::JbnormSnapshotMsg(symbol, snap));
                         });
                     }
+                    // ── ADR-135 Round 27 handlers ──
+                    BrokerCmd::ComputeOmegaSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_omega_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::OmegaSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeDfaSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_dfa_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::DfaSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeBurkeSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_burke_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::BurkeSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeMonthseasSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_monthseas_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::MonthseasSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeRollsprdSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_rollsprd_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::RollsprdSnapshotMsg(symbol, snap));
+                        });
+                    }
                     // ── ADR-130 web article ingestion handler ──
                     BrokerCmd::IngestResearchArticles { text, agent_override } => {
                         use typhoon_engine::core::research;
@@ -18537,6 +18652,27 @@ When the question touches recent news, sentiment, or prices, combine the researc
             jbnorm_symbol: String::new(),
             jbnorm_snapshot: typhoon_engine::core::research::JarqueBeraSnapshot::default(),
             jbnorm_loading: false,
+            // ── ADR-135 Round 27 defaults ──
+            show_omega: false,
+            omega_symbol: String::new(),
+            omega_snapshot: typhoon_engine::core::research::OmegaRatioSnapshot::default(),
+            omega_loading: false,
+            show_dfa: false,
+            dfa_symbol: String::new(),
+            dfa_snapshot: typhoon_engine::core::research::DetrendedFluctuationSnapshot::default(),
+            dfa_loading: false,
+            show_burke: false,
+            burke_symbol: String::new(),
+            burke_snapshot: typhoon_engine::core::research::BurkeRatioSnapshot::default(),
+            burke_loading: false,
+            show_monthseas: false,
+            monthseas_symbol: String::new(),
+            monthseas_snapshot: typhoon_engine::core::research::MonthlySeasonalitySnapshot::default(),
+            monthseas_loading: false,
+            show_rollsprd: false,
+            rollsprd_symbol: String::new(),
+            rollsprd_snapshot: typhoon_engine::core::research::RollSpreadSnapshot::default(),
+            rollsprd_loading: false,
             // ── ADR-130 defaults ──
             show_ingest_research: false,
             ingest_research_text: String::new(),
@@ -21908,6 +22044,78 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                     }
 
+                    // ── ADR-135 Round 27 packet blocks ──
+                    if let Ok(Some(om)) = rx::get_omega(&conn, &sym_upper) {
+                        if om.omega_label != "INSUFFICIENT_DATA" && !om.omega_label.is_empty() {
+                            let omega_disp = if om.omega_ratio.is_finite() {
+                                format!("{:.3}", om.omega_ratio)
+                            } else { "∞ (no loss days)".to_string() };
+                            let _ = writeln!(p, "### Omega Ratio (τ=0) — OMEGA ({}, as of {})", om.omega_label, om.as_of);
+                            let _ = writeln!(p, "- Bars {} · gains Σ {:.4} · losses Σ {:.4}",
+                                om.bars_used, om.gains_sum, om.losses_sum);
+                            let _ = writeln!(p, "- Gain days {} · loss days {} · win rate {:.1}%",
+                                om.gain_days, om.loss_days, om.win_rate_pct);
+                            let _ = writeln!(p, "- Omega ratio {}", omega_disp);
+                            if !om.note.is_empty() { let _ = writeln!(p, "- Note: {}", om.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(df)) = rx::get_dfa(&conn, &sym_upper) {
+                        if df.dfa_label != "INSUFFICIENT_DATA" && !df.dfa_label.is_empty() {
+                            let _ = writeln!(p, "### Detrended Fluctuation Analysis — DFA ({}, as of {})", df.dfa_label, df.as_of);
+                            let _ = writeln!(p, "- Bars {} · α {:.4} · scales {} · log-log R² {:.3}",
+                                df.bars_used, df.alpha, df.num_scales, df.r_squared);
+                            if !df.note.is_empty() { let _ = writeln!(p, "- Note: {}", df.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(bk)) = rx::get_burke(&conn, &sym_upper) {
+                        if bk.burke_label != "INSUFFICIENT_DATA" && !bk.burke_label.is_empty() {
+                            let _ = writeln!(p, "### Burke Ratio — BURKE ({}, as of {})", bk.burke_label, bk.as_of);
+                            let _ = writeln!(p, "- Bars {} · annualized return {:+.2}% · Burke ratio {:+.3}",
+                                bk.bars_used, bk.annualized_return_pct, bk.burke_ratio);
+                            let _ = writeln!(p, "- Drawdown events {} · Σdd² {:.3} · worst event {:.2}%",
+                                bk.dd_event_count, bk.sum_sq_drawdowns, bk.worst_event_dd_pct);
+                            if !bk.note.is_empty() { let _ = writeln!(p, "- Note: {}", bk.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(ms)) = rx::get_monthseas(&conn, &sym_upper) {
+                        if ms.season_label != "INSUFFICIENT_DATA" && !ms.season_label.is_empty() {
+                            const MONTHS: [&str; 12] = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                            let _ = writeln!(p, "### Monthly Seasonality — MONTHSEAS ({}, as of {})", ms.season_label, ms.as_of);
+                            let _ = writeln!(p, "- Years covered {} · bars {}", ms.years_covered, ms.bars_used);
+                            let _ = writeln!(p, "- Best month: **{}** ({:.1}% hit, {:+.3}% mean)",
+                                MONTHS[ms.best_month_idx], ms.best_month_hit_pct, ms.month_mean_ret_pct[ms.best_month_idx]);
+                            let _ = writeln!(p, "- Worst month: **{}** ({:.1}% hit, {:+.3}% mean)",
+                                MONTHS[ms.worst_month_idx], ms.worst_month_hit_pct, ms.month_mean_ret_pct[ms.worst_month_idx]);
+                            let cells: Vec<String> = (0..12).map(|i| format!("{} {:.0}%/{:+.2}%",
+                                MONTHS[i], ms.month_hit_pct[i], ms.month_mean_ret_pct[i])).collect();
+                            let _ = writeln!(p, "- Monthly hit %/mean: {}", cells.join(" · "));
+                            if !ms.note.is_empty() { let _ = writeln!(p, "- Note: {}", ms.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(rs)) = rx::get_rollsprd(&conn, &sym_upper) {
+                        if rs.roll_label != "INSUFFICIENT_DATA" && !rs.roll_label.is_empty() {
+                            let _ = writeln!(p, "### Roll Implicit Bid-Ask Spread — ROLLSPRD ({}, as of {})", rs.roll_label, rs.as_of);
+                            let _ = writeln!(p, "- Bars {} · first-lag cov {:+.6} · mean price {:.4}",
+                                rs.bars_used, rs.first_lag_cov, rs.mean_price);
+                            if rs.roll_label != "INVALID_POSITIVE_COV" {
+                                let _ = writeln!(p, "- Implicit spread {:.4} ({:.2} bps)",
+                                    rs.implicit_spread, rs.implicit_spread_bps);
+                            } else {
+                                let _ = writeln!(p, "- Spread undefined: first-lag cov non-negative (trending series).");
+                            }
+                            if !rs.note.is_empty() { let _ = writeln!(p, "- Note: {}", rs.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
                     // ── ADR-130 prior-ingested web research (if any) ──
                     if let Ok(Some(ing)) = rx::get_ingested_articles(&conn, &sym_upper) {
                         if !ing.articles.is_empty() {
@@ -24701,6 +24909,87 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         if let Ok(conn) = cache.connection() {
                             if let Ok(Some(snap)) = typhoon_engine::core::research::get_jbnorm(&conn, &self.jbnorm_symbol) {
                                 self.jbnorm_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            // ── ADR-135 Round 27 palette ──
+            "OMEGA" | "OMEGA_RATIO" | "OMEGARATIO" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.omega_symbol = sym; }
+                self.show_omega = true;
+                if self.omega_snapshot.symbol.is_empty() && !self.omega_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_omega(&conn, &self.omega_symbol) {
+                                self.omega_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "DFA" | "DETRENDED_FLUCT" | "DETRENDED_FLUCTUATION" | "DFAALPHA" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.dfa_symbol = sym; }
+                self.show_dfa = true;
+                if self.dfa_snapshot.symbol.is_empty() && !self.dfa_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_dfa(&conn, &self.dfa_symbol) {
+                                self.dfa_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "BURKE" | "BURKE_RATIO" | "BURKERATIO" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.burke_symbol = sym; }
+                self.show_burke = true;
+                if self.burke_snapshot.symbol.is_empty() && !self.burke_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_burke(&conn, &self.burke_symbol) {
+                                self.burke_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "MONTHSEAS" | "MONTHLY_SEASONALITY" | "MONTHLYSEASONALITY" | "SEAS" | "MONTH_SEAS" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.monthseas_symbol = sym; }
+                self.show_monthseas = true;
+                if self.monthseas_snapshot.symbol.is_empty() && !self.monthseas_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_monthseas(&conn, &self.monthseas_symbol) {
+                                self.monthseas_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "ROLLSPRD" | "ROLL_SPREAD" | "ROLLSPREAD" | "ROLL" | "EFFECTIVE_SPREAD" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.rollsprd_symbol = sym; }
+                self.show_rollsprd = true;
+                if self.rollsprd_snapshot.symbol.is_empty() && !self.rollsprd_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_rollsprd(&conn, &self.rollsprd_symbol) {
+                                self.rollsprd_snapshot = snap;
                             }
                         }
                     }
@@ -43934,6 +44223,375 @@ When the question touches recent news, sentiment, or prices, combine the researc
             self.show_jbnorm = open;
         }
 
+        // ── ADR-135 Round 27 windows ──
+        if self.show_omega {
+            if self.omega_symbol.is_empty() { self.omega_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_omega;
+            egui::Window::new("OMEGA — Omega Ratio (τ=0)")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.omega_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.omega_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.omega_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_omega(&conn, &sym_u) {
+                                        self.omega_snapshot = snap;
+                                        self.omega_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.omega_symbol.to_uppercase();
+                            self.omega_loading = true;
+                            self.omega_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeOmegaSnapshot { symbol: sym });
+                        }
+                        if self.omega_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.omega_snapshot;
+                    if snap.symbol.is_empty() || snap.omega_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 returns.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.omega_label.as_str() {
+                            "GOOD" | "EXCELLENT" => UP,
+                            "POOR" | "VERY_POOR" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        let omega_disp = if snap.omega_ratio.is_finite() {
+                            format!("{:.3}", snap.omega_ratio)
+                        } else { "∞".to_string() };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — Ω {} — win {:.1}% — {} bars — as of {}",
+                            snap.symbol, snap.omega_label, omega_disp, snap.win_rate_pct, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("omega_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Gains sum (log)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.5}", snap.gains_sum)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Losses sum (log)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.5}", snap.losses_sum)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Gain days").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.gain_days)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Loss days").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.loss_days)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Win rate").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.win_rate_pct)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_omega = open;
+        }
+
+        if self.show_dfa {
+            if self.dfa_symbol.is_empty() { self.dfa_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_dfa;
+            egui::Window::new("DFA — Detrended Fluctuation Analysis")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.dfa_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.dfa_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.dfa_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_dfa(&conn, &sym_u) {
+                                        self.dfa_snapshot = snap;
+                                        self.dfa_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.dfa_symbol.to_uppercase();
+                            self.dfa_loading = true;
+                            self.dfa_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeDfaSnapshot { symbol: sym });
+                        }
+                        if self.dfa_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.dfa_snapshot;
+                    if snap.symbol.is_empty() || snap.dfa_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥100 returns.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.dfa_label.as_str() {
+                            "PERSISTENT" | "STRONGLY_PERSISTENT" => UP,
+                            "ANTI_PERSISTENT" | "MEAN_REVERTING" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — α {:.4} — R² {:.3} — {} scales — {} bars — as of {}",
+                            snap.symbol, snap.dfa_label, snap.alpha, snap.r_squared, snap.num_scales, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("dfa_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("α (Hurst-like)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.alpha)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Scales sampled").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.num_scales)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Log-log R²").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.r_squared)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_dfa = open;
+        }
+
+        if self.show_burke {
+            if self.burke_symbol.is_empty() { self.burke_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_burke;
+            egui::Window::new("BURKE — Burke Ratio (Σdd² adjusted)")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.burke_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.burke_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.burke_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_burke(&conn, &sym_u) {
+                                        self.burke_snapshot = snap;
+                                        self.burke_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.burke_symbol.to_uppercase();
+                            self.burke_loading = true;
+                            self.burke_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeBurkeSnapshot { symbol: sym });
+                        }
+                        if self.burke_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.burke_snapshot;
+                    if snap.symbol.is_empty() || snap.burke_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 bars.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.burke_label.as_str() {
+                            "GOOD" | "EXCELLENT" => UP,
+                            "POOR" | "VERY_POOR" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — Burke {:+.3} — events {} — ann ret {:+.2}% — as of {}",
+                            snap.symbol, snap.burke_label, snap.burke_ratio, snap.dd_event_count, snap.annualized_return_pct, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("burke_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Annualized return").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.3}%", snap.annualized_return_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Drawdown events").small().strong());
+                            ui.label(egui::RichText::new(format!("{}", snap.dd_event_count)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Σdd²").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.3}", snap.sum_sq_drawdowns)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Worst event dd").small().strong());
+                            ui.label(egui::RichText::new(format!("-{:.2}%", snap.worst_event_dd_pct)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_burke = open;
+        }
+
+        if self.show_monthseas {
+            if self.monthseas_symbol.is_empty() { self.monthseas_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_monthseas;
+            egui::Window::new("MONTHSEAS — Monthly Seasonality")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([720.0, 540.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.monthseas_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.monthseas_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.monthseas_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_monthseas(&conn, &sym_u) {
+                                        self.monthseas_snapshot = snap;
+                                        self.monthseas_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.monthseas_symbol.to_uppercase();
+                            self.monthseas_loading = true;
+                            self.monthseas_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeMonthseasSnapshot { symbol: sym });
+                        }
+                        if self.monthseas_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.monthseas_snapshot;
+                    if snap.symbol.is_empty() || snap.season_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥120 bars across ≥1 year.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.season_label.as_str() {
+                            "STRONG_SEASONAL" | "MILD_SEASONAL" => UP,
+                            "INCONSISTENT" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        const MONTHS: [&str; 12] = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — {} yrs — best {} ({:.0}%) / worst {} ({:.0}%) — as of {}",
+                            snap.symbol, snap.season_label, snap.years_covered,
+                            MONTHS[snap.best_month_idx], snap.best_month_hit_pct,
+                            MONTHS[snap.worst_month_idx], snap.worst_month_hit_pct,
+                            snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("monthseas_grid").striped(true).num_columns(3).min_col_width(120.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Month").small().strong());
+                            ui.label(egui::RichText::new("Hit %").small().strong());
+                            ui.label(egui::RichText::new("Mean ret %").small().strong());
+                            ui.end_row();
+                            for m in 0..12 {
+                                ui.label(egui::RichText::new(MONTHS[m]).small());
+                                ui.label(egui::RichText::new(format!("{:.1}%", snap.month_hit_pct[m])).small().monospace());
+                                ui.label(egui::RichText::new(format!("{:+.3}%", snap.month_mean_ret_pct[m])).small().monospace());
+                                ui.end_row();
+                            }
+                        });
+                    }
+                });
+            self.show_monthseas = open;
+        }
+
+        if self.show_rollsprd {
+            if self.rollsprd_symbol.is_empty() { self.rollsprd_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_rollsprd;
+            egui::Window::new("ROLLSPRD — Roll's Implicit Bid-Ask Spread")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.rollsprd_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.rollsprd_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.rollsprd_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_rollsprd(&conn, &sym_u) {
+                                        self.rollsprd_snapshot = snap;
+                                        self.rollsprd_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.rollsprd_symbol.to_uppercase();
+                            self.rollsprd_loading = true;
+                            self.rollsprd_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeRollsprdSnapshot { symbol: sym });
+                        }
+                        if self.rollsprd_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.rollsprd_snapshot;
+                    if snap.symbol.is_empty() || snap.roll_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 bars.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else if snap.roll_label == "INVALID_POSITIVE_COV" {
+                        ui.label(egui::RichText::new(format!(
+                            "{} — INVALID — first-lag cov {:+.6} (≥0) — Roll model undefined (trending series)",
+                            snap.symbol, snap.first_lag_cov,
+                        )).strong().color(DOWN));
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).small());
+                        }
+                    } else {
+                        let color = match snap.roll_label.as_str() {
+                            "TIGHT" => UP,
+                            "WIDE" | "VERY_WIDE" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — spread {:.4} ({:.1} bps) — {} bars — as of {}",
+                            snap.symbol, snap.roll_label, snap.implicit_spread, snap.implicit_spread_bps, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("rollsprd_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("First-lag cov").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.6}", snap.first_lag_cov)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Mean price").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.mean_price)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Implicit spread").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.implicit_spread)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Implicit spread (bps)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}", snap.implicit_spread_bps)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_rollsprd = open;
+        }
+
         // ── ADR-130 INGEST_RESEARCH window ──
         if self.show_ingest_research {
             let mut open = self.show_ingest_research;
@@ -52396,6 +53054,67 @@ impl eframe::App for TyphooNApp {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let _ = typhoon_engine::core::research::upsert_jbnorm(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                // ── ADR-135 Round 27 receive ──
+                BrokerMsg::OmegaSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.omega_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.omega_snapshot = snap.clone();
+                        self.omega_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_omega(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::DfaSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.dfa_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.dfa_snapshot = snap.clone();
+                        self.dfa_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_dfa(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::BurkeSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.burke_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.burke_snapshot = snap.clone();
+                        self.burke_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_burke(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::MonthseasSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.monthseas_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.monthseas_snapshot = snap.clone();
+                        self.monthseas_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_monthseas(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::RollsprdSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.rollsprd_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.rollsprd_snapshot = snap.clone();
+                        self.rollsprd_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_rollsprd(&conn, &sym_u, &snap);
                         }
                     }
                 }
