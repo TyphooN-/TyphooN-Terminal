@@ -1939,7 +1939,105 @@ underwater, currently_underwater flag, and current_dd_duration
 (if a drawdown is still open at window end). Source: ADR-138
 DDDUR window.
 
-#### 2.142 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.142 Hill Tail-Index Estimator (HILLTAIL — ADR-139)
+
+Pulled from `research::get_hilltail`. Pure symbol-local HP stat
+over the trailing 253-session window. For order statistics
+X_(1) ≥ X_(2) ≥ … ≥ X_(n) of |r_t|, the Hill estimator
+`α̂ = k / Σᵢ₌₁ᵏ log(X_(i) / X_(k+1))` with k ≈ 10%·n estimates
+the Pareto tail exponent `P(|R| > x) ≈ c·x^(−α)`. Small α (≤2)
+⇒ infinite-variance tails; α > 4 ≈ Gaussian-like tails.
+Complements JBNORM (joint normality test) and KURT (fourth-moment
+magnitude — which becomes meaningless when γ₄ is infinite) with
+a distribution-free power-law exponent. Separate estimates on
+left-tail (negative-return magnitudes) and right-tail
+(positive-return magnitudes) expose tail asymmetry invisible to
+KURT. Header gives **tail_label** (GAUSSIAN_LIKE α>4 / LIGHT_TAIL
+α>3 / MODERATE_TAIL α>2 / HEAVY_TAIL α>1 / VERY_HEAVY_TAIL α≤1 /
+INSUFFICIENT_DATA). Body reports bars_used, k_order_stats,
+threshold_abs = X_(k+1), and the three α estimates. Source:
+ADR-139 HILLTAIL window.
+
+#### 2.143 Engle ARCH-LM Test (ARCHLM — ADR-139)
+
+Pulled from `research::get_archlm`. Pure symbol-local HP stat
+over the trailing 253-session window. Engle (1982) regresses
+squared mean-residuals ε²_t on intercept + ε²_{t-1}, …,
+ε²_{t-5} and reports `LM = n·R² ~ χ²(5)` under H₀ (no
+conditional heteroskedasticity). Critical values χ²₀.₀₅(5)=11.07
+and χ²₀.₀₁(5)=15.09 are hardcoded. p-value is computed via the
+Wilson-Hilferty `χ² → Φ` transform for display; the label uses
+direct critical-value comparison. Complements VOLOFVOL
+(descriptive rolling-σ scatter) with the canonical formal test
+for volatility clustering. Joins LJUNGB / RUNSTEST / ADF /
+MNKENDALL / CUSUM as the sixth inferential diagnostic and the
+first on *second-moment* memory. Header gives **arch_label**
+(NO_ARCH <11.07 / WEAK_ARCH <15.09 / STRONG_ARCH ≥15.09 /
+INSUFFICIENT_DATA; singular design ⇒ NO_ARCH). Body reports
+bars_used, q_lags=5, r_squared, lm_statistic, p_value,
+critical values, and `reject_homoskedastic`. Source: ADR-139
+ARCHLM window.
+
+#### 2.144 Pain Index + Pain Ratio (PAINRATIO — ADR-139)
+
+Pulled from `research::get_painratio`. Pure symbol-local HP stat
+over the trailing 253-session window. **Pain Index** = arithmetic
+mean of |dd_t| (%) over every bar, where `dd_t = (close_t −
+peak_t)/peak_t·100`. **Pain Ratio** = `annualized_return /
+pain_index` — the drawdown-averaged analogue of
+Sharpe/Calmar/Burke/Ulcer/Sterling. Completes the magnitude-
+norm sextet alongside CALMAR (sup / max dd), BURKE (L² /
+√Σdd²), STERLING (mean of worst N), ULCER (RMS / √mean(dd²)),
+and DDDUR (duration). PAIN is the L¹ norm — treats every bar
+equally instead of weighting the worst. Header gives
+**pain_label** (LOW_PAIN <1% / MILD_PAIN <3% / MODERATE_PAIN
+<7% / HIGH_PAIN <15% / SEVERE_PAIN ≥15% / INSUFFICIENT_DATA).
+Body reports bars_used, pain_index_pct, annualized_return_pct,
+pain_ratio, and max_dd_pct (companion magnitude). Source:
+ADR-139 PAINRATIO window.
+
+#### 2.145 Brown-Durbin-Evans CUSUM Break Test (CUSUM — ADR-139)
+
+Pulled from `research::get_cusum`. Pure symbol-local HP stat
+over the trailing 253-session window. Builds standardized
+cumulative sum `S_t = Σ_{s=1..t} (r_s − r̄) / σ̂` and reports
+`D = max_t |S_t| / √n`, which under H₀ (mean stability) has the
+Kolmogorov-Smirnov limiting distribution with critical values
+{10%=1.22, 5%=1.36, 1%=1.63}. Rejection ⇒ structural break in
+the return mean somewhere within the window. First structural-
+break test in the packet; pairs with ADF (stationarity of
+levels), LJUNGB (joint autocorrelation), RUNSTEST (sign
+randomness), ARCHLM (second-moment memory), and MNKENDALL
+(trend presence) as the sixth inferential diagnostic covering
+generator-stability. Header gives **cusum_label** (STABLE
+<1.22 / MARGINAL <1.36 / BREAK_DETECTED <1.63 / STRONG_BREAK
+≥1.63 / INSUFFICIENT_DATA). Body reports bars_used, max_abs_cusum,
+test_statistic (the scaled D), max_abs_bar (index of the extreme),
+direction_at_max ("UP"/"DOWN"/"NONE"), critical values, and
+`reject_stability`. Source: ADR-139 CUSUM window.
+
+#### 2.146 Cornish-Fisher Modified VaR (CFVAR — ADR-139)
+
+Pulled from `research::get_cfvar`. Pure symbol-local HP stat
+over the trailing 253-session window. Applies the Cornish-Fisher
+(1938) expansion
+`z* = z + (z²−1)·γ₃/6 + (z³−3z)·γ₄/24 − (2z³−5z)·γ₃²/36` to
+the standard-normal quantile z (z=-1.645 for 5%, z=-2.326 for
+1%), then reports `CF-VaR = μ + z*·σ`. Corrects the Gaussian
+parametric VaR quantile for sample skewness (γ₃) and *excess*
+kurtosis (γ₄). Complements CVAR (empirical tail mean — fully
+nonparametric) with a smooth analytical quantile an agent can
+extrapolate beyond the worst observed sample loss. Distinct
+from TAILR (shape) and DOWNVOL (scale). Header gives
+**cfvar_label** (BENIGN |Δ/Gauss|<10% / SKEW_DRIVEN
+skew-term dominant 10-50% / KURT_DRIVEN kurt-term dominant
+10-50% / EXTREME_DEVIATION |Δ/Gauss|>50% / INSUFFICIENT_DATA).
+Body reports bars_used, mean_ret_pct, sigma_ret_pct, skewness,
+excess_kurtosis, gauss_var_5pct_pct, cf_var_5pct_pct,
+gauss_var_1pct_pct, cf_var_1pct_pct, cf_adjustment_5pct_pct,
+skew_term_5pct, and kurt_term_5pct. Source: ADR-139 CFVAR window.
+
+#### 2.147 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -1955,7 +2053,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.143 Sector peer comparison
+#### 2.148 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1986,7 +2084,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.142 above.
+articles to the per-symbol bag consumed by sub-block 2.147 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -2166,30 +2264,44 @@ Question section, not per-symbol.
 | Mann-Kendall fields (ADR-138 MNKENDALL) | 2 k/v rows | Bars used + S-statistic + variance + z-statistic + p-value + Kendall τ + reject no-trend + mk label |
 | Bipower fields (ADR-138 BIPOWER) | 2 k/v rows | Bars used + realized variance + bipower variation + continuous/realized ann vol % + jump ratio + jump % + jump label |
 | Drawdown duration fields (ADR-138 DDDUR) | 2 k/v rows | Bars used + event count + max/mean/median duration + total bars underwater + % underwater + currently underwater + current duration + dddur label |
+| Hill tail-index fields (ADR-139 HILLTAIL) | 2 k/v rows | Returns used + k order stats + threshold |r|(k+1) + α on |r|/left/right + tail label |
+| ARCH-LM fields (ADR-139 ARCHLM) | 2 k/v rows | Returns used + q lags + R² + LM=n·R² + p-value + crit χ²(5) 5%/1% + reject homoskedastic + arch label |
+| Pain ratio fields (ADR-139 PAINRATIO) | 2 k/v rows | Bars used + pain index (mean\|dd\|) + annualized return + pain ratio + max dd + pain label |
+| CUSUM break fields (ADR-139 CUSUM) | 2 k/v rows | Returns used + max\|S_t\| + D=max\|S_t\|/√n + bar at max + direction + crit 10/5/1% + reject stability + cusum label |
+| Cornish-Fisher VaR fields (ADR-139 CFVAR) | 2 k/v rows | Returns used + mean/σ returns + skew γ₃ + excess kurt γ₄ + Gauss/CF VaR 5%+1% + adj 5% + skew/kurt term contributions + cfvar label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **56-110 KB**
-(up from 54-106 KB after ADR-137; ADR-138 adds five optional per-symbol
-blocks — PSR / ADF / MNKENDALL / BIPOWER / DDDUR — each measuring
+symbols. A single S&P 500 symbol now produces a packet around **58-114 KB**
+(up from 56-110 KB after ADR-138; ADR-139 adds five optional per-symbol
+blocks — HILLTAIL / ARCHLM / PAINRATIO / CUSUM / CFVAR — each measuring
 ~2 k/v rows and adding ~300-700 bytes when populated, for a
 typical +2 KB per symbol and +3 KB worst case; all five reuse the
 existing `research_historical_price` HP cache and the standard
 research-table LAN sync path with zero new API dependencies;
-PSR adds higher-moment correction to the Sharpe ratio
-(Lopez de Prado 2012) — first packet surface to report a
-*probability* that a return-quality ratio is statistically real;
-ADF provides a formal unit-root / stationarity test (rejection =
-mean-reverting log-price); MNKENDALL provides a distribution-free
-trend-presence test complementary to ADF; BIPOWER decomposes
-realized variance into continuous + jump components
-(Barndorff-Nielsen & Shephard 2004); DDDUR completes the
-drawdown family by adding a duration axis (CALMAR/BURKE/STERLING
-cover magnitude)); a 10-symbol basket now lands near **550-1100 KB**
-when every symbol has a fully populated ingest bag (the global
-context and the Return Path footer are each emitted exactly once,
-so multi-symbol overhead is still bounded by the per-symbol blocks).
+HILLTAIL reports the Hill (1975) tail-index estimator α on |r|
+plus separate left/right-tail α — first nonparametric tail-index
+surface in the packet, well-defined even when fourth-moment-based
+diagnostics (KURT/JBNORM) become meaningless under infinite-variance
+heavy tails; ARCHLM is the Engle (1982) ARCH Lagrange-multiplier
+test at q=5 — first formal conditional-heteroskedasticity test,
+distinguishing volatility clustering (reject) from iid magnitude
+(accept); PAINRATIO reports the Zephyr/FIBA Pain Index (mean|dd|)
+and Pain Ratio (ann_return/pain_index) — completes the drawdown
+magnitude-norm sextet {sup/CALMAR, L²/BURKE, worst-N/STERLING,
+RMS/ULCER, duration/DDDUR, L¹/PAINRATIO}; CUSUM is the
+Brown-Durbin-Evans (1975) OLS CUSUM structural-break test with
+Kolmogorov-Smirnov critical values {10%=1.22, 5%=1.36, 1%=1.63} —
+first formal mean-stability test in the packet; CFVAR is the
+Cornish-Fisher (1938) modified VaR adjusting the Gauss quantile for
+γ₃ and γ₄ — first higher-moment-adjusted parametric VaR, with
+skew-term vs kurt-term attribution so an agent sees which moment
+drives any departure from Gauss); a 10-symbol basket now lands near
+**570-1140 KB** when every symbol has a fully populated ingest bag
+(the global context and the Return Path footer are each emitted
+exactly once, so multi-symbol overhead is still bounded by the
+per-symbol blocks).
 
 ---
 
@@ -2469,6 +2581,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_mnkendall` | SQLite `research_mnkendall` | ADR-138 MNKENDALL window (Mann-Kendall nonparametric trend test — distribution-free z-statistic over all i<j sign comparisons; complements ADF with trend-presence instead of stationarity) |
 | `research::get_bipower` | SQLite `research_bipower` | ADR-138 BIPOWER window (Barndorff-Nielsen & Shephard 2004 bipower variation; jump_ratio = 1 − BPV/RV decomposes realized variance into continuous + jump components) |
 | `research::get_dddur` | SQLite `research_dddur` | ADR-138 DDDUR window (drawdown duration statistics: event count + max/mean/median bar-duration + % of time underwater — duration-axis companion to CALMAR/BURKE/STERLING magnitude) |
+| `research::get_hilltail` | SQLite `research_hilltail` | ADR-139 HILLTAIL window (Hill 1975 tail-index estimator on \|r\| plus separate left/right-tail α — nonparametric power-law exponent well-defined under infinite-variance heavy tails where KURT/JBNORM fail) |
+| `research::get_archlm` | SQLite `research_archlm` | ADR-139 ARCHLM window (Engle 1982 ARCH Lagrange-multiplier test at q=5 lags — formal conditional-heteroskedasticity test with χ²(5) critical values; first packet surface on second-moment memory) |
+| `research::get_painratio` | SQLite `research_painratio` | ADR-139 PAINRATIO window (Zephyr/FIBA Pain Index = mean\|dd\|, Pain Ratio = ann_return/pain_index — L¹ drawdown norm completing the magnitude-norm sextet with CALMAR/BURKE/STERLING/ULCER/DDDUR) |
+| `research::get_cusum` | SQLite `research_cusum` | ADR-139 CUSUM window (Brown-Durbin-Evans 1975 OLS CUSUM structural-break test — first formal mean-stability test in the packet with KS critical values {10%=1.22, 5%=1.36, 1%=1.63}) |
+| `research::get_cfvar` | SQLite `research_cfvar` | ADR-139 CFVAR window (Cornish-Fisher 1938 modified VaR — Gauss quantile adjusted for skew γ₃ and excess kurt γ₄ with skew-term vs kurt-term attribution) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -2506,5 +2623,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)

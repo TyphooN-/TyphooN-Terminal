@@ -3438,6 +3438,139 @@ pub struct DrawdownDurationSnapshot {
     pub note: String,
 }
 
+/// HILLTAIL — Hill tail-index estimator.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// For order statistics X_(1) ≥ X_(2) ≥ … ≥ X_(n) of |r_t|, the
+/// Hill estimator `α̂ = k / Σᵢ₌₁ᵏ log(X_(i) / X_(k+1))` estimates
+/// the Pareto-tail index assuming `P(|R| > x) ≈ c·x^(−α)`. Small α
+/// ⇒ heavy power-law tails (α ≤ 2 ⇒ infinite variance in the
+/// underlying Pareto); large α ⇒ tails decay fast (α > 4 ≈ Gaussian-
+/// like). Complements JBNORM (joint normality *test*) and KURT
+/// (fourth-moment magnitude) with a *nonparametric power-law
+/// exponent*. Separate estimates on left-tail (negative-return
+/// magnitudes) and right-tail (positive-return magnitudes) expose
+/// tail asymmetry invisible to KURT.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HillTailSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub k_order_stats: usize,                 // top-k used (10% of n, min 10)
+    pub threshold_abs: f64,                   // X_(k+1) from |r| ordering
+    pub hill_alpha_abs: f64,                  // tail index on |r|
+    pub hill_alpha_left: f64,                 // tail index on negative-return magnitudes
+    pub hill_alpha_right: f64,                // tail index on positive-return magnitudes
+    pub tail_label: String,                   // "GAUSSIAN_LIKE" α>4 / "LIGHT_TAIL" α>3 / "MODERATE_TAIL" α>2 / "HEAVY_TAIL" α>1 / "VERY_HEAVY_TAIL" α≤1 / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// ARCHLM — Engle (1982) ARCH Lagrange-multiplier test.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Regresses squared mean-residuals ε_t² on intercept +
+/// ε²_{t-1}, …, ε²_{t-q} (here q=5) and reports
+/// `LM = n·R² ~ χ²(q)` under H₀ (no conditional heteroskedasticity).
+/// Critical values χ²₀.₀₅(5)=11.07, χ²₀.₀₁(5)=15.09 (hardcoded).
+/// Complements VOLOFVOL (descriptive rolling-σ scatter) with a
+/// formal hypothesis test for volatility clustering, which is the
+/// canonical stylized fact of financial returns.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ArchLmSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub q_lags: usize,                        // 5
+    pub r_squared: f64,                       // R² of ε² regression
+    pub lm_statistic: f64,                    // n·R²
+    pub p_value: f64,                         // via Wilson-Hilferty transform to Φ
+    pub crit_5pct_chi2: f64,                  // 11.07
+    pub crit_1pct_chi2: f64,                  // 15.09
+    pub reject_homoskedastic: bool,           // LM > crit_5pct_chi2
+    pub arch_label: String,                   // "NO_ARCH" / "WEAK_ARCH" / "STRONG_ARCH" / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// PAINRATIO — Pain index and pain ratio (Zephyr/FIBA).
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Pain Index = arithmetic mean of |dd_t| (%) across every bar of
+/// the window, where dd_t = (close_t − peak_t)/peak_t · 100.
+/// Pain Ratio = annualized_return / pain_index — the drawdown-
+/// averaged analogue of Sharpe/Calmar/Burke/Ulcer/Sterling. Distinct
+/// denominators: CALMAR=max, BURKE=√Σdd², STERLING=mean of worst N,
+/// ULCER=√mean(dd²) (RMS), PAIN=mean|dd| (L¹). Pain treats every
+/// bar equally, not just the worst ones.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PainRatioSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pain_index_pct: f64,                  // mean |dd_t| in %
+    pub annualized_return_pct: f64,
+    pub pain_ratio: f64,                      // ann_return / pain_index
+    pub max_dd_pct: f64,                      // companion magnitude
+    pub pain_label: String,                   // "LOW_PAIN" <1 / "MILD_PAIN" <3 / "MODERATE_PAIN" <7 / "HIGH_PAIN" <15 / "SEVERE_PAIN" ≥15 / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// CUSUM — Brown-Durbin-Evans (1975) OLS CUSUM test for mean stability.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Builds standardized cumulative sum
+/// `S_t = Σ_{s=1..t} (r_s − r̄) / σ̂` and reports the scaled
+/// test statistic `D = max_t |S_t| / √n`, which under H₀ (mean
+/// stability) has the Kolmogorov-Smirnov limiting distribution with
+/// critical values {10%=1.22, 5%=1.36, 1%=1.63}. Rejection signals
+/// a structural break in the return mean. Pairs with ADF
+/// (stationarity of levels), LJUNGB (joint autocorrelation), and
+/// RUNSTEST (randomness of signs) as the fourth inferential
+/// diagnostic and the first structural-break test in the packet.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CusumBreakSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub max_abs_cusum: f64,                   // max_t |S_t|
+    pub test_statistic: f64,                  // max_abs_cusum / √n
+    pub max_abs_bar: usize,                   // index t where max is achieved
+    pub direction_at_max: String,             // "UP" if S_t>0 at max, "DOWN" if <0, "NONE" otherwise
+    pub crit_10pct: f64,                      // 1.22
+    pub crit_5pct: f64,                       // 1.36
+    pub crit_1pct: f64,                       // 1.63
+    pub reject_stability: bool,               // test_statistic > crit_5pct
+    pub cusum_label: String,                  // "STABLE" / "MARGINAL" / "BREAK_DETECTED" / "STRONG_BREAK" / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// CFVAR — Cornish-Fisher modified Value-at-Risk.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// Applies the Cornish-Fisher (1938) expansion
+/// `z* = z + (z²−1)·γ₃/6 + (z³−3z)·γ₄/24 − (2z³−5z)·γ₃²/36`
+/// to the standard-normal quantile, then reports
+/// `CF-VaR = μ + z*·σ`. This corrects the Gaussian VaR quantile
+/// for sample skewness (γ₃) and *excess* kurtosis (γ₄). Complements
+/// historical CVAR (fully nonparametric tail) with a parametric
+/// skew/kurt-aware VaR, useful when an agent wants a smooth
+/// analytical quantile rather than an empirical one. Reports both
+/// the Gaussian and CF-adjusted quantiles at 5% and 1%, and the
+/// dominance of skew-term vs kurt-term in driving any deviation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CornishFisherSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub mean_ret_pct: f64,                    // daily mean × 100
+    pub sigma_ret_pct: f64,                   // daily std × 100
+    pub skewness: f64,                        // γ₃
+    pub excess_kurtosis: f64,                 // γ₄ (excess — subtract 3)
+    pub gauss_var_5pct_pct: f64,              // μ + (−1.645)·σ × 100
+    pub cf_var_5pct_pct: f64,                 // μ + z*(5%)·σ × 100
+    pub gauss_var_1pct_pct: f64,              // μ + (−2.326)·σ × 100
+    pub cf_var_1pct_pct: f64,                 // μ + z*(1%)·σ × 100
+    pub cf_adjustment_5pct_pct: f64,          // cf_var_5pct − gauss_var_5pct
+    pub skew_term_5pct: f64,                  // (z²−1)·γ₃/6 − (2z³−5z)·γ₃²/36 at z=-1.645
+    pub kurt_term_5pct: f64,                  // (z³−3z)·γ₄/24 at z=-1.645
+    pub cfvar_label: String,                  // "BENIGN" / "SKEW_DRIVEN" / "KURT_DRIVEN" / "EXTREME_DEVIATION" / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -16255,6 +16388,310 @@ pub fn compute_dddur_snapshot(
     }
 }
 
+// ── ADR-139 Round 31: HILLTAIL / ARCHLM / PAINRATIO / CUSUM / CFVAR ──
+
+pub fn compute_hilltail_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> HillTailSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 50 {
+        return HillTailSnapshot { symbol: sym, as_of: as_of.into(), tail_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥50 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    fn hill_of(xs: &[f64]) -> (f64, usize, f64) {
+        // xs already positive magnitudes
+        let mut v: Vec<f64> = xs.iter().copied().filter(|x| *x > 0.0).collect();
+        if v.len() < 20 { return (0.0, 0, 0.0); }
+        v.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        let k = ((v.len() as f64 * 0.10).floor() as usize).max(10).min(v.len() - 1);
+        let threshold = v[k];
+        if threshold <= 0.0 { return (0.0, k, 0.0); }
+        let sum_log: f64 = v[..k].iter().map(|x| (x / threshold).ln()).sum();
+        let alpha = if sum_log > f64::EPSILON { k as f64 / sum_log } else { 0.0 };
+        (alpha, k, threshold)
+    }
+    let abs_mags: Vec<f64> = log_rets.iter().map(|r| r.abs()).collect();
+    let left_mags: Vec<f64> = log_rets.iter().filter(|r| **r < 0.0).map(|r| -r).collect();
+    let right_mags: Vec<f64> = log_rets.iter().filter(|r| **r > 0.0).copied().collect();
+    let (alpha_abs, k_abs, thresh_abs) = hill_of(&abs_mags);
+    let (alpha_left, _, _) = hill_of(&left_mags);
+    let (alpha_right, _, _) = hill_of(&right_mags);
+    let label = if alpha_abs <= 0.0 { "INSUFFICIENT_DATA" }
+        else if alpha_abs > 4.0 { "GAUSSIAN_LIKE" }
+        else if alpha_abs > 3.0 { "LIGHT_TAIL" }
+        else if alpha_abs > 2.0 { "MODERATE_TAIL" }
+        else if alpha_abs > 1.0 { "HEAVY_TAIL" }
+        else { "VERY_HEAVY_TAIL" };
+    HillTailSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: log_rets.len(),
+        k_order_stats: k_abs, threshold_abs: thresh_abs,
+        hill_alpha_abs: alpha_abs,
+        hill_alpha_left: alpha_left,
+        hill_alpha_right: alpha_right,
+        tail_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_archlm_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ArchLmSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let q: usize = 5;
+    if log_rets.len() < q + 30 {
+        return ArchLmSnapshot {
+            symbol: sym, as_of: as_of.into(), q_lags: q,
+            crit_5pct_chi2: 11.0705, crit_1pct_chi2: 15.0863,
+            arch_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} returns, got {}", q + 30, log_rets.len()),
+            ..Default::default()
+        };
+    }
+    let n_r = log_rets.len();
+    let mean = log_rets.iter().sum::<f64>() / n_r as f64;
+    let eps2: Vec<f64> = log_rets.iter().map(|r| (r - mean).powi(2)).collect();
+    // Build design matrix: rows t from q..n_r of [1, eps2[t-1], ..., eps2[t-q]] regressing eps2[t]
+    let n = n_r - q;
+    let nf = n as f64;
+    let y: Vec<f64> = (q..n_r).map(|t| eps2[t]).collect();
+    // Build sums for normal equations: X'X is (q+1)x(q+1), X'Y is (q+1)x1.
+    let p = q + 1;
+    let mut xtx = vec![0.0_f64; p * p];
+    let mut xty = vec![0.0_f64; p];
+    let y_mean = y.iter().sum::<f64>() / nf;
+    let tss: f64 = y.iter().map(|yi| (yi - y_mean).powi(2)).sum();
+    for t in q..n_r {
+        // row = [1, eps2[t-1], eps2[t-2], ..., eps2[t-q]]
+        let mut row = vec![1.0_f64; p];
+        for lag in 1..=q { row[lag] = eps2[t - lag]; }
+        for i in 0..p {
+            for j in 0..p { xtx[i * p + j] += row[i] * row[j]; }
+            xty[i] += row[i] * y[t - q];
+        }
+    }
+    // Solve via simple Gaussian elimination on (p x p) matrix. p=6 is tiny.
+    let mut a = xtx.clone();
+    let mut b = xty.clone();
+    let mut ok = true;
+    for col in 0..p {
+        let mut pivot = col;
+        for r in col + 1..p { if a[r * p + col].abs() > a[pivot * p + col].abs() { pivot = r; } }
+        if a[pivot * p + col].abs() < 1e-12 { ok = false; break; }
+        if pivot != col {
+            for k in 0..p { a.swap(col * p + k, pivot * p + k); }
+            b.swap(col, pivot);
+        }
+        let inv = 1.0 / a[col * p + col];
+        for r in col + 1..p {
+            let factor = a[r * p + col] * inv;
+            for k in col..p { a[r * p + k] -= factor * a[col * p + k]; }
+            b[r] -= factor * b[col];
+        }
+    }
+    let mut coef = vec![0.0_f64; p];
+    if ok {
+        for i in (0..p).rev() {
+            let mut sum = b[i];
+            for j in i + 1..p { sum -= a[i * p + j] * coef[j]; }
+            coef[i] = sum / a[i * p + i];
+        }
+    }
+    let rss: f64 = (q..n_r).map(|t| {
+        let mut yhat = coef[0];
+        for lag in 1..=q { yhat += coef[lag] * eps2[t - lag]; }
+        (y[t - q] - yhat).powi(2)
+    }).sum();
+    // Near-constant ε² (e.g. deterministic oscillating returns) makes X'X singular; that's
+    // equivalent to "no conditional heteroskedasticity" — treat as NO_ARCH with LM=0.
+    let r2 = if tss > f64::EPSILON && ok { (1.0 - rss / tss).max(0.0).min(1.0) } else { 0.0 };
+    let lm = nf * r2;
+    // Wilson-Hilferty chi-squared to normal: z = ((LM/q)^(1/3) - (1 - 2/(9q))) / √(2/(9q))
+    let qf = q as f64;
+    let z = ((lm / qf).powf(1.0 / 3.0) - (1.0 - 2.0 / (9.0 * qf))) / (2.0 / (9.0 * qf)).sqrt();
+    let p_val = (1.0 - std_normal_cdf(z)).max(0.0).min(1.0);
+    let crit5 = 11.0705_f64;
+    let crit1 = 15.0863_f64;
+    let reject = lm > crit5;
+    let label = if lm < crit5 { "NO_ARCH" }
+        else if lm < crit1 { "WEAK_ARCH" }
+        else { "STRONG_ARCH" };
+    ArchLmSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n_r,
+        q_lags: q, r_squared: r2, lm_statistic: lm, p_value: p_val,
+        crit_5pct_chi2: crit5, crit_1pct_chi2: crit1,
+        reject_homoskedastic: reject,
+        arch_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_painratio_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PainRatioSnapshot {
+    let sym = symbol.to_uppercase();
+    let window: Vec<&HistoricalPriceRow> = bars.iter().rev().take(253).collect::<Vec<_>>().into_iter().rev().collect();
+    if window.len() < 30 {
+        return PainRatioSnapshot { symbol: sym, as_of: as_of.into(), pain_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 bars, got {}", window.len()), ..Default::default() };
+    }
+    let n = window.len();
+    let mut peak: f64 = window[0].close;
+    let mut sum_abs_dd: f64 = 0.0;
+    let mut max_abs_dd: f64 = 0.0;
+    for b in window.iter() {
+        if b.close > peak { peak = b.close; }
+        let dd = if peak > 0.0 { (b.close - peak) / peak * 100.0 } else { 0.0 };
+        let abs_dd = (-dd).max(0.0); // dd ≤ 0 by construction; take magnitude
+        sum_abs_dd += abs_dd;
+        if abs_dd > max_abs_dd { max_abs_dd = abs_dd; }
+    }
+    let pain_index = sum_abs_dd / n as f64;
+    // Annualized return: total log return × (252/n)
+    let first = window.first().map(|b| b.close).unwrap_or(0.0);
+    let last = window.last().map(|b| b.close).unwrap_or(0.0);
+    let ann_ret_pct = if first > 0.0 && last > 0.0 {
+        ((last / first).ln() * 252.0 / n as f64) * 100.0
+    } else { 0.0 };
+    let pain_ratio = if pain_index > f64::EPSILON { ann_ret_pct / pain_index } else { 0.0 };
+    let label = if pain_index < 1.0 { "LOW_PAIN" }
+        else if pain_index < 3.0 { "MILD_PAIN" }
+        else if pain_index < 7.0 { "MODERATE_PAIN" }
+        else if pain_index < 15.0 { "HIGH_PAIN" }
+        else { "SEVERE_PAIN" };
+    PainRatioSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pain_index_pct: pain_index,
+        annualized_return_pct: ann_ret_pct,
+        pain_ratio,
+        max_dd_pct: max_abs_dd,
+        pain_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cusum_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CusumBreakSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let n = log_rets.len();
+    if n < 30 {
+        return CusumBreakSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            crit_10pct: 1.22, crit_5pct: 1.36, crit_1pct: 1.63,
+            direction_at_max: "NONE".into(),
+            cusum_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥30 returns, got {}", n),
+            ..Default::default()
+        };
+    }
+    let nf = n as f64;
+    let mean = log_rets.iter().sum::<f64>() / nf;
+    let var = log_rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (nf - 1.0).max(1.0);
+    let std = var.sqrt();
+    if std < f64::EPSILON {
+        return CusumBreakSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            crit_10pct: 1.22, crit_5pct: 1.36, crit_1pct: 1.63,
+            direction_at_max: "NONE".into(),
+            cusum_label: "INSUFFICIENT_DATA".into(),
+            note: "zero variance".into(),
+            ..Default::default()
+        };
+    }
+    let mut cum = 0.0_f64;
+    let mut max_abs = 0.0_f64;
+    let mut max_bar = 0_usize;
+    let mut max_signed = 0.0_f64;
+    for (t, r) in log_rets.iter().enumerate() {
+        cum += (r - mean) / std;
+        let a = cum.abs();
+        if a > max_abs {
+            max_abs = a;
+            max_bar = t;
+            max_signed = cum;
+        }
+    }
+    let stat = max_abs / nf.sqrt();
+    let crit10 = 1.22_f64;
+    let crit5 = 1.36_f64;
+    let crit1 = 1.63_f64;
+    let reject = stat > crit5;
+    let label = if stat < crit10 { "STABLE" }
+        else if stat < crit5 { "MARGINAL" }
+        else if stat < crit1 { "BREAK_DETECTED" }
+        else { "STRONG_BREAK" };
+    let dir = if max_signed > 0.0 { "UP" } else if max_signed < 0.0 { "DOWN" } else { "NONE" };
+    CusumBreakSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        max_abs_cusum: max_abs,
+        test_statistic: stat,
+        max_abs_bar: max_bar,
+        direction_at_max: dir.into(),
+        crit_10pct: crit10, crit_5pct: crit5, crit_1pct: crit1,
+        reject_stability: reject,
+        cusum_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cfvar_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CornishFisherSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return CornishFisherSnapshot { symbol: sym, as_of: as_of.into(), cfvar_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let nf = n as f64;
+    let mean = log_rets.iter().sum::<f64>() / nf;
+    let centered: Vec<f64> = log_rets.iter().map(|r| r - mean).collect();
+    let var = centered.iter().map(|d| d * d).sum::<f64>() / nf;
+    if var < f64::EPSILON {
+        return CornishFisherSnapshot { symbol: sym, as_of: as_of.into(), cfvar_label: "INSUFFICIENT_DATA".into(), note: "zero variance".into(), ..Default::default() };
+    }
+    let std = var.sqrt();
+    let m3 = centered.iter().map(|d| d.powi(3)).sum::<f64>() / nf;
+    let m4 = centered.iter().map(|d| d.powi(4)).sum::<f64>() / nf;
+    let skew = m3 / var.powf(1.5);
+    let kurt_excess = m4 / (var * var) - 3.0;
+    fn cf_z(z: f64, skew: f64, kurt_excess: f64) -> f64 {
+        z + (z * z - 1.0) * skew / 6.0
+          + (z.powi(3) - 3.0 * z) * kurt_excess / 24.0
+          - (2.0 * z.powi(3) - 5.0 * z) * skew * skew / 36.0
+    }
+    fn cf_skew_term(z: f64, skew: f64) -> f64 {
+        (z * z - 1.0) * skew / 6.0 - (2.0 * z.powi(3) - 5.0 * z) * skew * skew / 36.0
+    }
+    fn cf_kurt_term(z: f64, kurt_excess: f64) -> f64 {
+        (z.powi(3) - 3.0 * z) * kurt_excess / 24.0
+    }
+    let z5 = -1.6448536269514722_f64; // one-tailed 5%
+    let z1 = -2.3263478740408408_f64; // one-tailed 1%
+    let z5_cf = cf_z(z5, skew, kurt_excess);
+    let z1_cf = cf_z(z1, skew, kurt_excess);
+    let g5 = (mean + z5 * std) * 100.0;
+    let g1 = (mean + z1 * std) * 100.0;
+    let c5 = (mean + z5_cf * std) * 100.0;
+    let c1 = (mean + z1_cf * std) * 100.0;
+    let adj5 = c5 - g5;
+    let skew_t5 = cf_skew_term(z5, skew);
+    let kurt_t5 = cf_kurt_term(z5, kurt_excess);
+    let rel_dev = if g5.abs() > f64::EPSILON { adj5.abs() / g5.abs() } else { 0.0 };
+    let label = if rel_dev > 0.50 { "EXTREME_DEVIATION" }
+        else if rel_dev < 0.10 { "BENIGN" }
+        else if skew_t5.abs() >= kurt_t5.abs() { "SKEW_DRIVEN" }
+        else { "KURT_DRIVEN" };
+    CornishFisherSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        mean_ret_pct: mean * 100.0,
+        sigma_ret_pct: std * 100.0,
+        skewness: skew, excess_kurtosis: kurt_excess,
+        gauss_var_5pct_pct: g5, cf_var_5pct_pct: c5,
+        gauss_var_1pct_pct: g1, cf_var_1pct_pct: c1,
+        cf_adjustment_5pct_pct: adj5,
+        skew_term_5pct: skew_t5, kurt_term_5pct: kurt_t5,
+        cfvar_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -20851,6 +21288,159 @@ pub fn get_dddur(conn: &Connection, symbol: &str) -> Result<Option<DrawdownDurat
         .map_err(|e| format!("prepare get_dddur: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_dddur: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_dddur: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-139 Round 31: HILLTAIL / ARCHLM / PAINRATIO / CUSUM / CFVAR ──
+
+pub fn create_research_tables_v32(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v31(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_hilltail (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_hilltail_updated ON research_hilltail(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_archlm (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_archlm_updated ON research_archlm(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_painratio (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_painratio_updated ON research_painratio(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cusum (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cusum_updated ON research_cusum(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cfvar (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cfvar_updated ON research_cfvar(updated_at);",
+    ).map_err(|e| format!("create v32 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_hilltail(conn: &Connection, symbol: &str, snap: &HillTailSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v32(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("hilltail json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_hilltail(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert hilltail: {e}"))?;
+    Ok(())
+}
+
+pub fn get_hilltail(conn: &Connection, symbol: &str) -> Result<Option<HillTailSnapshot>, String> {
+    let _ = create_research_tables_v32(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_hilltail WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_hilltail: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_hilltail: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_hilltail: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_archlm(conn: &Connection, symbol: &str, snap: &ArchLmSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v32(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("archlm json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_archlm(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert archlm: {e}"))?;
+    Ok(())
+}
+
+pub fn get_archlm(conn: &Connection, symbol: &str) -> Result<Option<ArchLmSnapshot>, String> {
+    let _ = create_research_tables_v32(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_archlm WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_archlm: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_archlm: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_archlm: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_painratio(conn: &Connection, symbol: &str, snap: &PainRatioSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v32(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("painratio json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_painratio(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert painratio: {e}"))?;
+    Ok(())
+}
+
+pub fn get_painratio(conn: &Connection, symbol: &str) -> Result<Option<PainRatioSnapshot>, String> {
+    let _ = create_research_tables_v32(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_painratio WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_painratio: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_painratio: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_painratio: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cusum(conn: &Connection, symbol: &str, snap: &CusumBreakSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v32(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cusum json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cusum(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cusum: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cusum(conn: &Connection, symbol: &str) -> Result<Option<CusumBreakSnapshot>, String> {
+    let _ = create_research_tables_v32(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cusum WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_cusum: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_cusum: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_cusum: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cfvar(conn: &Connection, symbol: &str, snap: &CornishFisherSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v32(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cfvar json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cfvar(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cfvar: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cfvar(conn: &Connection, symbol: &str) -> Result<Option<CornishFisherSnapshot>, String> {
+    let _ = create_research_tables_v32(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cfvar WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_cfvar: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_cfvar: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_cfvar: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -28026,5 +28616,180 @@ Trailing text.
         assert_eq!(snap.total_bars_underwater, 0);
         assert!(!snap.currently_underwater);
         assert_eq!(snap.dddur_label, "MOSTLY_DRY");
+    }
+
+    // ── Round 31 tests ──
+
+    #[test]
+    fn hilltail_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = HillTailSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(),
+            bars_used: 200, k_order_stats: 20, threshold_abs: 0.02,
+            hill_alpha_abs: 2.5, hill_alpha_left: 2.3, hill_alpha_right: 2.7,
+            tail_label: "MODERATE_TAIL".into(), note: String::new(),
+        };
+        upsert_hilltail(&c, "TEST", &snap).unwrap();
+        let back = get_hilltail(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.tail_label, "MODERATE_TAIL");
+        assert!((back.hill_alpha_abs - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hilltail_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_hilltail_snapshot("T", "2026-04-15", &bars);
+        assert_eq!(snap.tail_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn hilltail_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_hilltail_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.tail_label, "INSUFFICIENT_DATA");
+        assert!(snap.k_order_stats >= 10);
+        assert!(snap.hill_alpha_abs >= 0.0);
+    }
+
+    #[test]
+    fn archlm_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = ArchLmSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(),
+            bars_used: 200, q_lags: 5, r_squared: 0.08,
+            lm_statistic: 16.0, p_value: 0.0068,
+            crit_5pct_chi2: 11.0705, crit_1pct_chi2: 15.0863,
+            reject_homoskedastic: true, arch_label: "STRONG_ARCH".into(),
+            note: String::new(),
+        };
+        upsert_archlm(&c, "TEST", &snap).unwrap();
+        let back = get_archlm(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.arch_label, "STRONG_ARCH");
+        assert!(back.reject_homoskedastic);
+    }
+
+    #[test]
+    fn archlm_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_archlm_snapshot("T", "2026-04-15", &bars);
+        assert_eq!(snap.arch_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn archlm_compute_oscillating() {
+        // Oscillating bars yield a regular ε² series; the LM stat should
+        // be finite and the label should not be INSUFFICIENT_DATA.
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_archlm_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.arch_label, "INSUFFICIENT_DATA");
+        assert!(snap.lm_statistic >= 0.0);
+        assert!(snap.r_squared >= 0.0 && snap.r_squared <= 1.0);
+    }
+
+    #[test]
+    fn painratio_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = PainRatioSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(),
+            bars_used: 200, pain_index_pct: 3.5,
+            annualized_return_pct: 12.0, pain_ratio: 3.43,
+            max_dd_pct: 22.0, pain_label: "MODERATE_PAIN".into(),
+            note: String::new(),
+        };
+        upsert_painratio(&c, "TEST", &snap).unwrap();
+        let back = get_painratio(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.pain_label, "MODERATE_PAIN");
+        assert!((back.pain_ratio - 3.43).abs() < 1e-9);
+    }
+
+    #[test]
+    fn painratio_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_painratio_snapshot("T", "2026-04-15", &bars);
+        assert_eq!(snap.pain_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn painratio_compute_monotone_low_pain() {
+        // Monotonically rising close → no drawdown → pain_index ≈ 0.
+        let bars = synthetic_ohlc_bars_150();
+        let snap = compute_painratio_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.pain_label, "INSUFFICIENT_DATA");
+        assert!(snap.pain_index_pct < 1.0);
+        assert_eq!(snap.pain_label, "LOW_PAIN");
+    }
+
+    #[test]
+    fn cusum_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = CusumBreakSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(),
+            bars_used: 200, max_abs_cusum: 20.5,
+            test_statistic: 1.45, max_abs_bar: 120,
+            direction_at_max: "UP".into(),
+            crit_10pct: 1.22, crit_5pct: 1.36, crit_1pct: 1.63,
+            reject_stability: true, cusum_label: "BREAK_DETECTED".into(),
+            note: String::new(),
+        };
+        upsert_cusum(&c, "TEST", &snap).unwrap();
+        let back = get_cusum(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.cusum_label, "BREAK_DETECTED");
+        assert_eq!(back.direction_at_max, "UP");
+    }
+
+    #[test]
+    fn cusum_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_cusum_snapshot("T", "2026-04-15", &bars);
+        assert_eq!(snap.cusum_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn cusum_compute_oscillating() {
+        // Alternating ±0.5% returns → near-zero mean → CUSUM should
+        // stay inside the 10% bound → STABLE.
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_cusum_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.cusum_label, "INSUFFICIENT_DATA");
+        assert!(snap.test_statistic >= 0.0);
+        assert!(snap.max_abs_cusum >= 0.0);
+    }
+
+    #[test]
+    fn cfvar_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = CornishFisherSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(),
+            bars_used: 200, mean_ret_pct: 0.05, sigma_ret_pct: 1.20,
+            skewness: -0.3, excess_kurtosis: 2.5,
+            gauss_var_5pct_pct: -1.92, cf_var_5pct_pct: -2.15,
+            gauss_var_1pct_pct: -2.74, cf_var_1pct_pct: -3.20,
+            cf_adjustment_5pct_pct: -0.23,
+            skew_term_5pct: -0.10, kurt_term_5pct: -0.15,
+            cfvar_label: "KURT_DRIVEN".into(), note: String::new(),
+        };
+        upsert_cfvar(&c, "TEST", &snap).unwrap();
+        let back = get_cfvar(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.cfvar_label, "KURT_DRIVEN");
+        assert!((back.cf_adjustment_5pct_pct - (-0.23)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cfvar_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_cfvar_snapshot("T", "2026-04-15", &bars);
+        assert_eq!(snap.cfvar_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn cfvar_compute_oscillating() {
+        // Oscillating symmetric returns should be near Gaussian → skew≈0,
+        // excess kurt ≈ -2 (very light) → CF adjustment should be small ⇒ BENIGN
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_cfvar_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.cfvar_label, "INSUFFICIENT_DATA");
+        assert!(snap.sigma_ret_pct > 0.0);
+        // Gauss 5% VaR should be non-positive (loss side)
+        assert!(snap.gauss_var_5pct_pct <= snap.mean_ret_pct);
     }
 }
