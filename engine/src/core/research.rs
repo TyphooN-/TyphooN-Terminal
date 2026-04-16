@@ -4002,6 +4002,84 @@ pub struct PeakoverSnapshot {
     pub note: String,
 }
 
+// ── ADR-145 Round 37 ──────────────────────────────────────────────────────
+
+/// HIGUCHI — Higuchi fractal dimension (Higuchi 1988).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct HiguchiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub k_max: usize,               // max sub-sampling interval
+    pub fractal_dim: f64,           // FD (slope of log L(k) vs log(1/k))
+    pub r_squared: f64,             // linear-fit R²
+    pub log_k_count: usize,         // #points used in regression
+    pub higuchi_label: String,      // SMOOTH / PERSISTENT / RANDOM / ROUGH / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// PICKANDS — Pickands 1975 tail-index estimator.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PickandsSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub k_index: usize,             // order-statistic index used
+    pub gamma_hat: f64,             // Pickands γ̂ = (1/ln2)·ln((x_k − x_2k)/(x_2k − x_4k))
+    pub tail_index: f64,            // 1/γ̂ (Fréchet α, when γ̂ > 0)
+    pub x_k: f64,                   // k-th largest |r|
+    pub x_2k: f64,                  // 2k-th largest
+    pub x_4k: f64,                  // 4k-th largest
+    pub pickands_label: String,     // FRECHET_HEAVY / FRECHET_MODERATE / GUMBEL_EXPONENTIAL / WEIBULL_BOUNDED / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// KAPPA3 — Kaplan-Knowles 2004 Kappa-3 ratio (third-order LPM).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct Kappa3Snapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub mar: f64,                   // Minimum Acceptable Return (0 for simplicity)
+    pub excess_mean: f64,           // μ − MAR (annualised)
+    pub lpm3: f64,                  // third lower partial moment E[max(MAR−r,0)³]
+    pub lpm3_root: f64,             // LPM3^(1/3)
+    pub kappa3: f64,                // (μ−MAR) / LPM3^(1/3)
+    pub sortino_compare: f64,       // (μ−MAR) / LPM2^(1/2) for reference
+    pub kappa3_label: String,       // STRONG / POSITIVE / NEUTRAL / NEGATIVE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// LYAPUNOV — Rosenstein et al. 1993 largest Lyapunov exponent.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct LyapunovSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub embed_dim: usize,           // m
+    pub time_delay: usize,          // τ (=1 for daily returns)
+    pub lambda_max: f64,            // largest Lyapunov exponent (per bar)
+    pub r_squared: f64,             // fit quality of ln d(i) vs i
+    pub steps_used: usize,          // number of i-steps in the regression
+    pub lyapunov_label: String,     // CHAOTIC / WEAKLY_CHAOTIC / PERIODIC / STABLE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// RANKAC — Spearman rank autocorrelation at lags 1, 5, 10.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct RankacSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub rho_lag1: f64,              // Spearman ρ at lag 1
+    pub rho_lag5: f64,              // Spearman ρ at lag 5
+    pub rho_lag10: f64,             // Spearman ρ at lag 10
+    pub mean_abs_rho: f64,          // mean |ρ| across the 3 lags
+    pub max_abs_rho: f64,           // max |ρ|
+    pub rankac_label: String,       // STRONG_DEPENDENCE / MODERATE_DEPENDENCE / WEAK_DEPENDENCE / INDEPENDENT / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -18340,6 +18418,309 @@ pub fn compute_peakover_snapshot(
     }
 }
 
+// ── ADR-145 Round 37 computes ────────────────────────────────────────────
+
+/// HIGUCHI compute: Higuchi 1988 fractal dimension.
+pub fn compute_higuchi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> HiguchiSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 100 {
+        return HiguchiSnapshot { symbol: sym, as_of: as_of.into(), higuchi_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥100 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    // cumulative sum so that "fluctuation" acts on a walk, per Higuchi convention
+    let mut x = Vec::with_capacity(n);
+    let mut s = 0.0f64;
+    for &r in &log_rets { s += r; x.push(s); }
+    let k_max = 10usize;
+    let mut log_k: Vec<f64> = Vec::new();
+    let mut log_l: Vec<f64> = Vec::new();
+    for k in 1..=k_max {
+        let mut lk_sum = 0.0f64;
+        let mut count = 0usize;
+        for m in 0..k {
+            // indices m, m+k, m+2k, ...
+            let max_i = (n - 1 - m) / k;
+            if max_i < 1 { continue; }
+            let mut l_m = 0.0f64;
+            for i in 1..=max_i {
+                l_m += (x[m + i * k] - x[m + (i - 1) * k]).abs();
+            }
+            let norm = ((n - 1) as f64) / ((max_i * k) as f64);
+            l_m = l_m * norm / (k as f64);
+            lk_sum += l_m; count += 1;
+        }
+        if count == 0 { continue; }
+        let l_avg = lk_sum / count as f64;
+        if l_avg > 0.0 {
+            log_k.push((1.0 / k as f64).ln());
+            log_l.push(l_avg.ln());
+        }
+    }
+    if log_k.len() < 3 {
+        return HiguchiSnapshot { symbol: sym, as_of: as_of.into(), higuchi_label: "INSUFFICIENT_DATA".into(), note: "insufficient log-k points".into(), ..Default::default() };
+    }
+    // Linear regression log_l = fd · log_k + c  (note: we want slope w.r.t. ln(1/k))
+    let m = log_k.len() as f64;
+    let mx: f64 = log_k.iter().sum::<f64>() / m;
+    let my: f64 = log_l.iter().sum::<f64>() / m;
+    let mut sxx = 0.0f64; let mut sxy = 0.0f64; let mut syy = 0.0f64;
+    for i in 0..log_k.len() {
+        let dx = log_k[i] - mx;
+        let dy = log_l[i] - my;
+        sxx += dx * dx; sxy += dx * dy; syy += dy * dy;
+    }
+    if sxx < f64::EPSILON {
+        return HiguchiSnapshot { symbol: sym, as_of: as_of.into(), higuchi_label: "INSUFFICIENT_DATA".into(), note: "no variation in log k".into(), ..Default::default() };
+    }
+    let fd = sxy / sxx; // slope
+    let r2 = if syy > f64::EPSILON { (sxy * sxy) / (sxx * syy) } else { 0.0 };
+    let label = if fd < 1.1 { "SMOOTH" }
+        else if fd < 1.4 { "PERSISTENT" }
+        else if fd < 1.6 { "RANDOM" }
+        else { "ROUGH" };
+    HiguchiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        k_max, fractal_dim: fd, r_squared: r2, log_k_count: log_k.len(),
+        higuchi_label: label.into(), note: String::new(),
+    }
+}
+
+/// PICKANDS compute: Pickands 1975 tail-index estimator.
+pub fn compute_pickands_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PickandsSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 80 {
+        return PickandsSnapshot { symbol: sym, as_of: as_of.into(), pickands_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥80 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let mut abs_r: Vec<f64> = log_rets.iter().map(|r| r.abs()).collect();
+    // sort descending so index i=0 is the largest
+    abs_r.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    // Pickands requires at least 4k+1 samples. Use k = n/16 ⇒ 4k < n.
+    let k = (n / 16).max(5);
+    if 4 * k >= n {
+        return PickandsSnapshot { symbol: sym, as_of: as_of.into(), pickands_label: "INSUFFICIENT_DATA".into(), note: format!("4k={} ≥ n={}", 4 * k, n), ..Default::default() };
+    }
+    let x_k = abs_r[k - 1];
+    let x_2k = abs_r[2 * k - 1];
+    let x_4k = abs_r[4 * k - 1];
+    let num = x_k - x_2k;
+    let den = x_2k - x_4k;
+    if den.abs() < f64::EPSILON || num.abs() < f64::EPSILON {
+        return PickandsSnapshot { symbol: sym, as_of: as_of.into(), pickands_label: "INSUFFICIENT_DATA".into(), note: "degenerate order-stat differences".into(), ..Default::default() };
+    }
+    let ratio = num / den;
+    if ratio <= 0.0 {
+        return PickandsSnapshot { symbol: sym, as_of: as_of.into(), pickands_label: "INSUFFICIENT_DATA".into(), note: format!("ratio {} ≤ 0", ratio), ..Default::default() };
+    }
+    let gamma_hat = ratio.ln() / std::f64::consts::LN_2;
+    let tail_index = if gamma_hat.abs() < f64::EPSILON { f64::INFINITY } else { 1.0 / gamma_hat };
+    let label = if gamma_hat > 0.5 { "FRECHET_HEAVY" }
+        else if gamma_hat > 0.1 { "FRECHET_MODERATE" }
+        else if gamma_hat > -0.1 { "GUMBEL_EXPONENTIAL" }
+        else { "WEIBULL_BOUNDED" };
+    PickandsSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        k_index: k, gamma_hat, tail_index,
+        x_k, x_2k, x_4k,
+        pickands_label: label.into(), note: String::new(),
+    }
+}
+
+/// KAPPA3 compute: Kaplan-Knowles 2004 Kappa-3 ratio.
+pub fn compute_kappa3_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> Kappa3Snapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return Kappa3Snapshot { symbol: sym, as_of: as_of.into(), kappa3_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let nf = n as f64;
+    let mar = 0.0_f64;
+    let mean = log_rets.iter().sum::<f64>() / nf;
+    // Annualise with ×252 for excess-mean and ×√252 for lpm roots
+    let excess_mean_ann = (mean - mar) * 252.0;
+    let mut lpm2 = 0.0f64; let mut lpm3 = 0.0f64;
+    for &r in &log_rets {
+        let d = (mar - r).max(0.0);
+        lpm2 += d * d;
+        lpm3 += d * d * d;
+    }
+    lpm2 /= nf; lpm3 /= nf;
+    if lpm2 < f64::EPSILON || lpm3 < f64::EPSILON {
+        return Kappa3Snapshot { symbol: sym, as_of: as_of.into(), kappa3_label: "INSUFFICIENT_DATA".into(), note: "zero lower partial moment".into(), ..Default::default() };
+    }
+    let lpm3_root = lpm3.powf(1.0 / 3.0);
+    // Annualise the downside risk: ×252^(1/3) for cube-root LPM, ×√252 for squared LPM
+    let lpm3_root_ann = lpm3_root * (252.0_f64).powf(1.0 / 3.0);
+    let lpm2_root_ann = lpm2.sqrt() * (252.0_f64).sqrt();
+    let kappa3 = excess_mean_ann / lpm3_root_ann;
+    let sortino = excess_mean_ann / lpm2_root_ann;
+    let label = if kappa3 > 1.0 { "STRONG" }
+        else if kappa3 > 0.0 { "POSITIVE" }
+        else if kappa3 > -0.5 { "NEUTRAL" }
+        else { "NEGATIVE" };
+    Kappa3Snapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        mar, excess_mean: excess_mean_ann,
+        lpm3, lpm3_root: lpm3_root_ann,
+        kappa3, sortino_compare: sortino,
+        kappa3_label: label.into(), note: String::new(),
+    }
+}
+
+/// LYAPUNOV compute: Rosenstein et al. 1993 largest Lyapunov exponent.
+pub fn compute_lyapunov_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> LyapunovSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 100 {
+        return LyapunovSnapshot { symbol: sym, as_of: as_of.into(), lyapunov_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥100 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let m = 3usize;
+    let tau = 1usize;
+    let n_vec = n - (m - 1) * tau;
+    if n_vec < 30 {
+        return LyapunovSnapshot { symbol: sym, as_of: as_of.into(), lyapunov_label: "INSUFFICIENT_DATA".into(), note: "too few embedding vectors".into(), ..Default::default() };
+    }
+    // Build embedded vectors
+    let mut vecs: Vec<[f64; 3]> = Vec::with_capacity(n_vec);
+    for i in 0..n_vec {
+        vecs.push([log_rets[i], log_rets[i + tau], log_rets[i + 2 * tau]]);
+    }
+    // For each reference point, find nearest neighbour (excluding Theiler window)
+    let theiler = 10usize;
+    let max_steps = 20usize;
+    let mut log_d_sum = vec![0.0f64; max_steps];
+    let mut log_d_cnt = vec![0usize; max_steps];
+    for i in 0..vecs.len() {
+        let mut best_j: Option<usize> = None;
+        let mut best_d = f64::INFINITY;
+        for j in 0..vecs.len() {
+            if (j as i64 - i as i64).unsigned_abs() as usize <= theiler { continue; }
+            let dx = vecs[i][0] - vecs[j][0];
+            let dy = vecs[i][1] - vecs[j][1];
+            let dz = vecs[i][2] - vecs[j][2];
+            let d2 = dx * dx + dy * dy + dz * dz;
+            if d2 < best_d { best_d = d2; best_j = Some(j); }
+        }
+        if let Some(j) = best_j {
+            if best_d <= f64::EPSILON { continue; }
+            for step in 0..max_steps {
+                let ii = i + step; let jj = j + step;
+                if ii >= vecs.len() || jj >= vecs.len() { break; }
+                let dx = vecs[ii][0] - vecs[jj][0];
+                let dy = vecs[ii][1] - vecs[jj][1];
+                let dz = vecs[ii][2] - vecs[jj][2];
+                let d = (dx * dx + dy * dy + dz * dz).sqrt();
+                if d > f64::EPSILON {
+                    log_d_sum[step] += d.ln();
+                    log_d_cnt[step] += 1;
+                }
+            }
+        }
+    }
+    let mut xs: Vec<f64> = Vec::new();
+    let mut ys: Vec<f64> = Vec::new();
+    for step in 0..max_steps {
+        if log_d_cnt[step] > 5 {
+            xs.push(step as f64);
+            ys.push(log_d_sum[step] / log_d_cnt[step] as f64);
+        }
+    }
+    if xs.len() < 5 {
+        return LyapunovSnapshot { symbol: sym, as_of: as_of.into(), lyapunov_label: "INSUFFICIENT_DATA".into(), note: "too few regression points".into(), ..Default::default() };
+    }
+    let mlen = xs.len() as f64;
+    let mx: f64 = xs.iter().sum::<f64>() / mlen;
+    let my: f64 = ys.iter().sum::<f64>() / mlen;
+    let mut sxx = 0.0f64; let mut sxy = 0.0f64; let mut syy = 0.0f64;
+    for i in 0..xs.len() {
+        let dx = xs[i] - mx;
+        let dy = ys[i] - my;
+        sxx += dx * dx; sxy += dx * dy; syy += dy * dy;
+    }
+    if sxx < f64::EPSILON {
+        return LyapunovSnapshot { symbol: sym, as_of: as_of.into(), lyapunov_label: "INSUFFICIENT_DATA".into(), note: "degenerate regression".into(), ..Default::default() };
+    }
+    let lambda = sxy / sxx;
+    let r2 = if syy > f64::EPSILON { (sxy * sxy) / (sxx * syy) } else { 0.0 };
+    let label = if lambda > 0.10 { "CHAOTIC" }
+        else if lambda > 0.02 { "WEAKLY_CHAOTIC" }
+        else if lambda > -0.02 { "PERIODIC" }
+        else { "STABLE" };
+    LyapunovSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        embed_dim: m, time_delay: tau,
+        lambda_max: lambda, r_squared: r2, steps_used: xs.len(),
+        lyapunov_label: label.into(), note: String::new(),
+    }
+}
+
+/// RANKAC compute: Spearman rank autocorrelation at lags 1, 5, 10.
+pub fn compute_rankac_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> RankacSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return RankacSnapshot { symbol: sym, as_of: as_of.into(), rankac_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    // Compute ranks (average rank for ties, Spearman-style)
+    let mut indexed: Vec<(usize, f64)> = log_rets.iter().enumerate().map(|(i, &v)| (i, v)).collect();
+    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut ranks = vec![0.0f64; n];
+    let mut i = 0;
+    while i < n {
+        let mut j = i;
+        while j + 1 < n && (indexed[j + 1].1 - indexed[i].1).abs() < f64::EPSILON { j += 1; }
+        let avg_rank = ((i + j) as f64) / 2.0 + 1.0;
+        for k in i..=j { ranks[indexed[k].0] = avg_rank; }
+        i = j + 1;
+    }
+    let compute_rho = |lag: usize| -> f64 {
+        if lag >= n { return 0.0; }
+        let m = n - lag;
+        let mf = m as f64;
+        let mut mx = 0.0f64; let mut my = 0.0f64;
+        for i in 0..m { mx += ranks[i]; my += ranks[i + lag]; }
+        mx /= mf; my /= mf;
+        let mut sxx = 0.0f64; let mut syy = 0.0f64; let mut sxy = 0.0f64;
+        for i in 0..m {
+            let dx = ranks[i] - mx;
+            let dy = ranks[i + lag] - my;
+            sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
+        }
+        if sxx < f64::EPSILON || syy < f64::EPSILON { 0.0 }
+        else { sxy / (sxx.sqrt() * syy.sqrt()) }
+    };
+    let r1 = compute_rho(1);
+    let r5 = compute_rho(5);
+    let r10 = compute_rho(10);
+    let mean_abs = (r1.abs() + r5.abs() + r10.abs()) / 3.0;
+    let max_abs = r1.abs().max(r5.abs()).max(r10.abs());
+    let label = if max_abs > 0.30 { "STRONG_DEPENDENCE" }
+        else if max_abs > 0.15 { "MODERATE_DEPENDENCE" }
+        else if max_abs > 0.05 { "WEAK_DEPENDENCE" }
+        else { "INDEPENDENT" };
+    RankacSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        rho_lag1: r1, rho_lag5: r5, rho_lag10: r10,
+        mean_abs_rho: mean_abs, max_abs_rho: max_abs,
+        rankac_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -23854,6 +24235,159 @@ pub fn get_peakover(conn: &Connection, symbol: &str) -> Result<Option<PeakoverSn
         .map_err(|e| format!("prepare get_peakover: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_peakover: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_peakover: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+/// ADR-145 Round 37 schema v38: adds `research_higuchi`, `research_pickands`,
+/// `research_kappa3`, `research_lyapunov`, `research_rankac`. Additive over v37.
+pub fn create_research_tables_v38(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v37(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_higuchi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_higuchi_updated ON research_higuchi(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_pickands (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_pickands_updated ON research_pickands(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_kappa3 (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_kappa3_updated ON research_kappa3(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_lyapunov (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_lyapunov_updated ON research_lyapunov(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_rankac (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_rankac_updated ON research_rankac(updated_at);",
+    ).map_err(|e| format!("create v38 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_higuchi(conn: &Connection, symbol: &str, snap: &HiguchiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v38(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("higuchi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_higuchi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert higuchi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_higuchi(conn: &Connection, symbol: &str) -> Result<Option<HiguchiSnapshot>, String> {
+    let _ = create_research_tables_v38(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_higuchi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_higuchi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_higuchi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_higuchi: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_pickands(conn: &Connection, symbol: &str, snap: &PickandsSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v38(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("pickands json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_pickands(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert pickands: {e}"))?;
+    Ok(())
+}
+
+pub fn get_pickands(conn: &Connection, symbol: &str) -> Result<Option<PickandsSnapshot>, String> {
+    let _ = create_research_tables_v38(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_pickands WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_pickands: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_pickands: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_pickands: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_kappa3(conn: &Connection, symbol: &str, snap: &Kappa3Snapshot) -> Result<(), String> {
+    let _ = create_research_tables_v38(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("kappa3 json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_kappa3(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert kappa3: {e}"))?;
+    Ok(())
+}
+
+pub fn get_kappa3(conn: &Connection, symbol: &str) -> Result<Option<Kappa3Snapshot>, String> {
+    let _ = create_research_tables_v38(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_kappa3 WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_kappa3: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_kappa3: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_kappa3: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_lyapunov(conn: &Connection, symbol: &str, snap: &LyapunovSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v38(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("lyapunov json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_lyapunov(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert lyapunov: {e}"))?;
+    Ok(())
+}
+
+pub fn get_lyapunov(conn: &Connection, symbol: &str) -> Result<Option<LyapunovSnapshot>, String> {
+    let _ = create_research_tables_v38(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_lyapunov WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_lyapunov: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_lyapunov: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_lyapunov: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_rankac(conn: &Connection, symbol: &str, snap: &RankacSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v38(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("rankac json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_rankac(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert rankac: {e}"))?;
+    Ok(())
+}
+
+pub fn get_rankac(conn: &Connection, symbol: &str) -> Result<Option<RankacSnapshot>, String> {
+    let _ = create_research_tables_v38(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_rankac WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_rankac: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_rankac: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_rankac: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -31925,5 +32459,132 @@ Trailing text.
         assert!(snap.threshold_p99 >= snap.threshold_p95);
         assert!(snap.mean_excess_p95 >= 0.0);
         assert!(snap.max_excess_p95 >= snap.mean_excess_p95);
+    }
+
+    #[test]
+    fn higuchi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = HiguchiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 200,
+            k_max: 10, fractal_dim: 1.45, r_squared: 0.98, log_k_count: 10,
+            higuchi_label: "RANDOM".into(), note: String::new(),
+        };
+        upsert_higuchi(&conn, "TEST", &snap).unwrap();
+        let got = get_higuchi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.higuchi_label, "RANDOM");
+        assert!((got.fractal_dim - 1.45).abs() < 1e-9);
+    }
+
+    #[test]
+    fn higuchi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_higuchi_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.higuchi_label, "INSUFFICIENT_DATA");
+        assert!(snap.fractal_dim.is_finite());
+        assert!(snap.log_k_count >= 3);
+    }
+
+    #[test]
+    fn pickands_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = PickandsSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 200,
+            k_index: 12, gamma_hat: 0.25, tail_index: 4.0,
+            x_k: 0.03, x_2k: 0.02, x_4k: 0.015,
+            pickands_label: "FRECHET_MODERATE".into(), note: String::new(),
+        };
+        upsert_pickands(&conn, "TEST", &snap).unwrap();
+        let got = get_pickands(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.pickands_label, "FRECHET_MODERATE");
+        assert!((got.gamma_hat - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pickands_compute_oscillating() {
+        // Fixture has only 2 distinct |r| values (±0.5%), so x_k = x_2k = x_4k → INSUFFICIENT_DATA.
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_pickands_snapshot("T", "2026-04-16", &bars);
+        assert_eq!(snap.pickands_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn kappa3_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = Kappa3Snapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 200,
+            mar: 0.0, excess_mean: 0.08, lpm3: 1e-5, lpm3_root: 0.20,
+            kappa3: 0.40, sortino_compare: 0.55,
+            kappa3_label: "POSITIVE".into(), note: String::new(),
+        };
+        upsert_kappa3(&conn, "TEST", &snap).unwrap();
+        let got = get_kappa3(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.kappa3_label, "POSITIVE");
+        assert!((got.kappa3 - 0.40).abs() < 1e-9);
+    }
+
+    #[test]
+    fn kappa3_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_kappa3_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.kappa3_label, "INSUFFICIENT_DATA");
+        assert!(snap.lpm3 > 0.0);
+        assert!(snap.lpm3_root > 0.0);
+        assert!(snap.kappa3.is_finite());
+        assert!(snap.sortino_compare.is_finite());
+    }
+
+    #[test]
+    fn lyapunov_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = LyapunovSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 200,
+            embed_dim: 3, time_delay: 1,
+            lambda_max: 0.04, r_squared: 0.85, steps_used: 20,
+            lyapunov_label: "WEAKLY_CHAOTIC".into(), note: String::new(),
+        };
+        upsert_lyapunov(&conn, "TEST", &snap).unwrap();
+        let got = get_lyapunov(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.lyapunov_label, "WEAKLY_CHAOTIC");
+        assert!((got.lambda_max - 0.04).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lyapunov_compute_oscillating() {
+        // Alternating ±0.5% returns → embedded vectors are highly degenerate.
+        // Label should be CHAOTIC / WEAKLY_CHAOTIC / PERIODIC / STABLE / INSUFFICIENT_DATA.
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_lyapunov_snapshot("T", "2026-04-16", &bars);
+        assert!(matches!(snap.lyapunov_label.as_str(),
+            "CHAOTIC" | "WEAKLY_CHAOTIC" | "PERIODIC" | "STABLE" | "INSUFFICIENT_DATA"));
+        if snap.lyapunov_label != "INSUFFICIENT_DATA" {
+            assert!(snap.lambda_max.is_finite());
+        }
+    }
+
+    #[test]
+    fn rankac_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = RankacSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 200,
+            rho_lag1: -0.08, rho_lag5: 0.02, rho_lag10: -0.03,
+            mean_abs_rho: 0.0433, max_abs_rho: 0.08,
+            rankac_label: "WEAK_DEPENDENCE".into(), note: String::new(),
+        };
+        upsert_rankac(&conn, "TEST", &snap).unwrap();
+        let got = get_rankac(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.rankac_label, "WEAK_DEPENDENCE");
+        assert!((got.rho_lag1 - (-0.08)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rankac_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_rankac_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.rankac_label, "INSUFFICIENT_DATA");
+        assert!(snap.rho_lag1.is_finite());
+        assert!(snap.rho_lag5.is_finite());
+        assert!(snap.rho_lag10.is_finite());
+        assert!(snap.rho_lag1 >= -1.0 && snap.rho_lag1 <= 1.0);
+        assert!(snap.max_abs_rho >= snap.mean_abs_rho);
     }
 }

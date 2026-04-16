@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**one hundred and seventy-three sub-blocks**, each of which is skipped silently when its data
+**one hundred and seventy-eight sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -2380,7 +2380,82 @@ bars_used, threshold_p95, threshold_p99, count_p95, count_p99,
 mean_excess_p95, mean_excess_p99, max_excess_p95, max_excess_p99.
 Source: ADR-144 PEAKOVER window.
 
-#### 2.172 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.172 Higuchi Fractal Dimension (HIGUCHI — ADR-145)
+
+Pulled from `research::get_higuchi`. Higuchi 1988 fractal dimension of
+the cumulative log-return walk. For each sub-sampling interval k ∈
+1..k_max=10 the normalised path length L(k) is computed; FD is the
+negative slope of log L(k) on log k via ordinary least-squares. FD ∈
+[1,2] classifies the walk as **SMOOTH** (<1.1, persistent trends
+dominate), **PERSISTENT** (<1.4), **RANDOM** (<1.6, Brownian regime)
+or **ROUGH** (otherwise, anti-persistent). Header gives
+**higuchi_label** + FD + R² (linear-fit quality). Body reports
+bars_used, k_max, fractal_dim, r_squared, log_k_count. Complements
+Hurst exponent (H=2−FD under Brownian assumptions) as an independent
+estimator. Source: ADR-145 HIGUCHI window.
+
+#### 2.173 Pickands Tail-Index (PICKANDS — ADR-145)
+
+Pulled from `research::get_pickands`. Pickands 1975 extreme-value
+γ̂ = ln((x_k−x_2k)/(x_2k−x_4k)) / ln 2, valid across all three EV
+domains (unlike Hill which assumes Fréchet). Uses k = max(n/16, 5)
+ensuring 4k < n. γ̂ maps to tail α = 1/γ̂ (when γ̂ > 0). Header
+gives **pickands_label** (FRECHET_HEAVY γ̂>0.5 / FRECHET_MODERATE
+γ̂>0.1 / GUMBEL_EXPONENTIAL γ̂>−0.1 / WEIBULL_BOUNDED /
+INSUFFICIENT_DATA for degenerate order-statistic triplets). Body
+reports bars_used, k_index, gamma_hat, tail_index, x_k, x_2k, x_4k.
+Used in concert with HILLTAIL as a Hill/Pickands cross-check — if
+the two disagree strongly, the assumed tail model is suspect. Source:
+ADR-145 PICKANDS window.
+
+#### 2.174 Kappa-3 Ratio (KAPPA3 — ADR-145)
+
+Pulled from `research::get_kappa3`. Kaplan-Knowles 2004 generalised
+Sortino: κ3 = (μ − MAR) / LPM3^(1/3) with MAR=0 and annualisation
+(×252 for excess mean, ×252^(1/3) for the cube-root). LPM3 weights
+tail losses more heavily than LPM2 — more sensitive to rare extreme
+drawdowns than Sortino. Snapshot also carries Sortino (via LPM2^(1/2))
+as a reference so the user can regress κ3 vs Sortino to see asymmetry
+in the downside. Header gives **kappa3_label** (STRONG κ3>1 /
+POSITIVE κ3>0 / NEUTRAL κ3>−0.5 / NEGATIVE / INSUFFICIENT_DATA when
+LPM3 is numerically zero). Body reports bars_used, mar, excess_mean,
+lpm3, lpm3_root, kappa3, sortino_compare. Source: ADR-145 KAPPA3
+window.
+
+#### 2.175 Largest Lyapunov Exponent (LYAPUNOV — ADR-145)
+
+Pulled from `research::get_lyapunov`. Rosenstein et al. 1993 largest
+Lyapunov exponent on the embedded time series: m=3 embedding
+dimension, τ=1 time delay, Theiler window=10 to exclude temporally
+close pairs. For each reference vector, finds its nearest
+non-Theiler neighbour and tracks log-distance growth over up to 20
+steps. λ_max is the slope of the mean-log-divergence curve via OLS.
+λ_max > 0 indicates sensitive dependence on initial conditions
+(chaotic); λ_max ≈ 0 indicates periodic/quasi-periodic; λ_max < 0
+indicates stable convergence. Header gives **lyapunov_label**
+(CHAOTIC λ>0.10 / WEAKLY_CHAOTIC λ>0.02 / PERIODIC λ>−0.02 / STABLE
+/ INSUFFICIENT_DATA for degenerate embeddings or < 5 regression
+points). Body reports bars_used, embed_dim, time_delay, lambda_max,
+r_squared, steps_used. Complements RUNS (randomness) and PACF
+(linear dependence) on the nonlinear-dynamics axis neither touches.
+Source: ADR-145 LYAPUNOV window.
+
+#### 2.176 Spearman Rank Autocorrelation (RANKAC — ADR-145)
+
+Pulled from `research::get_rankac`. Nonparametric Pearson ACF:
+rank-transform the return series using average ranks for ties
+(Spearman convention), then compute Pearson ρ at lags 1, 5, 10.
+Robust under fat tails and invariant under monotone transforms —
+useful for heavy-tailed assets where Pearson ACF over-weights tail
+observations. Header gives **rankac_label** (STRONG_DEPENDENCE
+max|ρ|>0.30 / MODERATE_DEPENDENCE >0.15 / WEAK_DEPENDENCE >0.05 /
+INDEPENDENT / INSUFFICIENT_DATA for n<30). Body reports bars_used,
+rho_lag1, rho_lag5, rho_lag10, mean_abs_rho, max_abs_rho. Direct
+robust counterpart to PACF; disagreement between the two suggests
+heavy-tail-driven spurious Pearson ACF signal. Source: ADR-145
+RANKAC window.
+
+#### 2.177 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -2396,7 +2471,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.173 Sector peer comparison
+#### 2.178 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -2427,7 +2502,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.172 above.
+articles to the per-symbol bag consumed by sub-block 2.177 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -2637,36 +2712,42 @@ Question section, not per-symbol.
 | L-moments fields (ADR-144 LMOM) | 2 k/v rows | Returns used + L1/L2/L3/L4 + τ3 skew + τ4 kurt + lmom label |
 | Kyle's λ fields (ADR-144 KYLELAM) | 2 k/v rows | Bars used + Kyle λ + mean \|Δp\| + mean V + correlation ρ + R² + kylelam label |
 | Peaks-over-threshold fields (ADR-144 PEAKOVER) | 3 k/v rows | Returns used + P95/P99 thresholds + counts + mean/max excesses (both P95 and P99) + peakover label |
+| Higuchi fractal dim fields (ADR-145 HIGUCHI) | 2 k/v rows | Returns used + k_max + fractal_dim + R² + log-k points + higuchi label |
+| Pickands tail-index fields (ADR-145 PICKANDS) | 2 k/v rows | Returns used + k + γ̂ + tail α + x_k/x_2k/x_4k order-stats + pickands label |
+| Kappa-3 ratio fields (ADR-145 KAPPA3) | 2 k/v rows | Returns used + MAR + excess μ + LPM3 + LPM3^(1/3) + κ3 + Sortino reference + kappa3 label |
+| Lyapunov exponent fields (ADR-145 LYAPUNOV) | 2 k/v rows | Returns used + m + τ + λ_max + R² + steps used + lyapunov label |
+| Spearman rank autocorrelation (ADR-145 RANKAC) | 2 k/v rows | Returns used + ρ(1) + ρ(5) + ρ(10) + mean\|ρ\| + max\|ρ\| + rankac label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **63-125 KB**
-(up from 62-123 KB after ADR-143; ADR-144 adds five optional per-symbol
-blocks — KSNORM / ADTEST / LMOM / KYLELAM / PEAKOVER — each measuring
-~3-10 k/v rows and adding ~250-700 bytes when populated, for a
-typical +1-2 KB per symbol and +2.5 KB worst case; all five reuse the
+symbols. A single S&P 500 symbol now produces a packet around **63-127 KB**
+(up from 63-125 KB after ADR-144; ADR-145 adds five optional per-symbol
+blocks — HIGUCHI / PICKANDS / KAPPA3 / LYAPUNOV / RANKAC — each
+measuring ~2-7 k/v rows and adding ~200-600 bytes when populated, for
+a typical +1-2 KB per symbol and +2 KB worst case; all five reuse the
 existing `research_historical_price` HP cache and the standard
 research-table LAN sync path with zero new API dependencies;
-KSNORM computes the Kolmogorov-Smirnov one-sample normality test
-(Kolmogorov 1933) against N(μ̂,σ̂²), with three-way rejection flags
-at 10%/5%/1% significance — the first omnibus goodness-of-fit
-surface; ADTEST computes the Anderson-Darling tail-weighted
-normality test (Stephens 1986) with small-sample-corrected A² and
-p-value approximation — strictly more powerful than KS in the tail
-regions where financial returns most often deviate from Gaussian;
-LMOM computes Hosking's 1990 L-moments L1..L4 and L-ratios τ3 τ4
-via unbiased probability-weighted moments — a robust alternative to
-classical skew/kurt that stays finite whenever the mean exists and
-exposes bounded L-skew/L-kurt for cross-symbol comparability;
-KYLELAM computes Kyle's (1985) daily price-impact λ =
-cov(|Δp|, V)/var(V) as a regression slope on share volume — the
-first linear-regression liquidity surface, distinct from AMIHUD's
-return-scaled ratio; PEAKOVER computes Peaks-Over-Threshold
-statistics (Pickands-Balkema-de Haan 1974/1975) at the P95 and P99
-thresholds — exceedance counts, mean excesses, max excesses — the
-first EVT/GPD-foundation surface for extreme-tail inspection); a
-10-symbol basket now lands near **620-1250 KB**
+HIGUCHI computes the Higuchi 1988 fractal dimension of the cumulative
+log-return walk at k_max=10, classifying the series as SMOOTH /
+PERSISTENT / RANDOM / ROUGH — the first direct geometric FD surface,
+complementing Hurst via H = 2 − FD under Brownian assumptions;
+PICKANDS computes the 1975 extreme-value γ̂ estimator valid across
+all three EV domains (Fréchet / Gumbel / Weibull), providing a
+Hill/Pickands cross-check that detects misspecified tail models;
+KAPPA3 computes the Kaplan-Knowles 2004 generalised-Sortino κ3 =
+(μ−MAR) / LPM3^(1/3) annualised — the first third-moment downside
+ratio, more sensitive to rare extreme losses than the LPM2-based
+Sortino, with Sortino reference included so regression between the
+two is diagnostic of downside asymmetry; LYAPUNOV computes the
+Rosenstein 1993 largest Lyapunov exponent on an m=3 embedded series
+with Theiler window=10, distinguishing CHAOTIC / PERIODIC / STABLE
+regimes — the first nonlinear-dynamics chaos surface, answering
+questions neither RUNS nor PACF can reach; RANKAC computes Spearman
+rank autocorrelation at lags 1/5/10 with average-rank ties — the
+robust nonparametric counterpart to PACF, directly comparable for
+flagging fat-tail-driven spurious Pearson ACF signal); a 10-symbol
+basket now lands near **630-1270 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).
@@ -2979,6 +3060,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_lmom` | SQLite `research_lmom` | ADR-144 LMOM window (Hosking 1990 L-moments L1..L4 + L-ratios τ3 τ4 via unbiased probability-weighted moments — first robust-moment surface with bounded L-skew/L-kurt) |
 | `research::get_kylelam` | SQLite `research_kylelam` | ADR-144 KYLELAM window (Kyle 1985 price-impact λ = cov(\|Δp\|,V)/var(V) regression slope + correlation + R² — first linear-regression liquidity surface, distinct from AMIHUD ratio) |
 | `research::get_peakover` | SQLite `research_peakover` | ADR-144 PEAKOVER window (Peaks-Over-Threshold exceedance counts + mean/max excesses at P95 and P99 thresholds — first EVT/GPD-foundation surface) |
+| `research::get_higuchi` | SQLite `research_higuchi` | ADR-145 HIGUCHI window (Higuchi 1988 fractal dimension of cumulative log-return walk, k_max=10, with SMOOTH/PERSISTENT/RANDOM/ROUGH regime labels — first direct geometric FD surface) |
+| `research::get_pickands` | SQLite `research_pickands` | ADR-145 PICKANDS window (Pickands 1975 extreme-value γ̂ valid across Fréchet/Gumbel/Weibull domains — first EV-domain-agnostic tail estimator, cross-checks HILLTAIL Hill α) |
+| `research::get_kappa3` | SQLite `research_kappa3` | ADR-145 KAPPA3 window (Kaplan-Knowles 2004 κ3 = (μ−MAR)/LPM3^(1/3) annualised with Sortino reference — first third-moment downside ratio) |
+| `research::get_lyapunov` | SQLite `research_lyapunov` | ADR-145 LYAPUNOV window (Rosenstein 1993 largest Lyapunov exponent λ₁ with m=3 embedding, Theiler=10 — first chaos/nonlinear-dynamics surface) |
+| `research::get_rankac` | SQLite `research_rankac` | ADR-145 RANKAC window (Spearman rank autocorrelation at lags 1/5/10 via average-rank tie handling — robust nonparametric counterpart to PACF) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -3016,5 +3102,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 / 142 / 143 / 144 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 / 142 / 143 / 144 / 145 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)
