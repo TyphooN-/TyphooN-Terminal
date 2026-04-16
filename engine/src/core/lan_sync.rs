@@ -312,6 +312,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_gpr",
     "research_pacf",
     "research_apen",
+    // ── ADR-141 Round 33 ────────────────────────────
+    "research_upr",
+    "research_levereff",
+    "research_drawdar",
+    "research_varhalf",
+    "research_gini",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -1547,6 +1553,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-141 Round 33 ──
+        "research_upr" => Some(
+            "CREATE TABLE IF NOT EXISTS research_upr (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_levereff" => Some(
+            "CREATE TABLE IF NOT EXISTS research_levereff (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_drawdar" => Some(
+            "CREATE TABLE IF NOT EXISTS research_drawdar (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_varhalf" => Some(
+            "CREATE TABLE IF NOT EXISTS research_varhalf (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_gini" => Some(
+            "CREATE TABLE IF NOT EXISTS research_gini (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -1723,6 +1765,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_gpr" => Some("updated_at"),
         "research_pacf" => Some("updated_at"),
         "research_apen" => Some("updated_at"),
+        // ── ADR-141 Round 33 ──
+        "research_upr" => Some("updated_at"),
+        "research_levereff" => Some("updated_at"),
+        "research_drawdar" => Some("updated_at"),
+        "research_varhalf" => Some("updated_at"),
+        "research_gini" => Some("updated_at"),
         _ => None,
     }
 }

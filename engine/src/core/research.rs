@@ -3668,6 +3668,87 @@ pub struct ApenSnapshot {
     pub note: String,
 }
 
+// ── ADR-141 Round 33 structs ──────────────────────────────────────────────
+
+/// UPR — Upside Potential Ratio (Sortino & van der Meer 1991).
+/// UPR = E[max(r−MAR,0)] / √E[min(r−MAR,0)²] where MAR=0.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct UprSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub upm1: f64,                     // upper partial moment of order 1
+    pub lpm2: f64,                     // lower partial moment of order 2
+    pub downside_dev: f64,             // √LPM₂
+    pub upr: f64,                      // UPM₁ / downside_dev
+    pub upr_label: String,             // LOW_UPSIDE / MODERATE_UPSIDE / BALANCED / HIGH_UPSIDE / VERY_HIGH_UPSIDE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// LEVEREFF — Leverage effect (Black 1976, Christie 1982).
+/// Measures asymmetric volatility: negative returns tend to
+/// increase future volatility more than positive returns.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct LeverEffSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub corr_r_nextsq: f64,           // corr(rₜ, rₜ₊₁²)
+    pub mean_vol_after_neg: f64,      // mean |rₜ₊₁| after rₜ < 0 (×100)
+    pub mean_vol_after_pos: f64,      // mean |rₜ₊₁| after rₜ > 0 (×100)
+    pub asym_ratio: f64,              // mean_vol_after_neg / mean_vol_after_pos
+    pub lever_label: String,          // STRONG_LEVERAGE / MILD_LEVERAGE / SYMMETRIC / REVERSE_LEVERAGE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// DRAWDAR — Drawdown-at-Risk + Conditional DaR.
+/// Quantile-based drawdown risk measure (Chekhlov et al. 2005).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct DrawDaRSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub dar_5pct: f64,                // 95th percentile of drawdown distribution (%)
+    pub cdar_5pct: f64,               // mean dd given dd > DaR(5%) — conditional DaR (%)
+    pub dar_1pct: f64,                // 99th percentile (%)
+    pub cdar_1pct: f64,               // conditional DaR at 1% (%)
+    pub max_dd_pct: f64,              // max drawdown (%)
+    pub mean_dd_pct: f64,             // mean of all non-zero drawdowns (%)
+    pub drawdar_label: String,        // LOW_DD_RISK / MODERATE_DD_RISK / HIGH_DD_RISK / SEVERE_DD_RISK / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// VARHALF — Volatility half-life (vol persistence).
+/// AR(1) on rolling 20d realized vol → half-life = −ln(2)/ln(β).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct VarHalfSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub vol_obs: usize,               // number of rolling-vol observations
+    pub ar1_beta: f64,                // AR(1) coefficient
+    pub ar1_alpha: f64,               // AR(1) intercept
+    pub ar1_r2: f64,                  // R² of AR(1) fit
+    pub half_life_days: f64,          // −ln(2)/ln(β)
+    pub varhalf_label: String,        // FAST_REVERT / MODERATE_PERSIST / SLOW_PERSIST / VERY_PERSISTENT / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// GINI — Gini coefficient of |returns|.
+/// Measures concentration/inequality of absolute return magnitudes.
+/// Gini = 0 → all |returns| equal; Gini = 1 → one return dominates.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct GiniSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub gini_coeff: f64,              // Gini on |returns| ∈ [0,1]
+    pub mean_abs_return_pct: f64,     // mean |r| × 100
+    pub median_abs_return_pct: f64,   // median |r| × 100
+    pub gini_label: String,           // LOW_CONCENTRATION / MODERATE_CONCENTRATION / HIGH_CONCENTRATION / VERY_HIGH_CONCENTRATION / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -17040,6 +17121,210 @@ pub fn compute_apen_snapshot(
     }
 }
 
+// ── ADR-141 Round 33 compute fns ──────────────────────────────────────────
+
+/// UPR compute: Upside Potential Ratio = E[max(r,0)] / √E[min(r,0)²] (MAR=0).
+pub fn compute_upr_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> UprSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return UprSnapshot { symbol: sym, as_of: as_of.into(), upr_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let nf = n as f64;
+    let upm1 = log_rets.iter().map(|&r| r.max(0.0)).sum::<f64>() / nf;
+    let lpm2 = log_rets.iter().map(|&r| r.min(0.0).powi(2)).sum::<f64>() / nf;
+    let dd = lpm2.sqrt();
+    let upr = if dd > f64::EPSILON { upm1 / dd } else { 0.0 };
+    let label = if upr < 0.5 { "LOW_UPSIDE" }
+        else if upr < 1.0 { "MODERATE_UPSIDE" }
+        else if upr < 1.5 { "BALANCED" }
+        else if upr < 2.5 { "HIGH_UPSIDE" }
+        else { "VERY_HIGH_UPSIDE" };
+    UprSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        upm1, lpm2, downside_dev: dd, upr,
+        upr_label: label.into(), note: String::new(),
+    }
+}
+
+/// LEVEREFF compute: leverage effect corr(rₜ, rₜ₊₁²) + asymmetric vol ratio.
+pub fn compute_levereff_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> LeverEffSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return LeverEffSnapshot { symbol: sym, as_of: as_of.into(), lever_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let pairs: Vec<(f64, f64)> = (0..n - 1).map(|i| (log_rets[i], log_rets[i + 1] * log_rets[i + 1])).collect();
+    let np = pairs.len() as f64;
+    let mean_r = pairs.iter().map(|(r, _)| r).sum::<f64>() / np;
+    let mean_s = pairs.iter().map(|(_, s)| s).sum::<f64>() / np;
+    let cov = pairs.iter().map(|(r, s)| (r - mean_r) * (s - mean_s)).sum::<f64>() / np;
+    let var_r = pairs.iter().map(|(r, _)| (r - mean_r).powi(2)).sum::<f64>() / np;
+    let var_s = pairs.iter().map(|(_, s)| (s - mean_s).powi(2)).sum::<f64>() / np;
+    let corr = if var_r > f64::EPSILON && var_s > f64::EPSILON {
+        cov / (var_r.sqrt() * var_s.sqrt())
+    } else { 0.0 };
+    let mut sum_vol_neg = 0.0_f64;
+    let mut cnt_neg = 0usize;
+    let mut sum_vol_pos = 0.0_f64;
+    let mut cnt_pos = 0usize;
+    for i in 0..n - 1 {
+        let next_abs = log_rets[i + 1].abs();
+        if log_rets[i] < 0.0 { sum_vol_neg += next_abs; cnt_neg += 1; }
+        else if log_rets[i] > 0.0 { sum_vol_pos += next_abs; cnt_pos += 1; }
+    }
+    let mvn = if cnt_neg > 0 { sum_vol_neg / cnt_neg as f64 * 100.0 } else { 0.0 };
+    let mvp = if cnt_pos > 0 { sum_vol_pos / cnt_pos as f64 * 100.0 } else { 0.0 };
+    let asym = if mvp > f64::EPSILON { mvn / mvp } else { 0.0 };
+    let label = if corr < -0.15 { "STRONG_LEVERAGE" }
+        else if corr < -0.05 { "MILD_LEVERAGE" }
+        else if corr <= 0.05 { "SYMMETRIC" }
+        else { "REVERSE_LEVERAGE" };
+    LeverEffSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        corr_r_nextsq: corr, mean_vol_after_neg: mvn,
+        mean_vol_after_pos: mvp, asym_ratio: asym,
+        lever_label: label.into(), note: String::new(),
+    }
+}
+
+/// DRAWDAR compute: Drawdown-at-Risk + Conditional DaR at 5% and 1%.
+pub fn compute_drawdar_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> DrawDaRSnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 30 {
+        return DrawDaRSnapshot { symbol: sym, as_of: as_of.into(), drawdar_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 bars, got {}", bars.len()), ..Default::default() };
+    }
+    let n = bars.len();
+    let mut peak = bars[0].close;
+    let mut dds: Vec<f64> = Vec::with_capacity(n);
+    for b in bars {
+        if b.close > peak { peak = b.close; }
+        let dd = if peak > f64::EPSILON { (peak - b.close) / peak * 100.0 } else { 0.0 };
+        dds.push(dd);
+    }
+    let mut sorted = dds.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let quantile = |q: f64| -> f64 {
+        let idx = ((n as f64 * q).ceil() as usize).min(n) - 1;
+        sorted[idx]
+    };
+    let dar5 = quantile(0.95);
+    let dar1 = quantile(0.99);
+    let cdar5 = {
+        let tail: Vec<f64> = sorted.iter().filter(|&&d| d >= dar5).cloned().collect();
+        if tail.is_empty() { dar5 } else { tail.iter().sum::<f64>() / tail.len() as f64 }
+    };
+    let cdar1 = {
+        let tail: Vec<f64> = sorted.iter().filter(|&&d| d >= dar1).cloned().collect();
+        if tail.is_empty() { dar1 } else { tail.iter().sum::<f64>() / tail.len() as f64 }
+    };
+    let max_dd = sorted.last().cloned().unwrap_or(0.0);
+    let nonzero: Vec<f64> = dds.iter().filter(|&&d| d > f64::EPSILON).cloned().collect();
+    let mean_dd = if nonzero.is_empty() { 0.0 } else { nonzero.iter().sum::<f64>() / nonzero.len() as f64 };
+    let label = if dar5 < 3.0 { "LOW_DD_RISK" }
+        else if dar5 < 7.0 { "MODERATE_DD_RISK" }
+        else if dar5 < 15.0 { "HIGH_DD_RISK" }
+        else { "SEVERE_DD_RISK" };
+    DrawDaRSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        dar_5pct: dar5, cdar_5pct: cdar5, dar_1pct: dar1, cdar_1pct: cdar1,
+        max_dd_pct: max_dd, mean_dd_pct: mean_dd,
+        drawdar_label: label.into(), note: String::new(),
+    }
+}
+
+/// VARHALF compute: volatility half-life via AR(1) on rolling 20d realized vol.
+pub fn compute_varhalf_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> VarHalfSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 50 {
+        return VarHalfSnapshot { symbol: sym, as_of: as_of.into(), varhalf_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥50 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let window = 20usize;
+    let mut vols: Vec<f64> = Vec::new();
+    for i in window..=n {
+        let slice = &log_rets[i - window..i];
+        let m = slice.iter().sum::<f64>() / window as f64;
+        let v = slice.iter().map(|r| (r - m).powi(2)).sum::<f64>() / window as f64;
+        vols.push(v.sqrt());
+    }
+    if vols.len() < 10 {
+        return VarHalfSnapshot { symbol: sym, as_of: as_of.into(), varhalf_label: "INSUFFICIENT_DATA".into(), note: "too few vol observations".into(), ..Default::default() };
+    }
+    let nv = vols.len();
+    let pairs: Vec<(f64, f64)> = (0..nv - 1).map(|i| (vols[i], vols[i + 1])).collect();
+    let np = pairs.len() as f64;
+    let mx = pairs.iter().map(|(x, _)| x).sum::<f64>() / np;
+    let my = pairs.iter().map(|(_, y)| y).sum::<f64>() / np;
+    let sxy = pairs.iter().map(|(x, y)| (x - mx) * (y - my)).sum::<f64>();
+    let sxx = pairs.iter().map(|(x, _)| (x - mx).powi(2)).sum::<f64>();
+    let beta = if sxx > f64::EPSILON { sxy / sxx } else { 0.0 };
+    let alpha = my - beta * mx;
+    let ss_res = pairs.iter().map(|(x, y)| (y - alpha - beta * x).powi(2)).sum::<f64>();
+    let ss_tot = pairs.iter().map(|(_, y)| (y - my).powi(2)).sum::<f64>();
+    let r2 = if ss_tot > f64::EPSILON { 1.0 - ss_res / ss_tot } else { 0.0 };
+    let hl = if beta > f64::EPSILON && beta < 1.0 {
+        -(2.0_f64.ln()) / beta.ln()
+    } else if beta >= 1.0 {
+        f64::INFINITY
+    } else { 0.0 };
+    let label = if hl.is_infinite() || hl > 60.0 { "VERY_PERSISTENT" }
+        else if hl > 30.0 { "SLOW_PERSIST" }
+        else if hl > 10.0 { "MODERATE_PERSIST" }
+        else { "FAST_REVERT" };
+    VarHalfSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        vol_obs: nv, ar1_beta: beta, ar1_alpha: alpha, ar1_r2: r2,
+        half_life_days: hl, varhalf_label: label.into(), note: String::new(),
+    }
+}
+
+/// GINI compute: Gini coefficient of |returns|.
+pub fn compute_gini_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> GiniSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return GiniSnapshot { symbol: sym, as_of: as_of.into(), gini_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let nf = n as f64;
+    let mut abs_rets: Vec<f64> = log_rets.iter().map(|r| r.abs()).collect();
+    abs_rets.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let total = abs_rets.iter().sum::<f64>();
+    if total < f64::EPSILON {
+        return GiniSnapshot { symbol: sym, as_of: as_of.into(), gini_label: "INSUFFICIENT_DATA".into(), note: "zero total |returns|".into(), ..Default::default() };
+    }
+    let weighted_sum: f64 = abs_rets.iter().enumerate()
+        .map(|(i, &v)| (i as f64 + 1.0) * v)
+        .sum();
+    let gini = (2.0 * weighted_sum) / (nf * total) - (nf + 1.0) / nf;
+    let mean_abs = total / nf * 100.0;
+    let median_abs = abs_rets[n / 2] * 100.0;
+    let label = if gini < 0.30 { "LOW_CONCENTRATION" }
+        else if gini < 0.45 { "MODERATE_CONCENTRATION" }
+        else if gini < 0.60 { "HIGH_CONCENTRATION" }
+        else { "VERY_HIGH_CONCENTRATION" };
+    GiniSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        gini_coeff: gini, mean_abs_return_pct: mean_abs,
+        median_abs_return_pct: median_abs,
+        gini_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -21942,6 +22227,159 @@ pub fn get_apen(conn: &Connection, symbol: &str) -> Result<Option<ApenSnapshot>,
         .map_err(|e| format!("prepare get_apen: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_apen: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_apen: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-141 Round 33 schema v34 + upsert/get ─────────────────────────────
+
+pub fn create_research_tables_v34(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v33(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_upr (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_upr_updated ON research_upr(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_levereff (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_levereff_updated ON research_levereff(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_drawdar (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_drawdar_updated ON research_drawdar(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_varhalf (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_varhalf_updated ON research_varhalf(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_gini (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_gini_updated ON research_gini(updated_at);",
+    ).map_err(|e| format!("create v34 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_upr(conn: &Connection, symbol: &str, snap: &UprSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v34(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("upr json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_upr(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert upr: {e}"))?;
+    Ok(())
+}
+
+pub fn get_upr(conn: &Connection, symbol: &str) -> Result<Option<UprSnapshot>, String> {
+    let _ = create_research_tables_v34(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_upr WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_upr: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_upr: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_upr: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_levereff(conn: &Connection, symbol: &str, snap: &LeverEffSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v34(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("levereff json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_levereff(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert levereff: {e}"))?;
+    Ok(())
+}
+
+pub fn get_levereff(conn: &Connection, symbol: &str) -> Result<Option<LeverEffSnapshot>, String> {
+    let _ = create_research_tables_v34(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_levereff WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_levereff: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_levereff: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_levereff: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_drawdar(conn: &Connection, symbol: &str, snap: &DrawDaRSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v34(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("drawdar json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_drawdar(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert drawdar: {e}"))?;
+    Ok(())
+}
+
+pub fn get_drawdar(conn: &Connection, symbol: &str) -> Result<Option<DrawDaRSnapshot>, String> {
+    let _ = create_research_tables_v34(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_drawdar WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_drawdar: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_drawdar: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_drawdar: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_varhalf(conn: &Connection, symbol: &str, snap: &VarHalfSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v34(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("varhalf json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_varhalf(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert varhalf: {e}"))?;
+    Ok(())
+}
+
+pub fn get_varhalf(conn: &Connection, symbol: &str) -> Result<Option<VarHalfSnapshot>, String> {
+    let _ = create_research_tables_v34(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_varhalf WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_varhalf: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_varhalf: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_varhalf: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_gini(conn: &Connection, symbol: &str, snap: &GiniSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v34(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("gini json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_gini(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert gini: {e}"))?;
+    Ok(())
+}
+
+pub fn get_gini(conn: &Connection, symbol: &str) -> Result<Option<GiniSnapshot>, String> {
+    let _ = create_research_tables_v34(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_gini WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_gini: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_gini: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_gini: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -29455,5 +29893,163 @@ Trailing text.
         assert!(snap.tolerance > 0.0);
         // Perfectly alternating ±0.5% is very regular → low ApEn expected
         assert_eq!(snap.apen_label, "REGULAR");
+    }
+
+    // ── ADR-141 Round 33 tests ────────────────────────────────────────────
+
+    #[test]
+    fn upr_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = UprSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(),
+            bars_used: 200, upm1: 0.003, lpm2: 0.00001, downside_dev: 0.00316, upr: 0.95,
+            upr_label: "MODERATE_UPSIDE".into(), note: String::new(),
+        };
+        upsert_upr(&c, "TEST", &snap).unwrap();
+        let back = get_upr(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.upr_label, "MODERATE_UPSIDE");
+        assert!((back.upr - 0.95).abs() < 1e-9);
+    }
+
+    #[test]
+    fn upr_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_upr_snapshot("T", "2026-04-16", &bars);
+        assert_eq!(snap.upr_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn upr_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_upr_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.upr_label, "INSUFFICIENT_DATA");
+        assert!(snap.upm1 > 0.0);
+        assert!(snap.downside_dev > 0.0);
+        assert!(snap.upr > 0.0);
+    }
+
+    #[test]
+    fn levereff_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = LeverEffSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(),
+            bars_used: 200, corr_r_nextsq: -0.12,
+            mean_vol_after_neg: 1.2, mean_vol_after_pos: 0.9, asym_ratio: 1.33,
+            lever_label: "MILD_LEVERAGE".into(), note: String::new(),
+        };
+        upsert_levereff(&c, "TEST", &snap).unwrap();
+        let back = get_levereff(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.lever_label, "MILD_LEVERAGE");
+        assert!((back.corr_r_nextsq - (-0.12)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn levereff_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_levereff_snapshot("T", "2026-04-16", &bars);
+        assert_eq!(snap.lever_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn levereff_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_levereff_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.lever_label, "INSUFFICIENT_DATA");
+        assert!(snap.mean_vol_after_neg > 0.0);
+        assert!(snap.mean_vol_after_pos > 0.0);
+    }
+
+    #[test]
+    fn drawdar_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = DrawDaRSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(),
+            bars_used: 200, dar_5pct: 5.0, cdar_5pct: 7.0,
+            dar_1pct: 8.0, cdar_1pct: 10.0, max_dd_pct: 12.0,
+            mean_dd_pct: 3.0, drawdar_label: "MODERATE_DD_RISK".into(), note: String::new(),
+        };
+        upsert_drawdar(&c, "TEST", &snap).unwrap();
+        let back = get_drawdar(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.drawdar_label, "MODERATE_DD_RISK");
+        assert!((back.dar_5pct - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn drawdar_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_drawdar_snapshot("T", "2026-04-16", &bars);
+        assert_eq!(snap.drawdar_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn drawdar_compute_monotone() {
+        let bars = synthetic_ohlc_bars_150();
+        let snap = compute_drawdar_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.drawdar_label, "INSUFFICIENT_DATA");
+        // Monotonically rising → drawdowns should be minimal
+        assert_eq!(snap.drawdar_label, "LOW_DD_RISK");
+    }
+
+    #[test]
+    fn varhalf_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = VarHalfSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(),
+            bars_used: 200, vol_obs: 180, ar1_beta: 0.95,
+            ar1_alpha: 0.001, ar1_r2: 0.90, half_life_days: 13.5,
+            varhalf_label: "MODERATE_PERSIST".into(), note: String::new(),
+        };
+        upsert_varhalf(&c, "TEST", &snap).unwrap();
+        let back = get_varhalf(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.varhalf_label, "MODERATE_PERSIST");
+        assert!((back.half_life_days - 13.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn varhalf_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_varhalf_snapshot("T", "2026-04-16", &bars);
+        assert_eq!(snap.varhalf_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn varhalf_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_varhalf_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.varhalf_label, "INSUFFICIENT_DATA");
+        assert!(snap.vol_obs > 0);
+    }
+
+    #[test]
+    fn gini_snapshot_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = GiniSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(),
+            bars_used: 200, gini_coeff: 0.35,
+            mean_abs_return_pct: 1.2, median_abs_return_pct: 0.9,
+            gini_label: "MODERATE_CONCENTRATION".into(), note: String::new(),
+        };
+        upsert_gini(&c, "TEST", &snap).unwrap();
+        let back = get_gini(&c, "TEST").unwrap().unwrap();
+        assert_eq!(back.gini_label, "MODERATE_CONCENTRATION");
+        assert!((back.gini_coeff - 0.35).abs() < 1e-9);
+    }
+
+    #[test]
+    fn gini_compute_insufficient() {
+        let bars: Vec<HistoricalPriceRow> = Vec::new();
+        let snap = compute_gini_snapshot("T", "2026-04-16", &bars);
+        assert_eq!(snap.gini_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn gini_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_gini_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.gini_label, "INSUFFICIENT_DATA");
+        assert!(snap.gini_coeff >= 0.0);
+        assert!(snap.gini_coeff <= 1.0);
+        // All |returns| are nearly equal → low Gini
+        assert_eq!(snap.gini_label, "LOW_CONCENTRATION");
     }
 }

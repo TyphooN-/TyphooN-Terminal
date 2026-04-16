@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**one hundred and twenty-three sub-blocks**, each of which is skipped silently when its data
+**one hundred and fifty-eight sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -2106,7 +2106,65 @@ self-match edge effects. Header gives **apen_label** (REGULAR ApEn
 INSUFFICIENT_DATA). Body reports bars_used, embed_dim, tolerance,
 phi_m, phi_m1, and apen. Source: ADR-140 APEN window.
 
-#### 2.152 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.152 Upside Potential Ratio (UPR — ADR-141)
+
+Pulled from `research::get_upr`. Computes the Sortino & van der Meer
+(1991) Upside Potential Ratio = UPM₁(MAR) / √LPM₂(MAR) with MAR=0.
+UPM₁ = mean of max(r,0), LPM₂ = mean of min(r,0)². Separates upside
+capture from downside risk — distinct from Sharpe (total vol), Sortino
+(downside dev only), and Omega (threshold integration). Header gives
+**upr_label** (POOR UPR < 0.3 / BELOW_AVERAGE < 0.6 / AVERAGE < 1.0 /
+GOOD < 1.5 / EXCELLENT ≥ 1.5 / INSUFFICIENT_DATA). Body reports
+bars_used, upm1, lpm2, sqrt_lpm2, upr, up_days, down_days.
+Source: ADR-141 UPR window.
+
+#### 2.153 Leverage Effect (LEVEREFF — ADR-141)
+
+Pulled from `research::get_levereff`. Computes the Black (1976)
+leverage effect: corr(rₜ, rₜ₊₁²) plus asymmetric vol ratio
+(down-vol / up-vol). Strong negative corr ⇒ negative returns amplify
+future volatility. Header gives **levereff_label** (STRONG_INVERSE
+corr < −0.3 / MODERATE_INVERSE < −0.1 / WEAK_OR_NONE −0.1–0.1 /
+POSITIVE_LEVERAGE ≥ 0.1 / INSUFFICIENT_DATA). Body reports bars_used,
+corr_r_vol, down_vol, up_vol, asym_ratio, pairs_used.
+Source: ADR-141 LEVEREFF window.
+
+#### 2.154 Drawdown-at-Risk (DRAWDAR — ADR-141)
+
+Pulled from `research::get_drawdar`. Computes the Chekhlov et al.
+(2005) drawdown quantile: DaR(α) and CDaR(α) at 5% and 1%, the
+drawdown analogs of VaR and CVaR. Reports running drawdown series
+quantiles directly — orthogonal to CVAR (return tail) and DDHIST
+(max/duration statistics). Header gives **drawdar_label** (LOW_DD_RISK
+DaR5 < 3% / MODERATE < 8% / ELEVATED < 15% / HIGH ≥ 15% /
+INSUFFICIENT_DATA). Body reports bars_used, max_dd, dar_5, cdar_5,
+dar_1, cdar_1, dd_events.
+Source: ADR-141 DRAWDAR window.
+
+#### 2.155 Volatility Half-Life (VARHALF — ADR-141)
+
+Pulled from `research::get_varhalf`. Fits AR(1) on rolling 20-day
+realized vol series: HL = −ln(2)/ln(β). Measures how quickly
+volatility shocks dissipate — fast HL ⇒ mean-reverting vol
+(short-lived spikes), slow HL ⇒ persistent vol regime changes.
+Header gives **varhalf_label** (FAST_REVERT HL < 5d / MODERATE < 15d /
+SLOW < 30d / PERSISTENT ≥ 30d / INSUFFICIENT_DATA). Body reports
+rv_points, ar1_beta, ar1_alpha, half_life_days, mean_rv, rv_latest.
+Source: ADR-141 VARHALF window.
+
+#### 2.156 Return Gini Coefficient (GINI — ADR-141)
+
+Pulled from `research::get_gini`. Computes the Gini coefficient on
+|log returns|: (2·Σ(i·|r|_sorted)) / (n·Σ|r|) − (n+1)/n. Measures
+concentration of absolute return magnitudes — high Gini ⇒ a few
+outsized moves dominate total return; low Gini ⇒ evenly distributed
+moves. Orthogonal to KURT (tail weight) and VOLCLUSTER (temporal
+clustering). Header gives **gini_label** (LOW_CONCENTRATION Gini
+< 0.3 / MODERATE < 0.5 / HIGH < 0.7 / VERY_HIGH ≥ 0.7 /
+INSUFFICIENT_DATA). Body reports bars_used, gini, mean_abs_ret,
+max_abs_ret, min_abs_ret. Source: ADR-141 GINI window.
+
+#### 2.157 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -2122,7 +2180,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.153 Sector peer comparison
+#### 2.158 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -2153,7 +2211,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.152 above.
+articles to the per-symbol bag consumed by sub-block 2.157 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -2343,37 +2401,44 @@ Question section, not per-symbol.
 | Gain-to-Pain fields (ADR-140 GPR) | 2 k/v rows | Returns used + Σ all/gains/\|losses\| % + GPR + profit factor + wins/losses + gpr label |
 | PACF fields (ADR-140 PACF) | 2 k/v rows | Returns used + PACF lags 1-5 + Bartlett 95% crit + sig lags + max \|PACF\| + max lag + pacf label |
 | Approximate entropy fields (ADR-140 APEN) | 2 k/v rows | Returns used + m + r + Φ^m + Φ^(m+1) + ApEn + apen label |
+| Upside potential ratio fields (ADR-141 UPR) | 2 k/v rows | Bars used + UPM₁ + LPM₂ + √LPM₂ + UPR + up/down days + upr label |
+| Leverage effect fields (ADR-141 LEVEREFF) | 2 k/v rows | Bars used + corr(r,vol²) + down/up vol + asymmetry ratio + pairs used + levereff label |
+| Drawdown-at-Risk fields (ADR-141 DRAWDAR) | 2 k/v rows | Bars used + max dd + DaR/CDaR 5% + DaR/CDaR 1% + dd events + drawdar label |
+| Volatility half-life fields (ADR-141 VARHALF) | 2 k/v rows | RV points + AR(1) β/α + half-life days + mean/latest RV + varhalf label |
+| Return Gini coefficient fields (ADR-141 GINI) | 2 k/v rows | Bars used + Gini + mean/max/min \|r\| + gini label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **59-116 KB**
-(up from 58-114 KB after ADR-139; ADR-140 adds five optional per-symbol
-blocks — ENTROPY / RACHEV / GPR / PACF / APEN — each measuring
+symbols. A single S&P 500 symbol now produces a packet around **60-118 KB**
+(up from 59-116 KB after ADR-140; ADR-141 adds five optional per-symbol
+blocks — UPR / LEVEREFF / DRAWDAR / VARHALF / GINI — each measuring
 ~2 k/v rows and adding ~200-600 bytes when populated, for a
 typical +1 KB per symbol and +2 KB worst case; all five reuse the
 existing `research_historical_price` HP cache and the standard
 research-table LAN sync path with zero new API dependencies;
-ENTROPY computes Shannon entropy H = −Σ pᵢ log₂(pᵢ) over a
-histogram of daily log-returns — first information-theoretic
-distributional measure, orthogonal to moment-based (KURT/SKEW)
-and test-based (JBNORM) diagnostics; RACHEV computes the Rachev
-ratio = ES_α(+R)/ES_α(−R) at 5% and 1% — first asymmetric tail
-comparison, answering whether the upside tail compensates the
-downside tail; GPR computes the Gain-to-Pain Ratio (Schwager) =
-Σ rₜ / Σ |min(rₜ,0)| plus Profit Factor — first return-per-
-realized-loss metric, distinct from drawdown-based Pain Ratio and
-threshold-based Omega; PACF computes partial autocorrelation at
-lags 1–5 via Durbin-Levinson with Bartlett 95% band — first
-lag-specific dependence structure, decomposing the joint
-autocorrelation tested by LJUNGB; APEN computes approximate
-entropy (Pincus 1991, m=2, r=0.2·σ) — first nonlinear
-predictability measure, capturing short-range pattern regularity
-invisible to HURST/DFA/LJUNGB/RUNSTEST); a 10-symbol basket now
-lands near **580-1160 KB** when every symbol has a fully populated
-ingest bag (the global context and the Return Path footer are each
-emitted exactly once, so multi-symbol overhead is still bounded by
-the per-symbol blocks).
+UPR computes the Upside Potential Ratio (Sortino & van der Meer
+1991) = UPM₁/√LPM₂ — first asymmetric capture-vs-risk ratio
+distinct from Sharpe (total vol), Sortino (downside dev only),
+and Omega (threshold integration); LEVEREFF computes the Black
+(1976) leverage effect: corr(rₜ, rₜ₊₁²) plus asymmetric vol
+ratio — first formal test of negative return → amplified vol
+feedback, orthogonal to VOLCLUSTER (temporal clustering) and
+ARCHLM (conditional heteroskedasticity); DRAWDAR computes
+Drawdown-at-Risk and Conditional DaR (Chekhlov et al. 2005) at
+5% and 1% — first quantile-based drawdown risk measure, the
+drawdown analog of VaR/CVaR, distinct from DDHIST (descriptive)
+and CVAR (return-tail); VARHALF fits AR(1) on rolling 20d RV to
+derive volatility half-life = −ln(2)/ln(β) — first vol-regime
+persistence measure, complementing VOLCLUSTER (temporal) and
+VOLOFVOL (dispersion); GINI computes the Gini coefficient on
+|log returns| — first return-concentration measure, orthogonal to
+KURT (tail weight), VOLCLUSTER (temporal clustering), and BIPOWER
+(jump decomposition)); a 10-symbol basket now lands near
+**590-1180 KB** when every symbol has a fully populated ingest bag
+(the global context and the Return Path footer are each emitted
+exactly once, so multi-symbol overhead is still bounded by the
+per-symbol blocks).
 
 ---
 
@@ -2663,6 +2728,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_gpr` | SQLite `research_gpr` | ADR-140 GPR window (Gain-to-Pain Ratio = Σ rₜ / Σ \|min(rₜ,0)\| + Profit Factor — Schwager's return-per-realized-loss metric, distinct from drawdown-based Pain Ratio) |
 | `research::get_pacf` | SQLite `research_pacf` | ADR-140 PACF window (partial autocorrelation at lags 1–5 via Durbin-Levinson with Bartlett 95% band — first lag-specific dependence decomposition of LJUNGB joint autocorrelation) |
 | `research::get_apen` | SQLite `research_apen` | ADR-140 APEN window (Pincus 1991 approximate entropy, m=2, r=0.2·σ — first nonlinear predictability measure capturing short-range pattern regularity) |
+| `research::get_upr` | SQLite `research_upr` | ADR-141 UPR window (Sortino & van der Meer 1991 Upside Potential Ratio = UPM₁/√LPM₂ — first asymmetric capture-vs-risk ratio) |
+| `research::get_levereff` | SQLite `research_levereff` | ADR-141 LEVEREFF window (Black 1976 leverage effect: corr(rₜ, rₜ₊₁²) + asymmetric vol ratio — first return→vol feedback measure) |
+| `research::get_drawdar` | SQLite `research_drawdar` | ADR-141 DRAWDAR window (Chekhlov et al. 2005 Drawdown-at-Risk + CDaR at 5%/1% — first quantile-based drawdown risk measure) |
+| `research::get_varhalf` | SQLite `research_varhalf` | ADR-141 VARHALF window (AR(1) on rolling 20d RV → half-life = −ln(2)/ln(β) — first vol-regime persistence measure) |
+| `research::get_gini` | SQLite `research_gini` | ADR-141 GINI window (Gini coefficient on |log returns| — first return-concentration measure orthogonal to KURT/VOLCLUSTER/BIPOWER) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -2700,5 +2770,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)
