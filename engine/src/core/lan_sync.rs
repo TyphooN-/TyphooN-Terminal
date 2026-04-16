@@ -348,6 +348,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_mfdfa",
     "research_hillks",
     "research_tsi",
+    // ── ADR-147 Round 39 ────────────────────────────
+    "research_garch11",
+    "research_sadf",
+    "research_cordim",
+    "research_skspec",
+    "research_automi",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -1799,6 +1805,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-147 Round 39 ──
+        "research_garch11" => Some(
+            "CREATE TABLE IF NOT EXISTS research_garch11 (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_sadf" => Some(
+            "CREATE TABLE IF NOT EXISTS research_sadf (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cordim" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cordim (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_skspec" => Some(
+            "CREATE TABLE IF NOT EXISTS research_skspec (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_automi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_automi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2011,6 +2053,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_mfdfa" => Some("updated_at"),
         "research_hillks" => Some("updated_at"),
         "research_tsi" => Some("updated_at"),
+        // ── ADR-147 Round 39 ──
+        "research_garch11" => Some("updated_at"),
+        "research_sadf" => Some("updated_at"),
+        "research_cordim" => Some("updated_at"),
+        "research_skspec" => Some("updated_at"),
+        "research_automi" => Some("updated_at"),
         _ => None,
     }
 }

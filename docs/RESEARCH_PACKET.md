@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**one hundred and eighty-three sub-blocks**, each of which is skipped silently when its data
+**one hundred and eighty-eight sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -2529,7 +2529,80 @@ zero-line behaviour than RSI; less noisy than MACD; distinct from
 CCI by using dual-EMA smoothing rather than mean deviation. Source:
 ADR-146 TSI window.
 
-#### 2.182 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.182 GARCH(1,1) Fit (GARCH11 — ADR-147)
+
+Pulled from `research::get_garch11`. Bollerslev 1986 conditional
+variance model σ²_t = ω + α·r²_{t-1} + β·σ²_{t-1} fit by
+coordinate-descent grid MLE over (α, β) ∈ [0, 0.4] × [0.4, 0.99]
+with ω implied by the unconditional-variance constraint ω =
+var·(1−α−β). Header gives **garch11_label** (NEAR_INTEGRATED
+α+β≥0.99 / HIGH_PERSISTENCE >0.95 / MODERATE_PERSISTENCE >0.85 /
+LOW_PERSISTENCE / INSUFFICIENT_DATA for n<60). Body reports
+bars_used, ω, α, β, persistence (α+β), unconditional variance,
+half-life in bars (ln 0.5 / ln(α+β)), and log-likelihood. First
+parametric volatility-persistence model in the terminal; EWMAVOL's
+single-λ decay is RiskMetrics-style, GARCH11 is the industry
+standard 2-parameter decomposition. Source: ADR-147 GARCH11 window.
+
+#### 2.183 Sup-ADF Bubble Test (SADF — ADR-147)
+
+Pulled from `research::get_sadf`. Phillips-Wu-Yu 2011 explosive-root
+statistic — expanding-window ADF t over r0 = floor((0.01 +
+1.8/√n)·n) forward, sup at the end. Complements the three
+stationarity tests (ADF/KPSS/PPROOT) by asking the asymmetric
+question: "is there an explosive sub-window in the recent tail?".
+Header gives **sadf_label** (EXPLOSIVE_CONFIRMED SADF>1.5·crit /
+EXPLOSIVE_LIKELY >crit / BORDERLINE >0.8·crit / STABLE /
+INSUFFICIENT_DATA for n<60). Body reports bars_used, min_window r0,
+full-sample ADF-t, sup-ADF statistic, argmax end index, tabulated
+5% critical value (interpolated in n), and reject-null boolean.
+First bubble / explosive-root detector in the terminal. Source:
+ADR-147 SADF window.
+
+#### 2.184 Correlation Dimension (CORDIM — ADR-147)
+
+Pulled from `research::get_cordim`. Grassberger-Procaccia 1983
+correlation dimension D2 at embedding m=3, fit to 10 log-spaced
+radii spanning 0.1× to ~1.0× the standardised-return range. D2 =
+d log C(ε) / d log ε where C(ε) is the fraction of m-vector pairs
+within ε. Header gives **cordim_label** (LOW_DIM D2<1.5 /
+MODERATE_DIM <2.5 / HIGH_DIM <3.5 / STOCHASTIC otherwise /
+INSUFFICIENT_DATA for n<60). Body reports bars_used, embed_dim,
+radii fitted, D2, and fit R². Distinct from Hurst/DFA/Higuchi —
+those assume self-similar scaling, D2 quantifies effective
+dimensionality of the embedded dynamics. Low D2 = close to a
+low-dimensional attractor; high D2 = near-stochastic. Source:
+ADR-147 CORDIM window.
+
+#### 2.185 Rolling Skewness Spectrum (SKSPEC — ADR-147)
+
+Pulled from `research::get_skspec`. Rolling 30-bar window skewness,
+then mean/std/min/max/range of the resulting skew series. Answers
+"is the return skew *stable* over time, or does it flip
+sign?" — critical for strategies whose P&L depends on skew
+persistence (e.g. put-selling). Header gives **skspec_label**
+(STABLE_POSITIVE |mean|>2·std & mean>0 / STABLE_NEGATIVE
+|mean|>2·std & mean<0 / DRIFTING |mean|>std / UNSTABLE otherwise /
+INSUFFICIENT_DATA for n<60). Body reports bars_used, window_size,
+mean_skew, std_skew, min_skew, max_skew, range_skew. Complements
+RETQUANT (ADR-135) which ships full-window skew — SKSPEC says
+whether that number is reliable. Source: ADR-147 SKSPEC window.
+
+#### 2.186 Auto Mutual Information (AUTOMI — ADR-147)
+
+Pulled from `research::get_automi`. Information-theoretic ACF:
+MI(k) = I(X_t; X_{t-k}) estimated via k=8 equiprobable histogram
+bins at lags 1, 5, 10 — plus the marginal entropy H(X) and the
+normalised MI(1)/H(X) ∈ [0,1]. Catches *any* statistical
+dependence (including nonlinear) — signature of volatility
+clustering, which contributes ~zero to linear ACF of returns but
+dominates MI of |returns|. Header gives **automi_label** (STRONG
+MI(1)/H(X)>0.20 / MODERATE >0.10 / WEAK >0.03 / INDEPENDENT
+otherwise / INSUFFICIENT_DATA for n<50). Body reports bars_used,
+num_bins, MI(1/5/10), H(X), and normalised MI(1)/H(X). Source:
+ADR-147 AUTOMI window.
+
+#### 2.187 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -2545,7 +2618,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.183 Sector peer comparison
+#### 2.188 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -2576,7 +2649,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.182 above.
+articles to the per-symbol bag consumed by sub-block 2.187 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -2796,17 +2869,51 @@ Question section, not per-symbol.
 | Multifractal DFA fields (ADR-146 MFDFA) | 2 k/v rows | Returns used + h(−2) + h(0) + h(+2) + Δh + scales used + mfdfa label |
 | Hill-tail KS fields (ADR-146 HILLKS) | 2 k/v rows | Returns used + k (tail size) + Hill α̂ + KS D statistic + KS 5% critical + hillks label |
 | True Strength Index fields (ADR-146 TSI) | 2 k/v rows | Bars used + EMA long/short periods + TSI value + signal value + TSI−signal + tsi label |
+| GARCH(1,1) fit fields (ADR-147 GARCH11) | 2 k/v rows | Returns used + ω + α + β + persistence + unconditional variance + half-life + log-likelihood + garch11 label |
+| Sup-ADF bubble test fields (ADR-147 SADF) | 2 k/v rows | Bars used + min window r0 + full-ADF t + SADF stat + argmax end + critical 5% + reject null + sadf label |
+| Correlation dimension fields (ADR-147 CORDIM) | 2 k/v rows | Returns used + embed_dim + radii fitted + D2 + fit R² + cordim label |
+| Rolling skewness spectrum fields (ADR-147 SKSPEC) | 2 k/v rows | Returns used + window size + mean/std/min/max/range of rolling skew + skspec label |
+| Auto mutual information fields (ADR-147 AUTOMI) | 2 k/v rows | Returns used + num_bins + MI(1/5/10) + H(X) + normalised MI(1)/H(X) + automi label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **64-129 KB**
-(up from 63-127 KB after ADR-145; ADR-146 adds five optional per-symbol
-blocks — BNSJUMP / PPROOT / MFDFA / HILLKS / TSI — each
+symbols. A single S&P 500 symbol now produces a packet around **65-131 KB**
+(up from 64-129 KB after ADR-146; ADR-147 adds five optional per-symbol
+blocks — GARCH11 / SADF / CORDIM / SKSPEC / AUTOMI — each
 measuring ~2 k/v rows and adding ~200-500 bytes when populated, for
 a typical +1 KB per symbol and +2 KB worst case; all five reuse the
 existing `research_historical_price` HP cache and the standard
 research-table LAN sync path with zero new API dependencies;
+GARCH11 fits Bollerslev 1986 σ²_t = ω + α·r²_{t-1} + β·σ²_{t-1}
+via coordinate-descent grid MLE over (α, β) with ω implied by the
+unconditional-variance constraint — first parametric volatility
+persistence model in the terminal; persistence α+β and half-life
+ln(0.5)/ln(α+β) are the key risk diagnostics, with
+NEAR_INTEGRATED / HIGH / MODERATE / LOW_PERSISTENCE labels; SADF
+computes the Phillips-Wu-Yu 2011 Sup-ADF statistic over an
+expanding window from r0 = floor((0.01+1.8/√n)·n) forward,
+comparing the sup-of-ADF-t against a tabulated 5% critical value
+(interpolated in n) — first bubble / explosive-root detector,
+complementing the three stationarity tests by asking the
+asymmetric recent-tail question with EXPLOSIVE_CONFIRMED /
+EXPLOSIVE_LIKELY / BORDERLINE / STABLE labels; CORDIM computes the
+Grassberger-Procaccia 1983 correlation dimension D2 via
+m=3 embedding and 10 log-spaced radii — first nonlinear-dynamics
+dimension surface distinct from the monofractal scaling exponents
+(Hurst/DFA/Higuchi); LOW_DIM (<1.5) suggests proximity to a
+low-dimensional attractor, STOCHASTIC (≥3.5) suggests near-random
+behaviour; SKSPEC rolls a 30-bar window over returns and reports
+mean/std/min/max/range of the rolling skew — first
+skewness-stability diagnostic, complementing RETQUANT's
+full-window skew with STABLE_POSITIVE / STABLE_NEGATIVE /
+DRIFTING / UNSTABLE labels driven by |mean|/std ratio; AUTOMI
+computes auto-mutual-information MI(k) at lags 1/5/10 via k=8
+equiprobable histogram bins plus H(X) and MI(1)/H(X) — first
+information-theoretic ACF, catching nonlinear dependence invisible
+to classical ACF with STRONG / MODERATE / WEAK / INDEPENDENT
+labels driven by the MI(1)/H(X) ratio; prior five (ADR-146) remain
+unchanged;
 BNSJUMP computes the Barndorff-Nielsen-Shephard 2006 jump-test
 Z-statistic z = (RV − BV) / sqrt(θ · Σr⁴) with an approximate p-value,
 the first formal jump-detection hypothesis test (complementing Round
@@ -2831,7 +2938,7 @@ critical value at 5%; TSI computes the Blau 1991 True Strength Index
 = 100 · EMA₁₃(EMA₂₅(ΔP)) / EMA₁₃(EMA₂₅(|ΔP|)) with a short-EMA signal
 line, providing a double-smoothed momentum oscillator with cleaner
 zero-line behaviour than RSI and less lag than MACD); a 10-symbol
-basket now lands near **640-1290 KB**
+basket now lands near **650-1310 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).
@@ -3154,6 +3261,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_mfdfa` | SQLite `research_mfdfa` | ADR-146 MFDFA window (Kantelhardt 2002 multifractal DFA at q ∈ {−2, 0, +2} over 7 scales with Δh spectrum width — first multifractal-spectrum surface) |
 | `research::get_hillks` | SQLite `research_hillks` | ADR-146 HILLKS window (KS goodness-of-fit for Hill-tail Pareto model with k=floor(n·0.10) tail size — catches misspecified tail assumptions that HILLTAIL alone cannot) |
 | `research::get_tsi` | SQLite `research_tsi` | ADR-146 TSI window (Blau 1991 True Strength Index = 100·EMA₁₃(EMA₂₅(ΔP))/EMA₁₃(EMA₂₅(|ΔP|)) — first double-smoothed momentum oscillator) |
+| `research::get_garch11` | SQLite `research_garch11` | ADR-147 GARCH11 window (Bollerslev 1986 GARCH(1,1) conditional-variance fit via coordinate-descent grid MLE — first parametric volatility persistence model, shipping α/β/persistence/half-life/unconditional variance) |
+| `research::get_sadf` | SQLite `research_sadf` | ADR-147 SADF window (Phillips-Wu-Yu 2011 Sup-ADF explosive-root / bubble test — first asymmetric tail-window stationarity test, complements ADF/KPSS/PPROOT) |
+| `research::get_cordim` | SQLite `research_cordim` | ADR-147 CORDIM window (Grassberger-Procaccia 1983 correlation dimension D2 at m=3 embedding — first nonlinear-dynamics dimension surface, distinct from monofractal Hurst/DFA/Higuchi) |
+| `research::get_skspec` | SQLite `research_skspec` | ADR-147 SKSPEC window (30-bar rolling skewness spectrum: mean/std/min/max/range — first skewness-stability diagnostic, complements RETQUANT full-window skew) |
+| `research::get_automi` | SQLite `research_automi` | ADR-147 AUTOMI window (auto-mutual-information at lags 1/5/10 via k=8 equiprobable histogram binning — first information-theoretic ACF, catches nonlinear dependence invisible to classical ACF) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -3191,5 +3303,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 / 142 / 143 / 144 / 145 / 146 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 / 142 / 143 / 144 / 145 / 146 / 147 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)
