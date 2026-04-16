@@ -10135,6 +10135,17 @@ enum BrokerCmd {
     ComputeWickbiasSnapshot { symbol: String },
     /// VOLOFVOL — Stdev of rolling 20-day realized vol.
     ComputeVolofvolSnapshot { symbol: String },
+    // ── ADR-134 Round 26 ──
+    /// CALMAR — Calmar ratio (annualized return / max drawdown).
+    ComputeCalmarSnapshot { symbol: String },
+    /// ULCER — Ulcer index + Martin ratio (UPI).
+    ComputeUlcerSnapshot { symbol: String },
+    /// VARRATIO — Lo-MacKinlay variance ratio.
+    ComputeVarratioSnapshot { symbol: String },
+    /// AMIHUD — Amihud illiquidity ratio.
+    ComputeAmihudSnapshot { symbol: String },
+    /// JBNORM — Jarque-Bera normality test.
+    ComputeJbnormSnapshot { symbol: String },
     // ── ADR-130 web article ingestion ──
     /// Parse an AI agent reply, extract any `===TYPHOON_INGEST===` fenced
     /// blocks, and merge the discovered articles into the per-symbol
@@ -10513,6 +10524,12 @@ enum BrokerMsg {
     WickbiasSnapshotMsg(String, typhoon_engine::core::research::WickBiasSnapshot),
     /// VOLOFVOL — Vol of rolling 20d realized vol snapshot for a symbol.
     VolofvolSnapshotMsg(String, typhoon_engine::core::research::VolOfVolSnapshot),
+    // ── ADR-134 Round 26 ──
+    CalmarSnapshotMsg(String, typhoon_engine::core::research::CalmarRatioSnapshot),
+    UlcerSnapshotMsg(String, typhoon_engine::core::research::UlcerIndexSnapshot),
+    VarratioSnapshotMsg(String, typhoon_engine::core::research::VarianceRatioSnapshot),
+    AmihudSnapshotMsg(String, typhoon_engine::core::research::AmihudIlliqSnapshot),
+    JbnormSnapshotMsg(String, typhoon_engine::core::research::JarqueBeraSnapshot),
     // ── ADR-130 ──
     /// Result of an INGEST_RESEARCH operation: per-symbol counts of
     /// newly-added articles plus any parser/write errors encountered.
@@ -12006,6 +12023,28 @@ pub struct TyphooNApp {
     volofvol_symbol: String,
     volofvol_snapshot: typhoon_engine::core::research::VolOfVolSnapshot,
     volofvol_loading: bool,
+
+    // ── ADR-134 Round 26 ──
+    show_calmar: bool,
+    calmar_symbol: String,
+    calmar_snapshot: typhoon_engine::core::research::CalmarRatioSnapshot,
+    calmar_loading: bool,
+    show_ulcer: bool,
+    ulcer_symbol: String,
+    ulcer_snapshot: typhoon_engine::core::research::UlcerIndexSnapshot,
+    ulcer_loading: bool,
+    show_varratio: bool,
+    varratio_symbol: String,
+    varratio_snapshot: typhoon_engine::core::research::VarianceRatioSnapshot,
+    varratio_loading: bool,
+    show_amihud: bool,
+    amihud_symbol: String,
+    amihud_snapshot: typhoon_engine::core::research::AmihudIlliqSnapshot,
+    amihud_loading: bool,
+    show_jbnorm: bool,
+    jbnorm_symbol: String,
+    jbnorm_snapshot: typhoon_engine::core::research::JarqueBeraSnapshot,
+    jbnorm_loading: bool,
 
     // ── ADR-130 Web article ingestion + packet viewer ──
     /// INGEST_RESEARCH — paste-in window where the user drops an AI
@@ -15686,6 +15725,82 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::VolofvolSnapshotMsg(symbol, snap));
                         });
                     }
+                    // ── ADR-134 Round 26 handlers ──
+                    BrokerCmd::ComputeCalmarSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_calmar_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::CalmarSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeUlcerSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_ulcer_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::UlcerSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeVarratioSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_varratio_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::VarratioSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeAmihudSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_amihud_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::AmihudSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeJbnormSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_jbnorm_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::JbnormSnapshotMsg(symbol, snap));
+                        });
+                    }
                     // ── ADR-130 web article ingestion handler ──
                     BrokerCmd::IngestResearchArticles { text, agent_override } => {
                         use typhoon_engine::core::research;
@@ -18401,6 +18516,27 @@ When the question touches recent news, sentiment, or prices, combine the researc
             volofvol_symbol: String::new(),
             volofvol_snapshot: typhoon_engine::core::research::VolOfVolSnapshot::default(),
             volofvol_loading: false,
+            // ── ADR-134 Round 26 defaults ──
+            show_calmar: false,
+            calmar_symbol: String::new(),
+            calmar_snapshot: typhoon_engine::core::research::CalmarRatioSnapshot::default(),
+            calmar_loading: false,
+            show_ulcer: false,
+            ulcer_symbol: String::new(),
+            ulcer_snapshot: typhoon_engine::core::research::UlcerIndexSnapshot::default(),
+            ulcer_loading: false,
+            show_varratio: false,
+            varratio_symbol: String::new(),
+            varratio_snapshot: typhoon_engine::core::research::VarianceRatioSnapshot::default(),
+            varratio_loading: false,
+            show_amihud: false,
+            amihud_symbol: String::new(),
+            amihud_snapshot: typhoon_engine::core::research::AmihudIlliqSnapshot::default(),
+            amihud_loading: false,
+            show_jbnorm: false,
+            jbnorm_symbol: String::new(),
+            jbnorm_snapshot: typhoon_engine::core::research::JarqueBeraSnapshot::default(),
+            jbnorm_loading: false,
             // ── ADR-130 defaults ──
             show_ingest_research: false,
             ingest_research_text: String::new(),
@@ -21711,6 +21847,67 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                     }
 
+                    // ── ADR-134 Round 26 packet blocks ──
+                    if let Ok(Some(cm)) = rx::get_calmar(&conn, &sym_upper) {
+                        if cm.calmar_label != "INSUFFICIENT_DATA" && !cm.calmar_label.is_empty() {
+                            let _ = writeln!(p, "### Calmar Ratio — CALMAR ({}, as of {})", cm.calmar_label, cm.as_of);
+                            let _ = writeln!(p, "- Bars {} · total return {:+.2}% · annualized {:+.2}%",
+                                cm.bars_used, cm.total_return_pct, cm.annualized_return_pct);
+                            let _ = writeln!(p, "- Max drawdown {:.2}% · Calmar ratio {:.3}",
+                                cm.max_drawdown_pct, cm.calmar_ratio);
+                            if !cm.note.is_empty() { let _ = writeln!(p, "- Note: {}", cm.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(ul)) = rx::get_ulcer(&conn, &sym_upper) {
+                        if ul.ulcer_label != "INSUFFICIENT_DATA" && !ul.ulcer_label.is_empty() {
+                            let _ = writeln!(p, "### Ulcer Index + Martin Ratio — ULCER ({}, as of {})", ul.ulcer_label, ul.as_of);
+                            let _ = writeln!(p, "- Bars {} · ulcer {:.3} · mean dd {:.2}% · max dd {:.2}%",
+                                ul.bars_used, ul.ulcer_index, ul.mean_drawdown_pct, ul.max_drawdown_pct);
+                            let _ = writeln!(p, "- In drawdown {:.1}% of bars · ann return {:+.2}% · Martin ratio {:.3}",
+                                ul.pct_in_drawdown, ul.annualized_return_pct, ul.martin_ratio);
+                            if !ul.note.is_empty() { let _ = writeln!(p, "- Note: {}", ul.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(vr)) = rx::get_varratio(&conn, &sym_upper) {
+                        if vr.rw_label != "INSUFFICIENT_DATA" && !vr.rw_label.is_empty() {
+                            let _ = writeln!(p, "### Lo-MacKinlay Variance Ratio — VARRATIO ({}, as of {})", vr.rw_label, vr.as_of);
+                            let _ = writeln!(p, "- Bars {} · VR(2) {:.3} · VR(5) {:.3} · VR(10) {:.3} · VR(20) {:.3}",
+                                vr.bars_used, vr.vr_2, vr.vr_5, vr.vr_10, vr.vr_20);
+                            let _ = writeln!(p, "- z(2) {:+.2} · z(5) {:+.2}",
+                                vr.z_stat_2, vr.z_stat_5);
+                            if !vr.note.is_empty() { let _ = writeln!(p, "- Note: {}", vr.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(am)) = rx::get_amihud(&conn, &sym_upper) {
+                        if am.illiq_label != "INSUFFICIENT_DATA" && !am.illiq_label.is_empty() {
+                            let _ = writeln!(p, "### Amihud Illiquidity — AMIHUD ({}, as of {})", am.illiq_label, am.as_of);
+                            let _ = writeln!(p, "- Bars {} · mean ILLIQ {:.4} · median {:.4} · 90th pctile {:.4}",
+                                am.bars_used, am.mean_illiq, am.median_illiq, am.illiq_90th);
+                            let _ = writeln!(p, "- Avg daily $ volume ${:.0}",
+                                am.avg_dollar_volume);
+                            if !am.note.is_empty() { let _ = writeln!(p, "- Note: {}", am.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(jb)) = rx::get_jbnorm(&conn, &sym_upper) {
+                        if jb.normal_label != "INSUFFICIENT_DATA" && !jb.normal_label.is_empty() {
+                            let _ = writeln!(p, "### Jarque-Bera Normality Test — JBNORM ({}, as of {})", jb.normal_label, jb.as_of);
+                            let _ = writeln!(p, "- Bars {} · skewness {:+.3} · excess kurtosis {:.3}",
+                                jb.bars_used, jb.skewness, jb.excess_kurtosis);
+                            let _ = writeln!(p, "- JB statistic {:.2} · p-value {:.6}",
+                                jb.jb_statistic, jb.jb_pvalue);
+                            if !jb.note.is_empty() { let _ = writeln!(p, "- Note: {}", jb.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
                     // ── ADR-130 prior-ingested web research (if any) ──
                     if let Ok(Some(ing)) = rx::get_ingested_articles(&conn, &sym_upper) {
                         if !ing.articles.is_empty() {
@@ -23398,7 +23595,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     }
                 }
             }
-            "LIQ" | "LIQUIDITY" | "LIQUIDITY_PROFILE" | "AMIHUD" => {
+            "LIQ" | "LIQUIDITY" | "LIQUIDITY_PROFILE" => {
                 let sym = self.charts.get(self.active_tab)
                     .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
                     .unwrap_or_default();
@@ -24423,6 +24620,87 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         if let Ok(conn) = cache.connection() {
                             if let Ok(Some(snap)) = typhoon_engine::core::research::get_volofvol(&conn, &self.volofvol_symbol) {
                                 self.volofvol_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            // ── ADR-134 Round 26 palette ──
+            "CALMAR" | "CALMAR_RATIO" | "CALMARRATIO" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.calmar_symbol = sym; }
+                self.show_calmar = true;
+                if self.calmar_snapshot.symbol.is_empty() && !self.calmar_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_calmar(&conn, &self.calmar_symbol) {
+                                self.calmar_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "ULCER" | "ULCER_INDEX" | "ULCERINDEX" | "MARTIN" | "UPI" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.ulcer_symbol = sym; }
+                self.show_ulcer = true;
+                if self.ulcer_snapshot.symbol.is_empty() && !self.ulcer_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_ulcer(&conn, &self.ulcer_symbol) {
+                                self.ulcer_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "VARRATIO" | "VAR_RATIO" | "VARIANCE_RATIO" | "LO_MACKINLAY" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.varratio_symbol = sym; }
+                self.show_varratio = true;
+                if self.varratio_snapshot.symbol.is_empty() && !self.varratio_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_varratio(&conn, &self.varratio_symbol) {
+                                self.varratio_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "AMIHUD" | "AMIHUD_ILLIQ" | "ILLIQ" | "ILLIQUIDITY" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.amihud_symbol = sym; }
+                self.show_amihud = true;
+                if self.amihud_snapshot.symbol.is_empty() && !self.amihud_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_amihud(&conn, &self.amihud_symbol) {
+                                self.amihud_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "JBNORM" | "JB" | "JARQUE_BERA" | "NORMALITY" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.jbnorm_symbol = sym; }
+                self.show_jbnorm = true;
+                if self.jbnorm_snapshot.symbol.is_empty() && !self.jbnorm_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_jbnorm(&conn, &self.jbnorm_symbol) {
+                                self.jbnorm_snapshot = snap;
                             }
                         }
                     }
@@ -43288,6 +43566,374 @@ When the question touches recent news, sentiment, or prices, combine the researc
             self.show_volofvol = open;
         }
 
+        // ── ADR-134 Round 26 windows ──
+        if self.show_calmar {
+            if self.calmar_symbol.is_empty() { self.calmar_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_calmar;
+            egui::Window::new("CALMAR — Calmar Ratio (Return / Max Drawdown)")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.calmar_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.calmar_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.calmar_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_calmar(&conn, &sym_u) {
+                                        self.calmar_snapshot = snap;
+                                        self.calmar_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.calmar_symbol.to_uppercase();
+                            self.calmar_loading = true;
+                            self.calmar_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeCalmarSnapshot { symbol: sym });
+                        }
+                        if self.calmar_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.calmar_snapshot;
+                    if snap.symbol.is_empty() || snap.calmar_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 bars.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.calmar_label.as_str() {
+                            "GOOD" | "EXCELLENT" => UP,
+                            "VERY_POOR" | "POOR" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — Calmar {:.2} — {} bars — as of {}",
+                            snap.symbol, snap.calmar_label, snap.calmar_ratio, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("calmar_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Total return").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.2}%", snap.total_return_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Annualized return").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.2}%", snap.annualized_return_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Max drawdown").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.max_drawdown_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Calmar ratio").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.3}", snap.calmar_ratio)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_calmar = open;
+        }
+
+        if self.show_ulcer {
+            if self.ulcer_symbol.is_empty() { self.ulcer_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_ulcer;
+            egui::Window::new("ULCER — Ulcer Index + Martin Ratio (UPI)")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.ulcer_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.ulcer_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.ulcer_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_ulcer(&conn, &sym_u) {
+                                        self.ulcer_snapshot = snap;
+                                        self.ulcer_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.ulcer_symbol.to_uppercase();
+                            self.ulcer_loading = true;
+                            self.ulcer_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeUlcerSnapshot { symbol: sym });
+                        }
+                        if self.ulcer_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.ulcer_snapshot;
+                    if snap.symbol.is_empty() || snap.ulcer_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 bars.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.ulcer_label.as_str() {
+                            "LOW_PAIN" => UP,
+                            "HIGH" | "SEVERE" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — UI {:.2} — Martin {:.2} — {} bars — as of {}",
+                            snap.symbol, snap.ulcer_label, snap.ulcer_index, snap.martin_ratio, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("ulcer_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Ulcer index").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.3}", snap.ulcer_index)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Mean drawdown %").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.mean_drawdown_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Max drawdown %").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.2}%", snap.max_drawdown_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("% in drawdown").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.1}%", snap.pct_in_drawdown)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Annualized return").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.2}%", snap.annualized_return_pct)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Martin ratio (UPI)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.3}", snap.martin_ratio)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_ulcer = open;
+        }
+
+        if self.show_varratio {
+            if self.varratio_symbol.is_empty() { self.varratio_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_varratio;
+            egui::Window::new("VARRATIO — Lo-MacKinlay Variance Ratio")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.varratio_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.varratio_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.varratio_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_varratio(&conn, &sym_u) {
+                                        self.varratio_snapshot = snap;
+                                        self.varratio_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.varratio_symbol.to_uppercase();
+                            self.varratio_loading = true;
+                            self.varratio_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeVarratioSnapshot { symbol: sym });
+                        }
+                        if self.varratio_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.varratio_snapshot;
+                    if snap.symbol.is_empty() || snap.rw_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥40 returns.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.rw_label.as_str() {
+                            "TRENDING" | "STRONG_TREND" => UP,
+                            "STRONG_REVERT" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — VR(5) {:.3} — z(5) {:+.2} — {} bars — as of {}",
+                            snap.symbol, snap.rw_label, snap.vr_5, snap.z_stat_5, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("varratio_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("VR(2)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.vr_2)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("VR(5)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.vr_5)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("VR(10)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.vr_10)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("VR(20)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.vr_20)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("z-stat(2)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.3}", snap.z_stat_2)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("z-stat(5)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.3}", snap.z_stat_5)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_varratio = open;
+        }
+
+        if self.show_amihud {
+            if self.amihud_symbol.is_empty() { self.amihud_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_amihud;
+            egui::Window::new("AMIHUD — Amihud Illiquidity Ratio")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.amihud_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.amihud_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.amihud_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_amihud(&conn, &sym_u) {
+                                        self.amihud_snapshot = snap;
+                                        self.amihud_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.amihud_symbol.to_uppercase();
+                            self.amihud_loading = true;
+                            self.amihud_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeAmihudSnapshot { symbol: sym });
+                        }
+                        if self.amihud_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.amihud_snapshot;
+                    if snap.symbol.is_empty() || snap.illiq_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 bars with volume.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.illiq_label.as_str() {
+                            "VERY_LIQUID" | "LIQUID" => UP,
+                            "ILLIQUID" | "VERY_ILLIQUID" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — ILLIQ {:.4} — {} bars — as of {}",
+                            snap.symbol, snap.illiq_label, snap.mean_illiq, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("amihud_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Mean ILLIQ (×1e6)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.mean_illiq)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Median ILLIQ (×1e6)").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.median_illiq)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("90th pctile ILLIQ").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.illiq_90th)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Avg daily $ volume").small().strong());
+                            ui.label(egui::RichText::new(format!("${:.0}", snap.avg_dollar_volume)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_amihud = open;
+        }
+
+        if self.show_jbnorm {
+            if self.jbnorm_symbol.is_empty() { self.jbnorm_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_jbnorm;
+            egui::Window::new("JBNORM — Jarque-Bera Normality Test")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([640.0, 440.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.jbnorm_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.jbnorm_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.jbnorm_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_jbnorm(&conn, &sym_u) {
+                                        self.jbnorm_snapshot = snap;
+                                        self.jbnorm_symbol = sym_u;
+                                    }
+                                }
+                            }
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.jbnorm_symbol.to_uppercase();
+                            self.jbnorm_loading = true;
+                            self.jbnorm_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeJbnormSnapshot { symbol: sym });
+                        }
+                        if self.jbnorm_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    ui.separator();
+                    let snap = &self.jbnorm_snapshot;
+                    if snap.symbol.is_empty() || snap.normal_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 returns.")
+                            .color(AXIS_TEXT).small());
+                        if !snap.note.is_empty() {
+                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+                        }
+                    } else {
+                        let color = match snap.normal_label.as_str() {
+                            "NORMAL" => UP,
+                            "NON_NORMAL" | "STRONGLY_NON_NORMAL" => DOWN,
+                            _ => AXIS_TEXT,
+                        };
+                        ui.label(egui::RichText::new(format!(
+                            "{} — {} — JB {:.2} — p {:.4} — {} bars — as of {}",
+                            snap.symbol, snap.normal_label, snap.jb_statistic, snap.jb_pvalue, snap.bars_used, snap.as_of,
+                        )).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("jbnorm_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Skewness").small().strong());
+                            ui.label(egui::RichText::new(format!("{:+.4}", snap.skewness)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Excess kurtosis").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.4}", snap.excess_kurtosis)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("JB statistic").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.3}", snap.jb_statistic)).small().monospace());
+                            ui.end_row();
+                            ui.label(egui::RichText::new("p-value (χ²(2))").small().strong());
+                            ui.label(egui::RichText::new(format!("{:.6}", snap.jb_pvalue)).small().monospace());
+                            ui.end_row();
+                        });
+                    }
+                });
+            self.show_jbnorm = open;
+        }
+
         // ── ADR-130 INGEST_RESEARCH window ──
         if self.show_ingest_research {
             let mut open = self.show_ingest_research;
@@ -51689,6 +52335,67 @@ impl eframe::App for TyphooNApp {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let _ = typhoon_engine::core::research::upsert_volofvol(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                // ── ADR-134 Round 26 receive ──
+                BrokerMsg::CalmarSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.calmar_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.calmar_snapshot = snap.clone();
+                        self.calmar_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_calmar(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::UlcerSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.ulcer_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.ulcer_snapshot = snap.clone();
+                        self.ulcer_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_ulcer(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::VarratioSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.varratio_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.varratio_snapshot = snap.clone();
+                        self.varratio_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_varratio(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::AmihudSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.amihud_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.amihud_snapshot = snap.clone();
+                        self.amihud_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_amihud(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::JbnormSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.jbnorm_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.jbnorm_snapshot = snap.clone();
+                        self.jbnorm_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_jbnorm(&conn, &sym_u, &snap);
                         }
                     }
                 }

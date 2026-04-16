@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**one hundred and eighteen sub-blocks**, each of which is skipped silently when its data
+**one hundred and twenty-three sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -1562,7 +1562,67 @@ Captures "is the vol regime stable or does vol itself bounce?" —
 complements VOLCLUSTER (which tests vol *autocorrelation*, not vol
 *variability*). Source: ADR-133 VOLOFVOL window.
 
-#### 2.117 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.117 Calmar Ratio (CALMAR — ADR-134)
+
+Pulled from `research::get_calmar`. Pure symbol-local HP stat over the
+trailing 253-session window. `calmar = annualized_return / max_drawdown`.
+The canonical drawdown-adjusted return metric used in CTA / trend-following
+evaluation. Reports total_return_pct, annualized_return_pct,
+max_drawdown_pct, and calmar_ratio. Header gives **calmar_label**
+(VERY_POOR <0.5 / POOR <1 / NEUTRAL <2 / GOOD <3 / EXCELLENT ≥3 or
+zero-drawdown positive return / INSUFFICIENT_DATA). A monotonically
+rising series (zero drawdown) gets EXCELLENT. Source: ADR-134 CALMAR window.
+
+#### 2.118 Ulcer Index + Martin Ratio (ULCER — ADR-134)
+
+Pulled from `research::get_ulcer`. Pure symbol-local HP stat over the
+trailing 253-session window. `ulcer_index = sqrt(mean(dd_pct²))` where
+`dd_pct = (close - running_peak) / running_peak × 100`. The continuous
+drawdown-weighted risk measure that captures average pain, not just the
+single worst event. Reports ulcer_index, mean/max drawdown %, share of
+bars in drawdown, annualized return, and `martin_ratio =
+annualized_return / ulcer_index` (the drawdown-analogue of Sharpe).
+Header gives **ulcer_label** (LOW_PAIN <2 / MILD <5 / MODERATE <10 /
+HIGH <20 / SEVERE ≥20 / INSUFFICIENT_DATA). Source: ADR-134 ULCER window.
+
+#### 2.119 Lo-MacKinlay Variance Ratio (VARRATIO — ADR-134)
+
+Pulled from `research::get_varratio`. Pure symbol-local HP stat over the
+trailing 253-session window. `VR(q) = Var(q-period overlapping returns) /
+(q × Var(1-period returns))`. VR=1 for random walk, >1 for trending, <1
+for mean-reverting. The first formal random-walk *hypothesis test* in the
+packet — unlike HURST/AUTOCOR which are descriptive statistics, VARRATIO
+has z-statistics with known asymptotic distributions. Reports VR at
+horizons 2/5/10/20 plus z-stats for horizons 2 and 5. Header gives
+**rw_label** (STRONG_REVERT VR5 <0.7 / MEAN_REVERT <0.9 / RANDOM_WALK
+0.9–1.1 / TRENDING <1.3 / STRONG_TREND ≥1.3 / INSUFFICIENT_DATA).
+Requires ≥40 log returns. Source: ADR-134 VARRATIO window.
+
+#### 2.120 Amihud Illiquidity (AMIHUD — ADR-134)
+
+Pulled from `research::get_amihud`. Pure symbol-local HP stat over the
+trailing 253-session window. `ILLIQ = mean(|r_t| / (close_t × volume_t))
+× 1e6` — the canonical Amihud (2002) microstructure liquidity scalar.
+Higher = less liquid = more price impact per dollar traded. Reports
+mean/median/90th-percentile of the daily ILLIQ series plus average daily
+dollar volume. Header gives **illiq_label** (VERY_LIQUID <0.01 / LIQUID
+<0.1 / MODERATE <1 / ILLIQUID <10 / VERY_ILLIQUID ≥10 /
+INSUFFICIENT_DATA). Requires ≥20 valid bar pairs (non-zero dollar
+volume). Source: ADR-134 AMIHUD window.
+
+#### 2.121 Jarque-Bera Normality Test (JBNORM — ADR-134)
+
+Pulled from `research::get_jbnorm`. Pure symbol-local HP stat over the
+trailing 253-session window. `JB = (n/6)(S² + K²/4)` where S = sample
+skewness and K = excess kurtosis. Under H₀ (normality), JB ~ χ²(2),
+so `p = exp(-JB/2)` (exact). Combines RETSKEW + RETKURT into a single
+"can we reject normality?" answer. Header gives **normal_label** (NORMAL
+p >0.10 / MILD_DEPARTURE >0.05 / MODERATE_DEPARTURE >0.01 / NON_NORMAL
+>0.001 / STRONGLY_NON_NORMAL ≤0.001 / INSUFFICIENT_DATA). The first
+surface in the packet to report an explicit p-value. Source: ADR-134
+JBNORM window.
+
+#### 2.122 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -1578,7 +1638,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.118 Sector peer comparison
+#### 2.123 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -1609,7 +1669,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.117 above.
+articles to the per-symbol bag consumed by sub-block 2.122 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -1764,19 +1824,25 @@ Question section, not per-symbol.
 | Kaufman efficiency ratio fields (ADR-133 EFFRATIO) | 2 k/v rows | Bars used + start/end close + net change + Σ |Δclose| + ER + signed ER + efficiency label |
 | Wick bias fields (ADR-133 WICKBIAS) | 2 k/v rows | Bars used + avg/median upper/lower wick + body share + bias score + bias label |
 | Vol-of-vol fields (ADR-133 VOLOFVOL) | 2 k/v rows | RV points + mean/stdev/min/max/latest RV20 + CV + cv label |
+| Calmar ratio fields (ADR-134 CALMAR) | 2 k/v rows | Bars used + total/annualized return + max drawdown + calmar ratio + calmar label |
+| Ulcer index fields (ADR-134 ULCER) | 2 k/v rows | Bars used + ulcer index + mean/max drawdown + % in drawdown + ann return + Martin ratio + ulcer label |
+| Variance ratio fields (ADR-134 VARRATIO) | 2 k/v rows | Bars used + VR(2/5/10/20) + z-stat(2/5) + rw label |
+| Amihud illiquidity fields (ADR-134 AMIHUD) | 2 k/v rows | Bars used + mean/median/90th ILLIQ + avg $ volume + illiq label |
+| Jarque-Bera normality fields (ADR-134 JBNORM) | 2 k/v rows | Bars used + skewness + excess kurtosis + JB statistic + p-value + normal label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **46-90 KB**
-(up from 44-86 KB after ADR-132; ADR-133 adds five optional per-symbol
-blocks — DOWNVOL / SHARPR / EFFRATIO / WICKBIAS / VOLOFVOL — each
+symbols. A single S&P 500 symbol now produces a packet around **48-94 KB**
+(up from 46-90 KB after ADR-133; ADR-134 adds five optional per-symbol
+blocks — CALMAR / ULCER / VARRATIO / AMIHUD / JBNORM — each
 measuring ~2 k/v rows and adding ~400-600 bytes when populated,
 for a typical +2 KB per symbol and +4 KB worst case; all five reuse
 the existing `research_historical_price` HP cache and the standard
-research-table LAN sync path with zero new API dependencies; WICKBIAS
-is the second HP surface to read all four OHLC columns together); a
-10-symbol basket now lands near **450-900 KB** when every symbol
+research-table LAN sync path with zero new API dependencies; JBNORM
+is the first surface to report an explicit p-value; AMIHUD is the
+first pure microstructure liquidity scalar); a
+10-symbol basket now lands near **470-940 KB** when every symbol
 has a fully populated ingest bag (the global context and the Return
 Path footer are each emitted exactly once, so multi-symbol overhead
 is still bounded by the per-symbol blocks).
@@ -2034,6 +2100,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_effratio` | SQLite `research_effratio` | ADR-133 EFFRATIO window (Kaufman efficiency ratio — net/gross price travel with trending/chopping label) |
 | `research::get_wickbias` | SQLite `research_wickbias` | ADR-133 WICKBIAS window (upper vs lower wick share asymmetry with buyer/seller rejection label) |
 | `research::get_volofvol` | SQLite `research_volofvol` | ADR-133 VOLOFVOL window (CV of rolling 20d realized vol — stable/chaotic vol-regime label) |
+| `research::get_calmar` | SQLite `research_calmar` | ADR-134 CALMAR window (Calmar ratio — annualized return / max drawdown with 5-way label) |
+| `research::get_ulcer` | SQLite `research_ulcer` | ADR-134 ULCER window (Ulcer index + Martin ratio — continuous drawdown-weighted risk with pain-level label) |
+| `research::get_varratio` | SQLite `research_varratio` | ADR-134 VARRATIO window (Lo-MacKinlay variance ratio at horizons 2/5/10/20 — formal random-walk hypothesis test) |
+| `research::get_amihud` | SQLite `research_amihud` | ADR-134 AMIHUD window (Amihud illiquidity ratio — |r|/dollar_volume microstructure liquidity scalar) |
+| `research::get_jbnorm` | SQLite `research_jbnorm` | ADR-134 JBNORM window (Jarque-Bera normality test — combined skewness+kurtosis χ²(2) test with exact p-value) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -2071,5 +2142,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)

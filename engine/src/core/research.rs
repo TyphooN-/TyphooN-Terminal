@@ -2882,6 +2882,104 @@ pub struct VolOfVolSnapshot {
     pub note: String,
 }
 
+// ── ADR-134 Round 26 — HP calmar / ulcer / variance-ratio / amihud / jarque-bera ──
+
+/// CALMAR — Calmar ratio: annualized return / max drawdown.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// The canonical drawdown-adjusted return metric. Reports both
+/// components (annualized return, max drawdown) plus the ratio.
+/// Label classifies on the Calmar ratio value.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CalmarRatioSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub total_return_pct: f64,          // (last/first - 1) × 100
+    pub annualized_return_pct: f64,     // total × (252 / bars_used)
+    pub max_drawdown_pct: f64,          // deepest peak-to-trough decline (positive number, %)
+    pub calmar_ratio: f64,              // annualized_return / max_drawdown (signed)
+    pub calmar_label: String,           // "VERY_POOR" | "POOR" | "NEUTRAL" | "GOOD" | "EXCELLENT" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// ULCER — Ulcer index + Martin ratio (UPI).
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// `ulcer_index = sqrt(mean(dd²))` where `dd = (price - peak) / peak × 100`.
+/// A continuous drawdown-weighted risk measure. Martin ratio = annualized
+/// return / ulcer_index, the drawdown-analogue of Sharpe.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UlcerIndexSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ulcer_index: f64,               // sqrt(mean(dd_pct²))
+    pub mean_drawdown_pct: f64,         // mean of running dd series (always ≤ 0)
+    pub max_drawdown_pct: f64,          // deepest dd point (always ≤ 0, most negative)
+    pub pct_in_drawdown: f64,           // share of bars strictly below running peak (0-100)
+    pub annualized_return_pct: f64,
+    pub martin_ratio: f64,              // annualized_return / ulcer_index (UPI)
+    pub ulcer_label: String,            // "LOW_PAIN" | "MILD" | "MODERATE" | "HIGH" | "SEVERE" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// VARRATIO — Lo-MacKinlay variance ratio at multiple horizons.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// `VR(q) = Var(q-period returns) / (q × Var(1-period returns))`.
+/// VR = 1 → random walk; VR > 1 → trending; VR < 1 → mean-reverting.
+/// This is the formal random-walk hypothesis *test* (with z-statistics),
+/// unlike HURST/AUTOCOR which are descriptive.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VarianceRatioSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub vr_2: f64,                      // VR at horizon 2
+    pub vr_5: f64,                      // VR at horizon 5
+    pub vr_10: f64,                     // VR at horizon 10
+    pub vr_20: f64,                     // VR at horizon 20
+    pub z_stat_2: f64,                  // Lo-MacKinlay z-statistic at horizon 2
+    pub z_stat_5: f64,                  // Lo-MacKinlay z-statistic at horizon 5
+    pub rw_label: String,               // "STRONG_REVERT" | "MEAN_REVERT" | "RANDOM_WALK" | "TRENDING" | "STRONG_TREND" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// AMIHUD — Amihud illiquidity ratio.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// `ILLIQ = mean(|r_t| / dollar_volume_t) × 1e6`. The canonical
+/// microstructure liquidity scalar — higher = less liquid = more
+/// price impact per dollar traded. Uses close × volume for dollar volume.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AmihudIlliqSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,               // days with valid dollar volume > 0
+    pub mean_illiq: f64,                // mean(|r| / dvol) × 1e6
+    pub median_illiq: f64,              // median of daily ILLIQ × 1e6
+    pub illiq_90th: f64,                // 90th percentile — worst liquidity day in 10
+    pub avg_dollar_volume: f64,         // average daily close × volume
+    pub illiq_label: String,            // "VERY_LIQUID" | "LIQUID" | "MODERATE" | "ILLIQUID" | "VERY_ILLIQUID" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
+/// JBNORM — Jarque-Bera normality test.
+/// Pure symbol-local HP stat over the trailing 253-session window.
+/// `JB = (n/6)(S² + K²/4)` where S = sample skewness and K = excess
+/// kurtosis. Under H₀ (normality), JB ~ χ²(2). The p-value is exact:
+/// `p = exp(-JB/2)` for χ²(2). Combines RETSKEW + RETKURT into a
+/// single actionable "can we reject normality?" answer.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct JarqueBeraSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub skewness: f64,                  // sample skewness
+    pub excess_kurtosis: f64,           // sample excess kurtosis (normal = 0)
+    pub jb_statistic: f64,              // (n/6)(S² + K²/4)
+    pub jb_pvalue: f64,                 // exp(-JB/2) for χ²(2)
+    pub normal_label: String,           // "NORMAL" | "MILD_DEPARTURE" | "MODERATE_DEPARTURE" | "NON_NORMAL" | "STRONGLY_NON_NORMAL" | "INSUFFICIENT_DATA"
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -14294,6 +14392,256 @@ pub fn compute_volofvol_snapshot(
     }
 }
 
+// ── ADR-134 Round 26 computes (CALMAR / ULCER / VARRATIO / AMIHUD / JBNORM) ──
+
+pub fn compute_calmar_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CalmarRatioSnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 30 {
+        return CalmarRatioSnapshot { symbol: sym, as_of: as_of.into(), calmar_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 bars, got {}", bars.len()), ..Default::default() };
+    }
+    let window = if bars.len() > 253 { &bars[bars.len() - 253..] } else { bars };
+    let first = window[0].close;
+    let last = window[window.len() - 1].close;
+    if first <= 0.0 || last <= 0.0 {
+        return CalmarRatioSnapshot { symbol: sym, as_of: as_of.into(), calmar_label: "INSUFFICIENT_DATA".into(), note: "non-positive close".into(), ..Default::default() };
+    }
+    let total_ret = (last / first - 1.0) * 100.0;
+    let ann_ret = total_ret * (252.0 / window.len() as f64);
+    let mut peak = window[0].close;
+    let mut max_dd: f64 = 0.0;
+    for b in window.iter() {
+        if b.close > peak { peak = b.close; }
+        let dd = (peak - b.close) / peak * 100.0;
+        if dd > max_dd { max_dd = dd; }
+    }
+    let calmar = if max_dd < f64::EPSILON { 0.0 } else { ann_ret / max_dd };
+    let label = if max_dd < f64::EPSILON && ann_ret <= 0.0 {
+        "INSUFFICIENT_DATA"
+    } else if max_dd < f64::EPSILON {
+        "EXCELLENT"
+    } else if calmar < 0.5 {
+        "VERY_POOR"
+    } else if calmar < 1.0 {
+        "POOR"
+    } else if calmar < 2.0 {
+        "NEUTRAL"
+    } else if calmar < 3.0 {
+        "GOOD"
+    } else {
+        "EXCELLENT"
+    };
+    CalmarRatioSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: window.len(),
+        total_return_pct: total_ret, annualized_return_pct: ann_ret,
+        max_drawdown_pct: max_dd, calmar_ratio: calmar,
+        calmar_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_ulcer_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> UlcerIndexSnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 30 {
+        return UlcerIndexSnapshot { symbol: sym, as_of: as_of.into(), ulcer_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 bars, got {}", bars.len()), ..Default::default() };
+    }
+    let window = if bars.len() > 253 { &bars[bars.len() - 253..] } else { bars };
+    let first = window[0].close;
+    let last = window[window.len() - 1].close;
+    if first <= 0.0 || last <= 0.0 {
+        return UlcerIndexSnapshot { symbol: sym, as_of: as_of.into(), ulcer_label: "INSUFFICIENT_DATA".into(), note: "non-positive close".into(), ..Default::default() };
+    }
+    let total_ret = (last / first - 1.0) * 100.0;
+    let ann_ret = total_ret * (252.0 / window.len() as f64);
+    let mut peak = window[0].close;
+    let mut dd_sum = 0.0_f64;
+    let mut dd_sq_sum = 0.0_f64;
+    let mut max_dd = 0.0_f64;
+    let mut in_dd_count = 0_usize;
+    for b in window.iter() {
+        if b.close > peak { peak = b.close; }
+        let dd_pct = (b.close - peak) / peak * 100.0; // ≤ 0
+        dd_sum += dd_pct;
+        dd_sq_sum += dd_pct * dd_pct;
+        if dd_pct < max_dd { max_dd = dd_pct; }
+        if dd_pct < -f64::EPSILON { in_dd_count += 1; }
+    }
+    let n = window.len() as f64;
+    let ulcer = (dd_sq_sum / n).sqrt();
+    let mean_dd = dd_sum / n;
+    let pct_in_dd = in_dd_count as f64 / n * 100.0;
+    let martin = if ulcer < f64::EPSILON { 0.0 } else { ann_ret / ulcer };
+    let label = if ulcer < f64::EPSILON && ann_ret <= 0.0 {
+        "INSUFFICIENT_DATA"
+    } else if ulcer < 2.0 {
+        "LOW_PAIN"
+    } else if ulcer < 5.0 {
+        "MILD"
+    } else if ulcer < 10.0 {
+        "MODERATE"
+    } else if ulcer < 20.0 {
+        "HIGH"
+    } else {
+        "SEVERE"
+    };
+    UlcerIndexSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: window.len(),
+        ulcer_index: ulcer, mean_drawdown_pct: mean_dd, max_drawdown_pct: max_dd,
+        pct_in_drawdown: pct_in_dd, annualized_return_pct: ann_ret,
+        martin_ratio: martin, ulcer_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_varratio_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> VarianceRatioSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 40 {
+        return VarianceRatioSnapshot { symbol: sym, as_of: as_of.into(), rw_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥40 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let mean = log_rets.iter().sum::<f64>() / n as f64;
+    let demeaned: Vec<f64> = log_rets.iter().map(|r| r - mean).collect();
+    let var1 = demeaned.iter().map(|d| d * d).sum::<f64>() / (n - 1) as f64;
+    if var1 < f64::EPSILON {
+        return VarianceRatioSnapshot { symbol: sym, as_of: as_of.into(), rw_label: "INSUFFICIENT_DATA".into(), note: "zero variance".into(), ..Default::default() };
+    }
+    let compute_vr = |q: usize| -> f64 {
+        if q > n { return 1.0; }
+        let mut agg = Vec::with_capacity(n / q + 1);
+        let mut i = 0;
+        while i + q <= n {
+            let s: f64 = demeaned[i..i + q].iter().sum();
+            agg.push(s);
+            i += 1;
+        }
+        if agg.is_empty() { return 1.0; }
+        let var_q = agg.iter().map(|s| s * s).sum::<f64>() / (agg.len() - 1).max(1) as f64;
+        var_q / (q as f64 * var1)
+    };
+    let vr2 = compute_vr(2);
+    let vr5 = compute_vr(5);
+    let vr10 = compute_vr(10);
+    let vr20 = compute_vr(20);
+    let z_stat = |vr: f64, q: usize| -> f64 {
+        let nf = n as f64;
+        let se = (2.0 * (q as f64 - 1.0) / (3.0 * q as f64 * nf)).sqrt();
+        if se < f64::EPSILON { 0.0 } else { (vr - 1.0) / se }
+    };
+    let z2 = z_stat(vr2, 2);
+    let z5 = z_stat(vr5, 5);
+    let label = if vr5 < 0.7 {
+        "STRONG_REVERT"
+    } else if vr5 < 0.9 {
+        "MEAN_REVERT"
+    } else if vr5 <= 1.1 {
+        "RANDOM_WALK"
+    } else if vr5 < 1.3 {
+        "TRENDING"
+    } else {
+        "STRONG_TREND"
+    };
+    VarianceRatioSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        vr_2: vr2, vr_5: vr5, vr_10: vr10, vr_20: vr20,
+        z_stat_2: z2, z_stat_5: z5,
+        rw_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_amihud_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AmihudIlliqSnapshot {
+    let sym = symbol.to_uppercase();
+    if bars.len() < 30 {
+        return AmihudIlliqSnapshot { symbol: sym, as_of: as_of.into(), illiq_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 bars, got {}", bars.len()), ..Default::default() };
+    }
+    let window = if bars.len() > 253 { &bars[bars.len() - 253..] } else { bars };
+    let mut daily_illiq: Vec<f64> = Vec::with_capacity(window.len());
+    let mut dvol_sum = 0.0_f64;
+    let mut dvol_count = 0_usize;
+    for pair in window.windows(2) {
+        let prev_close = pair[0].close;
+        let cur = &pair[1];
+        if prev_close <= 0.0 || cur.close <= 0.0 { continue; }
+        let dollar_vol = cur.close * cur.volume;
+        if dollar_vol < f64::EPSILON { continue; }
+        let abs_ret = (cur.close / prev_close).ln().abs();
+        daily_illiq.push(abs_ret / dollar_vol * 1e6);
+        dvol_sum += dollar_vol;
+        dvol_count += 1;
+    }
+    if daily_illiq.len() < 20 {
+        return AmihudIlliqSnapshot { symbol: sym, as_of: as_of.into(), illiq_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥20 valid bars, got {}", daily_illiq.len()), ..Default::default() };
+    }
+    let n = daily_illiq.len();
+    let mean_illiq = daily_illiq.iter().sum::<f64>() / n as f64;
+    daily_illiq.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_illiq = daily_illiq[n / 2];
+    let p90_idx = (n as f64 * 0.9).ceil() as usize;
+    let illiq_90th = daily_illiq[p90_idx.min(n - 1)];
+    let avg_dvol = if dvol_count > 0 { dvol_sum / dvol_count as f64 } else { 0.0 };
+    let label = if mean_illiq < 0.01 {
+        "VERY_LIQUID"
+    } else if mean_illiq < 0.1 {
+        "LIQUID"
+    } else if mean_illiq < 1.0 {
+        "MODERATE"
+    } else if mean_illiq < 10.0 {
+        "ILLIQUID"
+    } else {
+        "VERY_ILLIQUID"
+    };
+    AmihudIlliqSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        mean_illiq, median_illiq, illiq_90th,
+        avg_dollar_volume: avg_dvol, illiq_label: label.into(),
+        note: String::new(),
+    }
+}
+
+pub fn compute_jbnorm_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> JarqueBeraSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return JarqueBeraSnapshot { symbol: sym, as_of: as_of.into(), normal_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len() as f64;
+    let mean = log_rets.iter().sum::<f64>() / n;
+    let m2 = log_rets.iter().map(|r| { let d = r - mean; d * d }).sum::<f64>() / n;
+    if m2 < f64::EPSILON {
+        return JarqueBeraSnapshot { symbol: sym, as_of: as_of.into(), normal_label: "INSUFFICIENT_DATA".into(), note: "zero variance".into(), ..Default::default() };
+    }
+    let m3 = log_rets.iter().map(|r| { let d = r - mean; d * d * d }).sum::<f64>() / n;
+    let m4 = log_rets.iter().map(|r| { let d = r - mean; d * d * d * d }).sum::<f64>() / n;
+    let skew = m3 / m2.powf(1.5);
+    let kurt = m4 / (m2 * m2) - 3.0; // excess kurtosis
+    let jb = (n / 6.0) * (skew * skew + kurt * kurt / 4.0);
+    let pvalue = (-jb / 2.0).exp(); // exact for chi²(2)
+    let label = if pvalue > 0.10 {
+        "NORMAL"
+    } else if pvalue > 0.05 {
+        "MILD_DEPARTURE"
+    } else if pvalue > 0.01 {
+        "MODERATE_DEPARTURE"
+    } else if pvalue > 0.001 {
+        "NON_NORMAL"
+    } else {
+        "STRONGLY_NON_NORMAL"
+    };
+    JarqueBeraSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: log_rets.len(),
+        skewness: skew, excess_kurtosis: kurt,
+        jb_statistic: jb, jb_pvalue: pvalue,
+        normal_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -18125,6 +18473,159 @@ pub fn get_volofvol(conn: &Connection, symbol: &str) -> Result<Option<VolOfVolSn
         .map_err(|e| format!("prepare get_volofvol: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_volofvol: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_volofvol: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-134 Round 26 schema + upsert/get ──
+
+pub fn create_research_tables_v27(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v26(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_calmar (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_calmar_updated ON research_calmar(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_ulcer (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ulcer_updated ON research_ulcer(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_varratio (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_varratio_updated ON research_varratio(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_amihud (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_amihud_updated ON research_amihud(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_jbnorm (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_jbnorm_updated ON research_jbnorm(updated_at);",
+    ).map_err(|e| format!("create v27 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_calmar(conn: &Connection, symbol: &str, snap: &CalmarRatioSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v27(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("calmar json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_calmar(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert calmar: {e}"))?;
+    Ok(())
+}
+
+pub fn get_calmar(conn: &Connection, symbol: &str) -> Result<Option<CalmarRatioSnapshot>, String> {
+    let _ = create_research_tables_v27(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_calmar WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_calmar: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_calmar: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_calmar: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ulcer(conn: &Connection, symbol: &str, snap: &UlcerIndexSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v27(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ulcer json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ulcer(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ulcer: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ulcer(conn: &Connection, symbol: &str) -> Result<Option<UlcerIndexSnapshot>, String> {
+    let _ = create_research_tables_v27(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ulcer WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_ulcer: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_ulcer: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_ulcer: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_varratio(conn: &Connection, symbol: &str, snap: &VarianceRatioSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v27(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("varratio json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_varratio(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert varratio: {e}"))?;
+    Ok(())
+}
+
+pub fn get_varratio(conn: &Connection, symbol: &str) -> Result<Option<VarianceRatioSnapshot>, String> {
+    let _ = create_research_tables_v27(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_varratio WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_varratio: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_varratio: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_varratio: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_amihud(conn: &Connection, symbol: &str, snap: &AmihudIlliqSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v27(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("amihud json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_amihud(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert amihud: {e}"))?;
+    Ok(())
+}
+
+pub fn get_amihud(conn: &Connection, symbol: &str) -> Result<Option<AmihudIlliqSnapshot>, String> {
+    let _ = create_research_tables_v27(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_amihud WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_amihud: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_amihud: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_amihud: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_jbnorm(conn: &Connection, symbol: &str, snap: &JarqueBeraSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v27(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("jbnorm json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_jbnorm(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert jbnorm: {e}"))?;
+    Ok(())
+}
+
+pub fn get_jbnorm(conn: &Connection, symbol: &str) -> Result<Option<JarqueBeraSnapshot>, String> {
+    let _ = create_research_tables_v27(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_jbnorm WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_jbnorm: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_jbnorm: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_jbnorm: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -24329,5 +24830,151 @@ Trailing text.
     fn volofvol_compute_insufficient() {
         let snap = compute_volofvol_snapshot("X", "2026-04-15", &[]);
         assert_eq!(snap.cv_label, "INSUFFICIENT_DATA");
+    }
+
+    // ── ADR-134 Round 26 tests ──
+
+    #[test]
+    fn calmar_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = CalmarRatioSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 252,
+            total_return_pct: 25.0, annualized_return_pct: 25.0,
+            max_drawdown_pct: 10.0, calmar_ratio: 2.5,
+            calmar_label: "GOOD".into(), note: String::new(),
+        };
+        upsert_calmar(&c, "TEST", &snap).unwrap();
+        let got = get_calmar(&c, "TEST").unwrap().unwrap();
+        assert!((got.calmar_ratio - 2.5).abs() < 1e-9);
+        assert_eq!(got.calmar_label, "GOOD");
+    }
+
+    #[test]
+    fn calmar_compute_insufficient() {
+        let snap = compute_calmar_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.calmar_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn calmar_compute_positive() {
+        let bars = synthetic_up_trend_bars();
+        let snap = compute_calmar_snapshot("T", "2026-04-15", &bars);
+        assert!(snap.annualized_return_pct > 0.0, "rising series should have positive return");
+        assert_eq!(snap.calmar_label, "EXCELLENT");
+    }
+
+    #[test]
+    fn ulcer_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = UlcerIndexSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 252,
+            ulcer_index: 4.5, mean_drawdown_pct: -2.1, max_drawdown_pct: -8.0,
+            pct_in_drawdown: 70.0, annualized_return_pct: 15.0,
+            martin_ratio: 3.33, ulcer_label: "MILD".into(), note: String::new(),
+        };
+        upsert_ulcer(&c, "TEST", &snap).unwrap();
+        let got = get_ulcer(&c, "TEST").unwrap().unwrap();
+        assert!((got.ulcer_index - 4.5).abs() < 1e-9);
+        assert_eq!(got.ulcer_label, "MILD");
+    }
+
+    #[test]
+    fn ulcer_compute_insufficient() {
+        let snap = compute_ulcer_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.ulcer_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn ulcer_compute_rising() {
+        let bars = synthetic_up_trend_bars();
+        let snap = compute_ulcer_snapshot("T", "2026-04-15", &bars);
+        assert!(snap.ulcer_index < 1.0, "steadily rising series should have very low ulcer");
+        assert_eq!(snap.ulcer_label, "LOW_PAIN");
+    }
+
+    #[test]
+    fn varratio_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = VarianceRatioSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 252,
+            vr_2: 1.05, vr_5: 1.02, vr_10: 0.98, vr_20: 0.95,
+            z_stat_2: 0.5, z_stat_5: 0.2,
+            rw_label: "RANDOM_WALK".into(), note: String::new(),
+        };
+        upsert_varratio(&c, "TEST", &snap).unwrap();
+        let got = get_varratio(&c, "TEST").unwrap().unwrap();
+        assert!((got.vr_5 - 1.02).abs() < 1e-9);
+        assert_eq!(got.rw_label, "RANDOM_WALK");
+    }
+
+    #[test]
+    fn varratio_compute_insufficient() {
+        let snap = compute_varratio_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.rw_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn varratio_compute_random() {
+        let bars = synthetic_up_trend_bars();
+        let snap = compute_varratio_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.rw_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn amihud_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = AmihudIlliqSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 252,
+            mean_illiq: 0.05, median_illiq: 0.04, illiq_90th: 0.12,
+            avg_dollar_volume: 5e7, illiq_label: "LIQUID".into(), note: String::new(),
+        };
+        upsert_amihud(&c, "TEST", &snap).unwrap();
+        let got = get_amihud(&c, "TEST").unwrap().unwrap();
+        assert!((got.mean_illiq - 0.05).abs() < 1e-9);
+        assert_eq!(got.illiq_label, "LIQUID");
+    }
+
+    #[test]
+    fn amihud_compute_insufficient() {
+        let snap = compute_amihud_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.illiq_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn amihud_compute_liquid() {
+        let bars = synthetic_up_trend_bars();
+        let snap = compute_amihud_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.illiq_label, "INSUFFICIENT_DATA");
+        assert!(snap.avg_dollar_volume > 0.0);
+    }
+
+    #[test]
+    fn jbnorm_roundtrip() {
+        let c = Connection::open_in_memory().unwrap();
+        let snap = JarqueBeraSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-15".into(), bars_used: 252,
+            skewness: 0.1, excess_kurtosis: 0.5, jb_statistic: 3.0,
+            jb_pvalue: (-1.5_f64).exp(), normal_label: "NORMAL".into(), note: String::new(),
+        };
+        upsert_jbnorm(&c, "TEST", &snap).unwrap();
+        let got = get_jbnorm(&c, "TEST").unwrap().unwrap();
+        assert!((got.jb_statistic - 3.0).abs() < 1e-9);
+        assert_eq!(got.normal_label, "NORMAL");
+    }
+
+    #[test]
+    fn jbnorm_compute_insufficient() {
+        let snap = compute_jbnorm_snapshot("X", "2026-04-15", &[]);
+        assert_eq!(snap.normal_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn jbnorm_pvalue_chi2() {
+        let bars = synthetic_up_trend_bars();
+        let snap = compute_jbnorm_snapshot("T", "2026-04-15", &bars);
+        assert_ne!(snap.normal_label, "INSUFFICIENT_DATA");
+        assert!(snap.jb_pvalue >= 0.0 && snap.jb_pvalue <= 1.0, "p-value must be in [0,1]");
+        let expected_p = (-snap.jb_statistic / 2.0).exp();
+        assert!((snap.jb_pvalue - expected_p).abs() < 1e-12, "p = exp(-JB/2) for chi²(2)");
     }
 }
