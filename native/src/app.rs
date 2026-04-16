@@ -10223,6 +10223,17 @@ enum BrokerCmd {
     ComputeVarhalfSnapshot { symbol: String },
     /// GINI — Gini coefficient of |returns|.
     ComputeGiniSnapshot { symbol: String },
+    // ── ADR-142 Round 34 ──
+    /// SAMPEN — Sample Entropy.
+    ComputeSampenSnapshot { symbol: String },
+    /// PERMEN — Permutation Entropy.
+    ComputePermenSnapshot { symbol: String },
+    /// RECFACT — Recovery Factor.
+    ComputeRecfactSnapshot { symbol: String },
+    /// KPSS — KPSS stationarity test.
+    ComputeKpssSnapshot { symbol: String },
+    /// SPECENT — Spectral Entropy.
+    ComputeSpecentSnapshot { symbol: String },
     // ── ADR-130 web article ingestion ──
     /// Parse an AI agent reply, extract any `===TYPHOON_INGEST===` fenced
     /// blocks, and merge the discovered articles into the per-symbol
@@ -10649,6 +10660,12 @@ enum BrokerMsg {
     DrawdarSnapshotMsg(String, typhoon_engine::core::research::DrawDaRSnapshot),
     VarhalfSnapshotMsg(String, typhoon_engine::core::research::VarHalfSnapshot),
     GiniSnapshotMsg(String, typhoon_engine::core::research::GiniSnapshot),
+    // ── ADR-142 Round 34 ──
+    SampenSnapshotMsg(String, typhoon_engine::core::research::SampenSnapshot),
+    PermenSnapshotMsg(String, typhoon_engine::core::research::PermenSnapshot),
+    RecfactSnapshotMsg(String, typhoon_engine::core::research::RecfactSnapshot),
+    KpssSnapshotMsg(String, typhoon_engine::core::research::KpssSnapshot),
+    SpecentSnapshotMsg(String, typhoon_engine::core::research::SpecentSnapshot),
     // ── ADR-130 ──
     /// Result of an INGEST_RESEARCH operation: per-symbol counts of
     /// newly-added articles plus any parser/write errors encountered.
@@ -12318,6 +12335,27 @@ pub struct TyphooNApp {
     gini_symbol: String,
     gini_snapshot: typhoon_engine::core::research::GiniSnapshot,
     gini_loading: bool,
+    // ── ADR-142 Round 34 ──
+    show_sampen: bool,
+    sampen_symbol: String,
+    sampen_snapshot: typhoon_engine::core::research::SampenSnapshot,
+    sampen_loading: bool,
+    show_permen: bool,
+    permen_symbol: String,
+    permen_snapshot: typhoon_engine::core::research::PermenSnapshot,
+    permen_loading: bool,
+    show_recfact: bool,
+    recfact_symbol: String,
+    recfact_snapshot: typhoon_engine::core::research::RecfactSnapshot,
+    recfact_loading: bool,
+    show_kpss: bool,
+    kpss_symbol: String,
+    kpss_snapshot: typhoon_engine::core::research::KpssSnapshot,
+    kpss_loading: bool,
+    show_specent: bool,
+    specent_symbol: String,
+    specent_snapshot: typhoon_engine::core::research::SpecentSnapshot,
+    specent_loading: bool,
 
     // ── ADR-130 Web article ingestion + packet viewer ──
     /// INGEST_RESEARCH — paste-in window where the user drops an AI
@@ -16606,6 +16644,82 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::GiniSnapshotMsg(symbol, snap));
                         });
                     }
+                    // ── ADR-142 Round 34 handlers ──
+                    BrokerCmd::ComputeSampenSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_sampen_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::SampenSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputePermenSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_permen_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::PermenSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeRecfactSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_recfact_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::RecfactSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeKpssSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_kpss_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::KpssSnapshotMsg(symbol, snap));
+                        });
+                    }
+                    BrokerCmd::ComputeSpecentSnapshot { symbol } => {
+                        use typhoon_engine::core::research;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let bars = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    research::get_historical_price(&conn, &symbol).ok().flatten().unwrap_or_default()
+                                } else { Vec::new() }
+                            } else { Vec::new() };
+                            let snap = research::compute_specent_snapshot(&symbol, &today, &bars);
+                            let _ = msg_tx.send(BrokerMsg::SpecentSnapshotMsg(symbol, snap));
+                        });
+                    }
                     // ── ADR-130 web article ingestion handler ──
                     BrokerCmd::IngestResearchArticles { text, agent_override } => {
                         use typhoon_engine::core::research;
@@ -19489,6 +19603,27 @@ When the question touches recent news, sentiment, or prices, combine the researc
             gini_symbol: String::new(),
             gini_snapshot: typhoon_engine::core::research::GiniSnapshot::default(),
             gini_loading: false,
+            // ── ADR-142 Round 34 defaults ──
+            show_sampen: false,
+            sampen_symbol: String::new(),
+            sampen_snapshot: typhoon_engine::core::research::SampenSnapshot::default(),
+            sampen_loading: false,
+            show_permen: false,
+            permen_symbol: String::new(),
+            permen_snapshot: typhoon_engine::core::research::PermenSnapshot::default(),
+            permen_loading: false,
+            show_recfact: false,
+            recfact_symbol: String::new(),
+            recfact_snapshot: typhoon_engine::core::research::RecfactSnapshot::default(),
+            recfact_loading: false,
+            show_kpss: false,
+            kpss_symbol: String::new(),
+            kpss_snapshot: typhoon_engine::core::research::KpssSnapshot::default(),
+            kpss_loading: false,
+            show_specent: false,
+            specent_symbol: String::new(),
+            specent_snapshot: typhoon_engine::core::research::SpecentSnapshot::default(),
+            specent_loading: false,
             // ── ADR-130 defaults ──
             show_ingest_research: false,
             ingest_research_text: String::new(),
@@ -23287,6 +23422,57 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                     }
 
+                    // ── ADR-142 Round 34 packet blocks ──
+                    if let Ok(Some(se)) = rx::get_sampen(&conn, &sym_upper) {
+                        if se.sampen_label != "INSUFFICIENT_DATA" && se.sampen_label != "UNDEFINED" && !se.sampen_label.is_empty() {
+                            let _ = writeln!(p, "### Sample Entropy — SAMPEN ({}, as of {})", se.sampen_label, se.as_of);
+                            let _ = writeln!(p, "- Returns {} · m={} · r={:.6} · A={} · B={} · SampEn {:.4}",
+                                se.bars_used, se.embed_dim, se.tolerance, se.a_count, se.b_count, se.sampen);
+                            if !se.note.is_empty() { let _ = writeln!(p, "- Note: {}", se.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(pe)) = rx::get_permen(&conn, &sym_upper) {
+                        if pe.permen_label != "INSUFFICIENT_DATA" && !pe.permen_label.is_empty() {
+                            let _ = writeln!(p, "### Permutation Entropy — PERMEN ({}, as of {})", pe.permen_label, pe.as_of);
+                            let _ = writeln!(p, "- Returns {} · m={} · patterns {}/{} · H_raw {:.4} bits · H_norm {:.4}",
+                                pe.bars_used, pe.embed_dim, pe.patterns_observed, pe.patterns_possible, pe.permen_raw, pe.permen_normalised);
+                            if !pe.note.is_empty() { let _ = writeln!(p, "- Note: {}", pe.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(rf)) = rx::get_recfact(&conn, &sym_upper) {
+                        if rf.recfact_label != "INSUFFICIENT_DATA" && !rf.recfact_label.is_empty() {
+                            let _ = writeln!(p, "### Recovery Factor — RECFACT ({}, as of {})", rf.recfact_label, rf.as_of);
+                            let _ = writeln!(p, "- Bars {} · cum return {:.2}% · max dd {:.2}% · recovery factor {:.4}",
+                                rf.bars_used, rf.cum_return_pct, rf.max_drawdown_pct, rf.recovery_factor);
+                            if !rf.note.is_empty() { let _ = writeln!(p, "- Note: {}", rf.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(kp)) = rx::get_kpss(&conn, &sym_upper) {
+                        if kp.kpss_label != "INSUFFICIENT_DATA" && !kp.kpss_label.is_empty() {
+                            let _ = writeln!(p, "### KPSS Stationarity Test — KPSS ({}, as of {})", kp.kpss_label, kp.as_of);
+                            let _ = writeln!(p, "- Returns {} · η_μ {:.4} · lag ℓ={} · crit 10%={:.3} 5%={:.3} 1%={:.3} · reject_stationary {}",
+                                kp.bars_used, kp.kpss_stat, kp.lag_truncation, kp.crit_10, kp.crit_5, kp.crit_1, kp.reject_stationary);
+                            if !kp.note.is_empty() { let _ = writeln!(p, "- Note: {}", kp.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
+                    if let Ok(Some(sp)) = rx::get_specent(&conn, &sym_upper) {
+                        if sp.specent_label != "INSUFFICIENT_DATA" && !sp.specent_label.is_empty() {
+                            let _ = writeln!(p, "### Spectral Entropy — SPECENT ({}, as of {})", sp.specent_label, sp.as_of);
+                            let _ = writeln!(p, "- Returns {} · freqs {} · H_raw {:.4} · H_norm {:.4} · peak idx {} · peak share {:.4}",
+                                sp.bars_used, sp.num_freqs, sp.spectral_entropy_raw, sp.spectral_entropy_norm, sp.peak_freq_idx, sp.peak_power_share);
+                            if !sp.note.is_empty() { let _ = writeln!(p, "- Note: {}", sp.note); }
+                            let _ = writeln!(p);
+                        }
+                    }
+
                     // ── ADR-130 prior-ingested web research (if any) ──
                     if let Ok(Some(ing)) = rx::get_ingested_articles(&conn, &sym_upper) {
                         if !ing.articles.is_empty() {
@@ -26647,6 +26833,87 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         if let Ok(conn) = cache.connection() {
                             if let Ok(Some(snap)) = typhoon_engine::core::research::get_gini(&conn, &self.gini_symbol) {
                                 self.gini_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            // ── ADR-142 Round 34 palette ──
+            "SAMPEN" | "SAMPLE_ENTROPY" | "SAMPLEENTROPY" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.sampen_symbol = sym; }
+                self.show_sampen = true;
+                if self.sampen_snapshot.symbol.is_empty() && !self.sampen_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_sampen(&conn, &self.sampen_symbol) {
+                                self.sampen_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "PERMEN" | "PERMUTATION_ENTROPY" | "PERMENTROPY" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.permen_symbol = sym; }
+                self.show_permen = true;
+                if self.permen_snapshot.symbol.is_empty() && !self.permen_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_permen(&conn, &self.permen_symbol) {
+                                self.permen_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "RECFACT" | "RECOVERY_FACTOR" | "RECOVERYFACTOR" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.recfact_symbol = sym; }
+                self.show_recfact = true;
+                if self.recfact_snapshot.symbol.is_empty() && !self.recfact_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_recfact(&conn, &self.recfact_symbol) {
+                                self.recfact_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "KPSS" | "KPSS_TEST" | "KPSSTEST" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.kpss_symbol = sym; }
+                self.show_kpss = true;
+                if self.kpss_snapshot.symbol.is_empty() && !self.kpss_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_kpss(&conn, &self.kpss_symbol) {
+                                self.kpss_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+            }
+            "SPECENT" | "SPECTRAL_ENTROPY" | "SPECTRALENTROPY" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() { self.specent_symbol = sym; }
+                self.show_specent = true;
+                if self.specent_snapshot.symbol.is_empty() && !self.specent_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_specent(&conn, &self.specent_symbol) {
+                                self.specent_snapshot = snap;
                             }
                         }
                     }
@@ -48305,6 +48572,220 @@ When the question touches recent news, sentiment, or prices, combine the researc
             self.show_gini = open;
         }
 
+        // ── ADR-142 Round 34 windows ──
+        if self.show_sampen {
+            if self.sampen_symbol.is_empty() { self.sampen_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_sampen;
+            egui::Window::new("SAMPEN — Sample Entropy")
+                .open(&mut open).resizable(true).default_size([520.0, 300.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.sampen_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.sampen_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache { if let Ok(conn) = cache.connection() {
+                                let sym_u = self.sampen_symbol.to_uppercase();
+                                if let Ok(Some(snap)) = typhoon_engine::core::research::get_sampen(&conn, &sym_u) { self.sampen_snapshot = snap; self.sampen_symbol = sym_u; }
+                            }}
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.sampen_symbol.to_uppercase(); self.sampen_loading = true; self.sampen_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeSampenSnapshot { symbol: sym });
+                        }
+                        if self.sampen_loading { ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small()); }
+                    });
+                    ui.separator();
+                    let snap = &self.sampen_snapshot;
+                    if snap.symbol.is_empty() || snap.sampen_label == "INSUFFICIENT_DATA" || snap.sampen_label == "UNDEFINED" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 returns.").color(AXIS_TEXT).small());
+                    } else {
+                        let color = match snap.sampen_label.as_str() { "REGULAR" => UP, "HIGHLY_COMPLEX" => DOWN, _ => AXIS_TEXT };
+                        ui.label(egui::RichText::new(format!("{} — {} — SampEn {:.4} — as of {}", snap.symbol, snap.sampen_label, snap.sampen, snap.as_of)).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("sampen_summary").striped(true).num_columns(2).min_col_width(180.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Returns used").small().strong()); ui.label(egui::RichText::new(format!("{}", snap.bars_used)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Embed dim (m)").small().strong()); ui.label(egui::RichText::new(format!("{}", snap.embed_dim)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Tolerance (r)").small().strong()); ui.label(egui::RichText::new(format!("{:.6}", snap.tolerance)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("A count (m+1)").small().strong()); ui.label(egui::RichText::new(format!("{}", snap.a_count)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("B count (m)").small().strong()); ui.label(egui::RichText::new(format!("{}", snap.b_count)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Sample entropy").small().strong()); ui.label(egui::RichText::new(format!("{:.4}", snap.sampen)).small().monospace()); ui.end_row();
+                        });
+                    }
+                });
+            self.show_sampen = open;
+        }
+
+        if self.show_permen {
+            if self.permen_symbol.is_empty() { self.permen_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_permen;
+            egui::Window::new("PERMEN — Permutation Entropy")
+                .open(&mut open).resizable(true).default_size([520.0, 300.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.permen_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.permen_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache { if let Ok(conn) = cache.connection() {
+                                let sym_u = self.permen_symbol.to_uppercase();
+                                if let Ok(Some(snap)) = typhoon_engine::core::research::get_permen(&conn, &sym_u) { self.permen_snapshot = snap; self.permen_symbol = sym_u; }
+                            }}
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.permen_symbol.to_uppercase(); self.permen_loading = true; self.permen_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputePermenSnapshot { symbol: sym });
+                        }
+                        if self.permen_loading { ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small()); }
+                    });
+                    ui.separator();
+                    let snap = &self.permen_snapshot;
+                    if snap.symbol.is_empty() || snap.permen_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 returns.").color(AXIS_TEXT).small());
+                    } else {
+                        let color = match snap.permen_label.as_str() { "REGULAR" => UP, "HIGHLY_COMPLEX" => DOWN, _ => AXIS_TEXT };
+                        ui.label(egui::RichText::new(format!("{} — {} — H_norm {:.4} — as of {}", snap.symbol, snap.permen_label, snap.permen_normalised, snap.as_of)).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("permen_summary").striped(true).num_columns(2).min_col_width(180.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Returns used").small().strong()); ui.label(egui::RichText::new(format!("{}", snap.bars_used)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Embed dim (m)").small().strong()); ui.label(egui::RichText::new(format!("{}", snap.embed_dim)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Patterns observed").small().strong()); ui.label(egui::RichText::new(format!("{}/{}", snap.patterns_observed, snap.patterns_possible)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("H raw (bits)").small().strong()); ui.label(egui::RichText::new(format!("{:.4}", snap.permen_raw)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("H normalised").small().strong()); ui.label(egui::RichText::new(format!("{:.4}", snap.permen_normalised)).small().monospace()); ui.end_row();
+                        });
+                    }
+                });
+            self.show_permen = open;
+        }
+
+        if self.show_recfact {
+            if self.recfact_symbol.is_empty() { self.recfact_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_recfact;
+            egui::Window::new("RECFACT — Recovery Factor")
+                .open(&mut open).resizable(true).default_size([520.0, 300.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.recfact_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.recfact_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache { if let Ok(conn) = cache.connection() {
+                                let sym_u = self.recfact_symbol.to_uppercase();
+                                if let Ok(Some(snap)) = typhoon_engine::core::research::get_recfact(&conn, &sym_u) { self.recfact_snapshot = snap; self.recfact_symbol = sym_u; }
+                            }}
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.recfact_symbol.to_uppercase(); self.recfact_loading = true; self.recfact_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeRecfactSnapshot { symbol: sym });
+                        }
+                        if self.recfact_loading { ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small()); }
+                    });
+                    ui.separator();
+                    let snap = &self.recfact_snapshot;
+                    if snap.symbol.is_empty() || snap.recfact_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — needs ≥20 bars.").color(AXIS_TEXT).small());
+                    } else {
+                        let color = match snap.recfact_label.as_str() { "EXCELLENT" | "GOOD" => UP, "DEEP_LOSS" => DOWN, _ => AXIS_TEXT };
+                        ui.label(egui::RichText::new(format!("{} — {} — RF {:.4} — as of {}", snap.symbol, snap.recfact_label, snap.recovery_factor, snap.as_of)).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("recfact_summary").striped(true).num_columns(2).min_col_width(180.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Bars used").small().strong()); ui.label(egui::RichText::new(format!("{}", snap.bars_used)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Cum return (%)").small().strong()); ui.label(egui::RichText::new(format!("{:.4}", snap.cum_return_pct)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Max drawdown (%)").small().strong()); ui.label(egui::RichText::new(format!("{:.4}", snap.max_drawdown_pct)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Recovery factor").small().strong()); ui.label(egui::RichText::new(format!("{:.4}", snap.recovery_factor)).small().monospace()); ui.end_row();
+                        });
+                    }
+                });
+            self.show_recfact = open;
+        }
+
+        if self.show_kpss {
+            if self.kpss_symbol.is_empty() { self.kpss_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_kpss;
+            egui::Window::new("KPSS — Stationarity Test")
+                .open(&mut open).resizable(true).default_size([520.0, 300.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.kpss_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.kpss_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache { if let Ok(conn) = cache.connection() {
+                                let sym_u = self.kpss_symbol.to_uppercase();
+                                if let Ok(Some(snap)) = typhoon_engine::core::research::get_kpss(&conn, &sym_u) { self.kpss_snapshot = snap; self.kpss_symbol = sym_u; }
+                            }}
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.kpss_symbol.to_uppercase(); self.kpss_loading = true; self.kpss_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeKpssSnapshot { symbol: sym });
+                        }
+                        if self.kpss_loading { ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small()); }
+                    });
+                    ui.separator();
+                    let snap = &self.kpss_snapshot;
+                    if snap.symbol.is_empty() || snap.kpss_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 returns.").color(AXIS_TEXT).small());
+                    } else {
+                        let color = match snap.kpss_label.as_str() { "STATIONARY" => UP, "NONSTATIONARY" => DOWN, _ => AXIS_TEXT };
+                        ui.label(egui::RichText::new(format!("{} — {} — η_μ {:.4} — reject {} — as of {}", snap.symbol, snap.kpss_label, snap.kpss_stat, snap.reject_stationary, snap.as_of)).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("kpss_summary").striped(true).num_columns(2).min_col_width(200.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Returns used").small().strong()); ui.label(egui::RichText::new(format!("{}", snap.bars_used)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("KPSS stat (η_μ)").small().strong()); ui.label(egui::RichText::new(format!("{:.4}", snap.kpss_stat)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Lag truncation (ℓ)").small().strong()); ui.label(egui::RichText::new(format!("{}", snap.lag_truncation)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Crit 10%").small().strong()); ui.label(egui::RichText::new(format!("{:.3}", snap.crit_10)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Crit 5%").small().strong()); ui.label(egui::RichText::new(format!("{:.3}", snap.crit_5)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Crit 1%").small().strong()); ui.label(egui::RichText::new(format!("{:.3}", snap.crit_1)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Reject stationary").small().strong()); ui.label(egui::RichText::new(format!("{}", snap.reject_stationary)).small().monospace()); ui.end_row();
+                        });
+                    }
+                });
+            self.show_kpss = open;
+        }
+
+        if self.show_specent {
+            if self.specent_symbol.is_empty() { self.specent_symbol = chart_sym_research.clone(); }
+            let mut open = self.show_specent;
+            egui::Window::new("SPECENT — Spectral Entropy")
+                .open(&mut open).resizable(true).default_size([520.0, 300.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.specent_symbol).desired_width(100.0));
+                        if ui.button("Use Chart").clicked() { self.specent_symbol = chart_sym_research.clone(); }
+                        if ui.button("Load Cached").clicked() {
+                            if let Some(ref cache) = self.cache { if let Ok(conn) = cache.connection() {
+                                let sym_u = self.specent_symbol.to_uppercase();
+                                if let Ok(Some(snap)) = typhoon_engine::core::research::get_specent(&conn, &sym_u) { self.specent_snapshot = snap; self.specent_symbol = sym_u; }
+                            }}
+                        }
+                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                            let sym = self.specent_symbol.to_uppercase(); self.specent_loading = true; self.specent_symbol = sym.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::ComputeSpecentSnapshot { symbol: sym });
+                        }
+                        if self.specent_loading { ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small()); }
+                    });
+                    ui.separator();
+                    let snap = &self.specent_snapshot;
+                    if snap.symbol.is_empty() || snap.specent_label == "INSUFFICIENT_DATA" {
+                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 returns.").color(AXIS_TEXT).small());
+                    } else {
+                        let color = match snap.specent_label.as_str() { "PERIODIC" => UP, "NOISE_LIKE" => DOWN, _ => AXIS_TEXT };
+                        ui.label(egui::RichText::new(format!("{} — {} — H_norm {:.4} — as of {}", snap.symbol, snap.specent_label, snap.spectral_entropy_norm, snap.as_of)).strong().color(color));
+                        ui.separator();
+                        egui::Grid::new("specent_summary").striped(true).num_columns(2).min_col_width(180.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Returns used").small().strong()); ui.label(egui::RichText::new(format!("{}", snap.bars_used)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Freq bins").small().strong()); ui.label(egui::RichText::new(format!("{}", snap.num_freqs)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("H raw (bits)").small().strong()); ui.label(egui::RichText::new(format!("{:.4}", snap.spectral_entropy_raw)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("H normalised").small().strong()); ui.label(egui::RichText::new(format!("{:.4}", snap.spectral_entropy_norm)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Peak freq idx").small().strong()); ui.label(egui::RichText::new(format!("{}", snap.peak_freq_idx)).small().monospace()); ui.end_row();
+                            ui.label(egui::RichText::new("Peak power share").small().strong()); ui.label(egui::RichText::new(format!("{:.4}", snap.peak_power_share)).small().monospace()); ui.end_row();
+                        });
+                    }
+                });
+            self.show_specent = open;
+        }
+
         // ── ADR-130 INGEST_RESEARCH window ──
         if self.show_ingest_research {
             let mut open = self.show_ingest_research;
@@ -57194,6 +57675,67 @@ impl eframe::App for TyphooNApp {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let _ = typhoon_engine::core::research::upsert_gini(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                // ── ADR-142 Round 34 receive ──
+                BrokerMsg::SampenSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.sampen_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.sampen_snapshot = snap.clone();
+                        self.sampen_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_sampen(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::PermenSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.permen_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.permen_snapshot = snap.clone();
+                        self.permen_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_permen(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::RecfactSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.recfact_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.recfact_snapshot = snap.clone();
+                        self.recfact_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_recfact(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::KpssSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.kpss_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.kpss_snapshot = snap.clone();
+                        self.kpss_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_kpss(&conn, &sym_u, &snap);
+                        }
+                    }
+                }
+                BrokerMsg::SpecentSnapshotMsg(sym, snap) => {
+                    let sym_u = sym.to_uppercase();
+                    if self.specent_symbol.eq_ignore_ascii_case(&sym_u) {
+                        self.specent_snapshot = snap.clone();
+                        self.specent_loading = false;
+                    }
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = typhoon_engine::core::research::upsert_specent(&conn, &sym_u, &snap);
                         }
                     }
                 }

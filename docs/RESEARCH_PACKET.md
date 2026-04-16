@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**one hundred and fifty-eight sub-blocks**, each of which is skipped silently when its data
+**one hundred and sixty-three sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -2164,7 +2164,72 @@ clustering). Header gives **gini_label** (LOW_CONCENTRATION Gini
 INSUFFICIENT_DATA). Body reports bars_used, gini, mean_abs_ret,
 max_abs_ret, min_abs_ret. Source: ADR-141 GINI window.
 
-#### 2.157 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.157 Sample Entropy (SAMPEN — ADR-142)
+
+Pulled from `research::get_sampen`. Computes sample entropy
+(Richman & Moorman 2000) with m=2, r=0.2·σ — the self-match-excluded
+improvement over ApEn. SampEn = −ln(A/B) where A = template matches
+of length m+1 (excluding i==j) and B = template matches of length m
+(excluding i==j). More consistent and lower bias than APEN. Header
+gives **sampen_label** (REGULAR SampEn < 0.3 / MODERATE < 0.7 /
+COMPLEX < 1.2 / HIGHLY_COMPLEX ≥ 1.2 / UNDEFINED if B=0 /
+INSUFFICIENT_DATA). Body reports bars_used, embed_dim, tolerance,
+a_count, b_count, and sampen. Source: ADR-142 SAMPEN window.
+
+#### 2.158 Permutation Entropy (PERMEN — ADR-142)
+
+Pulled from `research::get_permen`. Computes permutation entropy
+(Bandt & Pompe 2002) with m=3 (6 ordinal patterns). Maps each
+consecutive m-tuple to its rank permutation and computes Shannon
+entropy of the pattern distribution. Captures temporal ordering
+structure invisible to ENTROPY (value histogram) and APEN/SAMPEN
+(template matching). Normalised H/log₂(m!) ∈ [0,1]. Header gives
+**permen_label** (REGULAR H_norm < 0.50 / MODERATE < 0.70 / COMPLEX
+< 0.85 / HIGHLY_COMPLEX ≥ 0.85 / INSUFFICIENT_DATA). Body reports
+bars_used, embed_dim, patterns_observed, patterns_possible,
+permen_raw, permen_normalised. Source: ADR-142 PERMEN window.
+
+#### 2.159 Recovery Factor (RECFACT — ADR-142)
+
+Pulled from `research::get_recfact`. Computes Recovery Factor =
+cumulative total return / |max drawdown|. Answers "has the asset
+fully recovered from its worst loss?" RF > 1 ⇒ yes. Distinct from
+CALMAR/BURKE/STERLING/PAINRATIO which all use annualized return.
+Header gives **recfact_label** (DEEP_LOSS RF < −1 / NEGATIVE < 0 /
+RECOVERING < 1 / GOOD < 3 / EXCELLENT ≥ 3 / INSUFFICIENT_DATA).
+Body reports bars_used, cum_return_pct, max_drawdown_pct,
+recovery_factor. Source: ADR-142 RECFACT window.
+
+#### 2.160 KPSS Stationarity Test (KPSS — ADR-142)
+
+Pulled from `research::get_kpss`. Computes the Kwiatkowski-Phillips-
+Schmidt-Shin (1992) stationarity test — the formal complement to
+ADF. ADF tests H₀: non-stationary; KPSS tests H₀: stationary.
+Standard practice reports both. Uses Newey-West long-run variance
+with Bartlett kernel and ℓ = floor(4·(n/100)^(2/9)). Critical
+values from KPSS (1992) Table 1: 10%=0.347, 5%=0.463, 1%=0.739.
+Header gives **kpss_label** (STATIONARY η_μ ≤ 0.347 /
+WEAKLY_NONSTATIONARY ≤ 0.463 / NONSTATIONARY > 0.463 /
+INSUFFICIENT_DATA). Body reports bars_used, kpss_stat,
+lag_truncation, crit_10/5/1, reject_stationary.
+Source: ADR-142 KPSS window.
+
+#### 2.161 Spectral Entropy (SPECENT — ADR-142)
+
+Pulled from `research::get_specent`. Computes spectral entropy =
+Shannon entropy of normalised power spectral density via DFT on
+mean-centred log returns. Measures periodicity in the frequency
+domain — low SpecEnt ⇒ dominant frequency components (cyclical
+returns); high SpecEnt ⇒ broad spectrum (noise-like). Orthogonal
+to ENTROPY (value histogram), APEN/SAMPEN (time-domain templates),
+and PERMEN (ordinal patterns). Header gives **specent_label**
+(PERIODIC H_norm < 0.50 / MODERATE_PERIODICITY < 0.70 /
+BROAD_SPECTRUM < 0.85 / NOISE_LIKE ≥ 0.85 / INSUFFICIENT_DATA).
+Body reports bars_used, num_freqs, spectral_entropy_raw,
+spectral_entropy_norm, peak_freq_idx, peak_power_share.
+Source: ADR-142 SPECENT window.
+
+#### 2.162 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -2180,7 +2245,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.158 Sector peer comparison
+#### 2.163 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -2211,7 +2276,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.157 above.
+articles to the per-symbol bag consumed by sub-block 2.162 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -2406,39 +2471,42 @@ Question section, not per-symbol.
 | Drawdown-at-Risk fields (ADR-141 DRAWDAR) | 2 k/v rows | Bars used + max dd + DaR/CDaR 5% + DaR/CDaR 1% + dd events + drawdar label |
 | Volatility half-life fields (ADR-141 VARHALF) | 2 k/v rows | RV points + AR(1) β/α + half-life days + mean/latest RV + varhalf label |
 | Return Gini coefficient fields (ADR-141 GINI) | 2 k/v rows | Bars used + Gini + mean/max/min \|r\| + gini label |
+| Sample entropy fields (ADR-142 SAMPEN) | 2 k/v rows | Returns used + m + r + A/B counts + SampEn + sampen label |
+| Permutation entropy fields (ADR-142 PERMEN) | 2 k/v rows | Returns used + m + patterns obs/possible + H_raw + H_norm + permen label |
+| Recovery factor fields (ADR-142 RECFACT) | 2 k/v rows | Bars used + cum return % + max dd % + recovery factor + recfact label |
+| KPSS stationarity fields (ADR-142 KPSS) | 2 k/v rows | Returns used + η_μ + lag ℓ + crit 10/5/1% + reject_stationary + kpss label |
+| Spectral entropy fields (ADR-142 SPECENT) | 2 k/v rows | Returns used + freq bins + H_raw + H_norm + peak idx + peak share + specent label |
 | Ingested web articles (ADR-130 INGESTED) | 15 shown / 50 cached | Top 15 newest articles emitted per symbol; FIFO bag holds up to 50 with URL dedup + timestamp-wins replacement |
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **60-118 KB**
-(up from 59-116 KB after ADR-140; ADR-141 adds five optional per-symbol
-blocks — UPR / LEVEREFF / DRAWDAR / VARHALF / GINI — each measuring
+symbols. A single S&P 500 symbol now produces a packet around **61-120 KB**
+(up from 60-118 KB after ADR-141; ADR-142 adds five optional per-symbol
+blocks — SAMPEN / PERMEN / RECFACT / KPSS / SPECENT — each measuring
 ~2 k/v rows and adding ~200-600 bytes when populated, for a
 typical +1 KB per symbol and +2 KB worst case; all five reuse the
 existing `research_historical_price` HP cache and the standard
 research-table LAN sync path with zero new API dependencies;
-UPR computes the Upside Potential Ratio (Sortino & van der Meer
-1991) = UPM₁/√LPM₂ — first asymmetric capture-vs-risk ratio
-distinct from Sharpe (total vol), Sortino (downside dev only),
-and Omega (threshold integration); LEVEREFF computes the Black
-(1976) leverage effect: corr(rₜ, rₜ₊₁²) plus asymmetric vol
-ratio — first formal test of negative return → amplified vol
-feedback, orthogonal to VOLCLUSTER (temporal clustering) and
-ARCHLM (conditional heteroskedasticity); DRAWDAR computes
-Drawdown-at-Risk and Conditional DaR (Chekhlov et al. 2005) at
-5% and 1% — first quantile-based drawdown risk measure, the
-drawdown analog of VaR/CVaR, distinct from DDHIST (descriptive)
-and CVAR (return-tail); VARHALF fits AR(1) on rolling 20d RV to
-derive volatility half-life = −ln(2)/ln(β) — first vol-regime
-persistence measure, complementing VOLCLUSTER (temporal) and
-VOLOFVOL (dispersion); GINI computes the Gini coefficient on
-|log returns| — first return-concentration measure, orthogonal to
-KURT (tail weight), VOLCLUSTER (temporal clustering), and BIPOWER
-(jump decomposition)); a 10-symbol basket now lands near
-**590-1180 KB** when every symbol has a fully populated ingest bag
-(the global context and the Return Path footer are each emitted
-exactly once, so multi-symbol overhead is still bounded by the
-per-symbol blocks).
+SAMPEN computes Sample Entropy (Richman & Moorman 2000) with m=2,
+r=0.2·σ, excluding self-matches — the modern standard improvement
+over APEN for time-series regularity measurement; PERMEN computes
+Permutation Entropy (Bandt & Pompe 2002) over ordinal patterns
+with m=3 — captures temporal ordering structure invisible to
+ENTROPY (value histogram), APEN/SAMPEN (template matching), and
+SPECENT (frequency domain); RECFACT computes the Recovery Factor =
+cumulative return / |max drawdown| — first raw-cumulative
+recovery metric, distinct from CALMAR/BURKE/STERLING/PAINRATIO
+which all annualize; KPSS computes the Kwiatkowski-Phillips-
+Schmidt-Shin (1992) stationarity test — the formal complement to
+ADF, testing H₀: stationary vs ADF's H₀: non-stationary, with
+Newey-West Bartlett-kernel HAC estimator; SPECENT computes
+Spectral Entropy = Shannon entropy of normalised PSD via DFT —
+first frequency-domain periodicity measure, revealing cyclical
+structure invisible to all time-domain methods); a 10-symbol
+basket now lands near **600-1200 KB** when every symbol has a
+fully populated ingest bag (the global context and the Return Path
+footer are each emitted exactly once, so multi-symbol overhead is
+still bounded by the per-symbol blocks).
 
 ---
 
@@ -2733,6 +2801,11 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_drawdar` | SQLite `research_drawdar` | ADR-141 DRAWDAR window (Chekhlov et al. 2005 Drawdown-at-Risk + CDaR at 5%/1% — first quantile-based drawdown risk measure) |
 | `research::get_varhalf` | SQLite `research_varhalf` | ADR-141 VARHALF window (AR(1) on rolling 20d RV → half-life = −ln(2)/ln(β) — first vol-regime persistence measure) |
 | `research::get_gini` | SQLite `research_gini` | ADR-141 GINI window (Gini coefficient on |log returns| — first return-concentration measure orthogonal to KURT/VOLCLUSTER/BIPOWER) |
+| `research::get_sampen` | SQLite `research_sampen` | ADR-142 SAMPEN window (Richman & Moorman 2000 Sample Entropy, m=2, r=0.2·σ, self-match-excluded — modern standard complement to APEN) |
+| `research::get_permen` | SQLite `research_permen` | ADR-142 PERMEN window (Bandt & Pompe 2002 Permutation Entropy, m=3 ordinal patterns — temporal ordering structure invisible to ENTROPY/APEN/SAMPEN) |
+| `research::get_recfact` | SQLite `research_recfact` | ADR-142 RECFACT window (Recovery Factor = cum return / \|max dd\| — first raw-cumulative recovery metric distinct from annualized ratios) |
+| `research::get_kpss` | SQLite `research_kpss` | ADR-142 KPSS window (Kwiatkowski-Phillips-Schmidt-Shin 1992 stationarity test — formal complement to ADF unit-root test) |
+| `research::get_specent` | SQLite `research_specent` | ADR-142 SPECENT window (Spectral Entropy via DFT — Shannon entropy of normalised PSD, first frequency-domain periodicity measure) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
@@ -2770,5 +2843,5 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
-- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 — Godel parity research surfaces
+- ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 / 142 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)

@@ -318,6 +318,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_drawdar",
     "research_varhalf",
     "research_gini",
+    // ── ADR-142 Round 34 ────────────────────────────
+    "research_sampen",
+    "research_permen",
+    "research_recfact",
+    "research_kpss",
+    "research_specent",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -1589,6 +1595,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-142 Round 34 ──
+        "research_sampen" => Some(
+            "CREATE TABLE IF NOT EXISTS research_sampen (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_permen" => Some(
+            "CREATE TABLE IF NOT EXISTS research_permen (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_recfact" => Some(
+            "CREATE TABLE IF NOT EXISTS research_recfact (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_kpss" => Some(
+            "CREATE TABLE IF NOT EXISTS research_kpss (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_specent" => Some(
+            "CREATE TABLE IF NOT EXISTS research_specent (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -1771,6 +1813,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_drawdar" => Some("updated_at"),
         "research_varhalf" => Some("updated_at"),
         "research_gini" => Some("updated_at"),
+        // ── ADR-142 Round 34 ──
+        "research_sampen" => Some("updated_at"),
+        "research_permen" => Some("updated_at"),
+        "research_recfact" => Some("updated_at"),
+        "research_kpss" => Some("updated_at"),
+        "research_specent" => Some("updated_at"),
         _ => None,
     }
 }

@@ -3749,6 +3749,82 @@ pub struct GiniSnapshot {
     pub note: String,
 }
 
+// ── ADR-142 Round 34 structs ──
+
+/// SAMPEN — Sample Entropy (Richman & Moorman 2000).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SampenSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub embed_dim: usize,             // m (default 2)
+    pub tolerance: f64,               // r (default 0.2·σ)
+    pub a_count: usize,               // template matches length m+1 (excl self)
+    pub b_count: usize,               // template matches length m (excl self)
+    pub sampen: f64,                   // −ln(A/B)
+    pub sampen_label: String,         // REGULAR / MODERATE / COMPLEX / HIGHLY_COMPLEX / INSUFFICIENT_DATA / UNDEFINED
+    pub note: String,
+}
+
+/// PERMEN — Permutation Entropy (Bandt & Pompe 2002).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PermenSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub embed_dim: usize,             // m (default 3 → 6 ordinal patterns)
+    pub patterns_observed: usize,     // distinct ordinal patterns seen
+    pub patterns_possible: usize,     // m! = 6
+    pub permen_raw: f64,              // Shannon entropy of pattern distribution
+    pub permen_normalised: f64,       // H / log₂(m!) ∈ [0,1]
+    pub permen_label: String,         // REGULAR / MODERATE / COMPLEX / HIGHLY_COMPLEX / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// RECFACT — Recovery Factor.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct RecfactSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub cum_return_pct: f64,          // (last/first − 1) × 100
+    pub max_drawdown_pct: f64,        // absolute max drawdown × 100
+    pub recovery_factor: f64,         // cum_return / |max_drawdown|
+    pub recfact_label: String,        // DEEP_LOSS / NEGATIVE / RECOVERING / GOOD / EXCELLENT / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// KPSS — Kwiatkowski-Phillips-Schmidt-Shin stationarity test.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct KpssSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub kpss_stat: f64,               // η_μ = Σ S_t² / (n² · s²_ℓ)
+    pub lag_truncation: usize,        // ℓ = floor(4·(n/100)^(2/9))
+    pub crit_10: f64,                 // 0.347
+    pub crit_5: f64,                  // 0.463
+    pub crit_1: f64,                  // 0.739
+    pub reject_stationary: bool,      // true if η_μ > crit_5
+    pub kpss_label: String,           // STATIONARY / WEAKLY_NONSTATIONARY / NONSTATIONARY / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// SPECENT — Spectral Entropy via DFT.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SpecentSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub num_freqs: usize,             // N/2 frequency bins
+    pub spectral_entropy_raw: f64,    // −Σ pₖ log₂(pₖ) on normalised PSD
+    pub spectral_entropy_norm: f64,   // H / log₂(N/2) ∈ [0,1]
+    pub peak_freq_idx: usize,         // index of max PSD bin
+    pub peak_power_share: f64,        // fraction of total power at peak
+    pub specent_label: String,        // PERIODIC / MODERATE_PERIODICITY / BROAD_SPECTRUM / NOISE_LIKE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -17325,6 +17401,236 @@ pub fn compute_gini_snapshot(
     }
 }
 
+// ── ADR-142 Round 34 compute ──
+
+/// SAMPEN compute: Sample Entropy (Richman & Moorman 2000).
+pub fn compute_sampen_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> SampenSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return SampenSnapshot { symbol: sym, as_of: as_of.into(), sampen_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let m = 2usize;
+    let sigma = {
+        let mean = log_rets.iter().sum::<f64>() / n as f64;
+        (log_rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / n as f64).sqrt()
+    };
+    let r = 0.2 * sigma;
+    if r < f64::EPSILON {
+        return SampenSnapshot { symbol: sym, as_of: as_of.into(), sampen_label: "INSUFFICIENT_DATA".into(), note: "zero stdev".into(), ..Default::default() };
+    }
+    let mut b_count = 0usize;
+    let mut a_count = 0usize;
+    for i in 0..n - m {
+        for j in (i + 1)..n - m {
+            let match_m = (0..m).all(|k| (log_rets[i + k] - log_rets[j + k]).abs() <= r);
+            if match_m {
+                b_count += 1;
+                if i + m < n && j + m < n && (log_rets[i + m] - log_rets[j + m]).abs() <= r {
+                    a_count += 1;
+                }
+            }
+        }
+    }
+    let (sampen, label) = if b_count == 0 {
+        (0.0, "UNDEFINED")
+    } else if a_count == 0 {
+        (f64::INFINITY, "HIGHLY_COMPLEX")
+    } else {
+        let se = -(a_count as f64 / b_count as f64).ln();
+        let l = if se < 0.3 { "REGULAR" }
+            else if se < 0.7 { "MODERATE" }
+            else if se < 1.2 { "COMPLEX" }
+            else { "HIGHLY_COMPLEX" };
+        (se, l)
+    };
+    SampenSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, embed_dim: m,
+        tolerance: r, a_count, b_count, sampen,
+        sampen_label: label.into(), note: String::new(),
+    }
+}
+
+/// PERMEN compute: Permutation Entropy (Bandt & Pompe 2002).
+pub fn compute_permen_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PermenSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return PermenSnapshot { symbol: sym, as_of: as_of.into(), permen_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let m = 3usize;
+    let factorial_m = 6usize; // 3! = 6
+    let mut pattern_counts = std::collections::HashMap::<Vec<usize>, usize>::new();
+    let num_patterns = n - m + 1;
+    for i in 0..num_patterns {
+        let window = &log_rets[i..i + m];
+        let mut indices: Vec<usize> = (0..m).collect();
+        indices.sort_by(|&a, &b| window[a].partial_cmp(&window[b]).unwrap_or(std::cmp::Ordering::Equal));
+        *pattern_counts.entry(indices).or_insert(0) += 1;
+    }
+    let num_p = num_patterns as f64;
+    let h_raw: f64 = pattern_counts.values()
+        .filter(|&&c| c > 0)
+        .map(|&c| { let p = c as f64 / num_p; -p * p.log2() })
+        .sum();
+    let h_max = (factorial_m as f64).log2();
+    let h_norm = if h_max > 0.0 { h_raw / h_max } else { 0.0 };
+    let label = if h_norm < 0.50 { "REGULAR" }
+        else if h_norm < 0.70 { "MODERATE" }
+        else if h_norm < 0.85 { "COMPLEX" }
+        else { "HIGHLY_COMPLEX" };
+    PermenSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, embed_dim: m,
+        patterns_observed: pattern_counts.len(), patterns_possible: factorial_m,
+        permen_raw: h_raw, permen_normalised: h_norm,
+        permen_label: label.into(), note: String::new(),
+    }
+}
+
+/// RECFACT compute: Recovery Factor.
+pub fn compute_recfact_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> RecfactSnapshot {
+    let sym = symbol.to_uppercase();
+    let usable: Vec<&HistoricalPriceRow> = bars.iter()
+        .filter(|b| b.close > 0.0)
+        .collect();
+    if usable.len() < 20 {
+        return RecfactSnapshot { symbol: sym, as_of: as_of.into(), recfact_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥20 bars, got {}", usable.len()), ..Default::default() };
+    }
+    let n = usable.len();
+    let first_close = usable[0].close;
+    let last_close = usable[n - 1].close;
+    let cum_return = (last_close / first_close) - 1.0;
+    let mut peak = usable[0].close;
+    let mut max_dd = 0.0f64;
+    for b in usable.iter() {
+        if b.close > peak { peak = b.close; }
+        let dd = (peak - b.close) / peak;
+        if dd > max_dd { max_dd = dd; }
+    }
+    let (rf, label) = if max_dd < 1e-10 {
+        if cum_return >= 0.0 { (f64::INFINITY, "EXCELLENT") } else { (0.0, "DEEP_LOSS") }
+    } else {
+        let r = cum_return / max_dd;
+        let l = if r < -1.0 { "DEEP_LOSS" }
+            else if r < 0.0 { "NEGATIVE" }
+            else if r < 1.0 { "RECOVERING" }
+            else if r < 3.0 { "GOOD" }
+            else { "EXCELLENT" };
+        (r, l)
+    };
+    RecfactSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        cum_return_pct: cum_return * 100.0, max_drawdown_pct: max_dd * 100.0,
+        recovery_factor: rf, recfact_label: label.into(), note: String::new(),
+    }
+}
+
+/// KPSS compute: Kwiatkowski-Phillips-Schmidt-Shin stationarity test.
+pub fn compute_kpss_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> KpssSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return KpssSnapshot { symbol: sym, as_of: as_of.into(), kpss_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let nf = n as f64;
+    let mean = log_rets.iter().sum::<f64>() / nf;
+    let residuals: Vec<f64> = log_rets.iter().map(|r| r - mean).collect();
+    let mut partial_sums = vec![0.0f64; n];
+    partial_sums[0] = residuals[0];
+    for i in 1..n {
+        partial_sums[i] = partial_sums[i - 1] + residuals[i];
+    }
+    let lag_trunc = ((4.0 * (nf / 100.0).powf(2.0 / 9.0)).floor()) as usize;
+    let lag_trunc = lag_trunc.max(1);
+    let sigma2 = residuals.iter().map(|e| e * e).sum::<f64>() / nf;
+    let mut s2_long = sigma2;
+    for l in 1..=lag_trunc {
+        let gamma_l: f64 = (0..n - l).map(|t| residuals[t] * residuals[t + l]).sum::<f64>() / nf;
+        let w = 1.0 - (l as f64 / (lag_trunc as f64 + 1.0));
+        s2_long += 2.0 * w * gamma_l;
+    }
+    if s2_long < f64::EPSILON {
+        return KpssSnapshot { symbol: sym, as_of: as_of.into(), kpss_label: "INSUFFICIENT_DATA".into(), note: "zero long-run variance".into(), ..Default::default() };
+    }
+    let eta = partial_sums.iter().map(|s| s * s).sum::<f64>() / (nf * nf * s2_long);
+    let crit_10 = 0.347;
+    let crit_5 = 0.463;
+    let crit_1 = 0.739;
+    let reject = eta > crit_5;
+    let label = if eta <= crit_10 { "STATIONARY" }
+        else if eta <= crit_5 { "WEAKLY_NONSTATIONARY" }
+        else { "NONSTATIONARY" };
+    KpssSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        kpss_stat: eta, lag_truncation: lag_trunc,
+        crit_10, crit_5, crit_1, reject_stationary: reject,
+        kpss_label: label.into(), note: String::new(),
+    }
+}
+
+/// SPECENT compute: Spectral Entropy via DFT.
+pub fn compute_specent_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> SpecentSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return SpecentSnapshot { symbol: sym, as_of: as_of.into(), specent_label: "INSUFFICIENT_DATA".into(), note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let mean = log_rets.iter().sum::<f64>() / n as f64;
+    let centered: Vec<f64> = log_rets.iter().map(|r| r - mean).collect();
+    let num_freqs = n / 2;
+    let mut psd = vec![0.0f64; num_freqs];
+    let pi2 = 2.0 * std::f64::consts::PI;
+    for k in 1..=num_freqs {
+        let mut re = 0.0f64;
+        let mut im = 0.0f64;
+        for (t, &x) in centered.iter().enumerate() {
+            let angle = pi2 * k as f64 * t as f64 / n as f64;
+            re += x * angle.cos();
+            im -= x * angle.sin();
+        }
+        psd[k - 1] = (re * re + im * im) / n as f64;
+    }
+    let total_power: f64 = psd.iter().sum();
+    if total_power < f64::EPSILON {
+        return SpecentSnapshot { symbol: sym, as_of: as_of.into(), specent_label: "INSUFFICIENT_DATA".into(), note: "zero spectral power".into(), ..Default::default() };
+    }
+    let norm_psd: Vec<f64> = psd.iter().map(|p| p / total_power).collect();
+    let h_raw: f64 = norm_psd.iter()
+        .filter(|&&p| p > 0.0)
+        .map(|&p| -p * p.log2())
+        .sum();
+    let h_max = (num_freqs as f64).log2();
+    let h_norm = if h_max > 0.0 { h_raw / h_max } else { 0.0 };
+    let (peak_idx, peak_share) = norm_psd.iter().enumerate()
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .map(|(i, &v)| (i, v))
+        .unwrap_or((0, 0.0));
+    let label = if h_norm < 0.50 { "PERIODIC" }
+        else if h_norm < 0.70 { "MODERATE_PERIODICITY" }
+        else if h_norm < 0.85 { "BROAD_SPECTRUM" }
+        else { "NOISE_LIKE" };
+    SpecentSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        num_freqs, spectral_entropy_raw: h_raw, spectral_entropy_norm: h_norm,
+        peak_freq_idx: peak_idx, peak_power_share: peak_share,
+        specent_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -22380,6 +22686,159 @@ pub fn get_gini(conn: &Connection, symbol: &str) -> Result<Option<GiniSnapshot>,
         .map_err(|e| format!("prepare get_gini: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_gini: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_gini: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-142 Round 34 schema v35 ──
+
+pub fn create_research_tables_v35(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v34(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_sampen (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_sampen_updated ON research_sampen(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_permen (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_permen_updated ON research_permen(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_recfact (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_recfact_updated ON research_recfact(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_kpss (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_kpss_updated ON research_kpss(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_specent (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_specent_updated ON research_specent(updated_at);",
+    ).map_err(|e| format!("create v35 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_sampen(conn: &Connection, symbol: &str, snap: &SampenSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v35(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("sampen json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_sampen(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert sampen: {e}"))?;
+    Ok(())
+}
+
+pub fn get_sampen(conn: &Connection, symbol: &str) -> Result<Option<SampenSnapshot>, String> {
+    let _ = create_research_tables_v35(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_sampen WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_sampen: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_sampen: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_sampen: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_permen(conn: &Connection, symbol: &str, snap: &PermenSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v35(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("permen json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_permen(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert permen: {e}"))?;
+    Ok(())
+}
+
+pub fn get_permen(conn: &Connection, symbol: &str) -> Result<Option<PermenSnapshot>, String> {
+    let _ = create_research_tables_v35(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_permen WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_permen: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_permen: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_permen: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_recfact(conn: &Connection, symbol: &str, snap: &RecfactSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v35(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("recfact json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_recfact(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert recfact: {e}"))?;
+    Ok(())
+}
+
+pub fn get_recfact(conn: &Connection, symbol: &str) -> Result<Option<RecfactSnapshot>, String> {
+    let _ = create_research_tables_v35(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_recfact WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_recfact: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_recfact: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_recfact: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_kpss(conn: &Connection, symbol: &str, snap: &KpssSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v35(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("kpss json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_kpss(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert kpss: {e}"))?;
+    Ok(())
+}
+
+pub fn get_kpss(conn: &Connection, symbol: &str) -> Result<Option<KpssSnapshot>, String> {
+    let _ = create_research_tables_v35(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_kpss WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_kpss: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_kpss: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_kpss: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_specent(conn: &Connection, symbol: &str, snap: &SpecentSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v35(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("specent json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_specent(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert specent: {e}"))?;
+    Ok(())
+}
+
+pub fn get_specent(conn: &Connection, symbol: &str) -> Result<Option<SpecentSnapshot>, String> {
+    let _ = create_research_tables_v35(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_specent WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_specent: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_specent: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_specent: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -30051,5 +30510,138 @@ Trailing text.
         assert!(snap.gini_coeff <= 1.0);
         // All |returns| are nearly equal → low Gini
         assert_eq!(snap.gini_label, "LOW_CONCENTRATION");
+    }
+
+    // ── ADR-142 Round 34 tests ──
+
+    #[test]
+    fn sampen_snapshot_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = SampenSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            embed_dim: 2, tolerance: 0.002, a_count: 1000, b_count: 2000,
+            sampen: 0.693, sampen_label: "MODERATE".into(), note: String::new(),
+        };
+        upsert_sampen(&conn, "TEST", &snap).unwrap();
+        let got = get_sampen(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.symbol, "TEST");
+        assert!((got.sampen - 0.693).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sampen_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_sampen_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.sampen_label, "INSUFFICIENT_DATA");
+        assert_ne!(snap.sampen_label, "UNDEFINED");
+        assert!(snap.sampen >= 0.0);
+        assert!(snap.b_count > 0);
+    }
+
+    #[test]
+    fn permen_snapshot_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = PermenSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            embed_dim: 3, patterns_observed: 6, patterns_possible: 6,
+            permen_raw: 2.58, permen_normalised: 0.99,
+            permen_label: "HIGHLY_COMPLEX".into(), note: String::new(),
+        };
+        upsert_permen(&conn, "TEST", &snap).unwrap();
+        let got = get_permen(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.symbol, "TEST");
+        assert!((got.permen_normalised - 0.99).abs() < 1e-6);
+    }
+
+    #[test]
+    fn permen_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_permen_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.permen_label, "INSUFFICIENT_DATA");
+        assert!(snap.permen_normalised >= 0.0);
+        assert!(snap.permen_normalised <= 1.0);
+        // Perfectly alternating → only 2 of 6 ordinal patterns → low normalised entropy
+        assert!(snap.patterns_observed <= 6);
+    }
+
+    #[test]
+    fn recfact_snapshot_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = RecfactSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            cum_return_pct: 15.0, max_drawdown_pct: 5.0,
+            recovery_factor: 3.0, recfact_label: "EXCELLENT".into(), note: String::new(),
+        };
+        upsert_recfact(&conn, "TEST", &snap).unwrap();
+        let got = get_recfact(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.symbol, "TEST");
+        assert!((got.recovery_factor - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn recfact_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_recfact_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.recfact_label, "INSUFFICIENT_DATA");
+        assert!(snap.bars_used >= 20);
+    }
+
+    #[test]
+    fn recfact_compute_rising() {
+        let bars = synthetic_ohlc_bars_150();
+        let snap = compute_recfact_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.recfact_label, "INSUFFICIENT_DATA");
+        assert!(snap.cum_return_pct > 0.0);
+        assert!(snap.recovery_factor > 0.0);
+    }
+
+    #[test]
+    fn kpss_snapshot_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = KpssSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            kpss_stat: 0.25, lag_truncation: 6, crit_10: 0.347, crit_5: 0.463, crit_1: 0.739,
+            reject_stationary: false, kpss_label: "STATIONARY".into(), note: String::new(),
+        };
+        upsert_kpss(&conn, "TEST", &snap).unwrap();
+        let got = get_kpss(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.symbol, "TEST");
+        assert!((got.kpss_stat - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn kpss_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_kpss_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.kpss_label, "INSUFFICIENT_DATA");
+        assert!(snap.lag_truncation >= 1);
+        // Oscillating returns are mean-reverting → should be stationary
+        assert_eq!(snap.kpss_label, "STATIONARY");
+    }
+
+    #[test]
+    fn specent_snapshot_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = SpecentSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            num_freqs: 126, spectral_entropy_raw: 5.0, spectral_entropy_norm: 0.72,
+            peak_freq_idx: 63, peak_power_share: 0.05,
+            specent_label: "BROAD_SPECTRUM".into(), note: String::new(),
+        };
+        upsert_specent(&conn, "TEST", &snap).unwrap();
+        let got = get_specent(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.symbol, "TEST");
+        assert!((got.spectral_entropy_norm - 0.72).abs() < 1e-6);
+    }
+
+    #[test]
+    fn specent_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_specent_snapshot("T", "2026-04-16", &bars);
+        assert_ne!(snap.specent_label, "INSUFFICIENT_DATA");
+        assert!(snap.spectral_entropy_norm >= 0.0);
+        assert!(snap.spectral_entropy_norm <= 1.0);
+        // Perfectly alternating ±0.5% → dominant frequency at N/2 → low spectral entropy
+        assert!(snap.specent_label == "PERIODIC" || snap.specent_label == "MODERATE_PERIODICITY");
     }
 }
