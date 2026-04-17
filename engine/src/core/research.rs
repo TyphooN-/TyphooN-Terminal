@@ -5266,6 +5266,103 @@ pub struct HeikinSnapshot {
     pub note: String,
 }
 
+// ── ADR-163 Round 52: ALMA / ZLEMA / ELDERRAY / TSF / RVI ──────────────────
+
+/// ALMA — Arnaud Legoux Moving Average with Gaussian kernel.
+/// weights[i] = exp(-((i - m)^2) / (2*s^2)) where m = offset*(N-1), s = N/sigma.
+/// Default length 20, offset 0.85, sigma 6.0. First Gaussian-kernel MA in the packet.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AlmaSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,
+    pub offset: f64,
+    pub sigma: f64,
+    pub alma_value: f64,
+    pub alma_prev: f64,
+    pub deviation_pct: f64,            // (last_close − alma_value) / alma_value × 100
+    pub last_close: f64,
+    pub alma_label: String,            // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// ZLEMA — Zero-Lag EMA (Ehlers). De-lag shift of `(N-1)/2` on the input
+/// before computing the EMA. length 20 → lag 9.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ZlemaSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,
+    pub lag_shift: usize,
+    pub zlema_value: f64,
+    pub zlema_prev: f64,
+    pub deviation_pct: f64,            // (last_close − zlema_value) / zlema_value × 100
+    pub last_close: f64,
+    pub zlema_label: String,           // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// ELDERRAY — Dr. Alexander Elder's Bull/Bear Power.
+/// Bull = high − EMA13(close). Bear = low − EMA13(close).
+/// Dual-channel trend intensity: Bull measures upward force, Bear measures downward force.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ElderRaySnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ema_length: usize,             // 13 by default
+    pub ema13: f64,
+    pub ema13_prev: f64,
+    pub bull_power: f64,               // high − EMA13
+    pub bull_power_prev: f64,
+    pub bear_power: f64,               // low − EMA13
+    pub bear_power_prev: f64,
+    pub last_close: f64,
+    pub elder_label: String,           // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TSF — Time Series Forecast. OLS over last N closes, forecast one bar forward.
+/// Projects the LINREG slope forward: forecast = slope·N + intercept (using 0..N time indices).
+/// Complements LINREG (current-bar fit) with LEADING/LAGGING classification.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct TsfSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 20
+    pub slope: f64,                    // per-bar slope
+    pub intercept: f64,                // at t=0 of the window
+    pub forecast_value: f64,           // projected close at t=N (one bar ahead)
+    pub last_close: f64,
+    pub forecast_deviation_pct: f64,   // (forecast_value − last_close) / last_close × 100
+    pub r_squared: f64,                // goodness of fit
+    pub tsf_label: String,             // LEADING_UP / LAGGING_UP / LEADING_DOWN / LAGGING_DOWN / FLAT / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// RVI — Relative Vigor Index (John Ehlers / Markos Katsanos).
+/// Numerator[i] = (C−O)[i] + 2·(C−O)[i−1] + 2·(C−O)[i−2] + (C−O)[i−3] (triangular weighting)
+/// Denominator[i] = same weighting on (H−L)
+/// RVI = SMA(numerator, 10) / SMA(denominator, 10)
+/// Signal = (RVI[i] + 2·RVI[i−1] + 2·RVI[i−2] + RVI[i−3]) / 6
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct RviSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 10
+    pub rvi_value: f64,
+    pub rvi_prev: f64,
+    pub signal_value: f64,
+    pub signal_prev: f64,
+    pub last_close: f64,
+    pub rvi_label: String,             // BULL_CROSS / BEAR_CROSS / BULL / BEAR / NEUTRAL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -24223,6 +24320,258 @@ pub fn compute_heikin_snapshot(
     }
 }
 
+// ── ADR-163 Round 52: ALMA / ZLEMA / ELDERRAY / TSF / RVI ──────────────────
+
+pub fn compute_alma_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AlmaSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 20usize;
+    let offset = 0.85f64;
+    let sigma = 6.0f64;
+    if n < length + 1 {
+        return AlmaSnapshot {
+            symbol: sym, as_of: as_of.into(), length, offset, sigma,
+            alma_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 1, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let m = offset * (length as f64 - 1.0);
+    let s = length as f64 / sigma;
+    let weights: Vec<f64> = (0..length).map(|i| {
+        let z = (i as f64 - m) / s;
+        (-0.5 * z * z).exp()
+    }).collect();
+    let w_sum: f64 = weights.iter().sum();
+    let compute_at = |end: usize| -> f64 {
+        let start = end + 1 - length;
+        let mut acc = 0.0;
+        for i in 0..length {
+            acc += weights[i] * closes[start + i];
+        }
+        acc / w_sum
+    };
+    let alma_value = compute_at(n - 1);
+    let alma_prev = compute_at(n - 2);
+    let last_close = closes[n - 1];
+    let dev = if alma_value.abs() > 1e-12 { (last_close - alma_value) / alma_value * 100.0 } else { 0.0 };
+    let label = if dev > 2.0 { "STRONG_BULL" }
+        else if dev > 0.0 { "BULL" }
+        else if dev < -2.0 { "STRONG_BEAR" }
+        else if dev < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    AlmaSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length, offset, sigma,
+        alma_value, alma_prev, deviation_pct: dev, last_close,
+        alma_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_zlema_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ZlemaSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 20usize;
+    let lag = (length - 1) / 2;        // 9
+    let min_bars = length + lag + 2;
+    if n < min_bars {
+        return ZlemaSnapshot {
+            symbol: sym, as_of: as_of.into(), length, lag_shift: lag,
+            zlema_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    // De-lagged series: 2*price[i] - price[i-lag] for i >= lag; else price[i]
+    let delagged: Vec<f64> = (0..n).map(|i| {
+        if i >= lag { 2.0 * closes[i] - closes[i - lag] } else { closes[i] }
+    }).collect();
+    let zl = ema_series(&delagged, length);
+    let zlema_value = zl[n - 1];
+    let zlema_prev = zl[n - 2];
+    let last_close = closes[n - 1];
+    let dev = if zlema_value.abs() > 1e-12 { (last_close - zlema_value) / zlema_value * 100.0 } else { 0.0 };
+    let label = if dev > 2.0 { "STRONG_BULL" }
+        else if dev > 0.0 { "BULL" }
+        else if dev < -2.0 { "STRONG_BEAR" }
+        else if dev < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    ZlemaSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length, lag_shift: lag,
+        zlema_value, zlema_prev, deviation_pct: dev, last_close,
+        zlema_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_elderray_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ElderRaySnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let ema_length = 13usize;
+    let min_bars = ema_length + 2;
+    if n < min_bars {
+        return ElderRaySnapshot {
+            symbol: sym, as_of: as_of.into(), ema_length,
+            elder_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let ema = ema_series(&closes, ema_length);
+    let ema13 = ema[n - 1];
+    let ema13_prev = ema[n - 2];
+    let bull_power = sorted[n - 1].high - ema13;
+    let bull_power_prev = sorted[n - 2].high - ema13_prev;
+    let bear_power = sorted[n - 1].low - ema13;
+    let bear_power_prev = sorted[n - 2].low - ema13_prev;
+    let last_close = closes[n - 1];
+    let ema_rising = ema13 > ema13_prev;
+    let ema_falling = ema13 < ema13_prev;
+    let label = if bull_power > 0.0 && bear_power > 0.0 && ema_rising { "STRONG_BULL" }
+        else if bull_power > 0.0 && ema_rising { "BULL" }
+        else if bull_power < 0.0 && bear_power < 0.0 && ema_falling { "STRONG_BEAR" }
+        else if bear_power < 0.0 && ema_falling { "BEAR" }
+        else { "NEUTRAL" };
+    ElderRaySnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, ema_length,
+        ema13, ema13_prev, bull_power, bull_power_prev, bear_power, bear_power_prev,
+        last_close, elder_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_tsf_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> TsfSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 20usize;
+    if n < length {
+        return TsfSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            tsf_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    // OLS on last `length` bars with t = 0..length-1
+    let nf = length as f64;
+    let window = &closes[n - length..];
+    let mut sum_t = 0.0;
+    let mut sum_y = 0.0;
+    let mut sum_tt = 0.0;
+    let mut sum_ty = 0.0;
+    for (i, &y) in window.iter().enumerate() {
+        let t = i as f64;
+        sum_t += t; sum_y += y; sum_tt += t * t; sum_ty += t * y;
+    }
+    let mean_t = sum_t / nf;
+    let mean_y = sum_y / nf;
+    let sxx = sum_tt - nf * mean_t * mean_t;
+    let sxy = sum_ty - nf * mean_t * mean_y;
+    let slope = if sxx.abs() > 1e-12 { sxy / sxx } else { 0.0 };
+    let intercept = mean_y - slope * mean_t;
+    // Forecast one bar forward: t = length (next bar after window)
+    let forecast_value = slope * nf + intercept;
+    let last_close = closes[n - 1];
+    // R² from residuals
+    let mut ss_res = 0.0;
+    let mut ss_tot = 0.0;
+    for (i, &y) in window.iter().enumerate() {
+        let y_hat = slope * (i as f64) + intercept;
+        ss_res += (y - y_hat).powi(2);
+        ss_tot += (y - mean_y).powi(2);
+    }
+    let r_squared = if ss_tot > 1e-12 { 1.0 - ss_res / ss_tot } else { 0.0 };
+    let dev_pct = if last_close.abs() > 1e-12 { (forecast_value - last_close) / last_close * 100.0 } else { 0.0 };
+    let label = if dev_pct.abs() < 0.1 { "FLAT" }
+        else if forecast_value > last_close && slope > 0.0 { "LEADING_UP" }
+        else if forecast_value > last_close { "LAGGING_UP" }
+        else if forecast_value < last_close && slope < 0.0 { "LEADING_DOWN" }
+        else { "LAGGING_DOWN" };
+    TsfSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        slope, intercept, forecast_value, last_close, forecast_deviation_pct: dev_pct,
+        r_squared, tsf_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_rvi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> RviSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 10usize;
+    // Need: 3 bars for the triangular weighting lookback + `length` bars for the SMA + 3 signal bars + 1 prev
+    let min_bars = length + 3 + 4;
+    if n < min_bars {
+        return RviSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            rvi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    // Per-bar raw numerator/denominator with triangular weighting back 0..3
+    let tri_num = |i: usize| -> f64 {
+        let co = |k: usize| sorted[k].close - sorted[k].open;
+        co(i) + 2.0 * co(i - 1) + 2.0 * co(i - 2) + co(i - 3)
+    };
+    let tri_den = |i: usize| -> f64 {
+        let hl = |k: usize| sorted[k].high - sorted[k].low;
+        hl(i) + 2.0 * hl(i - 1) + 2.0 * hl(i - 2) + hl(i - 3)
+    };
+    // SMA(length) over tri values
+    let rvi_at = |end: usize| -> f64 {
+        let mut num_sum = 0.0;
+        let mut den_sum = 0.0;
+        for k in (end + 1 - length)..=end {
+            num_sum += tri_num(k);
+            den_sum += tri_den(k);
+        }
+        if den_sum.abs() > 1e-12 { num_sum / den_sum } else { 0.0 }
+    };
+    // Need RVI at the last 4 bars (for signal[N] and signal[N-1])
+    let end = n - 1;
+    let rvi_0 = rvi_at(end);
+    let rvi_1 = rvi_at(end - 1);
+    let rvi_2 = rvi_at(end - 2);
+    let rvi_3 = rvi_at(end - 3);
+    let rvi_4 = rvi_at(end - 4);
+    let signal_0 = (rvi_0 + 2.0 * rvi_1 + 2.0 * rvi_2 + rvi_3) / 6.0;
+    let signal_1 = (rvi_1 + 2.0 * rvi_2 + 2.0 * rvi_3 + rvi_4) / 6.0;
+    let last_close = sorted[end].close;
+    let cross_up = rvi_1 <= signal_1 && rvi_0 > signal_0;
+    let cross_down = rvi_1 >= signal_1 && rvi_0 < signal_0;
+    let label = if cross_up { "BULL_CROSS" }
+        else if cross_down { "BEAR_CROSS" }
+        else if rvi_0 > signal_0 { "BULL" }
+        else if rvi_0 < signal_0 { "BEAR" }
+        else { "NEUTRAL" };
+    RviSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        rvi_value: rvi_0, rvi_prev: rvi_1, signal_value: signal_0, signal_prev: signal_1,
+        last_close, rvi_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -32044,6 +32393,157 @@ pub fn get_heikin(conn: &Connection, symbol: &str) -> Result<Option<HeikinSnapsh
         .map_err(|e| format!("prepare get_heikin: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_heikin: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_heikin: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn create_research_tables_v53(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v52(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_alma (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_alma_updated ON research_alma(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_zlema (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_zlema_updated ON research_zlema(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_elderray (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_elderray_updated ON research_elderray(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_tsf (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_tsf_updated ON research_tsf(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_rvi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_rvi_updated ON research_rvi(updated_at);",
+    ).map_err(|e| format!("create v53 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_alma(conn: &Connection, symbol: &str, snap: &AlmaSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v53(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("alma json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_alma(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert alma: {e}"))?;
+    Ok(())
+}
+
+pub fn get_alma(conn: &Connection, symbol: &str) -> Result<Option<AlmaSnapshot>, String> {
+    let _ = create_research_tables_v53(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_alma WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_alma: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_alma: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_alma: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_zlema(conn: &Connection, symbol: &str, snap: &ZlemaSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v53(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("zlema json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_zlema(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert zlema: {e}"))?;
+    Ok(())
+}
+
+pub fn get_zlema(conn: &Connection, symbol: &str) -> Result<Option<ZlemaSnapshot>, String> {
+    let _ = create_research_tables_v53(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_zlema WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_zlema: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_zlema: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_zlema: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_elderray(conn: &Connection, symbol: &str, snap: &ElderRaySnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v53(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("elderray json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_elderray(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert elderray: {e}"))?;
+    Ok(())
+}
+
+pub fn get_elderray(conn: &Connection, symbol: &str) -> Result<Option<ElderRaySnapshot>, String> {
+    let _ = create_research_tables_v53(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_elderray WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_elderray: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_elderray: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_elderray: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_tsf(conn: &Connection, symbol: &str, snap: &TsfSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v53(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("tsf json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_tsf(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert tsf: {e}"))?;
+    Ok(())
+}
+
+pub fn get_tsf(conn: &Connection, symbol: &str) -> Result<Option<TsfSnapshot>, String> {
+    let _ = create_research_tables_v53(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_tsf WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_tsf: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_tsf: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_tsf: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_rvi(conn: &Connection, symbol: &str, snap: &RviSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v53(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("rvi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_rvi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert rvi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_rvi(conn: &Connection, symbol: &str) -> Result<Option<RviSnapshot>, String> {
+    let _ = create_research_tables_v53(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_rvi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_rvi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_rvi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_rvi: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -42426,6 +42926,145 @@ Trailing text.
             assert!(snap.body_abs >= 0.0);
             assert!(snap.upper_wick >= 0.0 && snap.lower_wick >= 0.0);
             assert!(snap.consecutive_same_color >= 1);
+        }
+    }
+
+    // ── ADR-163 Round 52: ALMA / ZLEMA / ELDERRAY / TSF / RVI ──────────────
+
+    #[test]
+    fn alma_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = AlmaSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            length: 20, offset: 0.85, sigma: 6.0,
+            alma_value: 100.5, alma_prev: 99.8, deviation_pct: 1.2, last_close: 101.7,
+            alma_label: "BULL".into(), note: String::new(),
+        };
+        upsert_alma(&conn, "TEST", &snap).unwrap();
+        let got = get_alma(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.alma_label, "BULL");
+        assert!((got.alma_value - 100.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn alma_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_alma_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.alma_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.alma_label != "INSUFFICIENT_DATA" {
+            assert!(snap.alma_value.is_finite() && snap.alma_value > 0.0);
+            assert!(snap.deviation_pct.is_finite());
+        }
+    }
+
+    #[test]
+    fn zlema_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ZlemaSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 80,
+            length: 20, lag_shift: 9,
+            zlema_value: 100.2, zlema_prev: 100.0, deviation_pct: 0.5, last_close: 100.7,
+            zlema_label: "BULL".into(), note: String::new(),
+        };
+        upsert_zlema(&conn, "TEST", &snap).unwrap();
+        let got = get_zlema(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.zlema_label, "BULL");
+        assert_eq!(got.lag_shift, 9);
+    }
+
+    #[test]
+    fn zlema_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_zlema_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.zlema_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.zlema_label != "INSUFFICIENT_DATA" {
+            assert!(snap.zlema_value.is_finite() && snap.zlema_value > 0.0);
+            assert_eq!(snap.lag_shift, 9);
+        }
+    }
+
+    #[test]
+    fn elderray_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ElderRaySnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 60,
+            ema_length: 13, ema13: 100.0, ema13_prev: 99.5,
+            bull_power: 2.5, bull_power_prev: 2.0,
+            bear_power: -0.5, bear_power_prev: -0.8,
+            last_close: 101.5, elder_label: "BULL".into(), note: String::new(),
+        };
+        upsert_elderray(&conn, "TEST", &snap).unwrap();
+        let got = get_elderray(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.elder_label, "BULL");
+        assert!((got.bull_power - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn elderray_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_elderray_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.elder_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.elder_label != "INSUFFICIENT_DATA" {
+            assert!(snap.ema13.is_finite() && snap.ema13 > 0.0);
+            // Bull on the highs vs EMA; Bear on the lows vs EMA; bull ≥ bear by definition.
+            assert!(snap.bull_power >= snap.bear_power);
+        }
+    }
+
+    #[test]
+    fn tsf_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = TsfSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 80,
+            length: 20, slope: 0.5, intercept: 95.0, forecast_value: 105.0,
+            last_close: 104.0, forecast_deviation_pct: 0.96, r_squared: 0.85,
+            tsf_label: "LEADING_UP".into(), note: String::new(),
+        };
+        upsert_tsf(&conn, "TEST", &snap).unwrap();
+        let got = get_tsf(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.tsf_label, "LEADING_UP");
+        assert!((got.slope - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn tsf_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_tsf_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.tsf_label.as_str(),
+            "LEADING_UP" | "LAGGING_UP" | "LEADING_DOWN" | "LAGGING_DOWN" | "FLAT" | "INSUFFICIENT_DATA"));
+        if snap.tsf_label != "INSUFFICIENT_DATA" {
+            assert!(snap.forecast_value.is_finite());
+            assert!(snap.r_squared >= 0.0 && snap.r_squared <= 1.0 + 1e-6);
+        }
+    }
+
+    #[test]
+    fn rvi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = RviSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 60,
+            length: 10, rvi_value: 0.3, rvi_prev: 0.2,
+            signal_value: 0.25, signal_prev: 0.27,
+            last_close: 101.5, rvi_label: "BULL_CROSS".into(), note: String::new(),
+        };
+        upsert_rvi(&conn, "TEST", &snap).unwrap();
+        let got = get_rvi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.rvi_label, "BULL_CROSS");
+        assert_eq!(got.length, 10);
+    }
+
+    #[test]
+    fn rvi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_rvi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.rvi_label.as_str(),
+            "BULL_CROSS" | "BEAR_CROSS" | "BULL" | "BEAR" | "NEUTRAL" | "INSUFFICIENT_DATA"));
+        if snap.rvi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.rvi_value.is_finite());
+            assert!(snap.signal_value.is_finite());
         }
     }
 }

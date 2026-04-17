@@ -3472,7 +3472,113 @@ detect raw/smoothed divergence. Note: the chart-type switch
 snapshot is the *numerical* complement shipped into the packet.
 Source: ADR-161 HEIKIN window.
 
-#### 2.247 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.247 Arnaud Legoux Moving Average (ALMA — ADR-163)
+
+Pulled from `research::get_alma`. Legoux & Kouzoubov's 2009 ALMA
+applies a Gaussian-kernel weighting `w[i] = exp(−0.5·((i−m)/s)²)`
+with `m = offset·(N−1) = 0.85·19 = 16.15`, `s = N/sigma = 20/6 ≈
+3.33` across the length-N=20 window, then normalises by the weight
+sum. The Gaussian kernel is the first **bell-shaped** weighting in
+the packet — EMA decays exponentially, WMA/HMA linearly, SMA
+equally, and ALMA peaks in the middle-to-recent third of the window
+and decays on both sides. The peak-biased placement (offset=0.85
+pulls the weight peak toward the right/recent edge) reduces lag
+relative to SMA, while the Gaussian shape suppresses single-bar
+whipsaw relative to purely-recent-biased weightings. Header gives
+**alma_label** (STRONG_BULL for >+2% deviation / BULL for positive
+deviation / NEUTRAL at zero / BEAR for negative / STRONG_BEAR for
+<−2% / INSUFFICIENT_DATA for n<21). Body reports bars_used, length,
+offset (0.85 default), sigma (6.0 default), alma_value, alma_prev,
+deviation_pct, last_close. Distinct from HMA (ADR-148, sqrt-WMA
+lag), DEMA/TEMA (ADR-161, algebraic lag subtraction), KAMA
+(ADR-151, efficiency-adaptive), MCGD (ADR-160, feedback-adaptive):
+ALMA reduces lag by *peak-biased Gaussian kernel placement*. The
+`offset` and `sigma` fields are exposed so the AI can read the
+shape rather than guessing from the name. Source: ADR-163 ALMA
+window.
+
+#### 2.248 Zero-Lag EMA (ZLEMA — ADR-163)
+
+Pulled from `research::get_zlema`. Ehlers's 2002 ZLEMA applies a
+first-order de-lagging transform `price'[i] = 2·price[i] −
+price[i − lag]` where `lag = (N−1)/2 = 9` for N=20, and then runs a
+standard EMA(20) over the de-lagged series. The de-lagging step
+projects price forward by subtracting an older value and doubling
+the current, so the EMA's residual lag is partially cancelled at
+the input rather than algebraically at the output. Distinct from
+DEMA (ADR-161, **second-order algebraic** lag subtraction on the
+EMA chain) — ZLEMA de-lags the input series first then applies a
+single EMA, whereas DEMA applies two EMAs and subtracts. Both
+target lag reduction but via structurally different pathways: DEMA
+trades overshoot for more lag removal, ZLEMA trades slightly
+rougher response for less overshoot. Header gives **zlema_label**
+(STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR /
+INSUFFICIENT_DATA for n<31, where 31 = length + lag + 2). Body
+reports bars_used, length (20), lag_shift (9), zlema_value,
+zlema_prev, deviation_pct, last_close. Source: ADR-163 ZLEMA
+window.
+
+#### 2.249 Elder Ray — Bull/Bear Power (ELDERRAY — ADR-163)
+
+Pulled from `research::get_elderray`. Alexander Elder's 1989
+Bull/Bear Power defines `bull_power = high − EMA(13)` and
+`bear_power = low − EMA(13)`. First **dual-channel** trend-
+intensity surface in the packet: unlike BOP (ADR-116, per-bar
+close-vs-range conviction) or Williams %R (ADR-153, N-bar close-
+in-range), ELDERRAY measures *how far buyers and sellers can push
+price away from a central EMA* on the same bar, using the high as
+the bull ceiling and the low as the bear floor. Classic Elder
+regime interpretation: `bull > 0 && bear > 0 && EMA rising` =
+strong uptrend (both channels positive and trend intact);
+`bull < 0 && bear < 0 && EMA falling` = strong downtrend; mixed
+configurations indicate a regime transition. Header gives
+**elder_label** (STRONG_BULL / BULL / NEUTRAL / BEAR /
+STRONG_BEAR / INSUFFICIENT_DATA for n<15). Body reports bars_used,
+ema_length (13), ema13, ema13_prev, bull_power, bull_power_prev,
+bear_power, bear_power_prev, last_close. Source: ADR-163 ELDERRAY
+window.
+
+#### 2.250 Time Series Forecast (TSF — ADR-163)
+
+Pulled from `research::get_tsf`. TSF extends the existing LINREG
+(ADR-161, OLS fit at `t = N−1`) with a **forward projection** to
+`t = N` — i.e., the next bar's expected value under the regression
+hypothesis. Where LINREG answers "what is the fair value right
+now," TSF answers "what does the fit *imply* for the next bar."
+Adds four-state LEADING/LAGGING classification: `LEADING_UP` when
+forecast > last_close and slope > 0 (fit says price has further to
+rise), `LAGGING_UP` when forecast > last_close but slope < 0
+(price is ahead of the fit's turn), `LEADING_DOWN` / `LAGGING_DOWN`
+symmetrically, `FLAT` when `|forecast − last| / last < 0.1%`.
+Header gives **tsf_label** (LEADING_UP / LAGGING_UP / FLAT /
+LAGGING_DOWN / LEADING_DOWN / INSUFFICIENT_DATA for n<20). Body
+reports bars_used, length (20), slope, intercept, forecast_value,
+last_close, forecast_deviation_pct, r_squared. R² is reported
+alongside so the AI can discount the forward call when the fit
+itself is poor — same discipline LINREG uses for the current-bar
+fit. Source: ADR-163 TSF window.
+
+#### 2.251 Relative Vigor Index (RVI — ADR-163)
+
+Pulled from `research::get_rvi`. Ehlers's 2002 Relative Vigor Index
+computes `rvi = SMA₁₀(triangular(close−open)) /
+SMA₁₀(triangular(high−low))` where the triangular weighting is
+`x[i] + 2·x[i−1] + 2·x[i−2] + x[i−3]`, with a 4-bar triangular
+signal line `(rvi + 2·rvi[−1] + 2·rvi[−2] + rvi[−3]) / 6`.
+Measures **aggregated closing conviction** — in a bull market
+close−open tends to be positive and so the numerator grows relative
+to the range denominator. Distinct from BOP (ADR-116, single-bar
+close−open/range with no smoothing), from Stochastic (ADR-160,
+close-in-range against low/high extremes rather than open), and
+from RSI-family oscillators (gain/loss based). Signal-line cross-
+over is the canonical trade signal. Header gives **rvi_label**
+(BULL_CROSS when RVI crosses above signal / BULL when RVI > signal
+/ NEUTRAL / BEAR when RVI < signal / BEAR_CROSS when RVI crosses
+below signal / INSUFFICIENT_DATA for n<17, where 17 = length + 3 +
+4). Body reports bars_used, length (10), rvi_value, rvi_prev,
+signal_value, signal_prev, last_close. Source: ADR-163 RVI window.
+
+#### 2.252 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -3488,7 +3594,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.248 Sector peer comparison
+#### 2.253 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -3519,7 +3625,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.227 above.
+articles to the per-symbol bag consumed by sub-block 2.252 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -3748,13 +3854,47 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~77-149 KB**
-(up from 76-148 KB after ADR-160; ADR-161 adds five optional per-symbol
-blocks — DEMA / TEMA / LINREG / PIVOTS / HEIKIN — each measuring ~2 k/v
-rows and adding ~200-250 bytes when populated, for a typical +1.10 KB per
-symbol; all five reuse the existing `research_historical_price` HP cache
-and the standard research-table LAN sync path with zero new API
-dependencies; DEMA computes Mulloy's 1994 Double EMA = 2·EMA(20) −
+symbols. A single S&P 500 symbol now produces a packet around **~78-150 KB**
+(up from 77-149 KB after ADR-161; ADR-163 adds five optional per-symbol
+blocks — ALMA / ZLEMA / ELDERRAY / TSF / RVI — each measuring ~2 k/v
+rows and adding ~200-280 bytes when populated, for a typical +1.24 KB
+per symbol; all five reuse the existing `research_historical_price` HP
+cache and the standard research-table LAN sync path with zero new API
+dependencies; ALMA computes Legoux & Kouzoubov's 2009 Arnaud Legoux
+Moving Average with a Gaussian-kernel weighting `exp(−0.5·((i−m)/s)²)`
+at offset=0.85 and sigma=6 across length N=20, peak-biased toward the
+recent edge of the window with STRONG_BULL / BULL / NEUTRAL / BEAR /
+STRONG_BEAR labels driven by ±2% deviation from price — first bell-
+shaped Gaussian-kernel MA in the repo, distinct from the exponential
+(EMA), linear (WMA/HMA), flat (SMA), algebraic-lag-reduction
+(DEMA/TEMA), and adaptive (KAMA/MCGD/FRAMA) families already shipped;
+ZLEMA computes Ehlers's 2002 Zero-Lag EMA by de-lagging the input
+series first `price'[i] = 2·price[i] − price[i−9]` then running a
+standard EMA(20) on the de-lagged series — structurally distinct from
+DEMA which applies two EMAs and subtracts, giving a less-overshoot
+alternative lag-reduction pathway with the same 5-bucket labels;
+ELDERRAY computes Alexander Elder's 1989 Bull/Bear Power as
+`bull = high − EMA(13)` and `bear = low − EMA(13)`, the first dual-
+channel trend-intensity surface in the packet — STRONG_BULL when both
+channels positive and EMA rising, STRONG_BEAR when both negative and
+EMA falling, mixed configurations flag regime transition; distinct
+from BOP's per-bar close-vs-range and WillR's N-bar close-in-range on
+the conviction axis; TSF computes Time Series Forecast by extending
+LINREG's OLS fit with a forward projection to `t = N` — LEADING_UP /
+LAGGING_UP / FLAT / LAGGING_DOWN / LEADING_DOWN labels highlight
+when the one-bar-forward forecast leads or lags price movement, with
+R² reported so the AI can discount the forward call when fit is poor;
+RVI computes Ehlers's 2002 Relative Vigor Index as
+`SMA₁₀(triangular(close−open)) / SMA₁₀(triangular(high−low))` with a
+4-bar triangular signal line, measuring aggregated closing conviction
+with BULL_CROSS / BULL / NEUTRAL / BEAR / BEAR_CROSS labels driven by
+signal-line crossover — fills the gap between BOP's unsmoothed
+single-bar and Stochastic's close-in-range on the conviction axis;
+ADR-161 added five optional per-symbol blocks — DEMA / TEMA / LINREG /
+PIVOTS / HEIKIN — each measuring ~2 k/v rows and adding ~200-250 bytes
+when populated, for a typical +1.10 KB per symbol; all five reuse the
+existing `research_historical_price` HP cache and the standard
+research-table LAN sync path with zero new API dependencies; DEMA computes Mulloy's 1994 Double EMA = 2·EMA(20) −
 EMA(EMA(20)) with STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR
 labels driven by ±2% deviation thresholds — first algebraic-lag-
 reduction MA in the repo, complementing MCGD's feedback-adaptive and
@@ -4137,7 +4277,7 @@ critical value at 5%; TSI computes the Blau 1991 True Strength Index
 = 100 · EMA₁₃(EMA₂₅(ΔP)) / EMA₁₃(EMA₂₅(|ΔP|)) with a short-EMA signal
 line, providing a double-smoothed momentum oscillator with cleaner
 zero-line behaviour than RSI and less lag than MACD); a 10-symbol
-basket now lands near **740-1460 KB**
+basket now lands near **750-1470 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).

@@ -428,6 +428,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_heikin",
     // ── ADR-162 cross-client AI response cache ─────
     "ai_response_cache",
+    // ── ADR-163 Round 52 ────────────────────────────
+    "research_alma",
+    "research_zlema",
+    "research_elderray",
+    "research_tsf",
+    "research_rvi",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2359,6 +2365,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 source_client TEXT NOT NULL DEFAULT ''
             )"
         ),
+        // ── ADR-163 Round 52 ────────────────────────
+        "research_alma" => Some(
+            "CREATE TABLE IF NOT EXISTS research_alma (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_zlema" => Some(
+            "CREATE TABLE IF NOT EXISTS research_zlema (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_elderray" => Some(
+            "CREATE TABLE IF NOT EXISTS research_elderray (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_tsf" => Some(
+            "CREATE TABLE IF NOT EXISTS research_tsf (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_rvi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_rvi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2651,6 +2693,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_heikin" => Some("updated_at"),
         // ── ADR-162 cross-client AI response cache ──
         "ai_response_cache" => Some("updated_at"),
+        // ── ADR-163 Round 52 ──
+        "research_alma" => Some("updated_at"),
+        "research_zlema" => Some("updated_at"),
+        "research_elderray" => Some("updated_at"),
+        "research_tsf" => Some("updated_at"),
+        "research_rvi" => Some("updated_at"),
         _ => None,
     }
 }
