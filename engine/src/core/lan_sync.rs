@@ -390,6 +390,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_obv",
     "research_trix",
     "research_hma",
+    // ── ADR-155 Round 46 ────────────────────────────
+    "research_ppo",
+    "research_dpo",
+    "research_kst",
+    "research_ultosc",
+    "research_willr",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2093,6 +2099,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-155 Round 46 ──
+        "research_ppo" => Some(
+            "CREATE TABLE IF NOT EXISTS research_ppo (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_dpo" => Some(
+            "CREATE TABLE IF NOT EXISTS research_dpo (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_kst" => Some(
+            "CREATE TABLE IF NOT EXISTS research_kst (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_ultosc" => Some(
+            "CREATE TABLE IF NOT EXISTS research_ultosc (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_willr" => Some(
+            "CREATE TABLE IF NOT EXISTS research_willr (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2347,6 +2389,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_obv" => Some("updated_at"),
         "research_trix" => Some("updated_at"),
         "research_hma" => Some("updated_at"),
+        // ── ADR-155 Round 46 ──
+        "research_ppo" => Some("updated_at"),
+        "research_dpo" => Some("updated_at"),
+        "research_kst" => Some("updated_at"),
+        "research_ultosc" => Some("updated_at"),
+        "research_willr" => Some("updated_at"),
         _ => None,
     }
 }

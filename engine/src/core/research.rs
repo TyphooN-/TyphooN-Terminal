@@ -4765,6 +4765,92 @@ pub struct HmaSnapshot {
     pub note: String,
 }
 
+/// PPO — Gerald Appel Percentage Price Oscillator: 100·(EMA_fast − EMA_slow)/EMA_slow.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PpoSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub fast_period: usize,            // 12
+    pub slow_period: usize,            // 26
+    pub signal_period: usize,          // 9
+    pub ema_fast: f64,
+    pub ema_slow: f64,
+    pub ppo_value: f64,                // 100·(ema_fast − ema_slow)/ema_slow
+    pub signal_value: f64,             // EMA(ppo, 9)
+    pub histogram: f64,                // ppo − signal
+    pub last_close: f64,
+    pub ppo_label: String,             // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// DPO — Detrended Price Oscillator: close − SMA(close, N) shifted back (N/2 + 1) bars.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DpoSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 20
+    pub shift: usize,                  // N/2 + 1 = 11
+    pub sma_value: f64,                // SMA at shifted index
+    pub dpo_value: f64,                // close[t - shift] − sma[t]
+    pub dpo_pct: f64,                  // dpo / sma × 100
+    pub last_close: f64,
+    pub dpo_label: String,             // PEAK_HIGH / BULL / NEUTRAL / BEAR / PEAK_LOW / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// KST — Martin Pring Know Sure Thing: weighted sum of four ROCs smoothed by SMA.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct KstSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub rcma1: f64,                    // SMA(ROC(10), 10)
+    pub rcma2: f64,                    // SMA(ROC(15), 10)
+    pub rcma3: f64,                    // SMA(ROC(20), 10)
+    pub rcma4: f64,                    // SMA(ROC(30), 15)
+    pub kst_value: f64,                // 1·rcma1 + 2·rcma2 + 3·rcma3 + 4·rcma4
+    pub signal_value: f64,             // SMA(kst, 9)
+    pub histogram: f64,                // kst − signal
+    pub last_close: f64,
+    pub kst_label: String,             // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// ULTOSC — Larry Williams Ultimate Oscillator: weighted 3-period BP/TR ratio.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct UltoscSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period_short: usize,           // 7
+    pub period_mid: usize,             // 14
+    pub period_long: usize,            // 28
+    pub avg_short: f64,                // ΣBP_7 / ΣTR_7
+    pub avg_mid: f64,                  // ΣBP_14 / ΣTR_14
+    pub avg_long: f64,                 // ΣBP_28 / ΣTR_28
+    pub ultosc_value: f64,             // 100·(4·avg_short + 2·avg_mid + avg_long) / 7
+    pub last_close: f64,
+    pub ultosc_label: String,          // OVERBOUGHT >70 / BULL >50 / NEUTRAL / BEAR <50 / OVERSOLD <30 / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// WILLR — Larry Williams %R: (highest_high − close) / (highest_high − lowest_low) · −100.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct WillrSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub highest_high: f64,
+    pub lowest_low: f64,
+    pub willr_value: f64,              // ∈ [−100, 0]
+    pub last_close: f64,
+    pub willr_label: String,           // OVERBOUGHT >-20 / BULL >-50 / NEUTRAL / BEAR <-50 / OVERSOLD <-80 / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -21916,6 +22002,281 @@ pub fn compute_hma_snapshot(
     }
 }
 
+/// PPO — Percentage Price Oscillator (fast 12, slow 26, signal 9).
+pub fn compute_ppo_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PpoSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let fast_p = 12usize; let slow_p = 26usize; let signal_p = 9usize;
+    let min_bars = slow_p + signal_p + 2;
+    if n < min_bars {
+        return PpoSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            fast_period: fast_p, slow_period: slow_p, signal_period: signal_p,
+            ppo_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let ema = |src: &[f64], p: usize| -> Vec<f64> {
+        let mut out = vec![0.0_f64; src.len()];
+        let k = 2.0 / (p as f64 + 1.0);
+        let seed: f64 = src[..p].iter().sum::<f64>() / p as f64;
+        out[p - 1] = seed;
+        for i in p..src.len() {
+            out[i] = src[i] * k + out[i - 1] * (1.0 - k);
+        }
+        out
+    };
+    let e_fast = ema(&closes, fast_p);
+    let e_slow = ema(&closes, slow_p);
+    let mut ppo_series = vec![0.0_f64; n];
+    for i in (slow_p - 1)..n {
+        ppo_series[i] = if e_slow[i].abs() > f64::EPSILON {
+            100.0 * (e_fast[i] - e_slow[i]) / e_slow[i]
+        } else { 0.0 };
+    }
+    let sig_seed_end = slow_p - 1 + signal_p - 1;
+    let signal_series = {
+        let mut out = vec![0.0_f64; n];
+        if sig_seed_end < n {
+            let k = 2.0 / (signal_p as f64 + 1.0);
+            let seed: f64 = ppo_series[(slow_p - 1)..=sig_seed_end].iter().sum::<f64>() / signal_p as f64;
+            out[sig_seed_end] = seed;
+            for i in (sig_seed_end + 1)..n {
+                out[i] = ppo_series[i] * k + out[i - 1] * (1.0 - k);
+            }
+        }
+        out
+    };
+    let ppo_now = ppo_series[n - 1];
+    let sig_now = signal_series[n - 1];
+    let hist = ppo_now - sig_now;
+    let label = if ppo_now > 0.0 && ppo_now > sig_now && ppo_now.abs() > 0.1 { "STRONG_BULL" }
+        else if ppo_now > 0.0 { "BULL" }
+        else if ppo_now < 0.0 && ppo_now < sig_now && ppo_now.abs() > 0.1 { "STRONG_BEAR" }
+        else if ppo_now < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    PpoSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        fast_period: fast_p, slow_period: slow_p, signal_period: signal_p,
+        ema_fast: e_fast[n - 1], ema_slow: e_slow[n - 1],
+        ppo_value: ppo_now, signal_value: sig_now, histogram: hist,
+        last_close: sorted[n - 1].close,
+        ppo_label: label.into(), note: String::new(),
+    }
+}
+
+/// DPO — Detrended Price Oscillator (period 20).
+pub fn compute_dpo_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> DpoSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 20usize;
+    let shift = period / 2 + 1;
+    let min_bars = period + shift + 1;
+    if n < min_bars {
+        return DpoSnapshot {
+            symbol: sym, as_of: as_of.into(), period, shift,
+            dpo_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let t = n - 1;
+    let sma_window_end = t;
+    let sma_window_start = sma_window_end + 1 - period;
+    let sma_val: f64 = closes[sma_window_start..=sma_window_end].iter().sum::<f64>() / period as f64;
+    let past_idx = t.saturating_sub(shift);
+    let past_close = closes[past_idx];
+    let dpo_val = past_close - sma_val;
+    let dpo_pct = if sma_val.abs() > f64::EPSILON { dpo_val / sma_val * 100.0 } else { 0.0 };
+    let label = if dpo_pct > 5.0 { "PEAK_HIGH" }
+        else if dpo_pct > 0.5 { "BULL" }
+        else if dpo_pct < -5.0 { "PEAK_LOW" }
+        else if dpo_pct < -0.5 { "BEAR" }
+        else { "NEUTRAL" };
+    DpoSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period, shift,
+        sma_value: sma_val, dpo_value: dpo_val, dpo_pct,
+        last_close: closes[t],
+        dpo_label: label.into(), note: String::new(),
+    }
+}
+
+/// KST — Pring Know Sure Thing (ROC(10,15,20,30) smoothed, weighted 1/2/3/4, sig=9).
+pub fn compute_kst_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> KstSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let roc_periods = [10usize, 15, 20, 30];
+    let sma_periods = [10usize, 10, 10, 15];
+    let min_bars = 30 + 15 + 9 + 2; // 56
+    if n < min_bars {
+        return KstSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            kst_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let roc = |rp: usize| -> Vec<f64> {
+        let mut out = vec![0.0_f64; n];
+        for i in rp..n {
+            let prev = closes[i - rp];
+            out[i] = if prev.abs() > f64::EPSILON { (closes[i] - prev) / prev * 100.0 } else { 0.0 };
+        }
+        out
+    };
+    let sma = |src: &[f64], p: usize, start: usize| -> Vec<f64> {
+        let mut out = vec![0.0_f64; src.len()];
+        for i in (start + p - 1)..src.len() {
+            out[i] = src[(i + 1 - p)..=i].iter().sum::<f64>() / p as f64;
+        }
+        out
+    };
+    let r1 = roc(roc_periods[0]);
+    let r2 = roc(roc_periods[1]);
+    let r3 = roc(roc_periods[2]);
+    let r4 = roc(roc_periods[3]);
+    let rc1 = sma(&r1, sma_periods[0], roc_periods[0]);
+    let rc2 = sma(&r2, sma_periods[1], roc_periods[1]);
+    let rc3 = sma(&r3, sma_periods[2], roc_periods[2]);
+    let rc4 = sma(&r4, sma_periods[3], roc_periods[3]);
+    let mut kst_series = vec![0.0_f64; n];
+    let kst_start = 30 + 15 - 1; // earliest index where all 4 RCMAs are defined (RCMA4 = SMA(ROC(30),15))
+    for i in kst_start..n {
+        kst_series[i] = 1.0 * rc1[i] + 2.0 * rc2[i] + 3.0 * rc3[i] + 4.0 * rc4[i];
+    }
+    let sig_series = sma(&kst_series, 9, kst_start);
+    let kst_now = kst_series[n - 1];
+    let sig_now = sig_series[n - 1];
+    let hist = kst_now - sig_now;
+    let label = if kst_now > 0.0 && kst_now > sig_now && kst_now.abs() > 1.0 { "STRONG_BULL" }
+        else if kst_now > 0.0 { "BULL" }
+        else if kst_now < 0.0 && kst_now < sig_now && kst_now.abs() > 1.0 { "STRONG_BEAR" }
+        else if kst_now < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    KstSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        rcma1: rc1[n - 1], rcma2: rc2[n - 1], rcma3: rc3[n - 1], rcma4: rc4[n - 1],
+        kst_value: kst_now, signal_value: sig_now, histogram: hist,
+        last_close: closes[n - 1],
+        kst_label: label.into(), note: String::new(),
+    }
+}
+
+/// ULTOSC — Williams Ultimate Oscillator (7/14/28, weights 4/2/1).
+pub fn compute_ultosc_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> UltoscSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let ps = 7usize; let pm = 14usize; let pl = 28usize;
+    let min_bars = pl + 2;
+    if n < min_bars {
+        return UltoscSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            period_short: ps, period_mid: pm, period_long: pl,
+            ultosc_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let mut bp = vec![0.0_f64; n];
+    let mut tr = vec![0.0_f64; n];
+    for i in 1..n {
+        let c = sorted[i].close;
+        let l = sorted[i].low;
+        let h = sorted[i].high;
+        let pc = sorted[i - 1].close;
+        let min_lc = l.min(pc);
+        let max_hc = h.max(pc);
+        bp[i] = c - min_lc;
+        tr[i] = max_hc - min_lc;
+    }
+    let sum_tail = |src: &[f64], p: usize| -> f64 {
+        src[(n - p)..n].iter().sum::<f64>()
+    };
+    let sum_bp_s = sum_tail(&bp, ps);
+    let sum_tr_s = sum_tail(&tr, ps);
+    let sum_bp_m = sum_tail(&bp, pm);
+    let sum_tr_m = sum_tail(&tr, pm);
+    let sum_bp_l = sum_tail(&bp, pl);
+    let sum_tr_l = sum_tail(&tr, pl);
+    let avg_s = if sum_tr_s > f64::EPSILON { sum_bp_s / sum_tr_s } else { 0.0 };
+    let avg_m = if sum_tr_m > f64::EPSILON { sum_bp_m / sum_tr_m } else { 0.0 };
+    let avg_l = if sum_tr_l > f64::EPSILON { sum_bp_l / sum_tr_l } else { 0.0 };
+    let uo = 100.0 * (4.0 * avg_s + 2.0 * avg_m + avg_l) / 7.0;
+    let label = if uo > 70.0 { "OVERBOUGHT" }
+        else if uo > 50.0 { "BULL" }
+        else if uo < 30.0 { "OVERSOLD" }
+        else if uo < 50.0 { "BEAR" }
+        else { "NEUTRAL" };
+    UltoscSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        period_short: ps, period_mid: pm, period_long: pl,
+        avg_short: avg_s, avg_mid: avg_m, avg_long: avg_l,
+        ultosc_value: uo,
+        last_close: sorted[n - 1].close,
+        ultosc_label: label.into(), note: String::new(),
+    }
+}
+
+/// WILLR — Larry Williams %R (period 14).
+pub fn compute_willr_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> WillrSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    if n < period + 1 {
+        return WillrSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            willr_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", period + 1, n),
+            ..Default::default()
+        };
+    }
+    let start = n - period;
+    let mut hh = f64::NEG_INFINITY;
+    let mut ll = f64::INFINITY;
+    for r in &sorted[start..n] {
+        if r.high > hh { hh = r.high; }
+        if r.low < ll { ll = r.low; }
+    }
+    let last_close = sorted[n - 1].close;
+    let range = hh - ll;
+    let willr = if range > f64::EPSILON { (hh - last_close) / range * -100.0 } else { -50.0 };
+    let label = if willr > -20.0 { "OVERBOUGHT" }
+        else if willr > -50.0 { "BULL" }
+        else if willr < -80.0 { "OVERSOLD" }
+        else if willr < -50.0 { "BEAR" }
+        else { "NEUTRAL" };
+    WillrSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        highest_high: hh, lowest_low: ll, willr_value: willr,
+        last_close,
+        willr_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -28830,6 +29191,157 @@ pub fn get_hma(conn: &Connection, symbol: &str) -> Result<Option<HmaSnapshot>, S
         .map_err(|e| format!("prepare get_hma: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_hma: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_hma: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn create_research_tables_v47(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v46(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_ppo (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ppo_updated ON research_ppo(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_dpo (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_dpo_updated ON research_dpo(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_kst (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_kst_updated ON research_kst(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_ultosc (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ultosc_updated ON research_ultosc(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_willr (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_willr_updated ON research_willr(updated_at);",
+    ).map_err(|e| format!("create v47 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_ppo(conn: &Connection, symbol: &str, snap: &PpoSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v47(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ppo json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ppo(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ppo: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ppo(conn: &Connection, symbol: &str) -> Result<Option<PpoSnapshot>, String> {
+    let _ = create_research_tables_v47(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ppo WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_ppo: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_ppo: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_ppo: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_dpo(conn: &Connection, symbol: &str, snap: &DpoSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v47(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("dpo json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_dpo(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert dpo: {e}"))?;
+    Ok(())
+}
+
+pub fn get_dpo(conn: &Connection, symbol: &str) -> Result<Option<DpoSnapshot>, String> {
+    let _ = create_research_tables_v47(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_dpo WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_dpo: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_dpo: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_dpo: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_kst(conn: &Connection, symbol: &str, snap: &KstSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v47(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("kst json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_kst(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert kst: {e}"))?;
+    Ok(())
+}
+
+pub fn get_kst(conn: &Connection, symbol: &str) -> Result<Option<KstSnapshot>, String> {
+    let _ = create_research_tables_v47(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_kst WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_kst: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_kst: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_kst: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ultosc(conn: &Connection, symbol: &str, snap: &UltoscSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v47(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ultosc json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ultosc(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ultosc: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ultosc(conn: &Connection, symbol: &str) -> Result<Option<UltoscSnapshot>, String> {
+    let _ = create_research_tables_v47(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ultosc WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_ultosc: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_ultosc: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_ultosc: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_willr(conn: &Connection, symbol: &str, snap: &WillrSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v47(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("willr json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_willr(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert willr: {e}"))?;
+    Ok(())
+}
+
+pub fn get_willr(conn: &Connection, symbol: &str) -> Result<Option<WillrSnapshot>, String> {
+    let _ = create_research_tables_v47(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_willr WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_willr: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_willr: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_willr: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -38294,6 +38806,166 @@ Trailing text.
             assert_eq!(snap.period, 20);
             assert_eq!(snap.half_period, 10);
             assert!(snap.sqrt_period >= 4);
+        }
+    }
+
+    // ── ADR-155 Round 46 tests ──────────────────────────────────────────────
+
+    #[test]
+    fn ppo_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = PpoSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, fast_period: 12, slow_period: 26, signal_period: 9,
+            ema_fast: 151.0, ema_slow: 148.0,
+            ppo_value: 2.027, signal_value: 1.8, histogram: 0.227,
+            last_close: 150.0,
+            ppo_label: "BULL".into(), note: String::new(),
+        };
+        upsert_ppo(&conn, "TEST", &snap).unwrap();
+        let got = get_ppo(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.ppo_label, "BULL");
+        assert!((got.ppo_value - 2.027).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ppo_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ppo_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.ppo_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.ppo_label != "INSUFFICIENT_DATA" {
+            assert!(snap.ppo_value.is_finite());
+            assert!(snap.signal_value.is_finite());
+            assert!(snap.ema_fast > 0.0);
+            assert!(snap.ema_slow > 0.0);
+            assert_eq!(snap.fast_period, 12);
+            assert_eq!(snap.slow_period, 26);
+            assert_eq!(snap.signal_period, 9);
+        }
+    }
+
+    #[test]
+    fn dpo_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = DpoSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 20, shift: 11,
+            sma_value: 148.0, dpo_value: 2.5, dpo_pct: 1.69,
+            last_close: 150.0,
+            dpo_label: "BULL".into(), note: String::new(),
+        };
+        upsert_dpo(&conn, "TEST", &snap).unwrap();
+        let got = get_dpo(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.dpo_label, "BULL");
+        assert!((got.dpo_value - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn dpo_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_dpo_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.dpo_label.as_str(),
+            "PEAK_HIGH" | "BULL" | "NEUTRAL" | "BEAR" | "PEAK_LOW" | "INSUFFICIENT_DATA"));
+        if snap.dpo_label != "INSUFFICIENT_DATA" {
+            assert!(snap.dpo_value.is_finite());
+            assert!(snap.sma_value > 0.0);
+            assert_eq!(snap.period, 20);
+            assert_eq!(snap.shift, 11);
+        }
+    }
+
+    #[test]
+    fn kst_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = KstSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252,
+            rcma1: 0.8, rcma2: 1.2, rcma3: 1.5, rcma4: 2.0,
+            kst_value: 15.7, signal_value: 14.2, histogram: 1.5,
+            last_close: 150.0,
+            kst_label: "STRONG_BULL".into(), note: String::new(),
+        };
+        upsert_kst(&conn, "TEST", &snap).unwrap();
+        let got = get_kst(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.kst_label, "STRONG_BULL");
+        assert!((got.kst_value - 15.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn kst_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_kst_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.kst_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.kst_label != "INSUFFICIENT_DATA" {
+            assert!(snap.kst_value.is_finite());
+            assert!(snap.signal_value.is_finite());
+            assert!(snap.rcma1.is_finite());
+            assert!(snap.rcma4.is_finite());
+        }
+    }
+
+    #[test]
+    fn ultosc_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = UltoscSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period_short: 7, period_mid: 14, period_long: 28,
+            avg_short: 0.55, avg_mid: 0.52, avg_long: 0.50,
+            ultosc_value: 53.1,
+            last_close: 150.0,
+            ultosc_label: "BULL".into(), note: String::new(),
+        };
+        upsert_ultosc(&conn, "TEST", &snap).unwrap();
+        let got = get_ultosc(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.ultosc_label, "BULL");
+        assert!((got.ultosc_value - 53.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ultosc_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ultosc_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.ultosc_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.ultosc_label != "INSUFFICIENT_DATA" {
+            assert!(snap.ultosc_value.is_finite());
+            assert!(snap.ultosc_value >= 0.0 && snap.ultosc_value <= 100.0);
+            assert_eq!(snap.period_short, 7);
+            assert_eq!(snap.period_mid, 14);
+            assert_eq!(snap.period_long, 28);
+        }
+    }
+
+    #[test]
+    fn willr_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = WillrSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 14,
+            highest_high: 155.0, lowest_low: 145.0,
+            willr_value: -30.0,
+            last_close: 152.0,
+            willr_label: "BULL".into(), note: String::new(),
+        };
+        upsert_willr(&conn, "TEST", &snap).unwrap();
+        let got = get_willr(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.willr_label, "BULL");
+        assert!((got.willr_value - -30.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn willr_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_willr_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.willr_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.willr_label != "INSUFFICIENT_DATA" {
+            assert!(snap.willr_value.is_finite());
+            assert!(snap.willr_value >= -100.0 && snap.willr_value <= 0.0);
+            assert!(snap.highest_high >= snap.lowest_low);
+            assert_eq!(snap.period, 14);
         }
     }
 }

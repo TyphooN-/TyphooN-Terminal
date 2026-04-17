@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**two hundred and eighteen sub-blocks**, each of which is skipped silently when its data
+**two hundred and twenty-three sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -3006,7 +3006,75 @@ hma_vs_close_pct, last_close. Complements SMA/EMA/KAMA (ADR-142): HMA
 is the zero-lag-by-construction member of the MA family. We floor √n
 (TradingView convention). Source: ADR-154 HMA window.
 
-#### 2.217 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.217 Percentage Price Oscillator (PPO — ADR-155)
+
+Pulled from `research::get_ppo`. Appel's Percentage Price Oscillator —
+MACD's normalised twin, giving cross-symbol-comparable momentum.
+PPO = 100·(EMA₁₂ − EMA₂₆)/EMA₂₆; signal = EMA(PPO, 9); histogram =
+PPO − signal. Header gives **ppo_label** (STRONG_BULL PPO>0 &&
+PPO>signal && |PPO|>0.1 / BULL / NEUTRAL / BEAR / STRONG_BEAR /
+INSUFFICIENT_DATA for n<37). Body reports bars_used, fast_period
+(12), slow_period (26), signal_period (9), ema_fast, ema_slow,
+ppo_value, signal_value, histogram, last_close. Complements MACD:
+MACD's raw-price spread scales with price, PPO's % makes a 20-sym
+basket directly comparable. Source: ADR-155 PPO window.
+
+#### 2.218 Detrended Price Oscillator (DPO — ADR-155)
+
+Pulled from `research::get_dpo`. Removes trend by subtracting a
+centred SMA from shifted price: DPO_t = close_{t−shift} −
+SMA(close, 20)_t where shift = N/2+1 = 11. Isolates short-term
+cycles, useful for instruments with strong seasonality or cycle
+structure. Header gives **dpo_label** (PEAK_HIGH dpo%>5 / BULL
+dpo%>0.5 / NEUTRAL / BEAR dpo%<−0.5 / PEAK_LOW dpo%<−5 /
+INSUFFICIENT_DATA for n<32). Body reports bars_used, period (20),
+shift (11), sma_value, dpo_value, dpo_pct, last_close. Distinct
+from RSI/Stochastic: absolute price deviation rather than
+range-location, so fires cleanest on cycle-dominated tapes.
+Source: ADR-155 DPO window.
+
+#### 2.219 Know Sure Thing (KST — ADR-155)
+
+Pulled from `research::get_kst`. Pring's 1992 weighted four-cycle
+composite oscillator. RCMA1 = SMA(ROC(10), 10), RCMA2 = SMA(ROC(15), 10),
+RCMA3 = SMA(ROC(20), 10), RCMA4 = SMA(ROC(30), 15); KST = 1·RCMA1 +
+2·RCMA2 + 3·RCMA3 + 4·RCMA4; signal = SMA(KST, 9). Pring's 1/2/3/4
+weights emphasise longer cycles by design — KST is a *long-term cycle*
+oscillator unlike MACD/PPO/TRIX which are medium-term. Header gives
+**kst_label** (STRONG_BULL KST>0 && KST>signal && |KST|>1 / BULL /
+NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA for n<56). Body
+reports bars_used, rcma1, rcma2, rcma3, rcma4, kst_value,
+signal_value, histogram, last_close. First multi-cycle composite
+oscillator in the packet. Source: ADR-155 KST window.
+
+#### 2.220 Ultimate Oscillator (ULTOSC — ADR-155)
+
+Pulled from `research::get_ultosc`. Williams' 1976 three-timeframe
+weighted combo designed to reduce false divergences. BP (buying
+pressure) = close − min(low, prev_close), TR = max(high, prev_close)
+− min(low, prev_close); avg₇ = ΣBP₇/ΣTR₇, avg₁₄ = ΣBP₁₄/ΣTR₁₄,
+avg₂₈ = ΣBP₂₈/ΣTR₂₈; UO = 100·(4·avg₇ + 2·avg₁₄ + avg₂₈)/7 ∈ [0, 100].
+Header gives **ultosc_label** (OVERBOUGHT >70 / BULL >50 / NEUTRAL /
+BEAR <50 / OVERSOLD <30 / INSUFFICIENT_DATA for n<30). Body reports
+bars_used, period_short (7), period_mid (14), period_long (28),
+avg_short, avg_mid, avg_long, ultosc_value, last_close. First
+3-timeframe-weighted oscillator — distinct from single-lookback
+RSI/Stochastic. Source: ADR-155 ULTOSC window.
+
+#### 2.221 Williams %R (WILLR — ADR-155)
+
+Pulled from `research::get_willr`. Williams' 1973 inverted Stochastic:
+%R_t = (highest_high_14 − close_t) / (highest_high_14 − lowest_low_14)
+· −100 ∈ [−100, 0] where 0 is top of 14-bar range (overbought) and
+−100 is bottom (oversold). Header gives **willr_label** (OVERBOUGHT
+>−20 / BULL >−50 / NEUTRAL / BEAR <−50 / OVERSOLD <−80 /
+INSUFFICIENT_DATA for n<15). Body reports bars_used, period (14),
+highest_high, lowest_low, willr_value, last_close. Mathematically
+%R = −100 − %K of the same period, but the −20/−80 threshold
+convention makes divergence read differently in practice than
+Stochastic's 20/80. Source: ADR-155 WILLR window.
+
+#### 2.222 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -3022,7 +3090,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.218 Sector peer comparison
+#### 2.223 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -3053,7 +3121,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.217 above.
+articles to the per-symbol bag consumed by sub-block 2.222 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -3282,12 +3350,41 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~71-141 KB**
-(up from 70-139 KB after ADR-153; ADR-154 adds five optional per-symbol
-blocks — VORTEX / CHOP / OBV / TRIX / HMA — each measuring ~2 k/v rows
-and adding ~220-260 bytes when populated, for a typical +1.2 KB per symbol;
+symbols. A single S&P 500 symbol now produces a packet around **~72-143 KB**
+(up from 71-141 KB after ADR-154; ADR-155 adds five optional per-symbol
+blocks — PPO / DPO / KST / ULTOSC / WILLR — each measuring ~2 k/v rows
+and adding ~200-280 bytes when populated, for a typical +1.2 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the
 standard research-table LAN sync path with zero new API dependencies;
+PPO computes Appel's Percentage Price Oscillator (MACD's normalised twin)
+at 12/26/9 with STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR labels
+— the %-normalised cross-symbol-comparable complement to MACD whose
+raw-price spread scales with price level; DPO computes the standard
+Detrended Price Oscillator at period=20 shift=11 (close_{t−11} −
+SMA(close, 20)_t) with PEAK_HIGH / BULL / NEUTRAL / BEAR / PEAK_LOW
+labels — isolates short-term cycles by removing trend, useful for
+seasonally- or cyclically-dominated tapes; KST computes Pring's 1992
+Know Sure Thing as 1·SMA(ROC10,10) + 2·SMA(ROC15,10) + 3·SMA(ROC20,10)
++ 4·SMA(ROC30,15) with 9-bar signal and STRONG_BULL / BULL / NEUTRAL /
+BEAR / STRONG_BEAR labels — first multi-cycle composite oscillator,
+Pring's 1/2/3/4 weights emphasising longer cycles make it the long-term
+complement to MACD/PPO/TRIX; ULTOSC computes Williams' 1976 Ultimate
+Oscillator as 100·(4·avg_bp/tr_7 + 2·avg_bp/tr_14 + avg_bp/tr_28)/7
+with OVERBOUGHT (>70) / BULL / NEUTRAL / BEAR / OVERSOLD (<30) labels
+— first 3-timeframe-weighted oscillator, addressing the "which lookback
+do I pick?" problem directly for reduced false divergences; WILLR
+computes Williams' 1973 inverted Stochastic %R = (highest_high − close)
+/ (highest_high − lowest_low) · −100 ∈ [−100, 0] with OVERBOUGHT (>−20)
+/ BULL / NEUTRAL / BEAR / OVERSOLD (<−80) labels — oldest canonical
+range-location oscillator in published form (predates Lane's
+Stochastic), mathematically %R = −100 − %K but divergence reads
+differently in practice due to the −20/−80 threshold convention;
+prior five (ADR-154) remain unchanged; ADR-154 adds five optional
+per-symbol blocks — VORTEX / CHOP / OBV / TRIX / HMA — each measuring
+~2 k/v rows and adding ~220-260 bytes when populated, for a typical
++1.2 KB per symbol; all five reuse the existing
+`research_historical_price` HP cache and the standard research-table
+LAN sync path with zero new API dependencies;
 VORTEX computes the Botes & Siepman 2009 directional-movement alternative
 to ADX at period=14 (VM+ = |H_t − L_{t−1}|, VM− = |L_t − H_{t−1}|,
 VI± = ΣVM± / ΣTR) with BULL_CROSS (VI+>VI− with VI+>1) / BULL / NEUTRAL /
@@ -3495,7 +3592,7 @@ critical value at 5%; TSI computes the Blau 1991 True Strength Index
 = 100 · EMA₁₃(EMA₂₅(ΔP)) / EMA₁₃(EMA₂₅(|ΔP|)) with a short-EMA signal
 line, providing a double-smoothed momentum oscillator with cleaner
 zero-line behaviour than RSI and less lag than MACD); a 10-symbol
-basket now lands near **710-1410 KB**
+basket now lands near **720-1430 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).
