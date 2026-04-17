@@ -4941,6 +4941,80 @@ pub struct AwesomeSnapshot {
     pub note: String,
 }
 
+/// EFI — Alexander Elder (1993) Force Index: volume-weighted close change, smoothed by EMA13.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct EfiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ema_period: usize,             // 13
+    pub raw_efi: f64,                  // volume * (close − prev_close) latest bar
+    pub efi_value: f64,                // EMA13 of raw_efi
+    pub efi_prev: f64,                 // prior bar EFI (zero-cross detection)
+    pub last_close: f64,
+    pub efi_label: String,             // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// EMV — Richard Arms (1980s) Ease of Movement: distance-moved / box-ratio smoothed by SMA14.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct EmvSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub sma_period: usize,             // 14
+    pub volume_scale: f64,             // 100_000_000 (100 M)
+    pub raw_emv: f64,                  // distance_moved / box_ratio latest bar
+    pub emv_value: f64,                // SMA14 of raw_emv
+    pub last_close: f64,
+    pub emv_label: String,             // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// NVI — Paul Dysart / Norman Fosback Negative Volume Index: updates only on down-volume days.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct NviSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub signal_period: usize,          // 255 (EMA of NVI line)
+    pub nvi_value: f64,                // latest NVI (starts at 1000)
+    pub signal_value: f64,             // EMA255 of NVI
+    pub last_close: f64,
+    pub nvi_label: String,             // BULL (nvi > signal) / NEUTRAL / BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// PVI — Paul Dysart / Norman Fosback Positive Volume Index: updates only on up-volume days.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PviSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub signal_period: usize,          // 255
+    pub pvi_value: f64,                // latest PVI (starts at 1000)
+    pub signal_value: f64,             // EMA255 of PVI
+    pub last_close: f64,
+    pub pvi_label: String,             // BULL / NEUTRAL / BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// COPPOCK — E.S.C. Coppock (1962) Coppock Curve: WMA10(ROC14 + ROC11) long-term momentum.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CoppockSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub roc_fast: usize,               // 11
+    pub roc_slow: usize,               // 14
+    pub wma_period: usize,             // 10
+    pub coppock_value: f64,            // current reading
+    pub coppock_prev: f64,             // prior bar
+    pub last_close: f64,
+    pub coppock_label: String,         // BUY_CROSS (prev<0, now>0) / BULL / NEUTRAL / BEAR / SELL_CROSS / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -22702,6 +22776,310 @@ pub fn compute_awesome_snapshot(
     }
 }
 
+/// EFI — Elder Force Index: EMA13 of `volume × (close − prev_close)`.
+/// Positive + rising = bull pressure; negative + falling = bear pressure;
+/// near-zero cross = momentum exhaustion.
+pub fn compute_efi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> EfiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let ema_p = 13usize;
+    let min_bars = ema_p + 4;
+    if n < min_bars {
+        return EfiSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            ema_period: ema_p,
+            efi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    // Raw Force Index per bar from i=1..n-1
+    let mut raw: Vec<f64> = Vec::with_capacity(n - 1);
+    for i in 1..n {
+        raw.push(sorted[i].volume * (sorted[i].close - sorted[i-1].close));
+    }
+    if raw.len() < ema_p + 1 {
+        return EfiSnapshot {
+            symbol: sym, as_of: as_of.into(), bars_used: n,
+            ema_period: ema_p,
+            efi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("raw series {} < EMA+1 {}", raw.len(), ema_p + 1),
+            ..Default::default()
+        };
+    }
+    let alpha = 2.0 / (ema_p as f64 + 1.0);
+    let mut ema: Vec<f64> = Vec::with_capacity(raw.len());
+    let seed: f64 = raw[..ema_p].iter().sum::<f64>() / ema_p as f64;
+    ema.push(seed);
+    for i in ema_p..raw.len() {
+        let prev = *ema.last().unwrap();
+        ema.push(alpha * raw[i] + (1.0 - alpha) * prev);
+    }
+    let efi_value = *ema.last().unwrap();
+    let efi_prev = ema.get(ema.len().saturating_sub(2)).copied().unwrap_or(efi_value);
+    let raw_efi = *raw.last().unwrap();
+    let last_close = sorted[n - 1].close;
+    let abs_scale = (last_close.abs() * sorted[n - 1].volume.max(1.0)).max(1.0);
+    let norm = efi_value / abs_scale * 100.0;
+    let rising = efi_value > efi_prev;
+    let label = if efi_value > 0.0 && rising && norm.abs() > 0.05 { "STRONG_BULL" }
+        else if efi_value > 0.0 { "BULL" }
+        else if efi_value < 0.0 && !rising && norm.abs() > 0.05 { "STRONG_BEAR" }
+        else if efi_value < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    EfiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        ema_period: ema_p,
+        raw_efi, efi_value, efi_prev,
+        last_close,
+        efi_label: label.into(), note: String::new(),
+    }
+}
+
+/// EMV — Ease of Movement: `(midpoint_change) / (box_ratio)` smoothed by SMA14.
+/// `midpoint_change = (H+L)/2 − (H_prev+L_prev)/2`;
+/// `box_ratio = (volume / scale) / (H − L)`.
+/// High positive = easy upward movement on low volume; low-effort rally.
+pub fn compute_emv_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> EmvSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let sma_p = 14usize;
+    let vol_scale = 100_000_000.0f64;
+    let min_bars = sma_p + 4;
+    if n < min_bars {
+        return EmvSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            sma_period: sma_p, volume_scale: vol_scale,
+            emv_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let mut raw: Vec<f64> = Vec::with_capacity(n - 1);
+    for i in 1..n {
+        let mid_now = (sorted[i].high + sorted[i].low) * 0.5;
+        let mid_prev = (sorted[i-1].high + sorted[i-1].low) * 0.5;
+        let range = (sorted[i].high - sorted[i].low).max(1e-9);
+        let box_ratio = (sorted[i].volume / vol_scale) / range;
+        let bx = box_ratio.max(1e-9);
+        raw.push((mid_now - mid_prev) / bx);
+    }
+    if raw.len() < sma_p {
+        return EmvSnapshot {
+            symbol: sym, as_of: as_of.into(), bars_used: n,
+            sma_period: sma_p, volume_scale: vol_scale,
+            emv_label: "INSUFFICIENT_DATA".into(),
+            note: format!("raw series {} < SMA {}", raw.len(), sma_p),
+            ..Default::default()
+        };
+    }
+    let t = raw.len() - 1;
+    let sma: f64 = raw[(t + 1 - sma_p)..=t].iter().sum::<f64>() / sma_p as f64;
+    let raw_t = raw[t];
+    let last_close = sorted[n - 1].close;
+    let abs_scale = last_close.abs().max(1.0);
+    let norm = sma / abs_scale * 100.0;
+    let label = if sma > 0.0 && norm.abs() > 1.0 { "STRONG_BULL" }
+        else if sma > 0.0 { "BULL" }
+        else if sma < 0.0 && norm.abs() > 1.0 { "STRONG_BEAR" }
+        else if sma < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    EmvSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        sma_period: sma_p, volume_scale: vol_scale,
+        raw_emv: raw_t, emv_value: sma,
+        last_close,
+        emv_label: label.into(), note: String::new(),
+    }
+}
+
+/// NVI — Negative Volume Index: accumulates pct-change only when today's volume
+/// is LOWER than yesterday's. Fosback: NVI > 1-year-EMA signals "smart money"
+/// accumulation (historically 95% odds of bull market).
+pub fn compute_nvi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> NviSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let signal_p = 255usize;
+    let min_bars = 30usize; // enough to have a meaningful series even without full signal EMA
+    if n < min_bars {
+        return NviSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            signal_period: signal_p,
+            nvi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let mut nvi: Vec<f64> = Vec::with_capacity(n);
+    nvi.push(1000.0);
+    for i in 1..n {
+        let prev_nvi = *nvi.last().unwrap();
+        if sorted[i].volume < sorted[i-1].volume && sorted[i-1].close > 0.0 {
+            let pct = (sorted[i].close - sorted[i-1].close) / sorted[i-1].close;
+            nvi.push(prev_nvi * (1.0 + pct));
+        } else {
+            nvi.push(prev_nvi);
+        }
+    }
+    // Signal EMA — use whatever period we can fit (min(signal_p, nvi_len/2)).
+    let eff_p = signal_p.min(nvi.len().saturating_sub(2).max(3));
+    let alpha = 2.0 / (eff_p as f64 + 1.0);
+    let seed: f64 = nvi[..eff_p.min(nvi.len())].iter().sum::<f64>() / (eff_p.min(nvi.len())) as f64;
+    let mut ema = seed;
+    for i in eff_p.min(nvi.len())..nvi.len() {
+        ema = alpha * nvi[i] + (1.0 - alpha) * ema;
+    }
+    let nvi_value = *nvi.last().unwrap();
+    let signal_value = ema;
+    let last_close = sorted[n - 1].close;
+    let spread = (nvi_value - signal_value) / signal_value.abs().max(1.0) * 100.0;
+    let label = if nvi_value > signal_value && spread > 0.25 { "BULL" }
+        else if nvi_value < signal_value && spread < -0.25 { "BEAR" }
+        else { "NEUTRAL" };
+    NviSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        signal_period: eff_p,
+        nvi_value, signal_value,
+        last_close,
+        nvi_label: label.into(), note: String::new(),
+    }
+}
+
+/// PVI — Positive Volume Index: mirror of NVI, updating only on UP-volume days.
+/// Fosback: crowd-following indicator; PVI < 1-yr-EMA signals "smart money"
+/// selling while crowd bought.
+pub fn compute_pvi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PviSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let signal_p = 255usize;
+    let min_bars = 30usize;
+    if n < min_bars {
+        return PviSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            signal_period: signal_p,
+            pvi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let mut pvi: Vec<f64> = Vec::with_capacity(n);
+    pvi.push(1000.0);
+    for i in 1..n {
+        let prev_pvi = *pvi.last().unwrap();
+        if sorted[i].volume > sorted[i-1].volume && sorted[i-1].close > 0.0 {
+            let pct = (sorted[i].close - sorted[i-1].close) / sorted[i-1].close;
+            pvi.push(prev_pvi * (1.0 + pct));
+        } else {
+            pvi.push(prev_pvi);
+        }
+    }
+    let eff_p = signal_p.min(pvi.len().saturating_sub(2).max(3));
+    let alpha = 2.0 / (eff_p as f64 + 1.0);
+    let seed: f64 = pvi[..eff_p.min(pvi.len())].iter().sum::<f64>() / (eff_p.min(pvi.len())) as f64;
+    let mut ema = seed;
+    for i in eff_p.min(pvi.len())..pvi.len() {
+        ema = alpha * pvi[i] + (1.0 - alpha) * ema;
+    }
+    let pvi_value = *pvi.last().unwrap();
+    let signal_value = ema;
+    let last_close = sorted[n - 1].close;
+    let spread = (pvi_value - signal_value) / signal_value.abs().max(1.0) * 100.0;
+    let label = if pvi_value > signal_value && spread > 0.25 { "BULL" }
+        else if pvi_value < signal_value && spread < -0.25 { "BEAR" }
+        else { "NEUTRAL" };
+    PviSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        signal_period: eff_p,
+        pvi_value, signal_value,
+        last_close,
+        pvi_label: label.into(), note: String::new(),
+    }
+}
+
+/// COPPOCK — Coppock Curve: 10-bar WMA of (14-bar ROC + 11-bar ROC).
+/// Originally designed for monthly bars on equity indices; zero-line cross
+/// from below = BUY_CROSS (Coppock's "guide" signal).
+pub fn compute_coppock_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CoppockSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let roc_fast = 11usize;
+    let roc_slow = 14usize;
+    let wma_p = 10usize;
+    let min_bars = roc_slow + wma_p + 2;
+    if n < min_bars {
+        return CoppockSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            roc_fast, roc_slow, wma_period: wma_p,
+            coppock_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    // ROC series aligned: index i in ROC corresponds to bar i + roc_slow.
+    let mut roc_sum: Vec<f64> = Vec::with_capacity(n - roc_slow);
+    for i in roc_slow..n {
+        let prev_f = sorted[i - roc_fast].close;
+        let prev_s = sorted[i - roc_slow].close;
+        let roc_f = if prev_f > 0.0 { (sorted[i].close - prev_f) / prev_f * 100.0 } else { 0.0 };
+        let roc_s = if prev_s > 0.0 { (sorted[i].close - prev_s) / prev_s * 100.0 } else { 0.0 };
+        roc_sum.push(roc_f + roc_s);
+    }
+    if roc_sum.len() < wma_p + 1 {
+        return CoppockSnapshot {
+            symbol: sym, as_of: as_of.into(), bars_used: n,
+            roc_fast, roc_slow, wma_period: wma_p,
+            coppock_label: "INSUFFICIENT_DATA".into(),
+            note: format!("roc len {} < wma+1 {}", roc_sum.len(), wma_p + 1),
+            ..Default::default()
+        };
+    }
+    let wma = |src: &[f64], p: usize, idx: usize| -> f64 {
+        let mut num = 0.0f64; let mut den = 0.0f64;
+        for k in 0..p {
+            let w = (k as f64) + 1.0; // linear weights: oldest=1, newest=p
+            num += w * src[idx + 1 - p + k];
+            den += w;
+        }
+        num / den.max(1e-9)
+    };
+    let t = roc_sum.len() - 1;
+    let coppock_value = wma(&roc_sum, wma_p, t);
+    let coppock_prev = wma(&roc_sum, wma_p, t - 1);
+    let last_close = sorted[n - 1].close;
+    let label = if coppock_prev <= 0.0 && coppock_value > 0.0 { "BUY_CROSS" }
+        else if coppock_prev >= 0.0 && coppock_value < 0.0 { "SELL_CROSS" }
+        else if coppock_value > 0.0 { "BULL" }
+        else if coppock_value < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    CoppockSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        roc_fast, roc_slow, wma_period: wma_p,
+        coppock_value, coppock_prev,
+        last_close,
+        coppock_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -29918,6 +30296,158 @@ pub fn get_awesome(conn: &Connection, symbol: &str) -> Result<Option<AwesomeSnap
         .map_err(|e| format!("prepare get_awesome: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_awesome: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_awesome: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+/// ADR-158 Round 48 tables: EFI, EMV, NVI, PVI, COPPOCK.
+pub fn create_research_tables_v49(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v48(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_efi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_efi_updated ON research_efi(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_emv (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_emv_updated ON research_emv(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_nvi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_nvi_updated ON research_nvi(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_pvi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_pvi_updated ON research_pvi(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_coppock (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_coppock_updated ON research_coppock(updated_at);",
+    ).map_err(|e| format!("create v49 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_efi(conn: &Connection, symbol: &str, snap: &EfiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v49(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("efi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_efi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert efi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_efi(conn: &Connection, symbol: &str) -> Result<Option<EfiSnapshot>, String> {
+    let _ = create_research_tables_v49(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_efi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_efi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_efi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_efi: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_emv(conn: &Connection, symbol: &str, snap: &EmvSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v49(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("emv json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_emv(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert emv: {e}"))?;
+    Ok(())
+}
+
+pub fn get_emv(conn: &Connection, symbol: &str) -> Result<Option<EmvSnapshot>, String> {
+    let _ = create_research_tables_v49(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_emv WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_emv: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_emv: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_emv: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_nvi(conn: &Connection, symbol: &str, snap: &NviSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v49(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("nvi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_nvi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert nvi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_nvi(conn: &Connection, symbol: &str) -> Result<Option<NviSnapshot>, String> {
+    let _ = create_research_tables_v49(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_nvi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_nvi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_nvi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_nvi: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_pvi(conn: &Connection, symbol: &str, snap: &PviSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v49(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("pvi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_pvi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert pvi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_pvi(conn: &Connection, symbol: &str) -> Result<Option<PviSnapshot>, String> {
+    let _ = create_research_tables_v49(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_pvi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_pvi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_pvi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_pvi: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_coppock(conn: &Connection, symbol: &str, snap: &CoppockSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v49(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("coppock json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_coppock(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert coppock: {e}"))?;
+    Ok(())
+}
+
+pub fn get_coppock(conn: &Connection, symbol: &str) -> Result<Option<CoppockSnapshot>, String> {
+    let _ = create_research_tables_v49(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_coppock WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_coppock: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_coppock: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_coppock: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -39705,6 +40235,156 @@ Trailing text.
             assert!(snap.sma_slow > 0.0);
             assert_eq!(snap.fast_period, 5);
             assert_eq!(snap.slow_period, 34);
+        }
+    }
+
+    // ── ADR-158 Round 48 tests ──────────────────────────────────────────────
+
+    #[test]
+    fn efi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = EfiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, ema_period: 13,
+            raw_efi: 25_000.0, efi_value: 18_500.0, efi_prev: 17_200.0,
+            last_close: 150.0,
+            efi_label: "BULL".into(), note: String::new(),
+        };
+        upsert_efi(&conn, "TEST", &snap).unwrap();
+        let got = get_efi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.efi_label, "BULL");
+        assert!((got.efi_value - 18_500.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn efi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_efi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.efi_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.efi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.efi_value.is_finite());
+            assert!(snap.raw_efi.is_finite());
+            assert_eq!(snap.ema_period, 13);
+        }
+    }
+
+    #[test]
+    fn emv_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = EmvSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, sma_period: 14, volume_scale: 100_000_000.0,
+            raw_emv: 1.25, emv_value: 0.75,
+            last_close: 150.0,
+            emv_label: "BULL".into(), note: String::new(),
+        };
+        upsert_emv(&conn, "TEST", &snap).unwrap();
+        let got = get_emv(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.emv_label, "BULL");
+        assert!((got.emv_value - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn emv_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_emv_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.emv_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.emv_label != "INSUFFICIENT_DATA" {
+            assert!(snap.emv_value.is_finite());
+            assert!(snap.raw_emv.is_finite());
+            assert_eq!(snap.sma_period, 14);
+            assert!(snap.volume_scale > 0.0);
+        }
+    }
+
+    #[test]
+    fn nvi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = NviSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, signal_period: 255,
+            nvi_value: 1050.0, signal_value: 1020.0,
+            last_close: 150.0,
+            nvi_label: "BULL".into(), note: String::new(),
+        };
+        upsert_nvi(&conn, "TEST", &snap).unwrap();
+        let got = get_nvi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.nvi_label, "BULL");
+        assert!((got.nvi_value - 1050.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn nvi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_nvi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.nvi_label.as_str(),
+            "BULL" | "NEUTRAL" | "BEAR" | "INSUFFICIENT_DATA"));
+        if snap.nvi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.nvi_value.is_finite() && snap.nvi_value > 0.0);
+            assert!(snap.signal_value.is_finite() && snap.signal_value > 0.0);
+            assert!(snap.signal_period >= 3);
+        }
+    }
+
+    #[test]
+    fn pvi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = PviSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, signal_period: 255,
+            pvi_value: 1120.0, signal_value: 1080.0,
+            last_close: 150.0,
+            pvi_label: "BULL".into(), note: String::new(),
+        };
+        upsert_pvi(&conn, "TEST", &snap).unwrap();
+        let got = get_pvi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.pvi_label, "BULL");
+        assert!((got.pvi_value - 1120.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pvi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_pvi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.pvi_label.as_str(),
+            "BULL" | "NEUTRAL" | "BEAR" | "INSUFFICIENT_DATA"));
+        if snap.pvi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.pvi_value.is_finite() && snap.pvi_value > 0.0);
+            assert!(snap.signal_value.is_finite() && snap.signal_value > 0.0);
+            assert!(snap.signal_period >= 3);
+        }
+    }
+
+    #[test]
+    fn coppock_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CoppockSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, roc_fast: 11, roc_slow: 14, wma_period: 10,
+            coppock_value: 2.5, coppock_prev: 1.8,
+            last_close: 150.0,
+            coppock_label: "BULL".into(), note: String::new(),
+        };
+        upsert_coppock(&conn, "TEST", &snap).unwrap();
+        let got = get_coppock(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.coppock_label, "BULL");
+        assert!((got.coppock_value - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn coppock_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_coppock_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.coppock_label.as_str(),
+            "BUY_CROSS" | "SELL_CROSS" | "BULL" | "NEUTRAL" | "BEAR" | "INSUFFICIENT_DATA"));
+        if snap.coppock_label != "INSUFFICIENT_DATA" {
+            assert!(snap.coppock_value.is_finite());
+            assert!(snap.coppock_prev.is_finite());
+            assert_eq!(snap.roc_fast, 11);
+            assert_eq!(snap.roc_slow, 14);
+            assert_eq!(snap.wma_period, 10);
         }
     }
 }

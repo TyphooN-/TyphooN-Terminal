@@ -402,6 +402,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_klinger",
     "research_stochrsi",
     "research_awesome",
+    // ── ADR-158 Round 48 ────────────────────────────
+    "research_efi",
+    "research_emv",
+    "research_nvi",
+    "research_pvi",
+    "research_coppock",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2177,6 +2183,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_efi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_efi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_emv" => Some(
+            "CREATE TABLE IF NOT EXISTS research_emv (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_nvi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_nvi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_pvi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_pvi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_coppock" => Some(
+            "CREATE TABLE IF NOT EXISTS research_coppock (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2443,6 +2484,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_klinger" => Some("updated_at"),
         "research_stochrsi" => Some("updated_at"),
         "research_awesome" => Some("updated_at"),
+        // ── ADR-158 Round 48 ──
+        "research_efi" => Some("updated_at"),
+        "research_emv" => Some("updated_at"),
+        "research_nvi" => Some("updated_at"),
+        "research_pvi" => Some("updated_at"),
+        "research_coppock" => Some("updated_at"),
         _ => None,
     }
 }

@@ -3146,7 +3146,83 @@ ao_color_up (▲/▼), last_close. Uses bar-midpoint hl2 not close
 the bar". Serves as the simple baseline to confirm faster
 oscillators' signals. Source: ADR-156 AWESOME window.
 
-#### 2.227 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.227 Force Index (EFI — ADR-158)
+
+Pulled from `research::get_efi`. Alexander Elder's 1993 Force
+Index: `volume × (close − prev_close)` smoothed by EMA13.
+Positive + rising EFI = active bullish buying; negative + falling
+= active selling; zero-cross = momentum exhaustion. Header gives
+**efi_label** (STRONG_BULL >0 && rising && abs-norm > 5bp / BULL
+>0 / NEUTRAL / BEAR <0 / STRONG_BEAR <0 && falling && abs-norm > 5bp
+/ INSUFFICIENT_DATA for n<17). Body reports bars_used, ema_period
+(13), raw_efi (latest bar), efi_value (EMA13), efi_prev, last_close.
+Elder's canonical entry rule: use EFI zero-line cross to time
+entries in the direction of the dominant weekly trend. Source:
+ADR-158 EFI window.
+
+#### 2.228 Ease of Movement (EMV — ADR-158)
+
+Pulled from `research::get_emv`. Richard Arms' 1980s low-effort-
+rally detector: `midpoint_change = (H+L)/2 − (H_prev+L_prev)/2`;
+`box_ratio = (volume/100M) / (H − L)`; raw_emv = midpoint_change /
+box_ratio; smooth with SMA14. High positive = price moved up easily
+on low volume (bullish); high negative = dropped easily on low
+volume (bearish). Header gives **emv_label** (STRONG_BULL >0 &&
+norm>1% / BULL >0 / NEUTRAL / BEAR <0 / STRONG_BEAR <0 && norm<−1%
+/ INSUFFICIENT_DATA for n<18). Body reports bars_used, sma_period
+(14), volume_scale (100M), raw_emv, emv_value (SMA14), last_close.
+Complements CHAIKOSC and KLINGER — EMV specifically measures
+volume-efficiency, not direction. Source: ADR-158 EMV window.
+
+#### 2.229 Negative Volume Index (NVI — ADR-158)
+
+Pulled from `research::get_nvi`. Paul Dysart (1930s) / Norman
+Fosback (1976) low-volume-cohort accumulator. NVI starts at 1000
+and updates only when today's volume is LOWER than yesterday's,
+by that day's pct-change in close. Compared against its EMA
+(target 255-bar / 1-year; scales down gracefully on shorter
+tapes). Header gives **nvi_label** (BULL nvi>signal && spread>0.25%
+/ NEUTRAL / BEAR nvi<signal && spread<−0.25% / INSUFFICIENT_DATA
+for n<30). Body reports bars_used, signal_period (effective
+EMA period), nvi_value, signal_value, last_close. Fosback's
+rule: NVI above its 1-yr EMA historically signals 95%+ bull-
+market probability ("smart money" accumulating on low-volume
+sessions). Read alongside PVI (below) for full sentiment picture.
+Source: ADR-158 NVI window.
+
+#### 2.230 Positive Volume Index (PVI — ADR-158)
+
+Pulled from `research::get_pvi`. Dysart/Fosback companion to NVI,
+updates only on UP-volume days. PVI represents crowd-following
+behaviour: PVI above its 1-year EMA = crowd actively buying and
+prices rising on high volume (sentiment confirmation). The more
+diagnostic signal is PVI *below* EMA: crowd bought but rally
+failed, implying smart money distributed. Header gives **pvi_label**
+(BULL pvi>signal && spread>0.25% / NEUTRAL / BEAR pvi<signal &&
+spread<−0.25% / INSUFFICIENT_DATA for n<30). Body reports bars_used,
+signal_period, pvi_value, signal_value, last_close. Ship with
+NVI since Fosback's interpretation system only works when both
+are read side-by-side: NVI-up + PVI-up = strongest bull; NVI-up +
+PVI-down = smart money accumulating while crowd sells. Source:
+ADR-158 PVI window.
+
+#### 2.231 Coppock Curve (COPPOCK — ADR-158)
+
+Pulled from `research::get_coppock`. E.S.C. Coppock's October 1962
+*Barron's* long-term momentum guide: `WMA(10, ROC(14) + ROC(11))`.
+Originally designed on monthly bars for major equity indices;
+fires ~3-5× per decade at the index level with a strong historical
+hit rate (1974, 1982, 2009 all Coppock buys). Header gives
+**coppock_label** — uniquely carries explicit cross-event labels
+(BUY_CROSS prev≤0 && now>0 / SELL_CROSS prev≥0 && now<0) alongside
+state labels (BULL >0 / BEAR <0 / NEUTRAL / INSUFFICIENT_DATA
+for n<26). Body reports bars_used, roc_fast (11), roc_slow (14),
+wma_period (10), coppock_value, coppock_prev, last_close. On daily
+bars the cross cadence is faster than Coppock's monthly-bar design;
+interpret relative to tape granularity. Source: ADR-158 COPPOCK
+window.
+
+#### 2.232 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -3162,7 +3238,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.228 Sector peer comparison
+#### 2.233 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -3422,8 +3498,31 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~73-145 KB**
-(up from 72-143 KB after ADR-155; ADR-156 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~74-146 KB**
+(up from 73-145 KB after ADR-156; ADR-158 adds five optional per-symbol
+blocks — EFI / EMV / NVI / PVI / COPPOCK — each measuring ~2 k/v rows and
+adding ~190-240 bytes when populated, for a typical +1.06 KB per symbol;
+all five reuse the existing `research_historical_price` HP cache and the
+standard research-table LAN sync path with zero new API dependencies;
+EFI computes Elder's 1993 Force Index as EMA13(volume × Δclose) with
+STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR labels — the simplest
+volume-weighted momentum oscillator, Elder's zero-line cross signals
+aligned-trend entries; EMV computes Arms' 1980s Ease of Movement as
+SMA14(midpoint_change / box_ratio) with STRONG_BULL / BULL / NEUTRAL /
+BEAR / STRONG_BEAR labels — first low-effort-rally detector measuring
+whether volume efficiently produced price movement; NVI computes
+Dysart/Fosback's Negative Volume Index (1930s/1976) with BULL / NEUTRAL /
+BEAR labels — first low-volume-cohort accumulator, Fosback's 1-yr EMA
+rule claims 95%+ bull-market probability when NVI > EMA ("smart money"
+on low-volume sessions); PVI computes the Positive Volume Index
+companion with same BULL/NEUTRAL/BEAR scheme — read side-by-side with
+NVI for Fosback's full smart-money-vs-crowd sentiment picture; COPPOCK
+computes Coppock's October-1962 Coppock Curve as WMA10(ROC14 + ROC11)
+with uniquely explicit BUY_CROSS / SELL_CROSS event labels plus BULL /
+NEUTRAL / BEAR / INSUFFICIENT_DATA states — first long-term momentum
+guide whose cross-zero events (rare — ~3-5×/decade on monthly SPX) are
+treated as decision points rather than trailing states; prior five
+(ADR-156) remain unchanged; ADR-156 added five optional per-symbol
 blocks — MASS / CHAIKOSC / KLINGER / STOCHRSI / AWESOME — each measuring
 ~2 k/v rows and adding ~200-300 bytes when populated, for a typical
 +1.3 KB per symbol; all five reuse the existing `research_historical_price`
