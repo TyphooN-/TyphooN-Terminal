@@ -384,6 +384,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_cmf",
     "research_mfi",
     "research_psar",
+    // ── ADR-154 Round 45 ────────────────────────────
+    "research_vortex",
+    "research_chop",
+    "research_obv",
+    "research_trix",
+    "research_hma",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2051,6 +2057,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-154 Round 45 ──
+        "research_vortex" => Some(
+            "CREATE TABLE IF NOT EXISTS research_vortex (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_chop" => Some(
+            "CREATE TABLE IF NOT EXISTS research_chop (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_obv" => Some(
+            "CREATE TABLE IF NOT EXISTS research_obv (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_trix" => Some(
+            "CREATE TABLE IF NOT EXISTS research_trix (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_hma" => Some(
+            "CREATE TABLE IF NOT EXISTS research_hma (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2299,6 +2341,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_cmf" => Some("updated_at"),
         "research_mfi" => Some("updated_at"),
         "research_psar" => Some("updated_at"),
+        // ── ADR-154 Round 45 ──
+        "research_vortex" => Some("updated_at"),
+        "research_chop" => Some("updated_at"),
+        "research_obv" => Some("updated_at"),
+        "research_trix" => Some("updated_at"),
+        "research_hma" => Some("updated_at"),
         _ => None,
     }
 }

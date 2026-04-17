@@ -4676,6 +4676,95 @@ pub struct PsarSnapshot {
     pub note: String,
 }
 
+/// VORTEX — Botes & Siepman (2009) directional-movement alternative.
+/// VI+ = Σ|H_t − L_{t−1}| / ΣTR, VI− = Σ|L_t − H_{t−1}| / ΣTR over period=14.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct VortexSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub vi_plus: f64,
+    pub vi_minus: f64,
+    pub vi_diff: f64,                  // VI+ − VI−
+    pub sum_tr: f64,
+    pub sum_vm_plus: f64,
+    pub sum_vm_minus: f64,
+    pub last_close: f64,
+    pub vortex_label: String,          // BULL_CROSS / BULL / NEUTRAL / BEAR / BEAR_CROSS / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// CHOP — Bill Dreiss Choppiness Index (period=14).
+/// CI = 100·log10(ΣTR / (maxH − minL)) / log10(N). Values > 61.8 = choppy, < 38.2 = trending.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ChopSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub chop_value: f64,               // 0..100
+    pub sum_tr: f64,
+    pub range_high: f64,               // max high over period
+    pub range_low: f64,                // min low over period
+    pub range_span: f64,               // range_high - range_low
+    pub last_close: f64,
+    pub chop_label: String,            // CHOP >61.8 / RANGING >50 / NEUTRAL / TRANSITIONAL <50 / TRENDING <38.2 / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// OBV — Granville (1963) On-Balance Volume cumulative + 20-bar slope.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ObvSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub slope_window: usize,           // 20
+    pub obv_value: f64,                // latest cumulative
+    pub obv_slope: f64,                // linear-regression slope of last 20 OBV values
+    pub obv_change_pct: f64,           // (obv[N-1] - obv[N-20]) / |obv[N-20]| × 100 (or 0 if divisor≈0)
+    pub obv_min_20: f64,
+    pub obv_max_20: f64,
+    pub last_close: f64,
+    pub obv_label: String,             // STRONG_UP / UP / NEUTRAL / DOWN / STRONG_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TRIX — Jack Hutson (1980s) triple-EMA momentum oscillator.
+/// EMA3 = EMA(EMA(EMA(close, N), N), N); TRIX = 100·(EMA3_t/EMA3_{t−1} − 1); signal = EMA(TRIX, 9).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct TrixSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 15
+    pub signal_period: usize,          // 9
+    pub trix_value: f64,               // % change
+    pub signal_value: f64,             // EMA(TRIX, 9)
+    pub histogram: f64,                // trix − signal
+    pub ema3_value: f64,               // final triple-smoothed EMA level
+    pub last_close: f64,
+    pub trix_label: String,            // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// HMA — Alan Hull (2005) weighted-moving-average combo: HMA = WMA(2·WMA(n/2) − WMA(n), √n).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct HmaSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 20
+    pub half_period: usize,            // 10
+    pub sqrt_period: usize,            // 4 (floor(sqrt(20)))
+    pub hma_value: f64,                // latest HMA
+    pub hma_slope_pct: f64,            // (hma[N-1] - hma[N-6]) / hma[N-6] × 100
+    pub hma_vs_close_pct: f64,         // (close - hma) / hma × 100
+    pub last_close: f64,
+    pub hma_label: String,             // STRONG_UP / UP / NEUTRAL / DOWN / STRONG_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -21558,6 +21647,275 @@ pub fn compute_psar_snapshot(
     }
 }
 
+/// VORTEX — Botes & Siepman 2009 directional-movement alternative (period 14).
+pub fn compute_vortex_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> VortexSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    if n < period + 1 {
+        return VortexSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            vortex_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", period + 1, n),
+            ..Default::default()
+        };
+    }
+    let start = n - period;
+    let mut sum_tr = 0.0_f64;
+    let mut sum_vmp = 0.0_f64;
+    let mut sum_vmn = 0.0_f64;
+    for i in start..n {
+        let hi = sorted[i].high;
+        let lo = sorted[i].low;
+        let pc = sorted[i - 1].close;
+        let ph = sorted[i - 1].high;
+        let pl = sorted[i - 1].low;
+        let tr = (hi - lo).max((hi - pc).abs()).max((lo - pc).abs());
+        sum_tr += tr;
+        sum_vmp += (hi - pl).abs();
+        sum_vmn += (lo - ph).abs();
+    }
+    let vi_plus = if sum_tr > 0.0 { sum_vmp / sum_tr } else { 0.0 };
+    let vi_minus = if sum_tr > 0.0 { sum_vmn / sum_tr } else { 0.0 };
+    let diff = vi_plus - vi_minus;
+    let label = if diff > 0.1 && vi_plus > 1.0 { "BULL_CROSS" }
+        else if diff > 0.0 { "BULL" }
+        else if diff < -0.1 && vi_minus > 1.0 { "BEAR_CROSS" }
+        else if diff < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    VortexSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        vi_plus, vi_minus, vi_diff: diff,
+        sum_tr, sum_vm_plus: sum_vmp, sum_vm_minus: sum_vmn,
+        last_close: sorted[n - 1].close,
+        vortex_label: label.into(), note: String::new(),
+    }
+}
+
+/// CHOP — Choppiness Index (period 14).
+pub fn compute_chop_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ChopSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    if n < period + 1 {
+        return ChopSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            chop_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", period + 1, n),
+            ..Default::default()
+        };
+    }
+    let start = n - period;
+    let mut sum_tr = 0.0_f64;
+    let mut rh = f64::MIN;
+    let mut rl = f64::MAX;
+    for i in start..n {
+        let hi = sorted[i].high;
+        let lo = sorted[i].low;
+        let pc = sorted[i - 1].close;
+        let tr = (hi - lo).max((hi - pc).abs()).max((lo - pc).abs());
+        sum_tr += tr;
+        if hi > rh { rh = hi; }
+        if lo < rl { rl = lo; }
+    }
+    let span = rh - rl;
+    let chop = if span > 0.0 && sum_tr > 0.0 {
+        100.0 * (sum_tr / span).log10() / (period as f64).log10()
+    } else { 0.0 };
+    let label = if chop > 61.8 { "CHOP" }
+        else if chop > 50.0 { "RANGING" }
+        else if chop < 38.2 { "TRENDING" }
+        else if chop < 50.0 { "TRANSITIONAL" }
+        else { "NEUTRAL" };
+    ChopSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        chop_value: chop, sum_tr, range_high: rh, range_low: rl, range_span: span,
+        last_close: sorted[n - 1].close,
+        chop_label: label.into(), note: String::new(),
+    }
+}
+
+/// OBV — On-Balance Volume (cumulative) with 20-bar linear-regression slope.
+pub fn compute_obv_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ObvSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let slope_window = 20usize;
+    if n < slope_window + 1 {
+        return ObvSnapshot {
+            symbol: sym, as_of: as_of.into(), slope_window,
+            obv_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", slope_window + 1, n),
+            ..Default::default()
+        };
+    }
+    let mut obv = vec![0.0_f64; n];
+    for i in 1..n {
+        let delta = sorted[i].close - sorted[i - 1].close;
+        let step = if delta > 0.0 { sorted[i].volume }
+            else if delta < 0.0 { -sorted[i].volume }
+            else { 0.0 };
+        obv[i] = obv[i - 1] + step;
+    }
+    let w_start = n - slope_window;
+    let ys = &obv[w_start..n];
+    let w = slope_window as f64;
+    let sx: f64 = (0..slope_window).map(|i| i as f64).sum();
+    let sy: f64 = ys.iter().sum();
+    let sxx: f64 = (0..slope_window).map(|i| (i as f64).powi(2)).sum();
+    let sxy: f64 = ys.iter().enumerate().map(|(i, y)| (i as f64) * y).sum();
+    let denom = w * sxx - sx * sx;
+    let slope = if denom.abs() > f64::EPSILON { (w * sxy - sx * sy) / denom } else { 0.0 };
+    let start_v = ys[0];
+    let end_v = ys[slope_window - 1];
+    let change_pct = if start_v.abs() > f64::EPSILON { (end_v - start_v) / start_v.abs() * 100.0 } else { 0.0 };
+    let omin = ys.iter().cloned().fold(f64::INFINITY, f64::min);
+    let omax = ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let range = (omax - omin).abs().max(1.0);
+    let slope_norm = slope * slope_window as f64 / range;
+    let label = if slope_norm > 0.5 { "STRONG_UP" }
+        else if slope_norm > 0.1 { "UP" }
+        else if slope_norm < -0.5 { "STRONG_DOWN" }
+        else if slope_norm < -0.1 { "DOWN" }
+        else { "NEUTRAL" };
+    ObvSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, slope_window,
+        obv_value: obv[n - 1],
+        obv_slope: slope,
+        obv_change_pct: change_pct,
+        obv_min_20: omin, obv_max_20: omax,
+        last_close: sorted[n - 1].close,
+        obv_label: label.into(), note: String::new(),
+    }
+}
+
+/// TRIX — triple-EMA momentum (period 15, signal EMA 9).
+pub fn compute_trix_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> TrixSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 15usize;
+    let signal_period = 9usize;
+    let min_bars = 3 * period + signal_period + 1;
+    if n < min_bars {
+        return TrixSnapshot {
+            symbol: sym, as_of: as_of.into(), period, signal_period,
+            trix_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let alpha = 2.0_f64 / (period as f64 + 1.0);
+    let ema = |src: &[f64]| -> Vec<f64> {
+        let mut out = vec![0.0_f64; src.len()];
+        out[0] = src[0];
+        for i in 1..src.len() { out[i] = alpha * src[i] + (1.0 - alpha) * out[i - 1]; }
+        out
+    };
+    let e1 = ema(&closes);
+    let e2 = ema(&e1);
+    let e3 = ema(&e2);
+    let mut trix_series = vec![0.0_f64; n];
+    for i in 1..n {
+        trix_series[i] = if e3[i - 1].abs() > f64::EPSILON {
+            100.0 * (e3[i] / e3[i - 1] - 1.0)
+        } else { 0.0 };
+    }
+    let sig_alpha = 2.0_f64 / (signal_period as f64 + 1.0);
+    let mut sig = vec![0.0_f64; n];
+    sig[0] = trix_series[0];
+    for i in 1..n { sig[i] = sig_alpha * trix_series[i] + (1.0 - sig_alpha) * sig[i - 1]; }
+    let trix_now = trix_series[n - 1];
+    let sig_now = sig[n - 1];
+    let hist = trix_now - sig_now;
+    let label = if trix_now > 0.0 && hist > 0.0 && trix_now.abs() > 0.05 { "STRONG_BULL" }
+        else if trix_now > 0.0 { "BULL" }
+        else if trix_now < 0.0 && hist < 0.0 && trix_now.abs() > 0.05 { "STRONG_BEAR" }
+        else if trix_now < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    TrixSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period, signal_period,
+        trix_value: trix_now, signal_value: sig_now, histogram: hist,
+        ema3_value: e3[n - 1],
+        last_close: sorted[n - 1].close,
+        trix_label: label.into(), note: String::new(),
+    }
+}
+
+/// HMA — Hull Moving Average (period 20, √p≈4).
+pub fn compute_hma_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> HmaSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 20usize;
+    let half = period / 2;
+    let sqrt_p = (period as f64).sqrt().floor() as usize;
+    let min_bars = period + sqrt_p + 5;
+    if n < min_bars {
+        return HmaSnapshot {
+            symbol: sym, as_of: as_of.into(), period, half_period: half, sqrt_period: sqrt_p,
+            hma_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let wma = |src: &[f64], len: usize| -> Vec<f64> {
+        let mut out = vec![0.0_f64; src.len()];
+        let wsum: f64 = (1..=len).map(|i| i as f64).sum();
+        for i in (len - 1)..src.len() {
+            let mut acc = 0.0_f64;
+            for k in 0..len {
+                acc += src[i - (len - 1) + k] * (k + 1) as f64;
+            }
+            out[i] = acc / wsum;
+        }
+        out
+    };
+    let w_half = wma(&closes, half);
+    let w_full = wma(&closes, period);
+    let raw: Vec<f64> = (0..n).map(|i| 2.0 * w_half[i] - w_full[i]).collect();
+    let hma_series = wma(&raw, sqrt_p);
+    let hma_now = hma_series[n - 1];
+    let back_idx = n.saturating_sub(6);
+    let hma_back = hma_series[back_idx];
+    let slope_pct = if hma_back.abs() > f64::EPSILON { (hma_now - hma_back) / hma_back.abs() * 100.0 } else { 0.0 };
+    let last_close = sorted[n - 1].close;
+    let vs_close = if hma_now.abs() > f64::EPSILON { (last_close - hma_now) / hma_now * 100.0 } else { 0.0 };
+    let label = if slope_pct > 2.0 { "STRONG_UP" }
+        else if slope_pct > 0.2 { "UP" }
+        else if slope_pct < -2.0 { "STRONG_DOWN" }
+        else if slope_pct < -0.2 { "DOWN" }
+        else { "NEUTRAL" };
+    HmaSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        period, half_period: half, sqrt_period: sqrt_p,
+        hma_value: hma_now,
+        hma_slope_pct: slope_pct,
+        hma_vs_close_pct: vs_close,
+        last_close,
+        hma_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -28321,6 +28679,157 @@ pub fn get_psar(conn: &Connection, symbol: &str) -> Result<Option<PsarSnapshot>,
         .map_err(|e| format!("prepare get_psar: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_psar: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_psar: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn create_research_tables_v46(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v45(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_vortex (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_vortex_updated ON research_vortex(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_chop (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_chop_updated ON research_chop(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_obv (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_obv_updated ON research_obv(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_trix (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_trix_updated ON research_trix(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_hma (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_hma_updated ON research_hma(updated_at);",
+    ).map_err(|e| format!("create v46 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_vortex(conn: &Connection, symbol: &str, snap: &VortexSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v46(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("vortex json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_vortex(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert vortex: {e}"))?;
+    Ok(())
+}
+
+pub fn get_vortex(conn: &Connection, symbol: &str) -> Result<Option<VortexSnapshot>, String> {
+    let _ = create_research_tables_v46(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_vortex WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_vortex: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_vortex: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_vortex: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_chop(conn: &Connection, symbol: &str, snap: &ChopSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v46(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("chop json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_chop(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert chop: {e}"))?;
+    Ok(())
+}
+
+pub fn get_chop(conn: &Connection, symbol: &str) -> Result<Option<ChopSnapshot>, String> {
+    let _ = create_research_tables_v46(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_chop WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_chop: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_chop: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_chop: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_obv(conn: &Connection, symbol: &str, snap: &ObvSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v46(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("obv json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_obv(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert obv: {e}"))?;
+    Ok(())
+}
+
+pub fn get_obv(conn: &Connection, symbol: &str) -> Result<Option<ObvSnapshot>, String> {
+    let _ = create_research_tables_v46(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_obv WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_obv: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_obv: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_obv: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_trix(conn: &Connection, symbol: &str, snap: &TrixSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v46(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("trix json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_trix(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert trix: {e}"))?;
+    Ok(())
+}
+
+pub fn get_trix(conn: &Connection, symbol: &str) -> Result<Option<TrixSnapshot>, String> {
+    let _ = create_research_tables_v46(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_trix WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_trix: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_trix: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_trix: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_hma(conn: &Connection, symbol: &str, snap: &HmaSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v46(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("hma json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_hma(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert hma: {e}"))?;
+    Ok(())
+}
+
+pub fn get_hma(conn: &Connection, symbol: &str) -> Result<Option<HmaSnapshot>, String> {
+    let _ = create_research_tables_v46(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_hma WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_hma: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_hma: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_hma: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -37623,6 +38132,168 @@ Trailing text.
             assert!(snap.acceleration_factor >= snap.af_start);
             assert!(snap.acceleration_factor <= snap.af_max);
             assert!(snap.bars_in_trend >= 1);
+        }
+    }
+
+    // ── ADR-154 Round 45 tests ──────────────────────────────────────────────
+
+    #[test]
+    fn vortex_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = VortexSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 14,
+            vi_plus: 1.12, vi_minus: 0.88, vi_diff: 0.24,
+            sum_tr: 42.5, sum_vm_plus: 47.6, sum_vm_minus: 37.4,
+            last_close: 150.0,
+            vortex_label: "BULL".into(), note: String::new(),
+        };
+        upsert_vortex(&conn, "TEST", &snap).unwrap();
+        let got = get_vortex(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.vortex_label, "BULL");
+        assert!((got.vi_plus - 1.12).abs() < 1e-9);
+    }
+
+    #[test]
+    fn vortex_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_vortex_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.vortex_label.as_str(),
+            "BULL_CROSS" | "BULL" | "NEUTRAL" | "BEAR" | "BEAR_CROSS" | "INSUFFICIENT_DATA"));
+        if snap.vortex_label != "INSUFFICIENT_DATA" {
+            assert!(snap.vi_plus.is_finite() && snap.vi_plus >= 0.0);
+            assert!(snap.vi_minus.is_finite() && snap.vi_minus >= 0.0);
+            assert!(snap.sum_tr > 0.0);
+            assert_eq!(snap.period, 14);
+        }
+    }
+
+    #[test]
+    fn chop_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ChopSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 14,
+            chop_value: 55.4, sum_tr: 28.3,
+            range_high: 152.0, range_low: 145.0, range_span: 7.0,
+            last_close: 150.0,
+            chop_label: "RANGING".into(), note: String::new(),
+        };
+        upsert_chop(&conn, "TEST", &snap).unwrap();
+        let got = get_chop(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.chop_label, "RANGING");
+        assert!((got.chop_value - 55.4).abs() < 1e-9);
+    }
+
+    #[test]
+    fn chop_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_chop_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.chop_label.as_str(),
+            "CHOP" | "RANGING" | "NEUTRAL" | "TRANSITIONAL" | "TRENDING" | "INSUFFICIENT_DATA"));
+        if snap.chop_label != "INSUFFICIENT_DATA" {
+            assert!(snap.chop_value.is_finite());
+            assert!(snap.chop_value >= 0.0 && snap.chop_value <= 110.0);
+            assert!(snap.range_high >= snap.range_low);
+            assert_eq!(snap.period, 14);
+        }
+    }
+
+    #[test]
+    fn obv_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ObvSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, slope_window: 20,
+            obv_value: 1_500_000.0,
+            obv_slope: 2_500.0,
+            obv_change_pct: 3.4,
+            obv_min_20: 1_400_000.0, obv_max_20: 1_600_000.0,
+            last_close: 150.0,
+            obv_label: "UP".into(), note: String::new(),
+        };
+        upsert_obv(&conn, "TEST", &snap).unwrap();
+        let got = get_obv(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.obv_label, "UP");
+        assert!((got.obv_value - 1_500_000.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn obv_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_obv_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.obv_label.as_str(),
+            "STRONG_UP" | "UP" | "NEUTRAL" | "DOWN" | "STRONG_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.obv_label != "INSUFFICIENT_DATA" {
+            assert!(snap.obv_value.is_finite());
+            assert!(snap.obv_slope.is_finite());
+            assert!(snap.obv_max_20 >= snap.obv_min_20);
+            assert_eq!(snap.slope_window, 20);
+        }
+    }
+
+    #[test]
+    fn trix_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = TrixSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 15, signal_period: 9,
+            trix_value: 0.042, signal_value: 0.031, histogram: 0.011,
+            ema3_value: 149.75, last_close: 150.0,
+            trix_label: "BULL".into(), note: String::new(),
+        };
+        upsert_trix(&conn, "TEST", &snap).unwrap();
+        let got = get_trix(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.trix_label, "BULL");
+        assert!((got.trix_value - 0.042).abs() < 1e-9);
+    }
+
+    #[test]
+    fn trix_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_trix_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.trix_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.trix_label != "INSUFFICIENT_DATA" {
+            assert!(snap.trix_value.is_finite());
+            assert!(snap.signal_value.is_finite());
+            assert!(snap.ema3_value.is_finite() && snap.ema3_value > 0.0);
+            assert_eq!(snap.period, 15);
+            assert_eq!(snap.signal_period, 9);
+        }
+    }
+
+    #[test]
+    fn hma_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = HmaSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252,
+            period: 20, half_period: 10, sqrt_period: 4,
+            hma_value: 149.8,
+            hma_slope_pct: 0.45,
+            hma_vs_close_pct: 0.13,
+            last_close: 150.0,
+            hma_label: "UP".into(), note: String::new(),
+        };
+        upsert_hma(&conn, "TEST", &snap).unwrap();
+        let got = get_hma(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.hma_label, "UP");
+        assert!((got.hma_value - 149.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hma_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_hma_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.hma_label.as_str(),
+            "STRONG_UP" | "UP" | "NEUTRAL" | "DOWN" | "STRONG_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.hma_label != "INSUFFICIENT_DATA" {
+            assert!(snap.hma_value.is_finite() && snap.hma_value > 0.0);
+            assert!(snap.hma_slope_pct.is_finite());
+            assert_eq!(snap.period, 20);
+            assert_eq!(snap.half_period, 10);
+            assert!(snap.sqrt_period >= 4);
         }
     }
 }

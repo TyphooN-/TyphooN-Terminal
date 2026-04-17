@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**two hundred and thirteen sub-blocks**, each of which is skipped silently when its data
+**two hundred and eighteen sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -2940,7 +2940,73 @@ SUPERTREND (ADR-152): PSAR accelerates (AF grows each new EP),
 SuperTrend is ATR-proportional and does not accelerate — so PSAR fires
 trailing-stop exits earlier in mature trends. Source: ADR-153 PSAR window.
 
-#### 2.212 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.212 Botes & Siepman Vortex Indicator (VORTEX — ADR-154)
+
+Pulled from `research::get_vortex`. Botes & Siepman (2009) directional-movement
+alternative to ADX at period=14. VM+ = |H_t − L_{t−1}|, VM− = |L_t − H_{t−1}|,
+VI+ = ΣVM+ / ΣTR, VI− = ΣVM− / ΣTR. Header gives **vortex_label**
+(BULL_CROSS VI+>VI− with VI+>1 / BULL VI+>VI− / NEUTRAL / BEAR VI−>VI+ /
+BEAR_CROSS VI−>VI+ with VI−>1 / INSUFFICIENT_DATA for n<16). Body reports
+bars_used, period (14), vi_plus, vi_minus, vi_diff, sum_tr, sum_vm_plus,
+sum_vm_minus, last_close. Complements ADX (ADR-153): ADX is Wilder-smoothed
+and lagged, VORTEX is unsmoothed and catches direction changes earlier.
+Source: ADR-154 VORTEX window.
+
+#### 2.213 Bill Dreiss Choppiness Index (CHOP — ADR-154)
+
+Pulled from `research::get_chop`. Dreiss (1980s) bounded 0–100 trend-vs-range
+scalar at period=14. CHOP = 100 · log10(ΣTR / (maxH − minL)) / log10(N).
+Values >61.8 indicate choppy/ranging, <38.2 indicate trending (Fibonacci
+complements). Header gives **chop_label** (CHOP >61.8 / RANGING >50 /
+NEUTRAL / TRANSITIONAL <50 / TRENDING <38.2 / INSUFFICIENT_DATA for n<15).
+Body reports bars_used, period (14), chop_value, sum_tr, range_high,
+range_low, range_span, last_close. Distinct from ADX: ADX measures *trend
+strength*, CHOP measures *range efficiency* and is bounded by construction.
+Flat-tape (maxH==minL) bars are guarded and emit INSUFFICIENT_DATA rather
+than NaN. Source: ADR-154 CHOP window.
+
+#### 2.214 Granville On-Balance Volume (OBV — ADR-154)
+
+Pulled from `research::get_obv`. Granville (*New Key to Stock Market
+Profits*, 1963) cumulative volume indicator: OBV_t = OBV_{t−1} + sign(ΔClose)·
+Volume_t. Since value depends on history, we pair it with a 20-bar
+linear-regression slope normalised against the 20-bar OBV range to emit
+a label. Header gives **obv_label** (STRONG_UP / UP / NEUTRAL / DOWN /
+STRONG_DOWN / INSUFFICIENT_DATA for n<21). Body reports bars_used,
+slope_window (20), obv_value, obv_slope, obv_change_pct, obv_min_20,
+obv_max_20, last_close. Complements CMF (ADR-153): CMF is bounded
+[−1, +1] and forgets old volume, OBV is unbounded and remembers all
+history. Halted/zero-volume bars contribute zero (standard Granville),
+so OBV can plateau during halts. Source: ADR-154 OBV window.
+
+#### 2.215 Hutson Triple-EMA Rate-of-Change (TRIX — ADR-154)
+
+Pulled from `research::get_trix`. Hutson (*Stocks & Commodities*, 1983)
+triple-smoothed momentum oscillator at period=15 signal=9.
+EMA3 = EMA(EMA(EMA(close, 15), 15), 15); TRIX = 100·(EMA3_t/EMA3_{t−1} − 1);
+signal = EMA(TRIX, 9). Header gives **trix_label** (STRONG_BULL TRIX>0
+&& TRIX>signal && |TRIX|>0.05 / BULL TRIX>0 / NEUTRAL / BEAR TRIX<0 /
+STRONG_BEAR TRIX<0 && TRIX<signal && |TRIX|>0.05 / INSUFFICIENT_DATA
+for n<55). Body reports bars_used, period (15), signal_period (9),
+trix_value, signal_value, histogram, ema3_value, last_close.
+Complements MACD (EMA-EMA spread) and TSI (double-smoothed): TRIX is the
+highest-smoothing end of the momentum-oscillator spectrum — more noise
+rejection, more lag. Source: ADR-154 TRIX window.
+
+#### 2.216 Hull Moving Average (HMA — ADR-154)
+
+Pulled from `research::get_hma`. Hull (2005) explicitly-least-lagged
+weighted-MA construct at period=20. HMA = WMA(2·WMA(n/2) − WMA(n), √n).
+Inner difference 2·WMA(10) − WMA(20) has near-zero lag; outer WMA(√20=4)
+smooths the result. Header gives **hma_label** (STRONG_UP slope>2% /
+UP slope>0.2% / NEUTRAL / DOWN slope<−0.2% / STRONG_DOWN slope<−2% /
+INSUFFICIENT_DATA for n<21). Body reports bars_used, period (20),
+half_period (10), sqrt_period (4), hma_value, hma_slope_pct,
+hma_vs_close_pct, last_close. Complements SMA/EMA/KAMA (ADR-142): HMA
+is the zero-lag-by-construction member of the MA family. We floor √n
+(TradingView convention). Source: ADR-154 HMA window.
+
+#### 2.217 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -2956,7 +3022,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.213 Sector peer comparison
+#### 2.218 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -2987,7 +3053,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.212 above.
+articles to the per-symbol bag consumed by sub-block 2.217 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -3216,8 +3282,40 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~70-139 KB**
-(up from 69-137 KB after ADR-152; ADR-153 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~71-141 KB**
+(up from 70-139 KB after ADR-153; ADR-154 adds five optional per-symbol
+blocks — VORTEX / CHOP / OBV / TRIX / HMA — each measuring ~2 k/v rows
+and adding ~220-260 bytes when populated, for a typical +1.2 KB per symbol;
+all five reuse the existing `research_historical_price` HP cache and the
+standard research-table LAN sync path with zero new API dependencies;
+VORTEX computes the Botes & Siepman 2009 directional-movement alternative
+to ADX at period=14 (VM+ = |H_t − L_{t−1}|, VM− = |L_t − H_{t−1}|,
+VI± = ΣVM± / ΣTR) with BULL_CROSS (VI+>VI− with VI+>1) / BULL / NEUTRAL /
+BEAR / BEAR_CROSS (VI−>VI+ with VI−>1) labels — the unsmoothed-and-
+earlier direction-change complement to ADX's Wilder-smoothed trend-strength;
+CHOP computes Dreiss 1980s bounded 0–100 trend-vs-range scalar at period=14
+(100·log10(ΣTR / (maxH − minL)) / log10(N)) with CHOP (>61.8) / RANGING /
+NEUTRAL / TRANSITIONAL / TRENDING (<38.2) labels using Fibonacci
+complements — the *range-efficiency* bounded-by-construction complement
+to ADX's unbounded trend-strength measurement; OBV computes Granville's
+1963 cumulative sign(ΔClose)·Volume with a 20-bar linear-regression slope
+normalised against OBV range to emit STRONG_UP / UP / NEUTRAL / DOWN /
+STRONG_DOWN labels — the unbounded-all-history complement to CMF's
+[−1, +1] bounded 20-bar-volume-forget window, closing the cumulative-vs-
+period-based volume-indicator dimension (OBV 1963 predates CMF/MFI by
+~20 years); TRIX computes Hutson's 1983 triple-smoothed momentum
+oscillator at period=15 signal=9 (EMA3 = EMA(EMA(EMA(close, 15), 15), 15),
+TRIX = 100·(EMA3_t/EMA3_{t−1} − 1), signal = EMA(TRIX, 9)) with
+STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR labels — the
+highest-smoothing end of the momentum-oscillator spectrum (MACD =
+EMA-EMA, TSI = double-smoothed, TRIX = triple-smoothed), trading more
+noise rejection for more lag; HMA computes Hull's 2005
+explicitly-least-lagged MA construct at period=20 (HMA = WMA(2·WMA(n/2)
+− WMA(n), √n)) with STRONG_UP (slope>2%) / UP / NEUTRAL / DOWN /
+STRONG_DOWN (slope<−2%) labels — the zero-lag-by-construction member of
+the MA family (SMA/EMA/KAMA), useful for fast turn-detection without
+false-positive-ing on noise; prior five (ADR-153) remain unchanged;
+ADR-153 adds five optional per-symbol
 blocks — ADX / CCI / CMF / MFI / PSAR — each measuring ~2 k/v rows and
 adding ~210-270 bytes when populated, for a typical +1.15 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the
@@ -3397,7 +3495,7 @@ critical value at 5%; TSI computes the Blau 1991 True Strength Index
 = 100 · EMA₁₃(EMA₂₅(ΔP)) / EMA₁₃(EMA₂₅(|ΔP|)) with a short-EMA signal
 line, providing a double-smoothed momentum oscillator with cleaner
 zero-line behaviour than RSI and less lag than MACD); a 10-symbol
-basket now lands near **680-1350 KB**
+basket now lands near **710-1410 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).
