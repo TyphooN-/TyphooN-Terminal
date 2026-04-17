@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**one hundred and ninety-three sub-blocks**, each of which is skipped silently when its data
+**two hundred and eight sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -2806,7 +2806,76 @@ bars. Trend-quality complement to DONCHIAN's breakout detector — DONCHIAN
 answers *did we break*, KAMA answers *is the move clean enough to trade*.
 Source: ADR-151 KAMA window.
 
-#### 2.202 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.202 Ichimoku Kinkō Hyō Cloud (ICHIMOKU — ADR-152)
+
+Pulled from `research::get_ichimoku`. Canonical Japanese one-glance
+equilibrium chart: Tenkan-sen(9) = (maxH9 + minL9)/2, Kijun-sen(26) =
+(maxH26 + minL26)/2, Senkou Span A = (Tenkan + Kijun)/2, Senkou Span
+B(52) = (maxH52 + minL52)/2, Chikou Span = close shifted back 26.
+Header gives **ichimoku_label** (STRONG_BULL close > Senkou A & B AND
+Tenkan > Kijun / BULL close > cloud / NEUTRAL / BEAR close < cloud /
+STRONG_BEAR close < cloud AND Tenkan < Kijun / INSUFFICIENT_DATA for
+n<78). Body reports bars_used, all five line values, cloud_top (max
+of Senkou A/B), cloud_bottom (min), last_close. Cloud + T/K cross
+summarise trend + support/resistance + momentum in a single pass.
+Source: ADR-152 ICHIMOKU window.
+
+#### 2.203 SuperTrend ATR-Channel Overlay (SUPERTREND — ADR-152)
+
+Pulled from `research::get_supertrend`. Wilder-ATR trailing-stop band
+with strict flip recursion. Period=10, multiplier=3; upper/lower
+half-bands = hl2 ± m·ATR; the active band only tightens in the
+trend direction until the close crosses it, at which point the band
+flips and the sign of `direction` inverts. Header gives
+**supertrend_label** (STRONG_BULL / BULL / NEUTRAL / BEAR /
+STRONG_BEAR / INSUFFICIENT_DATA for n<11). Body reports bars_used,
+period, multiplier, atr, supertrend_value, direction (+1 long / −1
+short), last_close, distance_pct. Regime-aware complement to
+DONCHIAN's pure N-bar envelope breakout. Source: ADR-152 SUPERTREND.
+
+#### 2.204 Keltner Channel + TTM-Squeeze (KELTNER — ADR-152)
+
+Pulled from `research::get_keltner`. Keltner Channel (EMA-20 midline
+± 2·ATR-10) with an inline Bollinger(20, 2σ) computed for the
+TTM-Squeeze detection. Header gives **keltner_label** (STRONG_BULL
+close > upper / BULL / NEUTRAL / BEAR / STRONG_BEAR close < lower /
+INSUFFICIENT_DATA for n<21). Body reports bars_used, period (20),
+atr_period (10), multiplier (2), upper/mid/lower KC bands, bb_upper,
+bb_lower (inline), last_close, **ttm_squeeze** boolean (true when
+BB_upper ≤ KC_upper AND BB_lower ≥ KC_lower → volatility
+compression / breakout precursor, John Carter 2005). TTM-squeeze
+pairs KELTNER + BBSQUEEZE (ADR-151) for the canonical John Carter
+construct. Source: ADR-152 KELTNER window.
+
+#### 2.205 Ehlers Fisher Transform (FISHER — ADR-152)
+
+Pulled from `research::get_fisher`. Ehlers (2002) price-distribution
+transform 0.5·ln((1+x)/(1−x)) on hl2 midline rescaled over a 10-bar
+window to [−0.999, 0.999] with 0.66/0.67 smoothing weights and 0.5
+prior feedback. Sharper peaks than raw returns for turning-point
+detection. Header gives **fisher_label** (PEAK_HIGH fisher > 2 /
+BULL > 0.5 / NEUTRAL / BEAR < −0.5 / PEAK_LOW < −2 /
+INSUFFICIENT_DATA for n<11). Body reports bars_used, period (10),
+fisher_value, trigger_value (prior fisher), fisher−trigger delta,
+last_close. PEAK labels flag saturated regions about to revert;
+complementary oscillator to TSI. Source: ADR-152 FISHER window.
+
+#### 2.206 Aroon Oscillator (AROON — ADR-152)
+
+Pulled from `research::get_aroon`. Chande (1995) time-since-extreme
+oscillator. Over a 25-bar rolling window we locate bars_since_highest
+and bars_since_lowest; Aroon_Up = 100·(25 − bsh)/25, Aroon_Down =
+100·(25 − bsl)/25, Oscillator = Up − Down ∈ [−100, +100]. Header
+gives **aroon_label** (STRONG_UP osc > 50 / WEAK_UP > 25 /
+CONSOLIDATION / WEAK_DOWN < −25 / STRONG_DOWN < −50 /
+INSUFFICIENT_DATA for n<26). Body reports bars_used, period (25),
+aroon_up, aroon_down, aroon_oscillator, bars_since_high,
+bars_since_low, last_close. Distinct from ADX/CHOP (trend-strength)
+— Aroon fires the moment a new 25-bar extreme prints, so flags fresh
+trends earlier than strength-based indicators. Source: ADR-152 AROON
+window.
+
+#### 2.207 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -2822,7 +2891,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.203 Sector peer comparison
+#### 2.208 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -2853,7 +2922,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.197 above.
+articles to the per-symbol bag consumed by sub-block 2.207 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -3082,8 +3151,39 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **68-135 KB**
-(up from 67-134 KB after ADR-150; ADR-151 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~69-137 KB**
+(up from 68-135 KB after ADR-151; ADR-152 adds five optional per-symbol
+blocks — ICHIMOKU / SUPERTREND / KELTNER / FISHER / AROON — each
+measuring ~2 k/v rows and adding ~190-300 bytes when populated, for
+a typical +1.2 KB per symbol; all five reuse the existing
+`research_historical_price` HP cache and the standard research-table
+LAN sync path with zero new API dependencies; ICHIMOKU computes the
+canonical Japanese one-glance cloud (Tenkan-9, Kijun-26, Senkou A =
+(T+K)/2, Senkou B-52, Chikou shifted back 26 bars) and labels by
+close-vs-cloud position combined with Tenkan/Kijun cross direction
+with STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR — the first
+explicit Japanese-TA surface; SUPERTREND tracks a Wilder-ATR
+trailing-stop band (period=10, multiplier=3) with strict flip
+recursion comparing current close to the prior band value — the
+regime-aware volatility-tracking complement to DONCHIAN's
+event-based N-bar envelope breakout; KELTNER computes EMA-20 midline
+± 2·ATR-10 channels with an inline Bollinger(20, 2σ) computed
+internally so the surface can fire a **TTM-Squeeze** flag when BB is
+fully inside KC (BB_upper ≤ KC_upper AND BB_lower ≥ KC_lower) —
+John Carter's canonical volatility-compression / breakout-precursor
+construct (*Mastering the Trade*, 2005), pairing KELTNER with
+BBSQUEEZE (ADR-151) for the canonical TTM signal; FISHER applies
+Ehlers' 2002 price-distribution transform 0.5·ln((1+x)/(1−x)) on hl2
+midline rescaled over a 10-bar window to [−0.999, 0.999] with
+0.66/0.67 smoothing + 0.5 prior feedback — PEAK_HIGH (>2) / BULL /
+NEUTRAL / BEAR / PEAK_LOW (<−2) labels flag saturated regions about
+to mean-revert; AROON computes Chande's 1995 time-since-extreme
+oscillator at period=25 reporting Up/Down/Oscillator ∈ [−100, +100]
+with STRONG_UP (osc>50) / WEAK_UP / CONSOLIDATION / WEAK_DOWN /
+STRONG_DOWN labels — distinct from ADX/CHOP in measuring
+*bars-since-new-extreme* rather than *trend-strength*, so fires the
+moment a fresh 25-bar high/low prints; prior five (ADR-151) remain
+unchanged; ADR-151 adds five optional per-symbol
 blocks — SQUEEZE / SQUEEZERANK / BBSQUEEZE / DONCHIAN / KAMA — each
 measuring ~2 k/v rows and adding ~180-320 bytes when populated, for
 a typical +1.3 KB per symbol; four of the five reuse the existing

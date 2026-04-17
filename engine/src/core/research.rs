@@ -4485,6 +4485,108 @@ pub struct KamaSnapshot {
     pub note: String,
 }
 
+/// ICHIMOKU — Ichimoku Kinko Hyo five-line cloud system.
+/// Tenkan 9, Kijun 26, Senkou A = (Tenkan+Kijun)/2 plotted +26, Senkou B = 52-bar
+/// midpoint plotted +26, Chikou = close plotted −26. All midpoints use (H+L)/2.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct IchimokuSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub tenkan_sen: f64,               // 9-bar midpoint
+    pub kijun_sen: f64,                // 26-bar midpoint
+    pub senkou_span_a: f64,            // (tenkan+kijun)/2 at t (projected +26)
+    pub senkou_span_b: f64,            // 52-bar midpoint at t (projected +26)
+    pub chikou_span: f64,              // close plotted back −26
+    pub cloud_top: f64,                // max(senkou_a, senkou_b)
+    pub cloud_bottom: f64,             // min(senkou_a, senkou_b)
+    pub last_close: f64,
+    pub close_vs_cloud_pct: f64,       // (close - cloud_mid) / cloud_mid × 100
+    pub ichimoku_label: String,        // STRONG_BULL / BULL / IN_CLOUD / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// SUPERTREND — ATR-based trailing-stop trend indicator.
+/// Period 10, multiplier 3. Flips on close crossing prior band.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SupertrendSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 10
+    pub multiplier: f64,               // 3.0
+    pub atr: f64,
+    pub upper_band: f64,
+    pub lower_band: f64,
+    pub supertrend_value: f64,         // active band (upper in downtrend, lower in up)
+    pub trend_is_up: bool,
+    pub last_close: f64,
+    pub distance_pct: f64,             // (close - supertrend) / supertrend × 100
+    pub bars_in_trend: usize,          // bars since last flip
+    pub supertrend_label: String,      // STRONG_UP / UP / FLAT / DOWN / STRONG_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// KELTNER — Keltner Channels (EMA 20 ± multiplier × ATR 10).
+/// Pairs with BBSQUEEZE for the TTM-squeeze (BB inside KC → volatility compression).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct KeltnerSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ema_period: usize,             // 20
+    pub atr_period: usize,             // 10
+    pub multiplier: f64,               // 2.0
+    pub ema_value: f64,                // midline
+    pub atr: f64,
+    pub upper_channel: f64,
+    pub lower_channel: f64,
+    pub last_close: f64,
+    pub channel_width: f64,            // upper - lower
+    pub width_pct_of_mid: f64,         // (upper - lower) / ema × 100
+    pub channel_position_pct: f64,     // (close - lower) / (upper - lower) × 100
+    pub ttm_squeeze_on: bool,          // true when BB fully inside KC (computed here using BB 20/2σ)
+    pub keltner_label: String,         // BREAKOUT_UP / NEAR_UPPER / IN_CHANNEL / NEAR_LOWER / BREAKOUT_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// FISHER — John Ehlers' Fisher Transform of normalised price.
+/// Normalises close to [-1, 1] window, then applies 0.5·ln((1+x)/(1-x)).
+/// Output distribution is approximately Gaussian; sharp turning points.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct FisherSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 10
+    pub fisher_value: f64,             // latest transform output
+    pub fisher_signal: f64,            // prior bar's fisher_value (the "trigger")
+    pub extreme_2_cross: bool,         // crossed ±2 in last 3 bars (mean-reversion flag)
+    pub peak_abs_10: f64,              // max |fisher| over last 10 bars
+    pub last_close: f64,
+    pub fisher_label: String,          // STRONG_POS / POS / NEUTRAL / NEG / STRONG_NEG / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// AROON — Aroon Up / Aroon Down / Aroon Oscillator over 25 bars.
+/// Aroon Up = 100 × (period − bars_since_high) / period
+/// Aroon Down = 100 × (period − bars_since_low) / period
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AroonSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 25
+    pub aroon_up: f64,                 // 0..100
+    pub aroon_down: f64,               // 0..100
+    pub aroon_oscillator: f64,         // up − down, −100..100
+    pub bars_since_high: usize,
+    pub bars_since_low: usize,
+    pub last_close: f64,
+    pub aroon_label: String,           // STRONG_UP / WEAK_UP / CONSOLIDATION / WEAK_DOWN / STRONG_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -20743,6 +20845,339 @@ pub fn compute_kama_snapshot(
     }
 }
 
+/// ICHIMOKU — full Ichimoku Kinko Hyo cloud system.
+pub fn compute_ichimoku_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> IchimokuSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    // Need 52 bars for Senkou B, plus 26 bars of lookback for Chikou.
+    if n < 52 + 26 {
+        return IchimokuSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            ichimoku_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥78 bars, got {n}"),
+            ..Default::default()
+        };
+    }
+    let midpoint = |slice: &[&HistoricalPriceRow]| -> f64 {
+        let h = slice.iter().map(|b| b.high).fold(f64::NEG_INFINITY, f64::max);
+        let l = slice.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
+        (h + l) / 2.0
+    };
+    let tenkan = midpoint(&sorted[(n - 9)..n]);
+    let kijun = midpoint(&sorted[(n - 26)..n]);
+    let senkou_a = (tenkan + kijun) / 2.0;
+    let senkou_b = midpoint(&sorted[(n - 52)..n]);
+    let chikou = sorted[n - 1].close;
+    let cloud_top = senkou_a.max(senkou_b);
+    let cloud_bottom = senkou_a.min(senkou_b);
+    let last_close = sorted[n - 1].close;
+    let cloud_mid = (cloud_top + cloud_bottom) / 2.0;
+    let close_vs_cloud_pct = if cloud_mid.abs() > f64::EPSILON {
+        (last_close - cloud_mid) / cloud_mid * 100.0
+    } else { 0.0 };
+    let past_close = sorted[n - 1 - 26].close;
+    // Chikou-past confirmation: chikou above price from 26 bars ago = bullish confirm.
+    let chikou_bull = chikou > past_close;
+    let chikou_bear = chikou < past_close;
+    let label = if last_close > cloud_top && tenkan > kijun && chikou_bull {
+        "STRONG_BULL"
+    } else if last_close > cloud_top {
+        "BULL"
+    } else if last_close < cloud_bottom && tenkan < kijun && chikou_bear {
+        "STRONG_BEAR"
+    } else if last_close < cloud_bottom {
+        "BEAR"
+    } else {
+        "IN_CLOUD"
+    };
+    IchimokuSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        tenkan_sen: tenkan, kijun_sen: kijun,
+        senkou_span_a: senkou_a, senkou_span_b: senkou_b,
+        chikou_span: chikou,
+        cloud_top, cloud_bottom,
+        last_close, close_vs_cloud_pct,
+        ichimoku_label: label.into(), note: String::new(),
+    }
+}
+
+/// SUPERTREND — ATR-based trailing-stop trend indicator (period 10, multiplier 3).
+pub fn compute_supertrend_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> SupertrendSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 10usize;
+    let multiplier = 3.0_f64;
+    if n < period + 2 {
+        return SupertrendSnapshot {
+            symbol: sym, as_of: as_of.into(), period, multiplier,
+            supertrend_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", period + 2, n),
+            ..Default::default()
+        };
+    }
+    // Wilder-smoothed ATR.
+    let mut tr = Vec::<f64>::with_capacity(n);
+    tr.push(sorted[0].high - sorted[0].low);
+    for i in 1..n {
+        let h = sorted[i].high;
+        let l = sorted[i].low;
+        let pc = sorted[i - 1].close;
+        tr.push((h - l).max((h - pc).abs()).max((l - pc).abs()));
+    }
+    let mut atr = Vec::<f64>::with_capacity(n);
+    // Initial ATR = simple mean of first `period` TR values.
+    let first_atr: f64 = tr[..period].iter().sum::<f64>() / period as f64;
+    for _ in 0..period { atr.push(first_atr); }
+    for i in period..n {
+        let prev = *atr.last().unwrap();
+        atr.push((prev * (period as f64 - 1.0) + tr[i]) / period as f64);
+    }
+    // Supertrend recursion.
+    let mut upper = vec![0.0_f64; n];
+    let mut lower = vec![0.0_f64; n];
+    let mut st = vec![0.0_f64; n];
+    let mut up_trend = vec![true; n];
+    for i in period..n {
+        let hl2 = (sorted[i].high + sorted[i].low) / 2.0;
+        let basic_upper = hl2 + multiplier * atr[i];
+        let basic_lower = hl2 - multiplier * atr[i];
+        if i == period {
+            upper[i] = basic_upper;
+            lower[i] = basic_lower;
+            up_trend[i] = sorted[i].close >= basic_lower;
+            st[i] = if up_trend[i] { basic_lower } else { basic_upper };
+            continue;
+        }
+        upper[i] = if basic_upper < upper[i - 1] || sorted[i - 1].close > upper[i - 1] {
+            basic_upper
+        } else { upper[i - 1] };
+        lower[i] = if basic_lower > lower[i - 1] || sorted[i - 1].close < lower[i - 1] {
+            basic_lower
+        } else { lower[i - 1] };
+        let prev_st = st[i - 1];
+        let prev_up = up_trend[i - 1];
+        up_trend[i] = if prev_up {
+            sorted[i].close >= lower[i]
+        } else {
+            sorted[i].close > upper[i]
+        };
+        st[i] = if up_trend[i] { lower[i] } else { upper[i] };
+        let _ = prev_st;
+    }
+    let last_close = sorted[n - 1].close;
+    let trend_up = up_trend[n - 1];
+    let st_val = st[n - 1];
+    let dist_pct = if st_val.abs() > f64::EPSILON {
+        (last_close - st_val) / st_val * 100.0
+    } else { 0.0 };
+    // Bars in current trend
+    let mut bars_in = 1usize;
+    for i in (period + 1..n).rev() {
+        if up_trend[i] == trend_up && up_trend[i - 1] == trend_up { bars_in += 1; } else { break; }
+    }
+    let label = if trend_up && dist_pct.abs() > 5.0 { "STRONG_UP" }
+        else if trend_up { "UP" }
+        else if !trend_up && dist_pct.abs() > 5.0 { "STRONG_DOWN" }
+        else if !trend_up { "DOWN" }
+        else { "FLAT" };
+    SupertrendSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period, multiplier,
+        atr: atr[n - 1],
+        upper_band: upper[n - 1], lower_band: lower[n - 1],
+        supertrend_value: st_val, trend_is_up: trend_up,
+        last_close, distance_pct: dist_pct, bars_in_trend: bars_in,
+        supertrend_label: label.into(), note: String::new(),
+    }
+}
+
+/// KELTNER — Keltner Channels (EMA 20 ± 2·ATR 10) + TTM-squeeze flag.
+pub fn compute_keltner_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> KeltnerSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let ema_period = 20usize;
+    let atr_period = 10usize;
+    let multiplier = 2.0_f64;
+    let need = ema_period.max(atr_period) + 2;
+    if n < need {
+        return KeltnerSnapshot {
+            symbol: sym, as_of: as_of.into(), ema_period, atr_period, multiplier,
+            keltner_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", need, n),
+            ..Default::default()
+        };
+    }
+    // EMA of close.
+    let k = 2.0 / (ema_period as f64 + 1.0);
+    let seed: f64 = sorted[..ema_period].iter().map(|b| b.close).sum::<f64>() / ema_period as f64;
+    let mut ema = seed;
+    for i in ema_period..n {
+        ema = sorted[i].close * k + ema * (1.0 - k);
+    }
+    // Wilder ATR.
+    let mut tr = Vec::<f64>::with_capacity(n);
+    tr.push(sorted[0].high - sorted[0].low);
+    for i in 1..n {
+        let h = sorted[i].high;
+        let l = sorted[i].low;
+        let pc = sorted[i - 1].close;
+        tr.push((h - l).max((h - pc).abs()).max((l - pc).abs()));
+    }
+    let first_atr: f64 = tr[..atr_period].iter().sum::<f64>() / atr_period as f64;
+    let mut atr = first_atr;
+    for i in atr_period..n {
+        atr = (atr * (atr_period as f64 - 1.0) + tr[i]) / atr_period as f64;
+    }
+    let upper = ema + multiplier * atr;
+    let lower = ema - multiplier * atr;
+    let width = upper - lower;
+    let width_pct = if ema.abs() > f64::EPSILON { width / ema * 100.0 } else { 0.0 };
+    let last_close = sorted[n - 1].close;
+    let pos_pct = if width > f64::EPSILON {
+        ((last_close - lower) / width * 100.0).clamp(0.0, 100.0)
+    } else { 50.0 };
+    // TTM squeeze: BB 20/2σ inside KC.
+    let slice = &sorted[(n - ema_period)..n];
+    let mean: f64 = slice.iter().map(|b| b.close).sum::<f64>() / ema_period as f64;
+    let var: f64 = slice.iter().map(|b| (b.close - mean).powi(2)).sum::<f64>() / ema_period as f64;
+    let sd = var.sqrt();
+    let bb_upper = mean + 2.0 * sd;
+    let bb_lower = mean - 2.0 * sd;
+    let ttm_squeeze = bb_upper <= upper && bb_lower >= lower;
+    let label = if last_close > upper { "BREAKOUT_UP" }
+        else if pos_pct >= 80.0 { "NEAR_UPPER" }
+        else if last_close < lower { "BREAKOUT_DOWN" }
+        else if pos_pct <= 20.0 { "NEAR_LOWER" }
+        else { "IN_CHANNEL" };
+    KeltnerSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        ema_period, atr_period, multiplier,
+        ema_value: ema, atr,
+        upper_channel: upper, lower_channel: lower,
+        last_close, channel_width: width,
+        width_pct_of_mid: width_pct,
+        channel_position_pct: pos_pct,
+        ttm_squeeze_on: ttm_squeeze,
+        keltner_label: label.into(), note: String::new(),
+    }
+}
+
+/// FISHER — Ehlers' Fisher Transform over a 10-bar normalised-price window.
+pub fn compute_fisher_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> FisherSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 10usize;
+    if n < period + 12 {
+        return FisherSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            fisher_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", period + 12, n),
+            ..Default::default()
+        };
+    }
+    // Typical price midline for Fisher input.
+    let hl2: Vec<f64> = sorted.iter().map(|b| (b.high + b.low) / 2.0).collect();
+    let mut value = vec![0.0_f64; n];
+    let mut fisher = vec![0.0_f64; n];
+    for i in period..n {
+        let slice = &hl2[(i + 1 - period)..=i];
+        let hi = slice.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let lo = slice.iter().cloned().fold(f64::INFINITY, f64::min);
+        let rng = (hi - lo).max(1e-12);
+        // Normalise current to [-1, 1] with 0.33·2 smoothing (Ehlers' formulation).
+        let raw = 0.66 * ((hl2[i] - lo) / rng - 0.5) + 0.67 * value[i - 1];
+        value[i] = raw.clamp(-0.999, 0.999);
+        fisher[i] = 0.5 * ((1.0 + value[i]) / (1.0 - value[i])).ln() + 0.5 * fisher[i - 1];
+    }
+    let fisher_now = fisher[n - 1];
+    let fisher_prev = fisher[n - 2];
+    // Peak abs over last 10 bars
+    let tail_start = n.saturating_sub(10);
+    let peak_abs = fisher[tail_start..n].iter().map(|x| x.abs()).fold(0.0_f64, f64::max);
+    // ±2 cross in last 3 bars
+    let mut crossed = false;
+    for i in (n - 3)..n {
+        if i > 0 && ((fisher[i - 1] >= 2.0) != (fisher[i] >= 2.0) || (fisher[i - 1] <= -2.0) != (fisher[i] <= -2.0)) {
+            crossed = true;
+            break;
+        }
+    }
+    let label = if fisher_now > 2.0 { "STRONG_POS" }
+        else if fisher_now > 0.5 { "POS" }
+        else if fisher_now < -2.0 { "STRONG_NEG" }
+        else if fisher_now < -0.5 { "NEG" }
+        else { "NEUTRAL" };
+    FisherSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        fisher_value: fisher_now,
+        fisher_signal: fisher_prev,
+        extreme_2_cross: crossed,
+        peak_abs_10: peak_abs,
+        last_close: sorted[n - 1].close,
+        fisher_label: label.into(), note: String::new(),
+    }
+}
+
+/// AROON — Aroon Up / Down / Oscillator over 25 bars.
+pub fn compute_aroon_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AroonSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 25usize;
+    if n < period + 1 {
+        return AroonSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            aroon_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", period + 1, n),
+            ..Default::default()
+        };
+    }
+    // Window of the last (period+1) bars, inclusive.
+    let window = &sorted[(n - period - 1)..n];
+    let mut hi_idx = 0usize;
+    let mut lo_idx = 0usize;
+    for (i, b) in window.iter().enumerate() {
+        if b.high > window[hi_idx].high { hi_idx = i; }
+        if b.low < window[lo_idx].low { lo_idx = i; }
+    }
+    let last_idx = window.len() - 1; // == period
+    let bars_since_high = last_idx - hi_idx;
+    let bars_since_low = last_idx - lo_idx;
+    let up = 100.0 * (period as f64 - bars_since_high as f64) / period as f64;
+    let down = 100.0 * (period as f64 - bars_since_low as f64) / period as f64;
+    let osc = up - down;
+    let label = if osc > 50.0 { "STRONG_UP" }
+        else if osc > 15.0 { "WEAK_UP" }
+        else if osc < -50.0 { "STRONG_DOWN" }
+        else if osc < -15.0 { "WEAK_DOWN" }
+        else { "CONSOLIDATION" };
+    AroonSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        aroon_up: up, aroon_down: down, aroon_oscillator: osc,
+        bars_since_high, bars_since_low,
+        last_close: sorted[n - 1].close,
+        aroon_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -27202,6 +27637,159 @@ pub fn get_kama(conn: &Connection, symbol: &str) -> Result<Option<KamaSnapshot>,
         .map_err(|e| format!("prepare get_kama: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_kama: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_kama: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-152 Round 43 schema ────────────────────────────────────────────────
+
+pub fn create_research_tables_v44(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v43(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_ichimoku (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ichimoku_updated ON research_ichimoku(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_supertrend (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_supertrend_updated ON research_supertrend(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_keltner (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_keltner_updated ON research_keltner(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_fisher (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_fisher_updated ON research_fisher(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_aroon (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_aroon_updated ON research_aroon(updated_at);",
+    ).map_err(|e| format!("create v44 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_ichimoku(conn: &Connection, symbol: &str, snap: &IchimokuSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v44(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ichimoku json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ichimoku(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ichimoku: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ichimoku(conn: &Connection, symbol: &str) -> Result<Option<IchimokuSnapshot>, String> {
+    let _ = create_research_tables_v44(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ichimoku WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_ichimoku: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_ichimoku: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_ichimoku: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_supertrend(conn: &Connection, symbol: &str, snap: &SupertrendSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v44(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("supertrend json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_supertrend(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert supertrend: {e}"))?;
+    Ok(())
+}
+
+pub fn get_supertrend(conn: &Connection, symbol: &str) -> Result<Option<SupertrendSnapshot>, String> {
+    let _ = create_research_tables_v44(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_supertrend WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_supertrend: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_supertrend: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_supertrend: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_keltner(conn: &Connection, symbol: &str, snap: &KeltnerSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v44(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("keltner json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_keltner(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert keltner: {e}"))?;
+    Ok(())
+}
+
+pub fn get_keltner(conn: &Connection, symbol: &str) -> Result<Option<KeltnerSnapshot>, String> {
+    let _ = create_research_tables_v44(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_keltner WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_keltner: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_keltner: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_keltner: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_fisher(conn: &Connection, symbol: &str, snap: &FisherSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v44(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("fisher json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_fisher(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert fisher: {e}"))?;
+    Ok(())
+}
+
+pub fn get_fisher(conn: &Connection, symbol: &str) -> Result<Option<FisherSnapshot>, String> {
+    let _ = create_research_tables_v44(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_fisher WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_fisher: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_fisher: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_fisher: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_aroon(conn: &Connection, symbol: &str, snap: &AroonSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v44(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("aroon json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_aroon(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert aroon: {e}"))?;
+    Ok(())
+}
+
+pub fn get_aroon(conn: &Connection, symbol: &str) -> Result<Option<AroonSnapshot>, String> {
+    let _ = create_research_tables_v44(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_aroon WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_aroon: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_aroon: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_aroon: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -36186,6 +36774,166 @@ Trailing text.
             assert!(snap.last_close.is_finite());
             assert!(snap.kama_slope_pct.is_finite());
             assert_eq!(snap.period, 10);
+        }
+    }
+
+    // ── ADR-152 Round 43 tests ──
+    #[test]
+    fn ichimoku_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = IchimokuSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252,
+            tenkan_sen: 155.0, kijun_sen: 150.0,
+            senkou_span_a: 152.5, senkou_span_b: 148.0,
+            chikou_span: 160.0,
+            cloud_top: 152.5, cloud_bottom: 148.0,
+            last_close: 162.0, close_vs_cloud_pct: 7.8,
+            ichimoku_label: "STRONG_BULL".into(), note: String::new(),
+        };
+        upsert_ichimoku(&conn, "TEST", &snap).unwrap();
+        let got = get_ichimoku(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.ichimoku_label, "STRONG_BULL");
+        assert!((got.tenkan_sen - 155.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ichimoku_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ichimoku_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.ichimoku_label.as_str(),
+            "STRONG_BULL" | "BULL" | "IN_CLOUD" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.ichimoku_label != "INSUFFICIENT_DATA" {
+            assert!(snap.tenkan_sen.is_finite());
+            assert!(snap.kijun_sen.is_finite());
+            assert!(snap.cloud_top >= snap.cloud_bottom);
+            assert!(snap.last_close.is_finite());
+        }
+    }
+
+    #[test]
+    fn supertrend_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = SupertrendSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 10, multiplier: 3.0,
+            atr: 1.8, upper_band: 162.5, lower_band: 157.1,
+            supertrend_value: 157.1, trend_is_up: true,
+            last_close: 160.0, distance_pct: 1.8, bars_in_trend: 12,
+            supertrend_label: "UP".into(), note: String::new(),
+        };
+        upsert_supertrend(&conn, "TEST", &snap).unwrap();
+        let got = get_supertrend(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.supertrend_label, "UP");
+        assert!(got.trend_is_up);
+        assert_eq!(got.period, 10);
+    }
+
+    #[test]
+    fn supertrend_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_supertrend_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.supertrend_label.as_str(),
+            "STRONG_UP" | "UP" | "FLAT" | "STRONG_DOWN" | "DOWN" | "INSUFFICIENT_DATA"));
+        if snap.supertrend_label != "INSUFFICIENT_DATA" {
+            assert!(snap.atr >= 0.0);
+            assert!(snap.upper_band >= snap.lower_band);
+            assert_eq!(snap.period, 10);
+            assert!((snap.multiplier - 3.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn keltner_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = KeltnerSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, ema_period: 20, atr_period: 10, multiplier: 2.0,
+            ema_value: 150.0, atr: 1.8, upper_channel: 153.6, lower_channel: 146.4,
+            last_close: 152.0, channel_width: 7.2, width_pct_of_mid: 4.8,
+            channel_position_pct: 77.8, ttm_squeeze_on: false,
+            keltner_label: "IN_CHANNEL".into(), note: String::new(),
+        };
+        upsert_keltner(&conn, "TEST", &snap).unwrap();
+        let got = get_keltner(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.keltner_label, "IN_CHANNEL");
+        assert_eq!(got.ema_period, 20);
+        assert_eq!(got.atr_period, 10);
+    }
+
+    #[test]
+    fn keltner_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_keltner_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.keltner_label.as_str(),
+            "BREAKOUT_UP" | "NEAR_UPPER" | "IN_CHANNEL" | "NEAR_LOWER" | "BREAKOUT_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.keltner_label != "INSUFFICIENT_DATA" {
+            assert!(snap.atr >= 0.0);
+            assert!(snap.upper_channel > snap.lower_channel);
+            assert!(snap.channel_width > 0.0);
+            assert!(snap.channel_position_pct >= 0.0 && snap.channel_position_pct <= 100.0);
+        }
+    }
+
+    #[test]
+    fn fisher_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = FisherSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 10,
+            fisher_value: 1.25, fisher_signal: 0.75,
+            extreme_2_cross: false, peak_abs_10: 1.8,
+            last_close: 160.0,
+            fisher_label: "POS".into(), note: String::new(),
+        };
+        upsert_fisher(&conn, "TEST", &snap).unwrap();
+        let got = get_fisher(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.fisher_label, "POS");
+        assert!((got.fisher_value - 1.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fisher_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_fisher_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.fisher_label.as_str(),
+            "STRONG_POS" | "POS" | "NEUTRAL" | "NEG" | "STRONG_NEG" | "INSUFFICIENT_DATA"));
+        if snap.fisher_label != "INSUFFICIENT_DATA" {
+            assert!(snap.fisher_value.is_finite());
+            assert!(snap.fisher_signal.is_finite());
+            assert!(snap.peak_abs_10 >= 0.0);
+            assert_eq!(snap.period, 10);
+        }
+    }
+
+    #[test]
+    fn aroon_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = AroonSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 25,
+            aroon_up: 80.0, aroon_down: 20.0, aroon_oscillator: 60.0,
+            bars_since_high: 5, bars_since_low: 20,
+            last_close: 160.0,
+            aroon_label: "STRONG_UP".into(), note: String::new(),
+        };
+        upsert_aroon(&conn, "TEST", &snap).unwrap();
+        let got = get_aroon(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.aroon_label, "STRONG_UP");
+        assert_eq!(got.period, 25);
+    }
+
+    #[test]
+    fn aroon_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_aroon_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.aroon_label.as_str(),
+            "STRONG_UP" | "WEAK_UP" | "CONSOLIDATION" | "WEAK_DOWN" | "STRONG_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.aroon_label != "INSUFFICIENT_DATA" {
+            assert!(snap.aroon_up >= 0.0 && snap.aroon_up <= 100.0);
+            assert!(snap.aroon_down >= 0.0 && snap.aroon_down <= 100.0);
+            assert!(snap.aroon_oscillator >= -100.0 && snap.aroon_oscillator <= 100.0);
+            assert_eq!(snap.period, 25);
         }
     }
 }
