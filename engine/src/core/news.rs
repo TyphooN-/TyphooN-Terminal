@@ -577,7 +577,7 @@ pub async fn fetch_fmp_news(
     Ok(out)
 }
 
-fn parse_iso_ts(s: &str) -> i64 {
+pub fn parse_iso_ts(s: &str) -> i64 {
     if s.is_empty() { return 0; }
     // Handle "2026-04-13T14:20:30Z" or "2026-04-13 14:20:30" or "2026-04-13T14:20:30.000000Z"
     chrono::DateTime::parse_from_rfc3339(s)

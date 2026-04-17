@@ -3008,7 +3008,7 @@ async fn handle_client_tls(
                     "KRAKEN_BACKFILL", "CRYPTOCOMPARE",
                     "MT5_SYNC", "DARWIN_IMPORT", "FETCH_BARS",
                     "FINNHUB_NEWS", "ECON_CALENDAR", "CONGRESS_TRADES", "FRED_DATA",
-                    "SEC_FILING", "EVSCRAPE",
+                    "SEC_FILING", "EVSCRAPE", "INGEST_RESEARCH",
                 ];
                 if !ALLOWED_REMOTE_CMDS.contains(&cmd.as_str()) {
                     tracing::warn!("LAN sync: rejected unknown remote command '{}'", cmd);
