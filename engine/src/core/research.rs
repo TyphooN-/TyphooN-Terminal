@@ -4233,6 +4233,81 @@ pub struct AutomiSnapshot {
     pub note: String,
 }
 
+/// DURBINWATSON — Durbin-Watson d statistic for AR(1) autocorrelation on returns.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DurbinWatsonSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub dw_stat: f64,               // d ∈ [0, 4], ~2 ⇒ no autocorr
+    pub rho_estimate: f64,          // implied ρ ≈ 1 − d/2
+    pub dw_label: String,           // STRONG_POS / WEAK_POS / NO_AUTOCORR / WEAK_NEG / STRONG_NEG / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// BDSTEST — Brock-Dechert-Scheinkman test for iid at embedding dim m=2.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct BdsTestSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub embed_dim: usize,           // m (default 2)
+    pub epsilon_mult: f64,          // ε = epsilon_mult × σ (default 0.7)
+    pub bds_stat: f64,              // standardized test statistic (asymptotically N(0,1))
+    pub p_value_two_sided: f64,     // 2 × Φ(−|z|)
+    pub reject_null: bool,          // p < 0.05
+    pub bds_label: String,          // IID_CONFIRMED / WEAK_DEPENDENCE / STRONG_DEPENDENCE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// BREUSCHPAGAN — Breusch-Pagan LM test for heteroskedasticity.
+/// Aux regression: squared residual on a simple trend regressor (bar index).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct BreuschPaganSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub lm_stat: f64,               // n × R² from aux regression
+    pub r_squared: f64,             // R² of aux regression
+    pub df: usize,                  // degrees of freedom (number of regressors, default 1)
+    pub critical_95: f64,           // χ²(df) 95% critical value
+    pub reject_null: bool,          // true if lm_stat > critical_95
+    pub bp_label: String,           // HOMOSKEDASTIC / MILD_HETERO / STRONG_HETERO / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TURNPTS — Bartels turning-points randomness test on returns.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct TurnPtsSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub observed_turnpts: usize,    // count of local minima + maxima
+    pub expected_turnpts: f64,      // 2(n − 2) / 3 under iid
+    pub variance_turnpts: f64,      // (16n − 29) / 90
+    pub z_stat: f64,                // (obs − exp) / sqrt(var)
+    pub p_value_two_sided: f64,
+    pub reject_null: bool,
+    pub turnpts_label: String,      // RANDOM_IID / OVER_TURNING / UNDER_TURNING / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// PERIODOGRAM — discrete Fourier periodogram peak / spectral dominance.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PeriodogramSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub n_freqs: usize,             // number of positive Fourier frequencies tested
+    pub dominant_freq: f64,         // cycle frequency (cycles per bar, 0..0.5)
+    pub dominant_period_bars: f64,  // 1 / dominant_freq
+    pub dominant_power: f64,        // spectral power at the peak
+    pub total_power: f64,
+    pub dominant_power_ratio: f64,  // dominant_power / total_power
+    pub periodogram_label: String,  // STRONG_CYCLE / MODERATE_CYCLE / WEAK_CYCLE / NO_CYCLE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -19545,6 +19620,264 @@ pub fn compute_automi_snapshot(
     }
 }
 
+// ── ADR-149 Round 40 compute functions ─────────────────────────────────────
+
+/// DURBINWATSON compute: Durbin-Watson d statistic on log-returns.
+pub fn compute_durbinwatson_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> DurbinWatsonSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    if log_rets.len() < 30 {
+        return DurbinWatsonSnapshot { symbol: sym, as_of: as_of.into(),
+            dw_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥30 returns, got {}", log_rets.len()), ..Default::default() };
+    }
+    let n = log_rets.len();
+    let mean: f64 = log_rets.iter().sum::<f64>() / n as f64;
+    let mut sum_sq = 0.0f64;
+    let mut sum_diff_sq = 0.0f64;
+    for i in 0..n {
+        let e = log_rets[i] - mean;
+        sum_sq += e * e;
+        if i > 0 {
+            let prev = log_rets[i - 1] - mean;
+            let d = e - prev;
+            sum_diff_sq += d * d;
+        }
+    }
+    if sum_sq <= f64::EPSILON {
+        return DurbinWatsonSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            dw_label: "INSUFFICIENT_DATA".into(), note: "zero residual variance".into(),
+            ..Default::default() };
+    }
+    let d = sum_diff_sq / sum_sq;
+    let rho = 1.0 - d / 2.0;
+    let label = if d < 1.0 { "STRONG_POS" }
+        else if d < 1.5 { "WEAK_POS" }
+        else if d <= 2.5 { "NO_AUTOCORR" }
+        else if d <= 3.0 { "WEAK_NEG" }
+        else { "STRONG_NEG" };
+    DurbinWatsonSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        dw_stat: d, rho_estimate: rho,
+        dw_label: label.into(), note: String::new(),
+    }
+}
+
+/// BDSTEST compute: Brock-Dechert-Scheinkman iid test at embedding dim m=2.
+/// Uses ε = epsilon_mult × sample_std; reports standardized statistic.
+pub fn compute_bdstest_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> BdsTestSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let n = log_rets.len();
+    if n < 100 {
+        return BdsTestSnapshot { symbol: sym, as_of: as_of.into(),
+            bds_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥100 returns, got {}", n), ..Default::default() };
+    }
+    let m = 2usize;
+    let eps_mult = 0.7f64;
+    let mean: f64 = log_rets.iter().sum::<f64>() / n as f64;
+    let var: f64 = log_rets.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n as f64;
+    let sigma = var.sqrt();
+    if sigma <= f64::EPSILON {
+        return BdsTestSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            bds_label: "INSUFFICIENT_DATA".into(), note: "zero sample std".into(),
+            ..Default::default() };
+    }
+    let eps = eps_mult * sigma;
+    // Correlation integrals C_1(ε) and C_m(ε) via O(n²) pair enumeration.
+    let mut c1_pairs: usize = 0;
+    let mut cm_pairs: usize = 0;
+    let mut total_pairs: usize = 0;
+    let upper = n.saturating_sub(m - 1);
+    for i in 0..upper {
+        for j in (i + 1)..upper {
+            total_pairs += 1;
+            let d1 = (log_rets[i] - log_rets[j]).abs();
+            if d1 < eps {
+                c1_pairs += 1;
+                let d2 = (log_rets[i + 1] - log_rets[j + 1]).abs();
+                if d2 < eps { cm_pairs += 1; }
+            }
+        }
+    }
+    if total_pairs == 0 {
+        return BdsTestSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            bds_label: "INSUFFICIENT_DATA".into(), note: "no pairs".into(),
+            ..Default::default() };
+    }
+    let c1 = c1_pairs as f64 / total_pairs as f64;
+    let cm = cm_pairs as f64 / total_pairs as f64;
+    // Asymptotic variance approximation (Brock et al. 1996): V_m ≈ 4 × (c1^m(1−c1^m) + 2 Σ_k c1^{m−k}(K − c1²)) → use simplified:
+    // Under H0, BDS statistic ≈ sqrt(n) × (C_m − C_1^m) / σ_m.
+    // Use a practical approximation: σ_m² ≈ 4 × c1^{2m} × (1 − c1^{2m}) × m, which is a rough upper bound but keeps the
+    // statistic interpretable. Clamp to avoid division by zero.
+    let c1_2m = c1.powi((2 * m) as i32);
+    let sigma_m = (4.0 * c1_2m * (1.0 - c1_2m).max(1e-9) * m as f64).sqrt().max(1e-9);
+    let bds = (n as f64).sqrt() * (cm - c1.powi(m as i32)) / sigma_m;
+    let p = 2.0 * (1.0 - std_normal_cdf(bds.abs()));
+    let reject = p < 0.05;
+    let label = if !reject { "IID_CONFIRMED" }
+        else if bds.abs() < 4.0 { "WEAK_DEPENDENCE" }
+        else { "STRONG_DEPENDENCE" };
+    BdsTestSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        embed_dim: m, epsilon_mult: eps_mult,
+        bds_stat: bds, p_value_two_sided: p, reject_null: reject,
+        bds_label: label.into(), note: String::new(),
+    }
+}
+
+/// BREUSCHPAGAN compute: Breusch-Pagan heteroskedasticity test with bar index as sole regressor.
+pub fn compute_breuschpagan_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> BreuschPaganSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let n = log_rets.len();
+    if n < 30 {
+        return BreuschPaganSnapshot { symbol: sym, as_of: as_of.into(),
+            bp_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥30 returns, got {}", n), ..Default::default() };
+    }
+    let mean_r: f64 = log_rets.iter().sum::<f64>() / n as f64;
+    let sq_res: Vec<f64> = log_rets.iter().map(|&r| (r - mean_r).powi(2)).collect();
+    let mean_sq: f64 = sq_res.iter().sum::<f64>() / n as f64;
+    if mean_sq <= f64::EPSILON {
+        return BreuschPaganSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            bp_label: "INSUFFICIENT_DATA".into(), note: "zero residual variance".into(),
+            ..Default::default() };
+    }
+    // Regress sq_res on x = bar index. Auxiliary OLS: y_i = a + b·x_i + u_i
+    let x_bar = (n as f64 - 1.0) / 2.0;
+    let y_bar = mean_sq;
+    let mut sxx = 0.0f64; let mut sxy = 0.0f64; let mut syy = 0.0f64;
+    for i in 0..n {
+        let xi = i as f64 - x_bar;
+        let yi = sq_res[i] - y_bar;
+        sxx += xi * xi;
+        sxy += xi * yi;
+        syy += yi * yi;
+    }
+    let r_sq = if sxx > f64::EPSILON && syy > f64::EPSILON {
+        (sxy * sxy) / (sxx * syy)
+    } else { 0.0 };
+    let lm = n as f64 * r_sq;
+    let df = 1usize;
+    let critical_95 = 3.841;  // χ²(1) 95%
+    let reject = lm > critical_95;
+    let label = if !reject { "HOMOSKEDASTIC" }
+        else if lm < 10.83 { "MILD_HETERO" }       // χ²(1) 99.9% ≈ 10.83
+        else { "STRONG_HETERO" };
+    BreuschPaganSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        lm_stat: lm, r_squared: r_sq, df, critical_95, reject_null: reject,
+        bp_label: label.into(), note: String::new(),
+    }
+}
+
+/// TURNPTS compute: Bartels turning-points test on log-returns.
+pub fn compute_turnpts_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> TurnPtsSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let n = log_rets.len();
+    if n < 10 {
+        return TurnPtsSnapshot { symbol: sym, as_of: as_of.into(),
+            turnpts_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥10 returns, got {}", n), ..Default::default() };
+    }
+    let mut observed = 0usize;
+    for i in 1..(n - 1) {
+        let a = log_rets[i - 1];
+        let b = log_rets[i];
+        let c = log_rets[i + 1];
+        // strict local extremum — ties count as no turn
+        if (b > a && b > c) || (b < a && b < c) { observed += 1; }
+    }
+    let nf = n as f64;
+    let expected = 2.0 * (nf - 2.0) / 3.0;
+    let variance = (16.0 * nf - 29.0) / 90.0;
+    let z = if variance > f64::EPSILON {
+        (observed as f64 - expected) / variance.sqrt()
+    } else { 0.0 };
+    let p = 2.0 * (1.0 - std_normal_cdf(z.abs()));
+    let reject = p < 0.05;
+    let label = if !reject { "RANDOM_IID" }
+        else if z > 0.0 { "OVER_TURNING" }
+        else { "UNDER_TURNING" };
+    TurnPtsSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        observed_turnpts: observed, expected_turnpts: expected,
+        variance_turnpts: variance, z_stat: z,
+        p_value_two_sided: p, reject_null: reject,
+        turnpts_label: label.into(), note: String::new(),
+    }
+}
+
+/// PERIODOGRAM compute: direct-DFT peak cycle detection on mean-centered log-returns.
+pub fn compute_periodogram_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PeriodogramSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let n = log_rets.len();
+    if n < 64 {
+        return PeriodogramSnapshot { symbol: sym, as_of: as_of.into(),
+            periodogram_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥64 returns, got {}", n), ..Default::default() };
+    }
+    let mean: f64 = log_rets.iter().sum::<f64>() / n as f64;
+    let x: Vec<f64> = log_rets.iter().map(|&r| r - mean).collect();
+    // Positive Fourier frequencies k = 1..n/2 (skip DC); direct DFT O(n × n/2).
+    // Cap k-range to keep cost bounded for long histories.
+    let max_k = (n / 2).min(256);
+    let mut powers: Vec<(f64, f64)> = Vec::with_capacity(max_k);  // (freq, power)
+    let tau = 2.0 * std::f64::consts::PI;
+    let mut total_power = 0.0f64;
+    for k in 1..=max_k {
+        let omega = tau * k as f64 / n as f64;
+        let mut re = 0.0f64;
+        let mut im = 0.0f64;
+        for t in 0..n {
+            let theta = omega * t as f64;
+            re += x[t] * theta.cos();
+            im += x[t] * theta.sin();
+        }
+        let p = (re * re + im * im) / n as f64;
+        let f = k as f64 / n as f64;
+        powers.push((f, p));
+        total_power += p;
+    }
+    if total_power <= f64::EPSILON || powers.is_empty() {
+        return PeriodogramSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            n_freqs: powers.len(),
+            periodogram_label: "INSUFFICIENT_DATA".into(),
+            note: "zero total power".into(), ..Default::default() };
+    }
+    let (peak_f, peak_p) = powers.iter().cloned().fold((0.0_f64, 0.0_f64),
+        |acc, (f, p)| if p > acc.1 { (f, p) } else { acc });
+    let ratio = peak_p / total_power;
+    let period = if peak_f > 0.0 { 1.0 / peak_f } else { 0.0 };
+    let label = if ratio > 0.25 { "STRONG_CYCLE" }
+        else if ratio > 0.12 { "MODERATE_CYCLE" }
+        else if ratio > 0.05 { "WEAK_CYCLE" }
+        else { "NO_CYCLE" };
+    PeriodogramSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        n_freqs: powers.len(),
+        dominant_freq: peak_f, dominant_period_bars: period,
+        dominant_power: peak_p, total_power,
+        dominant_power_ratio: ratio,
+        periodogram_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -25518,6 +25851,160 @@ pub fn get_automi(conn: &Connection, symbol: &str) -> Result<Option<AutomiSnapsh
         .map_err(|e| format!("prepare get_automi: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_automi: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_automi: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+/// ADR-149 Round 40 schema v41: adds `research_durbinwatson`,
+/// `research_bdstest`, `research_breuschpagan`, `research_turnpts`,
+/// `research_periodogram`. Additive over v40.
+pub fn create_research_tables_v41(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v40(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_durbinwatson (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_durbinwatson_updated ON research_durbinwatson(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_bdstest (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_bdstest_updated ON research_bdstest(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_breuschpagan (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_breuschpagan_updated ON research_breuschpagan(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_turnpts (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_turnpts_updated ON research_turnpts(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_periodogram (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_periodogram_updated ON research_periodogram(updated_at);",
+    ).map_err(|e| format!("create v41 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_durbinwatson(conn: &Connection, symbol: &str, snap: &DurbinWatsonSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v41(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("durbinwatson json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_durbinwatson(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert durbinwatson: {e}"))?;
+    Ok(())
+}
+
+pub fn get_durbinwatson(conn: &Connection, symbol: &str) -> Result<Option<DurbinWatsonSnapshot>, String> {
+    let _ = create_research_tables_v41(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_durbinwatson WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_durbinwatson: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_durbinwatson: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_durbinwatson: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_bdstest(conn: &Connection, symbol: &str, snap: &BdsTestSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v41(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("bdstest json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_bdstest(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert bdstest: {e}"))?;
+    Ok(())
+}
+
+pub fn get_bdstest(conn: &Connection, symbol: &str) -> Result<Option<BdsTestSnapshot>, String> {
+    let _ = create_research_tables_v41(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_bdstest WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_bdstest: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_bdstest: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_bdstest: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_breuschpagan(conn: &Connection, symbol: &str, snap: &BreuschPaganSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v41(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("breuschpagan json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_breuschpagan(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert breuschpagan: {e}"))?;
+    Ok(())
+}
+
+pub fn get_breuschpagan(conn: &Connection, symbol: &str) -> Result<Option<BreuschPaganSnapshot>, String> {
+    let _ = create_research_tables_v41(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_breuschpagan WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_breuschpagan: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_breuschpagan: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_breuschpagan: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_turnpts(conn: &Connection, symbol: &str, snap: &TurnPtsSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v41(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("turnpts json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_turnpts(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert turnpts: {e}"))?;
+    Ok(())
+}
+
+pub fn get_turnpts(conn: &Connection, symbol: &str) -> Result<Option<TurnPtsSnapshot>, String> {
+    let _ = create_research_tables_v41(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_turnpts WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_turnpts: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_turnpts: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_turnpts: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_periodogram(conn: &Connection, symbol: &str, snap: &PeriodogramSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v41(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("periodogram json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_periodogram(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert periodogram: {e}"))?;
+    Ok(())
+}
+
+pub fn get_periodogram(conn: &Connection, symbol: &str) -> Result<Option<PeriodogramSnapshot>, String> {
+    let _ = create_research_tables_v41(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_periodogram WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_periodogram: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_periodogram: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_periodogram: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -34001,6 +34488,157 @@ Trailing text.
             assert!(snap.mi_lag10 >= 0.0);
             assert!(snap.num_bins == 8);
             assert!(snap.h_marginal >= 0.0);
+        }
+    }
+
+    // ── ADR-149 Round 40 tests ──
+
+    #[test]
+    fn durbinwatson_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = DurbinWatsonSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            dw_stat: 2.05, rho_estimate: -0.025,
+            dw_label: "NO_AUTOCORR".into(), note: String::new(),
+        };
+        upsert_durbinwatson(&conn, "TEST", &snap).unwrap();
+        let got = get_durbinwatson(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.dw_label, "NO_AUTOCORR");
+        assert!((got.dw_stat - 2.05).abs() < 1e-9);
+    }
+
+    #[test]
+    fn durbinwatson_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_durbinwatson_snapshot("T", "2026-04-16", &bars);
+        assert!(matches!(snap.dw_label.as_str(),
+            "STRONG_POS" | "WEAK_POS" | "NO_AUTOCORR" | "WEAK_NEG" | "STRONG_NEG" | "INSUFFICIENT_DATA"));
+        if snap.dw_label != "INSUFFICIENT_DATA" {
+            assert!(snap.dw_stat.is_finite());
+            assert!(snap.dw_stat >= 0.0 && snap.dw_stat <= 4.0);
+            assert!(snap.rho_estimate.is_finite());
+        }
+    }
+
+    #[test]
+    fn bdstest_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = BdsTestSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            embed_dim: 2, epsilon_mult: 0.7, bds_stat: 2.3,
+            p_value_two_sided: 0.021, reject_null: true,
+            bds_label: "WEAK_DEPENDENCE".into(), note: String::new(),
+        };
+        upsert_bdstest(&conn, "TEST", &snap).unwrap();
+        let got = get_bdstest(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.bds_label, "WEAK_DEPENDENCE");
+        assert_eq!(got.embed_dim, 2);
+        assert!((got.bds_stat - 2.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bdstest_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_bdstest_snapshot("T", "2026-04-16", &bars);
+        assert!(matches!(snap.bds_label.as_str(),
+            "IID_CONFIRMED" | "WEAK_DEPENDENCE" | "STRONG_DEPENDENCE" | "INSUFFICIENT_DATA"));
+        if snap.bds_label != "INSUFFICIENT_DATA" {
+            assert!(snap.bds_stat.is_finite());
+            assert!(snap.p_value_two_sided >= 0.0 && snap.p_value_two_sided <= 1.0);
+            assert_eq!(snap.embed_dim, 2);
+        }
+    }
+
+    #[test]
+    fn breuschpagan_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = BreuschPaganSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            lm_stat: 4.2, r_squared: 0.0167, df: 1, critical_95: 3.841,
+            reject_null: true,
+            bp_label: "MILD_HETERO".into(), note: String::new(),
+        };
+        upsert_breuschpagan(&conn, "TEST", &snap).unwrap();
+        let got = get_breuschpagan(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.bp_label, "MILD_HETERO");
+        assert_eq!(got.df, 1);
+        assert!((got.lm_stat - 4.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn breuschpagan_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_breuschpagan_snapshot("T", "2026-04-16", &bars);
+        assert!(matches!(snap.bp_label.as_str(),
+            "HOMOSKEDASTIC" | "MILD_HETERO" | "STRONG_HETERO" | "INSUFFICIENT_DATA"));
+        if snap.bp_label != "INSUFFICIENT_DATA" {
+            assert!(snap.lm_stat >= 0.0);
+            assert!(snap.r_squared >= 0.0 && snap.r_squared <= 1.0);
+            assert!(snap.critical_95 > 0.0);
+        }
+    }
+
+    #[test]
+    fn turnpts_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = TurnPtsSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            observed_turnpts: 170, expected_turnpts: 166.67,
+            variance_turnpts: 44.5, z_stat: 0.5,
+            p_value_two_sided: 0.617, reject_null: false,
+            turnpts_label: "RANDOM_IID".into(), note: String::new(),
+        };
+        upsert_turnpts(&conn, "TEST", &snap).unwrap();
+        let got = get_turnpts(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.turnpts_label, "RANDOM_IID");
+        assert_eq!(got.observed_turnpts, 170);
+        assert!((got.z_stat - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn turnpts_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_turnpts_snapshot("T", "2026-04-16", &bars);
+        assert!(matches!(snap.turnpts_label.as_str(),
+            "RANDOM_IID" | "OVER_TURNING" | "UNDER_TURNING" | "INSUFFICIENT_DATA"));
+        if snap.turnpts_label != "INSUFFICIENT_DATA" {
+            assert!(snap.expected_turnpts > 0.0);
+            assert!(snap.variance_turnpts > 0.0);
+            assert!(snap.z_stat.is_finite());
+            assert!(snap.p_value_two_sided >= 0.0 && snap.p_value_two_sided <= 1.0);
+        }
+    }
+
+    #[test]
+    fn periodogram_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = PeriodogramSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-16".into(), bars_used: 252,
+            n_freqs: 126, dominant_freq: 0.05, dominant_period_bars: 20.0,
+            dominant_power: 1.5e-3, total_power: 1.2e-2,
+            dominant_power_ratio: 0.125,
+            periodogram_label: "MODERATE_CYCLE".into(), note: String::new(),
+        };
+        upsert_periodogram(&conn, "TEST", &snap).unwrap();
+        let got = get_periodogram(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.periodogram_label, "MODERATE_CYCLE");
+        assert!((got.dominant_period_bars - 20.0).abs() < 1e-9);
+        assert_eq!(got.n_freqs, 126);
+    }
+
+    #[test]
+    fn periodogram_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_periodogram_snapshot("T", "2026-04-16", &bars);
+        assert!(matches!(snap.periodogram_label.as_str(),
+            "STRONG_CYCLE" | "MODERATE_CYCLE" | "WEAK_CYCLE" | "NO_CYCLE" | "INSUFFICIENT_DATA"));
+        if snap.periodogram_label != "INSUFFICIENT_DATA" {
+            assert!(snap.n_freqs >= 1);
+            assert!(snap.dominant_freq > 0.0);
+            assert!(snap.dominant_period_bars > 0.0);
+            assert!(snap.dominant_power >= 0.0);
+            assert!(snap.total_power > 0.0);
+            assert!(snap.dominant_power_ratio >= 0.0 && snap.dominant_power_ratio <= 1.0);
         }
     }
 }

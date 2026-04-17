@@ -2602,7 +2602,77 @@ otherwise / INSUFFICIENT_DATA for n<50). Body reports bars_used,
 num_bins, MI(1/5/10), H(X), and normalised MI(1)/H(X). Source:
 ADR-147 AUTOMI window.
 
-#### 2.187 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.187 Durbin-Watson Autocorrelation (DURBINWATSON — ADR-149)
+
+Pulled from `research::get_durbinwatson`. Classic Durbin-Watson
+d-statistic on log-returns: d = Σ(Δe)² / Σe² with e = r − mean(r).
+d∈[0,4], d≈2 indicates no first-order AR(1) correlation, d<1 strong
+positive, d>3 strong negative; implied ρ̂ ≈ 1 − d/2. Header gives
+**dw_label** (STRONG_POS d<1 / WEAK_POS <1.5 / NO_AUTOCORR 1.5–2.5 /
+WEAK_NEG <3.0 / STRONG_NEG otherwise / INSUFFICIENT_DATA for n<30).
+Body reports bars_used, dw_stat, rho_estimate. Complements LJUNGB
+(block-lag) and AUTOMI (information-theoretic) by surfacing the
+single-lag linear diagnostic from the classical regression-printout
+tradition. Source: ADR-149 DURBINWATSON window.
+
+#### 2.188 BDS iid Test (BDSTEST — ADR-149)
+
+Pulled from `research::get_bdstest`. Brock-Dechert-Scheinkman (1996)
+test of the iid null at embedding dimension m=2 with ε=0.7×σ. Reports
+the asymptotically-standard-normal BDS statistic computed from the
+correlation integrals C_1(ε) and C_m(ε); two-sided p-value; and a
+reject_null flag at α=0.05. Header gives **bds_label**
+(IID_CONFIRMED p≥0.05 / WEAK_DEPENDENCE |BDS|<4 / STRONG_DEPENDENCE
+otherwise / INSUFFICIENT_DATA for n<100). Body reports bars_used,
+embed_dim, epsilon_mult, bds_stat, p_value_two_sided, reject_null.
+Variance approximation is a simplified upper bound (see ADR-149); a
+rejection is robust evidence of nonlinear dependence but marginal
+p-values should be cross-checked against a dedicated package.
+Source: ADR-149 BDSTEST window.
+
+#### 2.189 Breusch-Pagan Heteroskedasticity (BREUSCHPAGAN — ADR-149)
+
+Pulled from `research::get_breuschpagan`. Breusch-Pagan (1979) LM
+test with bar index as the sole regressor on squared residuals of
+the demeaned log-returns. Statistic LM = n×R² compared to χ²(1);
+critical_95 = 3.841. Header gives **bp_label** (HOMOSKEDASTIC
+LM≤3.841 / MILD_HETERO <10.83 / STRONG_HETERO otherwise /
+INSUFFICIENT_DATA for n<30). Body reports bars_used, lm_stat,
+r_squared, df, critical_95, reject_null. Complements ARCHLM
+(ADR-139) which tests autoregressive conditional heteroskedasticity;
+BREUSCHPAGAN catches monotonic trends in variance that ARCHLM misses.
+Source: ADR-149 BREUSCHPAGAN window.
+
+#### 2.190 Bartels Turning-Points Test (TURNPTS — ADR-149)
+
+Pulled from `research::get_turnpts`. Non-parametric Bartels /
+turning-points test on log-returns: counts strict local extrema
+(b>a ∧ b>c or b<a ∧ b<c), compares observed against expected
+2(n−2)/3 under the iid null, variance (16n−29)/90, z-statistic, and
+two-sided p-value. Header gives **turnpts_label** (RANDOM_IID
+p≥0.05 / OVER_TURNING z>0 / UNDER_TURNING z<0 / INSUFFICIENT_DATA
+for n<10). Body reports bars_used, observed_turnpts,
+expected_turnpts, variance_turnpts, z_stat, p_value_two_sided,
+reject_null. Orthogonal to RUNSTEST (sign-relative-to-median) —
+catches different iid failure modes. Source: ADR-149 TURNPTS window.
+
+#### 2.191 Direct-DFT Periodogram (PERIODOGRAM — ADR-149)
+
+Pulled from `research::get_periodogram`. Schuster-style raw
+periodogram computed by direct DFT over k=1..min(n/2, 256) on the
+mean-centered log-returns. Reports the dominant frequency, its
+period in bars (1/f), its power, total spectral power, and the
+dominant-to-total ratio. Header gives **periodogram_label**
+(STRONG_CYCLE ratio>0.25 / MODERATE_CYCLE >0.12 / WEAK_CYCLE >0.05 /
+NO_CYCLE otherwise / INSUFFICIENT_DATA for n<64). Body reports
+bars_used, n_freqs, dominant_freq, dominant_period_bars,
+dominant_power, total_power, dominant_power_ratio. First
+frequency-domain surface in the packet — complements the time-domain
+DFA/MFDFA/AUTOMI family. Leakage is uncorrected (no windowing); for
+exact peak positioning cross-check with a multitaper estimator.
+Source: ADR-149 PERIODOGRAM window.
+
+#### 2.192 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -2618,7 +2688,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.188 Sector peer comparison
+#### 2.193 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -2649,7 +2719,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.187 above.
+articles to the per-symbol bag consumed by sub-block 2.192 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
