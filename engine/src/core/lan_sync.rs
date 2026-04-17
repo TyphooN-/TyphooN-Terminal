@@ -426,6 +426,8 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_linreg",
     "research_pivots",
     "research_heikin",
+    // ── ADR-162 cross-client AI response cache ─────
+    "ai_response_cache",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2341,6 +2343,22 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-162 cross-client AI response cache ──
+        "ai_response_cache" => Some(
+            "CREATE TABLE IF NOT EXISTS ai_response_cache (
+                prompt_hash TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                prompt_preview TEXT NOT NULL DEFAULT '',
+                response TEXT NOT NULL,
+                token_count_prompt INTEGER NOT NULL DEFAULT 0,
+                token_count_completion INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                hit_count INTEGER NOT NULL DEFAULT 0,
+                source_client TEXT NOT NULL DEFAULT ''
+            )"
+        ),
         _ => None,
     }
 }
@@ -2631,6 +2649,8 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_linreg" => Some("updated_at"),
         "research_pivots" => Some("updated_at"),
         "research_heikin" => Some("updated_at"),
+        // ── ADR-162 cross-client AI response cache ──
+        "ai_response_cache" => Some("updated_at"),
         _ => None,
     }
 }

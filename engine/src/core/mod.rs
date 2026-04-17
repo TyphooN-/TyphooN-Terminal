@@ -23,3 +23,4 @@ pub mod econ_calendar;
 pub mod research;
 pub mod news;
 pub mod ai_sessions;
+pub mod ai_response_cache;
