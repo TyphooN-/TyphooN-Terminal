@@ -3809,7 +3809,92 @@ aggregation layer** that answers "which upcoming expiration has
 the heaviest flow" without drilling into individual strikes.
 Source: ADR-166 EXPCAL window (Tier 2 tab).
 
-#### 2.263 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.263 Wilder Smoothed MA (SMMA — ADR-167)
+
+Pulled from `research::get_smma`. Wilder's Smoothed Moving Average
+is the recursive `SMMA_t = (SMMA_{t−1}·(N−1) + price_t) / N`
+— equivalent to EMA with `α = 1/N` (vs classical EMA's
+`α = 2/(N+1)`). With length=14 it decays much more slowly than
+EMA₁₄ and underpins ATR, RSI's average gain/loss, and Williams's
+Alligator. Seeded with SMA over the first N closes. Distinct from
+SMA, EMA, DEMA, TEMA, KAMA, FRAMA, HMA, TRIMA, T3, VIDYA, and
+ZLEMA — SMMA is the one slow-decay Wilder recursion not
+previously surfaced on its own. STRONG_BULL (≥+2%) / BULL (>0) /
+NEUTRAL / BEAR (<0) / STRONG_BEAR (≤−2%) labels derived from
+close-vs-SMMA deviation percentage. Requires n≥16; body reports
+bars_used, length (14), smma_value, smma_prev, deviation_pct,
+last_close. Source: ADR-167 SMMA window.
+
+#### 2.264 Bill Williams Alligator (ALLIGATOR — ADR-167)
+
+Pulled from `research::get_alligator`. The Alligator is three
+displaced SMMAs of the median price (H+L)/2: **jaw = SMMA₁₃
+shifted +8**, **teeth = SMMA₈ shifted +5**, **lips = SMMA₅ shifted
++3**. All three are evaluated at their shifted-to-today index so
+the snapshot answers "what is the alligator doing *right now*".
+Label is derived from line ordering and total spread:
+**SLEEPING** when spread is near zero (<0.15% of close),
+**EATING_UP** when `lips > teeth > jaw`, **EATING_DOWN** when
+reversed, **AWAKENING** otherwise (crossing). Rounds out the
+Williams Chaos Theory trio alongside AO (ADR-156) and AC
+(ADR-165). Distinct from Fractals (peak/trough markers, separate
+surface). Requires n≥23; body reports jaw/teeth/lips (current and
+prior-bar), spread_pct, last_close. Source: ADR-167 ALLIGATOR
+window.
+
+#### 2.265 Connors RSI (CRSI — ADR-167)
+
+Pulled from `research::get_crsi`. Larry Connors's composite
+oscillator: `CRSI = (RSI₃(close) + RSI₂(streak) +
+percent_rank(ROC₁, 100)) / 3`. `streak` is the signed count of
+consecutive up/down days. The three components together produce a
+very reactive mean-reversion oscillator — canonical Connors
+entries at >90 (short) / <10 (long). Distinct from RSI
+(single-length Wilder), RMI (RSI on momentum series), and
+StochRSI — CRSI's contribution is the explicit streak component,
+which captures regime persistence that pure RSI variants don't.
+OVERBOUGHT (≥75) / BULLISH (≥60) / NEUTRAL / BEARISH (≤40) /
+OVERSOLD (≤25) labels. Requires n≥108 (100-bar rank lookback + a
+small margin); body reports rsi_length (3), streak_length (2),
+rank_lookback (100), rsi_close, rsi_streak, percent_rank,
+crsi_value, crsi_prev, last_close. Source: ADR-167 CRSI window.
+
+#### 2.266 Standard Error Bands (SEB — ADR-167)
+
+Pulled from `research::get_seb`. Tim Tillson / Don Fishback's
+Standard Error Bands are `center ± k·SE` where center is the
+linear-regression fitted value at `t = N − 1` and SE is the
+residual standard error `sqrt(Σ(y − ŷ)² / (N − 2))`. **Narrower
+than Bollinger when price fits the regression well** (low residual
+variance) and wider when price is noisy around the trend — gives
+a *trend-aware* channel. Distinct from Keltner (ATR-based),
+Donchian (max-min), LRC (stddev-of-price around regression, not
+residuals), and TSF (single regression-endpoint value). SEB is
+the one channel tied to regression-residual variance specifically.
+ABOVE_BAND / UPPER_HALF / NEUTRAL / LOWER_HALF / BELOW_BAND labels
+driven by close position vs upper/lower bands. Requires n≥22;
+body reports length (20), num_se (2.0), upper, middle, lower,
+bandwidth, position_pct, last_close. Source: ADR-167 SEB window.
+
+#### 2.267 Intraday Momentum Index (IMI — ADR-167)
+
+Pulled from `research::get_imi`. Tushar Chande's IMI is an
+RSI-style ratio computed from *per-bar* `close − open` rather
+than inter-bar `close − close[-1]`: `IMI = 100 · ΣUp / (ΣUp +
+ΣDown)` over N=14 bars, where `Up = max(close − open, 0)`,
+`Down = max(open − close, 0)`. Measures **buying vs selling
+pressure within each bar**, complementing RSI's inter-bar view.
+Distinct from RSI (inter-bar close diff), CMO (Chande, sum of
+ups/downs inter-bar), QSTICK (EMA of close−open, not RSI-style),
+and BOP (single-bar scaled close-open, not aggregated). IMI can
+print OVERBOUGHT while RSI prints NEUTRAL when the market closes
+near the high every day without inter-bar follow-through.
+OVERBOUGHT (≥70) / BULL (≥60) / NEUTRAL / BEAR (≤40) / OVERSOLD
+(≤30) labels. Requires n≥16; body reports length (14), sum_gains,
+sum_losses, imi_value, imi_prev, last_close. Source: ADR-167
+IMI window.
+
+#### 2.268 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -3825,7 +3910,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.264 Sector peer comparison
+#### 2.269 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -4085,8 +4170,42 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~80-153 KB**
-(up from 80-152 KB after ADR-165; ADR-166 adds one optional per-symbol block —
+symbols. A single S&P 500 symbol now produces a packet around **~81-155 KB**
+(up from 80-153 KB after ADR-166; ADR-167 adds five optional per-symbol
+blocks — SMMA / ALLIGATOR / CRSI / SEB / IMI — each measuring ~2 k/v rows
+and adding ~230-300 bytes when populated, for a typical +1.35 KB per
+symbol; all five reuse the existing `research_historical_price` HP cache
+and the standard research-table LAN sync path with zero new API
+dependencies; SMMA computes Wilder's Smoothed Moving Average as the
+recursive `SMMA_t = (SMMA_{t−1}·(N−1) + price_t) / N` — equivalent to EMA
+with `α = 1/N` (vs classical EMA's `α = 2/(N+1)`), the slow-decay Wilder
+recursion that underpins ATR, RSI's avg-gain/loss, and the Alligator,
+with STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR labels driven by
+±2% close-vs-SMMA deviation; ALLIGATOR computes Bill Williams's
+three-line chart-pattern system as displaced SMMAs of the median price
+(jaw = SMMA₁₃ shifted +8, teeth = SMMA₈ shifted +5, lips = SMMA₅ shifted
++3), evaluated at their shifted-to-today index with EATING_UP /
+EATING_DOWN / AWAKENING / SLEEPING labels driven by line ordering and
+total spread — rounds out the Williams Chaos Theory trio alongside
+AO/AC; CRSI computes Larry Connors's composite oscillator
+`(RSI₃(close) + RSI₂(streak) + percent_rank(ROC₁, 100)) / 3` where
+streak is the signed count of consecutive up/down days — the one RSI
+variant that explicitly encodes regime persistence via the streak
+component, with OVERBOUGHT / BULLISH / NEUTRAL / BEARISH / OVERSOLD
+labels at 75/60/40/25; SEB computes Tim Tillson / Don Fishback's
+Standard Error Bands as linear-regression endpoint ± k·SE channels
+using the residual standard error `sqrt(Σ(y − ŷ)² / (N − 2))` —
+trend-aware channels that contract when price fits the regression well
+and expand when it doesn't, distinct from Bollinger (stddev around flat
+mean), Keltner (ATR around EMA), and Donchian (max-min), with
+ABOVE_BAND / UPPER_HALF / NEUTRAL / LOWER_HALF / BELOW_BAND labels; IMI
+computes Tushar Chande's Intraday Momentum Index as a RSI-style ratio
+on **per-bar `close − open`** rather than inter-bar close-close —
+`IMI = 100 · ΣUp / (ΣUp + ΣDown)` over N=14, distinct from RSI, CMO,
+QSTICK, and BOP on the bar-local-momentum axis, with OVERBOUGHT / BULL
+/ NEUTRAL / BEAR / OVERSOLD labels at 70/60/40/30 and persistence that
+RSI masks when the market closes near the high every day without
+inter-bar follow-through; ADR-166 adds one optional per-symbol block —
 EXPCAL (Options Expiration Calendar, Tier 2) — a date-axis aggregation
 over the cached options chain that classifies each upcoming expiration
 as WEEKLY / MONTHLY / QUARTERLY / TRIPLE_WITCHING / LEAPS by pure date

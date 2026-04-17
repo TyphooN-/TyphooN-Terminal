@@ -448,6 +448,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_rmi",
     // ── ADR-166 Options Expiration Calendar ──────────
     "research_symbol_expirations",
+    // ── ADR-167 Round 55 ────────────────────────────
+    "research_smma",
+    "research_alligator",
+    "research_crsi",
+    "research_seb",
+    "research_imi",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2494,6 +2500,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_smma" => Some(
+            "CREATE TABLE IF NOT EXISTS research_smma (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_alligator" => Some(
+            "CREATE TABLE IF NOT EXISTS research_alligator (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_crsi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_crsi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_seb" => Some(
+            "CREATE TABLE IF NOT EXISTS research_seb (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_imi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_imi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2805,6 +2846,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_elderimp" => Some("updated_at"),
         "research_rmi" => Some("updated_at"),
         "research_symbol_expirations" => Some("updated_at"),
+        // ── ADR-167 Round 55 ──
+        "research_smma" => Some("updated_at"),
+        "research_alligator" => Some("updated_at"),
+        "research_crsi" => Some("updated_at"),
+        "research_seb" => Some("updated_at"),
+        "research_imi" => Some("updated_at"),
         _ => None,
     }
 }

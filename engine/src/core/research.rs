@@ -5565,6 +5565,119 @@ pub struct RmiSnapshot {
     pub note: String,
 }
 
+/// Wilder's Smoothed Moving Average (SMMA / RMA) — a recursive MA with
+/// `SMMA_t = (SMMA_{t-1}·(N-1) + price_t) / N`. Equivalent to EMA with
+/// `alpha = 1/N` (vs classical EMA's `alpha = 2/(N+1)`), giving it much
+/// slower decay and less whipsaw than same-length EMA. Basis of ATR,
+/// RSI's average gain/loss, and Williams's Alligator surface.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SmmaSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub smma_value: f64,
+    pub smma_prev: f64,
+    pub deviation_pct: f64,            // (close − smma)/smma · 100
+    pub last_close: f64,
+    pub smma_label: String,            // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Bill Williams's Alligator — three displaced SMMAs of the median price:
+/// `jaw = SMMA₁₃(medprice) shifted +8`, `teeth = SMMA₈ shifted +5`,
+/// `lips = SMMA₅ shifted +3`. The current-bar values surfaced here are
+/// the *shifted-to-today* values, i.e. `jaw[t] = SMMA₁₃(medprice[0..=t-8])`,
+/// etc. Label encodes the alligator's state: SLEEPING when the three
+/// lines are intertwined; EATING_UP when lips > teeth > jaw and spreading;
+/// EATING_DOWN when lips < teeth < jaw and spreading; AWAKENING when
+/// crossing. Classic chart-pattern surface in forex/crypto systems.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AlligatorSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub jaw: f64,                      // SMMA₁₃, shifted +8
+    pub teeth: f64,                    // SMMA₈,  shifted +5
+    pub lips: f64,                     // SMMA₅,  shifted +3
+    pub jaw_prev: f64,
+    pub teeth_prev: f64,
+    pub lips_prev: f64,
+    pub spread_pct: f64,               // (max − min of 3 lines) / last_close · 100
+    pub last_close: f64,
+    pub alligator_label: String,       // EATING_UP / EATING_DOWN / AWAKENING / SLEEPING / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Larry Connors's Connors RSI — a composite of three momentum
+/// components: `CRSI = (RSI₃(close) + RSI₂(streak) + percent_rank(ROC₁, 100))/3`.
+/// `streak` is the current up/down streak counter. The percent_rank
+/// component measures where today's 1-bar ROC ranks over the last 100
+/// bars. Behaves as a mean-reversion signal with sharp extremes — the
+/// canonical Connors entry/exit threshold is >90 (short) / <10 (long).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CrsiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub rsi_length: usize,             // 3
+    pub streak_length: usize,          // 2
+    pub rank_lookback: usize,          // 100
+    pub rsi_close: f64,                // RSI₃(close)
+    pub rsi_streak: f64,               // RSI₂(streak)
+    pub percent_rank: f64,             // 100·rank/lookback
+    pub crsi_value: f64,               // mean of the three components
+    pub crsi_prev: f64,
+    pub last_close: f64,
+    pub crsi_label: String,            // OVERBOUGHT / BULLISH / NEUTRAL / BEARISH / OVERSOLD / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Standard Error Bands — Tim Tillson / Don Fishback channels around a
+/// linear regression endpoint fit. Center is the linreg fitted value at
+/// `t = N−1`, bands are `center ± k·SE` where
+/// `SE = sqrt(Σ(y_i − ŷ_i)² / (N−2))`. Narrower than Bollinger when the
+/// fit is good (low residual variance) and wider when price is noisy
+/// around the trend. Better mean-reversion signal in trending markets
+/// than Bollinger since the center itself captures the trend.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SebSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 20
+    pub num_se: f64,                   // 2.0
+    pub upper: f64,
+    pub middle: f64,                   // linreg endpoint fit
+    pub lower: f64,
+    pub bandwidth: f64,                // (upper − lower)/middle
+    pub position_pct: f64,             // (close − lower)/(upper − lower) · 100
+    pub last_close: f64,
+    pub seb_label: String,             // ABOVE_BAND / UPPER_HALF / NEUTRAL / LOWER_HALF / BELOW_BAND / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Tushar Chande's Intraday Momentum Index — RSI applied to the
+/// **bar-by-bar close-minus-open series** rather than close-minus-prior-
+/// close. `IMI = 100·Σ(up_cls-op) / (Σ(up) + Σ|down|)` over N bars.
+/// Measures buying vs selling pressure within each bar, making it
+/// sensitive to intraday direction. Distinct from RSI (inter-bar), QSTICK
+/// (EMA of close-open), and BOP (single-bar scaled close-open).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ImiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub sum_gains: f64,
+    pub sum_losses: f64,
+    pub imi_value: f64,                // 0..100
+    pub imi_prev: f64,
+    pub last_close: f64,
+    pub imi_label: String,             // OVERBOUGHT / BULL / NEUTRAL / BEAR / OVERSOLD / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -25331,6 +25444,335 @@ pub fn compute_rmi_snapshot(
     }
 }
 
+/// Wilder's Smoothed Moving Average (SMMA / RMA) — recursive MA with
+/// `SMMA_t = (SMMA_{t-1}·(N-1) + price_t) / N`. Seed with SMA over first
+/// N closes. Labels by close-vs-SMMA deviation percentage:
+/// STRONG_BULL ≥ +2%, BULL > 0%, NEUTRAL = 0, BEAR < 0%, STRONG_BEAR ≤ -2%.
+pub fn compute_smma_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> SmmaSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 14usize;
+    let min_bars = length + 2;
+    if n < min_bars {
+        return SmmaSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            smma_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let mut smma = vec![0.0; n];
+    let seed: f64 = closes[0..length].iter().sum::<f64>() / length as f64;
+    smma[length - 1] = seed;
+    for i in length..n {
+        smma[i] = (smma[i - 1] * (length as f64 - 1.0) + closes[i]) / length as f64;
+    }
+    let smma_value = smma[n - 1];
+    let smma_prev  = smma[n - 2];
+    let last_close = closes[n - 1];
+    let deviation_pct = if smma_value.abs() > 1e-12 {
+        (last_close - smma_value) / smma_value * 100.0
+    } else { 0.0 };
+    let label = if deviation_pct >= 2.0 { "STRONG_BULL" }
+        else if deviation_pct <= -2.0 { "STRONG_BEAR" }
+        else if deviation_pct > 0.0 { "BULL" }
+        else if deviation_pct < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    SmmaSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        length, smma_value, smma_prev, deviation_pct,
+        last_close,
+        smma_label: label.into(), note: String::new(),
+    }
+}
+
+/// Bill Williams's Alligator — three displaced SMMAs of the median price:
+/// jaw = SMMA₁₃(medprice) evaluated 8 bars ago, teeth = SMMA₈ evaluated
+/// 5 bars ago, lips = SMMA₅ evaluated 3 bars ago. Labelling inspects the
+/// ordering and total spread: SLEEPING when spread is near zero,
+/// EATING_UP when lips > teeth > jaw, EATING_DOWN when reversed,
+/// AWAKENING otherwise (crossing).
+pub fn compute_alligator_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AlligatorSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    // jaw needs SMMA₁₃ at index n-1-8 and the prior bar at n-2-8.
+    let min_bars = 13 + 8 + 2;
+    if n < min_bars {
+        return AlligatorSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            alligator_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let med: Vec<f64> = sorted.iter().map(|b| (b.high + b.low) / 2.0).collect();
+    let smma_of = |len: usize| -> Vec<f64> {
+        let mut out = vec![0.0; n];
+        if n < len { return out; }
+        let seed: f64 = med[0..len].iter().sum::<f64>() / len as f64;
+        out[len - 1] = seed;
+        for i in len..n {
+            out[i] = (out[i - 1] * (len as f64 - 1.0) + med[i]) / len as f64;
+        }
+        out
+    };
+    let smma13 = smma_of(13);
+    let smma8  = smma_of(8);
+    let smma5  = smma_of(5);
+    let jaw_t   = n - 1 - 8;
+    let teeth_t = n - 1 - 5;
+    let lips_t  = n - 1 - 3;
+    let jaw        = smma13[jaw_t];
+    let jaw_prev   = smma13[jaw_t - 1];
+    let teeth      = smma8[teeth_t];
+    let teeth_prev = smma8[teeth_t - 1];
+    let lips       = smma5[lips_t];
+    let lips_prev  = smma5[lips_t - 1];
+    let last_close = sorted[n - 1].close;
+    let mn = jaw.min(teeth).min(lips);
+    let mx = jaw.max(teeth).max(lips);
+    let spread_pct = if last_close.abs() > 1e-12 {
+        (mx - mn) / last_close * 100.0
+    } else { 0.0 };
+    let asleep_thresh = 0.15_f64; // percent spread below which state = SLEEPING
+    let label = if spread_pct < asleep_thresh { "SLEEPING" }
+        else if lips > teeth && teeth > jaw { "EATING_UP" }
+        else if lips < teeth && teeth < jaw { "EATING_DOWN" }
+        else { "AWAKENING" };
+    AlligatorSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        jaw, teeth, lips, jaw_prev, teeth_prev, lips_prev,
+        spread_pct, last_close,
+        alligator_label: label.into(), note: String::new(),
+    }
+}
+
+/// Larry Connors's Connors RSI — composite of three components:
+/// `CRSI = (RSI₃(close) + RSI₂(streak) + percent_rank(ROC₁, 100)) / 3`.
+/// Streak is the signed run-length counter (+k on k up-days, -k on
+/// k down-days, 0 on flat). Canonical extremes: > 90 (short), < 10 (long).
+pub fn compute_crsi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CrsiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let rsi_length = 3usize;
+    let streak_length = 2usize;
+    let rank_lookback = 100usize;
+    let min_bars = rank_lookback + rsi_length + 5;
+    if n < min_bars {
+        return CrsiSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            rsi_length, streak_length, rank_lookback,
+            crsi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let rsi_series = |series: &[f64], length: usize| -> Vec<f64> {
+        let m = series.len();
+        let mut out = vec![50.0; m];
+        if m < length + 1 { return out; }
+        let mut gains = vec![0.0; m];
+        let mut losses = vec![0.0; m];
+        for i in 1..m {
+            let d = series[i] - series[i - 1];
+            if d > 0.0 { gains[i] = d; } else { losses[i] = -d; }
+        }
+        let mut avg_g: f64 = gains[1..=length].iter().sum::<f64>() / length as f64;
+        let mut avg_l: f64 = losses[1..=length].iter().sum::<f64>() / length as f64;
+        out[length] = if avg_l.abs() < 1e-12 { 100.0 } else {
+            let rs = avg_g / avg_l; 100.0 - 100.0 / (1.0 + rs)
+        };
+        for i in (length + 1)..m {
+            avg_g = (avg_g * (length as f64 - 1.0) + gains[i]) / length as f64;
+            avg_l = (avg_l * (length as f64 - 1.0) + losses[i]) / length as f64;
+            out[i] = if avg_l.abs() < 1e-12 { 100.0 } else {
+                let rs = avg_g / avg_l; 100.0 - 100.0 / (1.0 + rs)
+            };
+        }
+        out
+    };
+    let rsi_close_series = rsi_series(&closes, rsi_length);
+    let rsi_close = rsi_close_series[n - 1];
+    let mut streak = vec![0.0; n];
+    for i in 1..n {
+        let d = closes[i] - closes[i - 1];
+        streak[i] = if d > 0.0 {
+            if streak[i - 1] > 0.0 { streak[i - 1] + 1.0 } else { 1.0 }
+        } else if d < 0.0 {
+            if streak[i - 1] < 0.0 { streak[i - 1] - 1.0 } else { -1.0 }
+        } else { 0.0 };
+    }
+    let rsi_streak_series = rsi_series(&streak, streak_length);
+    let rsi_streak = rsi_streak_series[n - 1];
+    let mut roc = vec![0.0; n];
+    for i in 1..n {
+        roc[i] = if closes[i - 1].abs() > 1e-12 {
+            (closes[i] - closes[i - 1]) / closes[i - 1] * 100.0
+        } else { 0.0 };
+    }
+    let today_roc = roc[n - 1];
+    let window_start = n.saturating_sub(rank_lookback);
+    let window = &roc[window_start..(n - 1)];
+    let below = window.iter().filter(|&&x| x < today_roc).count() as f64;
+    let percent_rank = if window.is_empty() { 0.0 } else {
+        100.0 * below / window.len() as f64
+    };
+    let crsi_value = (rsi_close + rsi_streak + percent_rank) / 3.0;
+    let rsi_close_prev = rsi_close_series[n - 2];
+    let rsi_streak_prev = rsi_streak_series[n - 2];
+    let prev_roc = roc[n - 2];
+    let prev_window_start = (n - 1).saturating_sub(rank_lookback);
+    let prev_window = &roc[prev_window_start..(n - 2)];
+    let prev_below = prev_window.iter().filter(|&&x| x < prev_roc).count() as f64;
+    let prev_pr = if prev_window.is_empty() { 0.0 } else {
+        100.0 * prev_below / prev_window.len() as f64
+    };
+    let crsi_prev = (rsi_close_prev + rsi_streak_prev + prev_pr) / 3.0;
+    let label = if crsi_value >= 75.0 { "OVERBOUGHT" }
+        else if crsi_value <= 25.0 { "OVERSOLD" }
+        else if crsi_value >= 60.0 { "BULLISH" }
+        else if crsi_value <= 40.0 { "BEARISH" }
+        else { "NEUTRAL" };
+    CrsiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        rsi_length, streak_length, rank_lookback,
+        rsi_close, rsi_streak, percent_rank,
+        crsi_value, crsi_prev,
+        last_close: closes[n - 1],
+        crsi_label: label.into(), note: String::new(),
+    }
+}
+
+/// Standard Error Bands — linear-regression endpoint fit ± k·SE channels.
+/// Center = regression value at `t = N − 1`; SE = residual standard error
+/// with (N − 2) degrees of freedom. Labels by close position vs bands.
+pub fn compute_seb_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> SebSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 20usize;
+    let num_se = 2.0f64;
+    let min_bars = length + 2;
+    if n < min_bars {
+        return SebSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            length, num_se,
+            seb_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let start = n - length;
+    let xs: Vec<f64> = (0..length).map(|i| i as f64).collect();
+    let ys: &[f64] = &closes[start..n];
+    let x_mean: f64 = xs.iter().sum::<f64>() / length as f64;
+    let y_mean: f64 = ys.iter().sum::<f64>() / length as f64;
+    let mut sxy = 0.0;
+    let mut sxx = 0.0;
+    for i in 0..length {
+        sxy += (xs[i] - x_mean) * (ys[i] - y_mean);
+        sxx += (xs[i] - x_mean).powi(2);
+    }
+    let slope = if sxx.abs() < 1e-12 { 0.0 } else { sxy / sxx };
+    let intercept = y_mean - slope * x_mean;
+    let mut ss_res = 0.0;
+    for i in 0..length {
+        let yhat = slope * xs[i] + intercept;
+        ss_res += (ys[i] - yhat).powi(2);
+    }
+    let dof = (length as f64 - 2.0).max(1.0);
+    let se = (ss_res / dof).sqrt();
+    let middle = slope * (length as f64 - 1.0) + intercept;
+    let upper = middle + num_se * se;
+    let lower = middle - num_se * se;
+    let bandwidth = if middle.abs() > 1e-12 { (upper - lower) / middle } else { 0.0 };
+    let last_close = closes[n - 1];
+    let range = upper - lower;
+    let position_pct = if range.abs() > 1e-12 {
+        (last_close - lower) / range * 100.0
+    } else { 50.0 };
+    let label = if last_close > upper { "ABOVE_BAND" }
+        else if last_close < lower { "BELOW_BAND" }
+        else if position_pct >= 66.6667 { "UPPER_HALF" }
+        else if position_pct <= 33.3333 { "LOWER_HALF" }
+        else { "NEUTRAL" };
+    SebSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        length, num_se, upper, middle, lower,
+        bandwidth, position_pct, last_close,
+        seb_label: label.into(), note: String::new(),
+    }
+}
+
+/// Tushar Chande's Intraday Momentum Index — RSI-style ratio built from
+/// per-bar `close − open` buying/selling pressure rather than close-to-
+/// close momentum. `IMI = 100 · ΣUp / (ΣUp + ΣDown)` over N bars, where
+/// Up = max(close − open, 0), Down = max(open − close, 0).
+pub fn compute_imi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ImiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 14usize;
+    let min_bars = length + 2;
+    if n < min_bars {
+        return ImiSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            imi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let mut gains = vec![0.0; n];
+    let mut losses = vec![0.0; n];
+    for i in 0..n {
+        let d = sorted[i].close - sorted[i].open;
+        if d > 0.0 { gains[i] = d; } else { losses[i] = -d; }
+    }
+    let imi_at = |end: usize| -> (f64, f64, f64) {
+        let start = end + 1 - length;
+        let sg: f64 = gains[start..=end].iter().sum();
+        let sl: f64 = losses[start..=end].iter().sum();
+        let tot = sg + sl;
+        let v = if tot > 1e-12 { 100.0 * sg / tot } else { 50.0 };
+        (sg, sl, v)
+    };
+    let (sum_gains, sum_losses, imi_value) = imi_at(n - 1);
+    let (_, _, imi_prev) = imi_at(n - 2);
+    let label = if imi_value >= 70.0 { "OVERBOUGHT" }
+        else if imi_value <= 30.0 { "OVERSOLD" }
+        else if imi_value >= 60.0 { "BULL" }
+        else if imi_value <= 40.0 { "BEAR" }
+        else { "NEUTRAL" };
+    ImiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        length, sum_gains, sum_losses,
+        imi_value, imi_prev,
+        last_close: sorted[n - 1].close,
+        imi_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -33851,6 +34293,159 @@ pub fn get_symbol_expirations(conn: &Connection, symbol: &str) -> Result<Option<
         .map_err(|e| format!("prepare get_symexp: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_symexp: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_symexp: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── Round 55 SQLite schema + helpers: SMMA/ALLIGATOR/CRSI/SEB/IMI ──────────
+
+pub fn create_research_tables_v57(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v56(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_smma (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_smma_updated ON research_smma(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_alligator (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_alligator_updated ON research_alligator(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_crsi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_crsi_updated ON research_crsi(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_seb (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_seb_updated ON research_seb(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_imi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_imi_updated ON research_imi(updated_at);",
+    ).map_err(|e| format!("create v57 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_smma(conn: &Connection, symbol: &str, snap: &SmmaSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v57(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("smma json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_smma(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert smma: {e}"))?;
+    Ok(())
+}
+
+pub fn get_smma(conn: &Connection, symbol: &str) -> Result<Option<SmmaSnapshot>, String> {
+    let _ = create_research_tables_v57(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_smma WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_smma: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_smma: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_smma: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_alligator(conn: &Connection, symbol: &str, snap: &AlligatorSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v57(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("alligator json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_alligator(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert alligator: {e}"))?;
+    Ok(())
+}
+
+pub fn get_alligator(conn: &Connection, symbol: &str) -> Result<Option<AlligatorSnapshot>, String> {
+    let _ = create_research_tables_v57(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_alligator WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_alligator: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_alligator: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_alligator: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_crsi(conn: &Connection, symbol: &str, snap: &CrsiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v57(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("crsi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_crsi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert crsi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_crsi(conn: &Connection, symbol: &str) -> Result<Option<CrsiSnapshot>, String> {
+    let _ = create_research_tables_v57(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_crsi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_crsi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_crsi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_crsi: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_seb(conn: &Connection, symbol: &str, snap: &SebSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v57(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("seb json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_seb(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert seb: {e}"))?;
+    Ok(())
+}
+
+pub fn get_seb(conn: &Connection, symbol: &str) -> Result<Option<SebSnapshot>, String> {
+    let _ = create_research_tables_v57(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_seb WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_seb: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_seb: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_seb: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_imi(conn: &Connection, symbol: &str, snap: &ImiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v57(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("imi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_imi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert imi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_imi(conn: &Connection, symbol: &str) -> Result<Option<ImiSnapshot>, String> {
+    let _ = create_research_tables_v57(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_imi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_imi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_imi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_imi: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -44696,5 +45291,145 @@ Trailing text.
         assert_eq!(got.expirations.len(), 1);
         assert_eq!(got.expirations[0].expiry_type, "WEEKLY");
         assert!((got.expirations[0].put_call_ratio - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn smma_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = SmmaSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 40,
+            length: 14, smma_value: 101.2, smma_prev: 100.8,
+            deviation_pct: -1.2, last_close: 100.0,
+            smma_label: "BEAR".into(), note: String::new(),
+        };
+        upsert_smma(&conn, "TEST", &snap).unwrap();
+        let got = get_smma(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.smma_label, "BEAR");
+        assert!((got.smma_value - 101.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn smma_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_smma_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.smma_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.smma_label != "INSUFFICIENT_DATA" {
+            assert!(snap.smma_value.is_finite());
+            assert!(snap.smma_value > 0.0);
+        }
+    }
+
+    #[test]
+    fn alligator_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = AlligatorSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 60,
+            jaw: 98.0, teeth: 99.0, lips: 100.0,
+            jaw_prev: 97.5, teeth_prev: 98.5, lips_prev: 99.5,
+            spread_pct: 2.0, last_close: 100.5,
+            alligator_label: "EATING_UP".into(), note: String::new(),
+        };
+        upsert_alligator(&conn, "TEST", &snap).unwrap();
+        let got = get_alligator(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.alligator_label, "EATING_UP");
+        assert!((got.lips - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn alligator_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_alligator_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.alligator_label.as_str(),
+            "EATING_UP" | "EATING_DOWN" | "AWAKENING" | "SLEEPING" | "INSUFFICIENT_DATA"));
+        if snap.alligator_label != "INSUFFICIENT_DATA" {
+            assert!(snap.jaw.is_finite() && snap.teeth.is_finite() && snap.lips.is_finite());
+            assert!(snap.spread_pct >= 0.0);
+        }
+    }
+
+    #[test]
+    fn crsi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CrsiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 120,
+            rsi_length: 3, streak_length: 2, rank_lookback: 100,
+            rsi_close: 65.0, rsi_streak: 55.0, percent_rank: 72.0,
+            crsi_value: 64.0, crsi_prev: 60.0,
+            last_close: 100.0,
+            crsi_label: "BULLISH".into(), note: String::new(),
+        };
+        upsert_crsi(&conn, "TEST", &snap).unwrap();
+        let got = get_crsi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.crsi_label, "BULLISH");
+        assert!((got.crsi_value - 64.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn crsi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_crsi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.crsi_label.as_str(),
+            "OVERBOUGHT" | "BULLISH" | "NEUTRAL" | "BEARISH" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.crsi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.crsi_value.is_finite());
+            assert!(snap.crsi_value >= 0.0 && snap.crsi_value <= 100.0);
+        }
+    }
+
+    #[test]
+    fn seb_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = SebSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 40,
+            length: 20, num_se: 2.0,
+            upper: 105.0, middle: 100.0, lower: 95.0,
+            bandwidth: 0.10, position_pct: 50.0, last_close: 100.0,
+            seb_label: "NEUTRAL".into(), note: String::new(),
+        };
+        upsert_seb(&conn, "TEST", &snap).unwrap();
+        let got = get_seb(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.seb_label, "NEUTRAL");
+        assert!((got.middle - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn seb_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_seb_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.seb_label.as_str(),
+            "ABOVE_BAND" | "UPPER_HALF" | "NEUTRAL" | "LOWER_HALF" | "BELOW_BAND" | "INSUFFICIENT_DATA"));
+        if snap.seb_label != "INSUFFICIENT_DATA" {
+            assert!(snap.upper >= snap.middle && snap.middle >= snap.lower);
+            assert!(snap.bandwidth.is_finite());
+        }
+    }
+
+    #[test]
+    fn imi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ImiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 40,
+            length: 14, sum_gains: 12.0, sum_losses: 8.0,
+            imi_value: 60.0, imi_prev: 55.0,
+            last_close: 100.0,
+            imi_label: "BULL".into(), note: String::new(),
+        };
+        upsert_imi(&conn, "TEST", &snap).unwrap();
+        let got = get_imi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.imi_label, "BULL");
+        assert!((got.imi_value - 60.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn imi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_imi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.imi_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.imi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.imi_value.is_finite());
+            assert!(snap.imi_value >= 0.0 && snap.imi_value <= 100.0);
+        }
     }
 }
