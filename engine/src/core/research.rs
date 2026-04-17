@@ -5678,6 +5678,122 @@ pub struct ImiSnapshot {
     pub note: String,
 }
 
+/// Daryl Guppy's Multiple Moving Average — a fan of twelve EMAs split into
+/// a **short-term trader group** (3, 5, 8, 10, 12, 15) and a **long-term
+/// investor group** (30, 35, 40, 45, 50, 60). When the short group is
+/// above and spread wide and the long group is below and parallel, a
+/// strong uptrend is confirmed. Compression in both groups signals an
+/// imminent move. `compression_pct` measures the short-group width
+/// relative to last close.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct GmmaSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub short_ema_avg: f64,            // mean of 3,5,8,10,12,15
+    pub long_ema_avg: f64,             // mean of 30,35,40,45,50,60
+    pub short_min: f64,                // min of short group
+    pub short_max: f64,                // max of short group
+    pub long_min: f64,
+    pub long_max: f64,
+    pub short_compression_pct: f64,    // (short_max − short_min)/last_close · 100
+    pub long_compression_pct: f64,
+    pub group_gap_pct: f64,            // (short_ema_avg − long_ema_avg)/last_close · 100
+    pub last_close: f64,
+    pub gmma_label: String,            // STRONG_UPTREND / UPTREND / COMPRESSION / DOWNTREND / STRONG_DOWNTREND / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Moving Average Envelope — a simple MA bracketed by **fixed percentage
+/// bands** above and below, as distinct from Bollinger (stdev-based) or
+/// Keltner (ATR-based). Classical technician's channel: `upper = MA·(1+k)`,
+/// `lower = MA·(1−k)`. Position within the envelope is a coarse
+/// overbought/oversold gauge.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MaenvSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 20
+    pub pct_band: f64,                 // 2.5
+    pub upper: f64,
+    pub middle: f64,                   // SMA(N)
+    pub lower: f64,
+    pub bandwidth_pct: f64,            // 2 · pct_band (constant, for symmetry)
+    pub position_pct: f64,             // (close − lower)/(upper − lower) · 100
+    pub last_close: f64,
+    pub maenv_label: String,           // ABOVE_BAND / UPPER_HALF / NEUTRAL / LOWER_HALF / BELOW_BAND / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Marc Chaikin's Accumulation/Distribution Line — a cumulative running
+/// total of `money flow multiplier × volume`, where
+/// `MFM = ((close − low) − (high − close)) / (high − low)`. Tracks whether
+/// the bar closes in the upper (accumulation) or lower (distribution) half
+/// of its range and weights by volume. Rising ADL with flat/down price is
+/// a bullish divergence; falling ADL with flat/up price is bearish.
+/// Distinct from OBV (raw signed volume) and CMF (ranged-MFM / ranged-vol
+/// ratio): ADL is the cumulative running total of MFM·V.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AdlSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub adl_value: f64,                // cumulative total
+    pub adl_prev: f64,
+    pub adl_sma_length: usize,         // 20
+    pub adl_sma: f64,                  // SMA(ADL, 20)
+    pub slope_per_bar: f64,            // OLS slope of last 20 ADL points
+    pub last_close: f64,
+    pub price_delta_pct: f64,          // close over last 20 bars vs adl direction
+    pub adl_label: String,             // STRONG_ACCUMULATION / ACCUMULATION / NEUTRAL / DISTRIBUTION / STRONG_DISTRIBUTION / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Adam White's Vertical Horizontal Filter — measures **trendiness vs
+/// ranging** of the price series over N bars:
+/// `VHF = (HHV_N − LLV_N) / Σ|Δclose|`. High VHF (>0.5) means price is
+/// grinding in one direction (trending); low VHF (<0.3) means price is
+/// chopping around the same range (ranging). Distinct from ADX (which is
+/// a trend strength oscillator on +DI/-DI differences), CHOP (log10 of
+/// range/sum-of-TR), and AROON (positional HHV/LLV timing).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct VhfSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 28
+    pub highest_high: f64,
+    pub lowest_low: f64,
+    pub sum_abs_delta: f64,
+    pub vhf_value: f64,
+    pub vhf_prev: f64,
+    pub last_close: f64,
+    pub vhf_label: String,             // STRONG_TREND / TREND / NEUTRAL / RANGING / STRONG_RANGING / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Volume Rate of Change — `VROC = (V_now − V_{now-N}) / V_{now-N} · 100`.
+/// Analogous to price ROC but on the volume series. Spikes in VROC mark
+/// unusual participation (news, earnings, breakouts); persistent positive
+/// VROC with rising price confirms trend. Different from RelVol (which
+/// compares current vs long-horizon average) and NVol (current vs 20-day
+/// median); VROC is strictly a two-point volume delta.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct VrocSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub volume_now: f64,
+    pub volume_then: f64,
+    pub vroc_value: f64,               // pct
+    pub vroc_prev: f64,
+    pub last_close: f64,
+    pub vroc_label: String,            // SURGE / ELEVATED / NEUTRAL / QUIET / COLLAPSE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -25773,6 +25889,264 @@ pub fn compute_imi_snapshot(
     }
 }
 
+/// Guppy Multiple Moving Average — fan of 6 short + 6 long EMAs.
+/// Reports group averages, spread, and trend label (STRONG_UPTREND when
+/// short-avg > long-avg and both groups fanned; COMPRESSION when short
+/// group width < 0.25 · long group width).
+pub fn compute_gmma_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> GmmaSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let short_lengths: [usize; 6] = [3, 5, 8, 10, 12, 15];
+    let long_lengths: [usize; 6] = [30, 35, 40, 45, 50, 60];
+    let min_bars = 60 + 2;
+    if n < min_bars {
+        return GmmaSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            gmma_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|r| r.close).collect();
+    let ema = |period: usize| -> f64 {
+        let alpha = 2.0 / (period as f64 + 1.0);
+        let mut e = closes[0];
+        for &c in &closes[1..] { e = alpha * c + (1.0 - alpha) * e; }
+        e
+    };
+    let shorts: Vec<f64> = short_lengths.iter().map(|&p| ema(p)).collect();
+    let longs: Vec<f64> = long_lengths.iter().map(|&p| ema(p)).collect();
+    let short_ema_avg = shorts.iter().sum::<f64>() / shorts.len() as f64;
+    let long_ema_avg = longs.iter().sum::<f64>() / longs.len() as f64;
+    let short_min = shorts.iter().cloned().fold(f64::INFINITY, f64::min);
+    let short_max = shorts.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let long_min = longs.iter().cloned().fold(f64::INFINITY, f64::min);
+    let long_max = longs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let last_close = closes[n - 1];
+    let short_compression_pct = if last_close > 0.0 { (short_max - short_min) / last_close * 100.0 } else { 0.0 };
+    let long_compression_pct = if last_close > 0.0 { (long_max - long_min) / last_close * 100.0 } else { 0.0 };
+    let group_gap_pct = if last_close > 0.0 { (short_ema_avg - long_ema_avg) / last_close * 100.0 } else { 0.0 };
+    let fanned_up = short_min > long_max;
+    let fanned_down = short_max < long_min;
+    let compressed = short_compression_pct < 0.25 * long_compression_pct.max(1e-6);
+    let label = if fanned_up && group_gap_pct > 1.0 { "STRONG_UPTREND" }
+        else if short_ema_avg > long_ema_avg { "UPTREND" }
+        else if fanned_down && group_gap_pct < -1.0 { "STRONG_DOWNTREND" }
+        else if short_ema_avg < long_ema_avg { "DOWNTREND" }
+        else if compressed { "COMPRESSION" }
+        else { "NEUTRAL" };
+    GmmaSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        short_ema_avg, long_ema_avg,
+        short_min, short_max, long_min, long_max,
+        short_compression_pct, long_compression_pct, group_gap_pct,
+        last_close,
+        gmma_label: label.into(), note: String::new(),
+    }
+}
+
+/// Moving Average Envelope — SMA(N) ± k%. Labels the close's position
+/// relative to the envelope.
+pub fn compute_maenv_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MaenvSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 20usize;
+    let pct_band = 2.5_f64;
+    if n < length + 1 {
+        return MaenvSnapshot {
+            symbol: sym, as_of: as_of.into(), length, pct_band,
+            maenv_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 1, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|r| r.close).collect();
+    let start = n - length;
+    let sma: f64 = closes[start..].iter().sum::<f64>() / length as f64;
+    let middle = sma;
+    let factor = pct_band / 100.0;
+    let upper = middle * (1.0 + factor);
+    let lower = middle * (1.0 - factor);
+    let last_close = closes[n - 1];
+    let bandwidth_pct = 2.0 * pct_band;
+    let position_pct = if upper > lower {
+        (last_close - lower) / (upper - lower) * 100.0
+    } else { 50.0 };
+    let label = if last_close > upper { "ABOVE_BAND" }
+        else if last_close < lower { "BELOW_BAND" }
+        else if position_pct >= 75.0 { "UPPER_HALF" }
+        else if position_pct <= 25.0 { "LOWER_HALF" }
+        else { "NEUTRAL" };
+    MaenvSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        length, pct_band,
+        upper, middle, lower,
+        bandwidth_pct, position_pct,
+        last_close,
+        maenv_label: label.into(), note: String::new(),
+    }
+}
+
+/// Chaikin Accumulation/Distribution Line — cumulative ∑(MFM · volume).
+/// Reports ADL, 20-bar SMA, OLS slope of last 20 ADL points, and
+/// accumulation/distribution label.
+pub fn compute_adl_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AdlSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let adl_sma_length = 20usize;
+    if n < adl_sma_length + 2 {
+        return AdlSnapshot {
+            symbol: sym, as_of: as_of.into(), adl_sma_length,
+            adl_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", adl_sma_length + 2, n),
+            ..Default::default()
+        };
+    }
+    let mut adl = vec![0.0; n];
+    let mut running = 0.0_f64;
+    for i in 0..n {
+        let r = sorted[i];
+        let range = r.high - r.low;
+        let mfm = if range > 1e-12 {
+            ((r.close - r.low) - (r.high - r.close)) / range
+        } else { 0.0 };
+        running += mfm * r.volume;
+        adl[i] = running;
+    }
+    let adl_value = adl[n - 1];
+    let adl_prev = adl[n - 2];
+    let sma_start = n - adl_sma_length;
+    let adl_sma: f64 = adl[sma_start..].iter().sum::<f64>() / adl_sma_length as f64;
+    // OLS slope of last 20 points
+    let nf = adl_sma_length as f64;
+    let xs: Vec<f64> = (0..adl_sma_length).map(|i| i as f64).collect();
+    let ys: &[f64] = &adl[sma_start..];
+    let mx: f64 = xs.iter().sum::<f64>() / nf;
+    let my: f64 = ys.iter().sum::<f64>() / nf;
+    let mut num = 0.0; let mut den = 0.0;
+    for i in 0..adl_sma_length {
+        let dx = xs[i] - mx;
+        num += dx * (ys[i] - my);
+        den += dx * dx;
+    }
+    let slope_per_bar = if den > 1e-12 { num / den } else { 0.0 };
+    let last_close = sorted[n - 1].close;
+    let price_past = sorted[sma_start].close;
+    let price_delta_pct = if price_past > 0.0 { (last_close - price_past) / price_past * 100.0 } else { 0.0 };
+    let norm_slope = if last_close > 0.0 { slope_per_bar / last_close } else { 0.0 };
+    let label = if norm_slope > 1_000_000.0 { "STRONG_ACCUMULATION" }
+        else if norm_slope > 100_000.0 { "ACCUMULATION" }
+        else if norm_slope < -1_000_000.0 { "STRONG_DISTRIBUTION" }
+        else if norm_slope < -100_000.0 { "DISTRIBUTION" }
+        else { "NEUTRAL" };
+    AdlSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        adl_value, adl_prev, adl_sma_length, adl_sma,
+        slope_per_bar, last_close, price_delta_pct,
+        adl_label: label.into(), note: String::new(),
+    }
+}
+
+/// Vertical Horizontal Filter — (HHV − LLV) / Σ|Δclose| over N=28.
+/// High = trending, low = ranging.
+pub fn compute_vhf_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> VhfSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 28usize;
+    if n < length + 2 {
+        return VhfSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            vhf_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 2, n),
+            ..Default::default()
+        };
+    }
+    let vhf_at = |end: usize| -> (f64, f64, f64, f64) {
+        let start = end + 1 - length;
+        let mut hh = f64::NEG_INFINITY;
+        let mut ll = f64::INFINITY;
+        for i in start..=end {
+            if sorted[i].high > hh { hh = sorted[i].high; }
+            if sorted[i].low < ll { ll = sorted[i].low; }
+        }
+        let mut sum_abs = 0.0;
+        for i in start..=end {
+            sum_abs += (sorted[i].close - sorted[i - 1].close).abs();
+        }
+        let v = if sum_abs > 1e-12 { (hh - ll) / sum_abs } else { 0.0 };
+        (hh, ll, sum_abs, v)
+    };
+    let (highest_high, lowest_low, sum_abs_delta, vhf_value) = vhf_at(n - 1);
+    let (_, _, _, vhf_prev) = vhf_at(n - 2);
+    let label = if vhf_value >= 0.6 { "STRONG_TREND" }
+        else if vhf_value >= 0.4 { "TREND" }
+        else if vhf_value <= 0.2 { "STRONG_RANGING" }
+        else if vhf_value <= 0.3 { "RANGING" }
+        else { "NEUTRAL" };
+    VhfSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        length, highest_high, lowest_low, sum_abs_delta,
+        vhf_value, vhf_prev,
+        last_close: sorted[n - 1].close,
+        vhf_label: label.into(), note: String::new(),
+    }
+}
+
+/// Volume Rate of Change — 14-bar ROC of volume.
+pub fn compute_vroc_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> VrocSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 14usize;
+    if n < length + 2 {
+        return VrocSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            vroc_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 2, n),
+            ..Default::default()
+        };
+    }
+    let vroc_at = |end: usize| -> (f64, f64, f64) {
+        let then = sorted[end - length].volume;
+        let now = sorted[end].volume;
+        let v = if then > 1e-12 { (now - then) / then * 100.0 } else { 0.0 };
+        (now, then, v)
+    };
+    let (volume_now, volume_then, vroc_value) = vroc_at(n - 1);
+    let (_, _, vroc_prev) = vroc_at(n - 2);
+    let label = if vroc_value >= 100.0 { "SURGE" }
+        else if vroc_value >= 30.0 { "ELEVATED" }
+        else if vroc_value <= -50.0 { "COLLAPSE" }
+        else if vroc_value <= -20.0 { "QUIET" }
+        else { "NEUTRAL" };
+    VrocSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        length, volume_now, volume_then,
+        vroc_value, vroc_prev,
+        last_close: sorted[n - 1].close,
+        vroc_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -34446,6 +34820,157 @@ pub fn get_imi(conn: &Connection, symbol: &str) -> Result<Option<ImiSnapshot>, S
         .map_err(|e| format!("prepare get_imi: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_imi: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_imi: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn create_research_tables_v58(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v57(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_gmma (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_gmma_updated ON research_gmma(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_maenv (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_maenv_updated ON research_maenv(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_adl (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_adl_updated ON research_adl(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_vhf (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_vhf_updated ON research_vhf(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_vroc (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_vroc_updated ON research_vroc(updated_at);",
+    ).map_err(|e| format!("create v58 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_gmma(conn: &Connection, symbol: &str, snap: &GmmaSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v58(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("gmma json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_gmma(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert gmma: {e}"))?;
+    Ok(())
+}
+
+pub fn get_gmma(conn: &Connection, symbol: &str) -> Result<Option<GmmaSnapshot>, String> {
+    let _ = create_research_tables_v58(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_gmma WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_gmma: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_gmma: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_gmma: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_maenv(conn: &Connection, symbol: &str, snap: &MaenvSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v58(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("maenv json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_maenv(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert maenv: {e}"))?;
+    Ok(())
+}
+
+pub fn get_maenv(conn: &Connection, symbol: &str) -> Result<Option<MaenvSnapshot>, String> {
+    let _ = create_research_tables_v58(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_maenv WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_maenv: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_maenv: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_maenv: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_adl(conn: &Connection, symbol: &str, snap: &AdlSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v58(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("adl json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_adl(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert adl: {e}"))?;
+    Ok(())
+}
+
+pub fn get_adl(conn: &Connection, symbol: &str) -> Result<Option<AdlSnapshot>, String> {
+    let _ = create_research_tables_v58(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_adl WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_adl: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_adl: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_adl: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_vhf(conn: &Connection, symbol: &str, snap: &VhfSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v58(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("vhf json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_vhf(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert vhf: {e}"))?;
+    Ok(())
+}
+
+pub fn get_vhf(conn: &Connection, symbol: &str) -> Result<Option<VhfSnapshot>, String> {
+    let _ = create_research_tables_v58(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_vhf WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_vhf: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_vhf: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_vhf: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_vroc(conn: &Connection, symbol: &str, snap: &VrocSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v58(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("vroc json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_vroc(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert vroc: {e}"))?;
+    Ok(())
+}
+
+pub fn get_vroc(conn: &Connection, symbol: &str) -> Result<Option<VrocSnapshot>, String> {
+    let _ = create_research_tables_v58(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_vroc WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_vroc: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_vroc: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_vroc: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -45430,6 +45955,149 @@ Trailing text.
         if snap.imi_label != "INSUFFICIENT_DATA" {
             assert!(snap.imi_value.is_finite());
             assert!(snap.imi_value >= 0.0 && snap.imi_value <= 100.0);
+        }
+    }
+
+    #[test]
+    fn gmma_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = GmmaSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 120,
+            short_ema_avg: 101.0, long_ema_avg: 99.0,
+            short_min: 100.5, short_max: 101.5,
+            long_min: 98.0, long_max: 100.0,
+            short_compression_pct: 1.0, long_compression_pct: 2.0,
+            group_gap_pct: 2.0, last_close: 100.0,
+            gmma_label: "UPTREND".into(), note: String::new(),
+        };
+        upsert_gmma(&conn, "TEST", &snap).unwrap();
+        let got = get_gmma(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.gmma_label, "UPTREND");
+        assert!((got.short_ema_avg - 101.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gmma_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_gmma_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.gmma_label.as_str(),
+            "STRONG_UPTREND" | "UPTREND" | "COMPRESSION" | "DOWNTREND" | "STRONG_DOWNTREND" | "NEUTRAL" | "INSUFFICIENT_DATA"));
+        if snap.gmma_label != "INSUFFICIENT_DATA" {
+            assert!(snap.short_ema_avg.is_finite());
+            assert!(snap.long_ema_avg.is_finite());
+        }
+    }
+
+    #[test]
+    fn maenv_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MaenvSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 40,
+            length: 20, pct_band: 2.5,
+            upper: 102.5, middle: 100.0, lower: 97.5,
+            bandwidth_pct: 5.0, position_pct: 50.0, last_close: 100.0,
+            maenv_label: "NEUTRAL".into(), note: String::new(),
+        };
+        upsert_maenv(&conn, "TEST", &snap).unwrap();
+        let got = get_maenv(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.maenv_label, "NEUTRAL");
+        assert!((got.middle - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn maenv_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_maenv_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.maenv_label.as_str(),
+            "ABOVE_BAND" | "UPPER_HALF" | "NEUTRAL" | "LOWER_HALF" | "BELOW_BAND" | "INSUFFICIENT_DATA"));
+        if snap.maenv_label != "INSUFFICIENT_DATA" {
+            assert!(snap.upper >= snap.middle && snap.middle >= snap.lower);
+            assert!(snap.bandwidth_pct > 0.0);
+        }
+    }
+
+    #[test]
+    fn adl_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = AdlSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 40,
+            adl_value: 1_500_000.0, adl_prev: 1_450_000.0,
+            adl_sma_length: 20, adl_sma: 1_300_000.0,
+            slope_per_bar: 50_000.0, last_close: 100.0,
+            price_delta_pct: 3.5,
+            adl_label: "ACCUMULATION".into(), note: String::new(),
+        };
+        upsert_adl(&conn, "TEST", &snap).unwrap();
+        let got = get_adl(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.adl_label, "ACCUMULATION");
+        assert!((got.adl_value - 1_500_000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn adl_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_adl_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.adl_label.as_str(),
+            "STRONG_ACCUMULATION" | "ACCUMULATION" | "NEUTRAL" | "DISTRIBUTION" | "STRONG_DISTRIBUTION" | "INSUFFICIENT_DATA"));
+        if snap.adl_label != "INSUFFICIENT_DATA" {
+            assert!(snap.adl_value.is_finite());
+            assert!(snap.adl_sma.is_finite());
+        }
+    }
+
+    #[test]
+    fn vhf_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = VhfSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 60,
+            length: 28, highest_high: 105.0, lowest_low: 95.0,
+            sum_abs_delta: 20.0,
+            vhf_value: 0.5, vhf_prev: 0.45,
+            last_close: 100.0,
+            vhf_label: "TREND".into(), note: String::new(),
+        };
+        upsert_vhf(&conn, "TEST", &snap).unwrap();
+        let got = get_vhf(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.vhf_label, "TREND");
+        assert!((got.vhf_value - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn vhf_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_vhf_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.vhf_label.as_str(),
+            "STRONG_TREND" | "TREND" | "NEUTRAL" | "RANGING" | "STRONG_RANGING" | "INSUFFICIENT_DATA"));
+        if snap.vhf_label != "INSUFFICIENT_DATA" {
+            assert!(snap.vhf_value.is_finite());
+            assert!(snap.vhf_value >= 0.0);
+        }
+    }
+
+    #[test]
+    fn vroc_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = VrocSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 30,
+            length: 14, volume_now: 1_200_000.0, volume_then: 1_000_000.0,
+            vroc_value: 20.0, vroc_prev: 15.0,
+            last_close: 100.0,
+            vroc_label: "NEUTRAL".into(), note: String::new(),
+        };
+        upsert_vroc(&conn, "TEST", &snap).unwrap();
+        let got = get_vroc(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.vroc_label, "NEUTRAL");
+        assert!((got.vroc_value - 20.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn vroc_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_vroc_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.vroc_label.as_str(),
+            "SURGE" | "ELEVATED" | "NEUTRAL" | "QUIET" | "COLLAPSE" | "INSUFFICIENT_DATA"));
+        if snap.vroc_label != "INSUFFICIENT_DATA" {
+            assert!(snap.vroc_value.is_finite());
         }
     }
 }

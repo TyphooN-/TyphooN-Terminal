@@ -3894,7 +3894,90 @@ OVERBOUGHT (≥70) / BULL (≥60) / NEUTRAL / BEAR (≤40) / OVERSOLD
 sum_losses, imi_value, imi_prev, last_close. Source: ADR-167
 IMI window.
 
-#### 2.268 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.268 Guppy Multiple Moving Average (GMMA — ADR-168)
+
+Pulled from `research::get_gmma`. Daryl Guppy's MMA is a fan of
+twelve EMAs split into a **short-term trader group** (periods 3, 5,
+8, 10, 12, 15) and a **long-term investor group** (30, 35, 40, 45,
+50, 60). Reports group averages, min/max within each group,
+compression percentages (`(max−min)/close·100`), and group-gap
+(`(short_avg − long_avg)/close·100`). Trend label is
+STRONG_UPTREND when the short group is above the long group with
+group-gap > 1%, UPTREND when short-avg > long-avg without strong
+fanning, COMPRESSION when the short group width is less than 25%
+of the long group width, DOWNTREND / STRONG_DOWNTREND on the mirror
+conditions. Distinct from ALLIGATOR (3-line SMMA shifted system,
+ADR-167), from every single-MA surface, and from any dual-MA
+crossover. Requires n≥62; body reports short_ema_avg, long_ema_avg,
+short_min/max, long_min/max, short_compression_pct,
+long_compression_pct, group_gap_pct, last_close. Source: ADR-168
+GMMA window.
+
+#### 2.269 Moving Average Envelope (MAENV — ADR-168)
+
+Pulled from `research::get_maenv`. Classical technician's channel:
+`upper = SMA(20)·(1+k)`, `middle = SMA(20)`, `lower = SMA(20)·(1−k)`
+with `k = 0.025` (±2.5%). Distinct from Bollinger (stdev-based,
+ADR-108), Keltner (ATR-based, ADR-135), Donchian (rolling high/low,
+ADR-149), SEB (regression-residual, ADR-167), and STARC (SMA ± k·ATR):
+MAENV is the only "fixed pct, no vol input" channel. ABOVE_BAND /
+UPPER_HALF (pos ≥75%) / NEUTRAL / LOWER_HALF (pos ≤25%) / BELOW_BAND
+labels based on close position within the band. Requires n≥21;
+body reports length (20), pct_band (2.5), upper, middle, lower,
+bandwidth_pct (5.0), position_pct, last_close. Source: ADR-168
+MAENV window.
+
+#### 2.270 Chaikin Accumulation/Distribution Line (ADL — ADR-168)
+
+Pulled from `research::get_adl`. Marc Chaikin's ADL is a cumulative
+running total of `money_flow_multiplier · volume`, where
+`MFM = ((close − low) − (high − close)) / (high − low)`. Bars
+closing in the upper half of their range contribute positive money
+flow (accumulation); bars closing in the lower half contribute
+negative (distribution). Distinct from OBV (raw signed volume,
+range-agnostic), CMF (ranged ratio over N bars, ADR-140), KLINGER
+(dual-EMA transformation of volume force, ADR-152), PVT (ROC·volume
+rather than MFM·volume, ADR-164), and from the Chaikin Oscillator
+(ADOSC, difference of EMAs on ADL — not shipped). Reports ADL,
+ADL_prev, ADL_SMA(20), OLS slope of last 20 ADL points,
+price_delta_pct over the same window, and a label derived from the
+normalised slope. STRONG_ACCUMULATION / ACCUMULATION / NEUTRAL /
+DISTRIBUTION / STRONG_DISTRIBUTION labels. Requires n≥22; body
+reports adl_value, adl_prev, adl_sma_length (20), adl_sma,
+slope_per_bar, last_close, price_delta_pct. Source: ADR-168 ADL
+window.
+
+#### 2.271 Vertical Horizontal Filter (VHF — ADR-168)
+
+Pulled from `research::get_vhf`. Adam White's 1991 VHF measures
+**trendiness vs ranging**: `VHF = (HHV_N − LLV_N) / Σ|Δclose|` over
+N=28 bars. High VHF (>0.5) = price is grinding in one direction
+(trending); low VHF (<0.3) = price is chopping around the same
+range. Distinct from ADX (trend strength from +DI/-DI differences,
+ADR-108), CHOP (log10 of range/sum-of-TR, ADR-141), AROON
+(positional HHV/LLV timing, ADR-140), and VI (Vortex, ADR-150).
+VHF is the canonical "am I in a trend right now, or a range?"
+filter used to gate trend-following strategies. STRONG_TREND
+(≥0.6) / TREND (≥0.4) / NEUTRAL / RANGING (≤0.3) / STRONG_RANGING
+(≤0.2) labels. Requires n≥30; body reports length (28),
+highest_high, lowest_low, sum_abs_delta, vhf_value, vhf_prev,
+last_close. Source: ADR-168 VHF window.
+
+#### 2.272 Volume Rate of Change (VROC — ADR-168)
+
+Pulled from `research::get_vroc`. Strict two-point volume delta:
+`VROC = (V_now − V_{now−N}) / V_{now−N} · 100` with N=14. Spikes
+mark unusual participation (news, earnings, breakouts); persistent
+positive VROC with rising price confirms trend. Distinct from
+RelVol (current-vs-long-horizon average, ADR-139), NVol
+(current-vs-20-day median, ADR-148), and the price-based ROC
+(ADR-113). VROC is the "has volume accelerated?" gauge used in
+volume-first breakout systems. SURGE (≥+100%) / ELEVATED (≥+30%) /
+NEUTRAL / QUIET (≤−20%) / COLLAPSE (≤−50%) labels. Requires n≥16;
+body reports length (14), volume_now, volume_then, vroc_value,
+vroc_prev, last_close. Source: ADR-168 VROC window.
+
+#### 2.273 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -3910,7 +3993,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.269 Sector peer comparison
+#### 2.274 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -4170,9 +4253,46 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~81-155 KB**
-(up from 80-153 KB after ADR-166; ADR-167 adds five optional per-symbol
-blocks — SMMA / ALLIGATOR / CRSI / SEB / IMI — each measuring ~2 k/v rows
+symbols. A single S&P 500 symbol now produces a packet around **~82-157 KB**
+(up from 81-155 KB after ADR-167; ADR-168 adds five optional per-symbol
+blocks — GMMA / MAENV / ADL / VHF / VROC — each measuring ~2 k/v rows and
+adding ~240-320 bytes when populated, for a typical +1.39 KB per symbol;
+all five reuse the existing `research_historical_price` HP cache and the
+standard research-table LAN sync path with zero new API dependencies;
+GMMA computes Daryl Guppy's Multiple Moving Average as a fan of twelve
+EMAs split into a short-term trader group (periods 3,5,8,10,12,15) and a
+long-term investor group (periods 30,35,40,45,50,60), reporting group
+averages, min/max per group, compression percentages
+`(max−min)/close·100`, and group-gap `(short_avg−long_avg)/close·100`,
+with STRONG_UPTREND / UPTREND / COMPRESSION / DOWNTREND /
+STRONG_DOWNTREND labels driven by fan state and gap magnitude —
+distinct from the ALLIGATOR 3-line SMMA system, from every single-MA
+surface, and from any dual-MA crossover; MAENV computes the classical
+technician's Moving Average Envelope as `SMA(20) ± 2.5%` bands with
+ABOVE_BAND / UPPER_HALF / NEUTRAL / LOWER_HALF / BELOW_BAND labels
+based on close position within the band — the only "fixed pct, no
+vol input" channel alongside Bollinger (stddev), Keltner (ATR), SEB
+(regression residual), and Donchian (max-min); ADL computes Marc
+Chaikin's Accumulation/Distribution Line as a cumulative running total
+of `money_flow_multiplier · volume` where
+`MFM = ((close−low)−(high−close))/(high−low)`, reporting the ADL line,
+its 20-bar SMA, its 20-bar OLS slope, and 20-bar price delta, with
+STRONG_ACCUMULATION / ACCUMULATION / NEUTRAL / DISTRIBUTION /
+STRONG_DISTRIBUTION labels — distinct from OBV (raw signed volume,
+range-agnostic), CMF (ranged ratio), KLINGER (dual-EMA), and PVT
+(ROC·volume); VHF computes Adam White's 1991 Vertical Horizontal
+Filter as `(HHV_28 − LLV_28) / Σ|Δclose|` — a trend-vs-range gauge
+with STRONG_TREND / TREND / NEUTRAL / RANGING / STRONG_RANGING
+labels at 0.6/0.4/0.3/0.2 thresholds, the canonical "am I in a
+trend right now, or a range?" filter distinct from ADX (+DI/-DI
+strength), CHOP (log10 range/sum-of-TR), AROON (positional HHV/LLV
+timing), and VI (Vortex); VROC computes the strict two-point
+Volume Rate of Change as `(V_now − V_{now-14}) / V_{now-14} · 100`
+with SURGE / ELEVATED / NEUTRAL / QUIET / COLLAPSE labels at
++100/+30/-20/-50 thresholds — distinct from RelVol
+(current-vs-long-horizon), NVol (current-vs-20-day median), and
+price-based ROC; ADR-167 adds five optional per-symbol blocks —
+SMMA / ALLIGATOR / CRSI / SEB / IMI — each measuring ~2 k/v rows
 and adding ~230-300 bytes when populated, for a typical +1.35 KB per
 symbol; all five reuse the existing `research_historical_price` HP cache
 and the standard research-table LAN sync path with zero new API

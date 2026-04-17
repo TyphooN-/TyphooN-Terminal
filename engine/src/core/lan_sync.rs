@@ -454,6 +454,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_crsi",
     "research_seb",
     "research_imi",
+    // ── ADR-168 Round 56 ────────────────────────────
+    "research_gmma",
+    "research_maenv",
+    "research_adl",
+    "research_vhf",
+    "research_vroc",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2535,6 +2541,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_gmma" => Some(
+            "CREATE TABLE IF NOT EXISTS research_gmma (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_maenv" => Some(
+            "CREATE TABLE IF NOT EXISTS research_maenv (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_adl" => Some(
+            "CREATE TABLE IF NOT EXISTS research_adl (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_vhf" => Some(
+            "CREATE TABLE IF NOT EXISTS research_vhf (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_vroc" => Some(
+            "CREATE TABLE IF NOT EXISTS research_vroc (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2852,6 +2893,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_crsi" => Some("updated_at"),
         "research_seb" => Some("updated_at"),
         "research_imi" => Some("updated_at"),
+        // ── ADR-168 Round 56 ──
+        "research_gmma" => Some("updated_at"),
+        "research_maenv" => Some("updated_at"),
+        "research_adl" => Some("updated_at"),
+        "research_vhf" => Some("updated_at"),
+        "research_vroc" => Some("updated_at"),
         _ => None,
     }
 }
