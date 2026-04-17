@@ -5363,6 +5363,111 @@ pub struct RviSnapshot {
     pub note: String,
 }
 
+// ── ADR-164 Round 53: TRIMA / T3 / VIDYA / SMI / PVT ───────────────────────
+
+/// TRIMA — Triangular Moving Average. SMA-of-SMA with a (N+1)/2 sub-window
+/// produces a triangular-weighted central MA. Distinct from SMA (flat),
+/// WMA/HMA (linear), EMA (exponential), ALMA (Gaussian), DEMA/TEMA
+/// (algebraic lag reduction). Length 20.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct TrimaSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 20
+    pub trima_value: f64,
+    pub trima_prev: f64,
+    pub deviation_pct: f64,            // (last_close − trima_value) / trima_value × 100
+    pub last_close: f64,
+    pub trima_label: String,           // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// T3 — Tim Tillson's 1998 composite MA. Six iterative EMAs with volume
+/// factor v default 0.7:
+/// e1 = EMA(close, N); e2 = EMA(e1, N); ... ; e6 = EMA(e5, N);
+/// c1 = −v³; c2 = 3v² + 3v³; c3 = −6v² − 3v − 3v³; c4 = 1 + 3v + v³ + 3v²;
+/// T3 = c1·e6 + c2·e5 + c3·e4 + c4·e3.
+/// Generalises DEMA (v=0 recovers EMA; v=1 produces strong lag reduction).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct T3Snapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 20
+    pub v_factor: f64,                 // 0.7 canonical
+    pub t3_value: f64,
+    pub t3_prev: f64,
+    pub deviation_pct: f64,
+    pub last_close: f64,
+    pub t3_label: String,              // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// VIDYA — Tushar Chande's 1992 Variable Index Dynamic Average.
+/// alpha_t = (2 / (N+1)) · |CMO(9)| / 100.
+/// VIDYA_t = alpha_t · price_t + (1 − alpha_t) · VIDYA_{t−1}.
+/// alpha scales with momentum: strong trends accelerate the MA, ranges freeze it.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct VidyaSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 20 (EMA base)
+    pub cmo_length: usize,             // 9
+    pub vidya_value: f64,
+    pub vidya_prev: f64,
+    pub current_alpha: f64,            // last-bar effective alpha
+    pub cmo_magnitude: f64,            // |CMO| at last bar ∈ [0, 100]
+    pub deviation_pct: f64,
+    pub last_close: f64,
+    pub vidya_label: String,           // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// SMI — Stochastic Momentum Index (William Blau 1993).
+/// H = max(high, N); L = min(low, N); mid = (H+L)/2.
+/// Numerator = double-EMA smoothed (close − mid).
+/// Denominator = double-EMA smoothed ((H−L)/2).
+/// SMI = 100 · Numerator / Denominator ∈ [−100, 100].
+/// Signal = EMA(SMI, short).
+/// Distinct from STOCHRSI (stochastic of RSI) and STOCH (raw price stochastic).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SmiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 10 lookback
+    pub smooth_length: usize,          // 3 double-EMA smoothing
+    pub signal_length: usize,          // 3 signal EMA
+    pub smi_value: f64,
+    pub smi_prev: f64,
+    pub signal_value: f64,
+    pub signal_prev: f64,
+    pub last_close: f64,
+    pub smi_label: String,             // OVERBOUGHT / BULL_CROSS / BULL / NEUTRAL / BEAR / BEAR_CROSS / OVERSOLD / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// PVT — Price Volume Trend (Dysart/Lowry 1966).
+/// PVT_t = PVT_{t−1} + volume_t · (close_t − close_{t−1}) / close_{t−1}.
+/// Cumulative volume-weighted running sum of percent price changes.
+/// Distinct from OBV (±volume based on close direction): PVT scales the
+/// volume attribution by the magnitude of the percent move.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PvtSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pvt_value: f64,                // cumulative PVT at last bar
+    pub pvt_prev: f64,                 // cumulative PVT at previous bar
+    pub pvt_ema: f64,                  // 20-bar EMA of PVT series
+    pub pvt_slope: f64,                // PVT[last] − PVT[last−n], n=20
+    pub last_close: f64,
+    pub pvt_label: String,             // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -24572,6 +24677,280 @@ pub fn compute_rvi_snapshot(
     }
 }
 
+// ── ADR-164 Round 53: TRIMA / T3 / VIDYA / SMI / PVT ───────────────────────
+
+fn sma_series(values: &[f64], length: usize) -> Vec<f64> {
+    let n = values.len();
+    let mut out = vec![0.0; n];
+    if n == 0 || length == 0 { return out; }
+    let mut acc = 0.0;
+    for i in 0..n {
+        acc += values[i];
+        if i >= length { acc -= values[i - length]; }
+        out[i] = if i + 1 >= length { acc / length as f64 } else { 0.0 };
+    }
+    out
+}
+
+pub fn compute_trima_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> TrimaSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 20usize;
+    let inner = length / 2 + 1; // SMA of SMA with (N/2 + 1) windows
+    let min_bars = length + inner;
+    if n < min_bars {
+        return TrimaSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            trima_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let s1 = sma_series(&closes, inner);
+    let s2 = sma_series(&s1, inner);
+    let trima_value = s2[n - 1];
+    let trima_prev = s2[n - 2];
+    let last_close = closes[n - 1];
+    let dev = if trima_value.abs() > 1e-12 { (last_close - trima_value) / trima_value * 100.0 } else { 0.0 };
+    let label = if dev > 2.0 { "STRONG_BULL" }
+        else if dev > 0.0 { "BULL" }
+        else if dev < -2.0 { "STRONG_BEAR" }
+        else if dev < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    TrimaSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        trima_value, trima_prev, deviation_pct: dev, last_close,
+        trima_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_t3_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> T3Snapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 20usize;
+    let v = 0.7f64;
+    let min_bars = length * 6 / 5; // rough warmup floor; EMA stabilises
+    if n < min_bars.max(length + 2) {
+        return T3Snapshot {
+            symbol: sym, as_of: as_of.into(), length, v_factor: v,
+            t3_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars.max(length + 2), n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let e1 = ema_series(&closes, length);
+    let e2 = ema_series(&e1, length);
+    let e3 = ema_series(&e2, length);
+    let e4 = ema_series(&e3, length);
+    let e5 = ema_series(&e4, length);
+    let e6 = ema_series(&e5, length);
+    let c1 = -v.powi(3);
+    let c2 = 3.0 * v * v + 3.0 * v.powi(3);
+    let c3 = -6.0 * v * v - 3.0 * v - 3.0 * v.powi(3);
+    let c4 = 1.0 + 3.0 * v + v.powi(3) + 3.0 * v * v;
+    let t3_at = |i: usize| c1 * e6[i] + c2 * e5[i] + c3 * e4[i] + c4 * e3[i];
+    let t3_value = t3_at(n - 1);
+    let t3_prev = t3_at(n - 2);
+    let last_close = closes[n - 1];
+    let dev = if t3_value.abs() > 1e-12 { (last_close - t3_value) / t3_value * 100.0 } else { 0.0 };
+    let label = if dev > 2.0 { "STRONG_BULL" }
+        else if dev > 0.0 { "BULL" }
+        else if dev < -2.0 { "STRONG_BEAR" }
+        else if dev < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    T3Snapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length, v_factor: v,
+        t3_value, t3_prev, deviation_pct: dev, last_close,
+        t3_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_vidya_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> VidyaSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 20usize;
+    let cmo_length = 9usize;
+    let min_bars = length + cmo_length + 2;
+    if n < min_bars {
+        return VidyaSnapshot {
+            symbol: sym, as_of: as_of.into(), length, cmo_length,
+            vidya_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    // |CMO(cmo_length)| at each bar i: 100 · |sum_up − sum_down| / (sum_up + sum_down)
+    let cmo_abs = |end: usize| -> f64 {
+        let start = end + 1 - cmo_length;
+        let mut up = 0.0;
+        let mut dn = 0.0;
+        for k in start..=end {
+            if k == 0 { continue; }
+            let d = closes[k] - closes[k - 1];
+            if d > 0.0 { up += d; } else { dn += -d; }
+        }
+        let s = up + dn;
+        if s > 1e-12 { 100.0 * (up - dn).abs() / s } else { 0.0 }
+    };
+    let base_alpha = 2.0 / (length as f64 + 1.0);
+    let warmup = cmo_length.max(length);
+    let mut vidya = closes[warmup];
+    let mut prev_vidya = vidya;
+    let mut current_alpha = 0.0;
+    let mut cmo_now = 0.0;
+    for i in (warmup + 1)..n {
+        prev_vidya = vidya;
+        let cmo_i = cmo_abs(i);
+        let alpha = base_alpha * cmo_i / 100.0;
+        vidya = alpha * closes[i] + (1.0 - alpha) * vidya;
+        current_alpha = alpha;
+        cmo_now = cmo_i;
+    }
+    let vidya_value = vidya;
+    let last_close = closes[n - 1];
+    let dev = if vidya_value.abs() > 1e-12 { (last_close - vidya_value) / vidya_value * 100.0 } else { 0.0 };
+    let label = if dev > 2.0 { "STRONG_BULL" }
+        else if dev > 0.0 { "BULL" }
+        else if dev < -2.0 { "STRONG_BEAR" }
+        else if dev < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    VidyaSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length, cmo_length,
+        vidya_value, vidya_prev: prev_vidya, current_alpha, cmo_magnitude: cmo_now,
+        deviation_pct: dev, last_close, vidya_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_smi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> SmiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 10usize;
+    let smooth = 3usize;
+    let signal = 3usize;
+    let min_bars = length + 2 * smooth + signal + 2;
+    if n < min_bars {
+        return SmiSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            smooth_length: smooth, signal_length: signal,
+            smi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    // Per-bar numerator = close − mid where mid = (H_max + L_min)/2 over lookback.
+    // Per-bar denominator = (H_max − L_min)/2.
+    let mut num_series = vec![0.0; n];
+    let mut den_series = vec![0.0; n];
+    for i in (length - 1)..n {
+        let start = i + 1 - length;
+        let mut hmax = f64::MIN;
+        let mut lmin = f64::MAX;
+        for k in start..=i {
+            if sorted[k].high > hmax { hmax = sorted[k].high; }
+            if sorted[k].low < lmin { lmin = sorted[k].low; }
+        }
+        let mid = (hmax + lmin) * 0.5;
+        num_series[i] = sorted[i].close - mid;
+        den_series[i] = (hmax - lmin) * 0.5;
+    }
+    let num_1 = ema_series(&num_series, smooth);
+    let num_2 = ema_series(&num_1, smooth);
+    let den_1 = ema_series(&den_series, smooth);
+    let den_2 = ema_series(&den_1, smooth);
+    let smi_series: Vec<f64> = (0..n).map(|i| {
+        if den_2[i].abs() > 1e-12 { 100.0 * num_2[i] / den_2[i] } else { 0.0 }
+    }).collect();
+    let sig_series = ema_series(&smi_series, signal);
+    let smi_value = smi_series[n - 1];
+    let smi_prev = smi_series[n - 2];
+    let signal_value = sig_series[n - 1];
+    let signal_prev = sig_series[n - 2];
+    let last_close = sorted[n - 1].close;
+    let cross_up = smi_prev <= signal_prev && smi_value > signal_value;
+    let cross_down = smi_prev >= signal_prev && smi_value < signal_value;
+    let label = if smi_value > 40.0 { "OVERBOUGHT" }
+        else if cross_up { "BULL_CROSS" }
+        else if cross_down { "BEAR_CROSS" }
+        else if smi_value < -40.0 { "OVERSOLD" }
+        else if smi_value > signal_value { "BULL" }
+        else if smi_value < signal_value { "BEAR" }
+        else { "NEUTRAL" };
+    SmiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        smooth_length: smooth, signal_length: signal,
+        smi_value, smi_prev, signal_value, signal_prev, last_close,
+        smi_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_pvt_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PvtSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let ema_length = 20usize;
+    let slope_lookback = 20usize;
+    let min_bars = ema_length + slope_lookback + 2;
+    if n < min_bars {
+        return PvtSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            pvt_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let mut pvt_series = vec![0.0; n];
+    for i in 1..n {
+        let prev_close = sorted[i - 1].close;
+        let pct = if prev_close.abs() > 1e-12 {
+            (sorted[i].close - prev_close) / prev_close
+        } else { 0.0 };
+        pvt_series[i] = pvt_series[i - 1] + sorted[i].volume * pct;
+    }
+    let pvt_ema = ema_series(&pvt_series, ema_length);
+    let pvt_value = pvt_series[n - 1];
+    let pvt_prev = pvt_series[n - 2];
+    let pvt_ema_last = pvt_ema[n - 1];
+    let slope_base = pvt_series[n - 1 - slope_lookback];
+    let pvt_slope = pvt_value - slope_base;
+    let last_close = sorted[n - 1].close;
+    let abs_pvt = pvt_value.abs().max(1.0);
+    let slope_ratio = pvt_slope / abs_pvt;
+    let above_ema = pvt_value > pvt_ema_last;
+    let below_ema = pvt_value < pvt_ema_last;
+    let label = if slope_ratio > 0.05 && above_ema { "STRONG_BULL" }
+        else if slope_ratio > 0.0 && above_ema { "BULL" }
+        else if slope_ratio < -0.05 && below_ema { "STRONG_BEAR" }
+        else if slope_ratio < 0.0 && below_ema { "BEAR" }
+        else { "NEUTRAL" };
+    PvtSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pvt_value, pvt_prev, pvt_ema: pvt_ema_last, pvt_slope, last_close,
+        pvt_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -32544,6 +32923,157 @@ pub fn get_rvi(conn: &Connection, symbol: &str) -> Result<Option<RviSnapshot>, S
         .map_err(|e| format!("prepare get_rvi: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_rvi: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_rvi: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn create_research_tables_v54(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v53(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_trima (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_trima_updated ON research_trima(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_t3 (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_t3_updated ON research_t3(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_vidya (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_vidya_updated ON research_vidya(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_smi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_smi_updated ON research_smi(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_pvt (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_pvt_updated ON research_pvt(updated_at);",
+    ).map_err(|e| format!("create v54 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_trima(conn: &Connection, symbol: &str, snap: &TrimaSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v54(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("trima json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_trima(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert trima: {e}"))?;
+    Ok(())
+}
+
+pub fn get_trima(conn: &Connection, symbol: &str) -> Result<Option<TrimaSnapshot>, String> {
+    let _ = create_research_tables_v54(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_trima WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_trima: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_trima: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_trima: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_t3(conn: &Connection, symbol: &str, snap: &T3Snapshot) -> Result<(), String> {
+    let _ = create_research_tables_v54(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("t3 json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_t3(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert t3: {e}"))?;
+    Ok(())
+}
+
+pub fn get_t3(conn: &Connection, symbol: &str) -> Result<Option<T3Snapshot>, String> {
+    let _ = create_research_tables_v54(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_t3 WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_t3: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_t3: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_t3: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_vidya(conn: &Connection, symbol: &str, snap: &VidyaSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v54(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("vidya json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_vidya(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert vidya: {e}"))?;
+    Ok(())
+}
+
+pub fn get_vidya(conn: &Connection, symbol: &str) -> Result<Option<VidyaSnapshot>, String> {
+    let _ = create_research_tables_v54(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_vidya WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_vidya: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_vidya: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_vidya: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_smi(conn: &Connection, symbol: &str, snap: &SmiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v54(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("smi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_smi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert smi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_smi(conn: &Connection, symbol: &str) -> Result<Option<SmiSnapshot>, String> {
+    let _ = create_research_tables_v54(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_smi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_smi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_smi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_smi: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_pvt(conn: &Connection, symbol: &str, snap: &PvtSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v54(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("pvt json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_pvt(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert pvt: {e}"))?;
+    Ok(())
+}
+
+pub fn get_pvt(conn: &Connection, symbol: &str) -> Result<Option<PvtSnapshot>, String> {
+    let _ = create_research_tables_v54(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_pvt WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_pvt: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_pvt: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_pvt: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -43065,6 +43595,143 @@ Trailing text.
         if snap.rvi_label != "INSUFFICIENT_DATA" {
             assert!(snap.rvi_value.is_finite());
             assert!(snap.signal_value.is_finite());
+        }
+    }
+
+    // ── ADR-164 Round 53 tests ────────────────────────────────────────────
+
+    #[test]
+    fn trima_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = TrimaSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 80,
+            length: 20, trima_value: 100.5, trima_prev: 100.3,
+            deviation_pct: 0.5, last_close: 101.0,
+            trima_label: "BULL".into(), note: String::new(),
+        };
+        upsert_trima(&conn, "TEST", &snap).unwrap();
+        let got = get_trima(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.trima_label, "BULL");
+        assert_eq!(got.length, 20);
+    }
+
+    #[test]
+    fn trima_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_trima_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.trima_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.trima_label != "INSUFFICIENT_DATA" {
+            assert!(snap.trima_value.is_finite() && snap.trima_value > 0.0);
+        }
+    }
+
+    #[test]
+    fn t3_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = T3Snapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 80,
+            length: 20, v_factor: 0.7, t3_value: 100.2, t3_prev: 100.0,
+            deviation_pct: 0.3, last_close: 100.5,
+            t3_label: "BULL".into(), note: String::new(),
+        };
+        upsert_t3(&conn, "TEST", &snap).unwrap();
+        let got = get_t3(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.t3_label, "BULL");
+        assert!((got.v_factor - 0.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn t3_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_t3_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.t3_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.t3_label != "INSUFFICIENT_DATA" {
+            assert!(snap.t3_value.is_finite() && snap.t3_value > 0.0);
+        }
+    }
+
+    #[test]
+    fn vidya_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = VidyaSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 80,
+            length: 20, cmo_length: 9, vidya_value: 99.8, vidya_prev: 99.6,
+            current_alpha: 0.05, cmo_magnitude: 52.0, deviation_pct: 0.2,
+            last_close: 100.0, vidya_label: "BULL".into(), note: String::new(),
+        };
+        upsert_vidya(&conn, "TEST", &snap).unwrap();
+        let got = get_vidya(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.vidya_label, "BULL");
+        assert_eq!(got.cmo_length, 9);
+    }
+
+    #[test]
+    fn vidya_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_vidya_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.vidya_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.vidya_label != "INSUFFICIENT_DATA" {
+            assert!(snap.vidya_value.is_finite() && snap.vidya_value > 0.0);
+            assert!(snap.current_alpha >= 0.0 && snap.current_alpha <= 1.0);
+            assert!(snap.cmo_magnitude >= 0.0 && snap.cmo_magnitude <= 100.0 + 1e-6);
+        }
+    }
+
+    #[test]
+    fn smi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = SmiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 60,
+            length: 10, smooth_length: 3, signal_length: 3,
+            smi_value: 25.0, smi_prev: 20.0, signal_value: 22.0, signal_prev: 23.0,
+            last_close: 102.0, smi_label: "BULL_CROSS".into(), note: String::new(),
+        };
+        upsert_smi(&conn, "TEST", &snap).unwrap();
+        let got = get_smi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.smi_label, "BULL_CROSS");
+        assert_eq!(got.length, 10);
+    }
+
+    #[test]
+    fn smi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_smi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.smi_label.as_str(),
+            "OVERBOUGHT" | "OVERSOLD" | "BULL_CROSS" | "BEAR_CROSS" |
+            "BULL" | "BEAR" | "NEUTRAL" | "INSUFFICIENT_DATA"));
+        if snap.smi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.smi_value.is_finite());
+            assert!(snap.smi_value >= -100.0 - 1.0 && snap.smi_value <= 100.0 + 1.0);
+        }
+    }
+
+    #[test]
+    fn pvt_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = PvtSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 80,
+            pvt_value: 12345.6, pvt_prev: 12340.0, pvt_ema: 12300.0,
+            pvt_slope: 500.0, last_close: 100.0,
+            pvt_label: "BULL".into(), note: String::new(),
+        };
+        upsert_pvt(&conn, "TEST", &snap).unwrap();
+        let got = get_pvt(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.pvt_label, "BULL");
+        assert!((got.pvt_slope - 500.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pvt_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_pvt_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.pvt_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.pvt_label != "INSUFFICIENT_DATA" {
+            assert!(snap.pvt_value.is_finite());
+            assert!(snap.pvt_ema.is_finite());
         }
     }
 }

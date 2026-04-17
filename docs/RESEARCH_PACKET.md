@@ -3578,7 +3578,113 @@ below signal / INSUFFICIENT_DATA for n<17, where 17 = length + 3 +
 4). Body reports bars_used, length (10), rvi_value, rvi_prev,
 signal_value, signal_prev, last_close. Source: ADR-163 RVI window.
 
-#### 2.252 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.252 Triangular Moving Average (TRIMA — ADR-164)
+
+Pulled from `research::get_trima`. Arnaud Legoux's 1997 formulation
+of the classic triangular moving average: first computes
+`inner = floor(N/2) + 1`, then `TRIMA = SMA_inner(SMA_inner(close))`.
+Expands algebraically to `TRIMA_t = Σ_{i=0}^{N-1} w_i · close_{t-i}`
+with a symmetric, triangular weight kernel peaking at the window
+centre — unlike WMA/HMA (linearly peaked at the recent edge) and
+ALMA (Gaussian-skewed at the recent edge). The centre-weighted
+shape makes TRIMA **less sensitive to whipsaws** at both edges,
+which is why mean-reversion strategies often prefer it over SMA.
+STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR labels driven
+by ±2% deviation of price from trima_value. Requires at least
+`2·(inner) − 1` bars to emit (e.g. length=20 → inner=11 → 21 bars);
+window enforces n≥31 for a 20-bar TRIMA. Distinct from every
+existing MA family (SMA, EMA, WMA, HMA, DEMA, TEMA, ALMA, ZLEMA,
+KAMA, MCGD, FRAMA) on the symmetry axis — the only MA in the
+repo where the centre bar carries the largest weight. Body
+reports bars_used, length (20), inner_length, trima_value,
+trima_prev, deviation_pct, last_close. Source: ADR-164 TRIMA
+window.
+
+#### 2.253 Tillson T3 Moving Average (T3 — ADR-164)
+
+Pulled from `research::get_t3`. Tim Tillson's 1998 T3 applies
+six cascaded EMAs with a user-tunable smoothing factor `v=0.7`
+and recombines them via `T3 = c1·e6 + c2·e5 + c3·e4 + c4·e3`
+where `c1 = −v³`, `c2 = 3v² + 3v³`, `c3 = −6v² − 3v − 3v³`,
+`c4 = 1 + 3v + v³ + 3v²`. At v=0 T3 reduces to EMA(N) (no lag
+reduction); at v=1 it becomes a DEMA-like aggressive smoother.
+The cascade generalises DEMA's two-EMA and TEMA's three-EMA lag-
+reduction schemes into a tunable family — Tillson's default v=0.7
+is the engineering compromise between responsiveness and
+overshoot noise. Warm-up is 6N where N is the base length;
+window enforces n≥24 for length=4, but the default length=10 with
+≥30 bars. Distinct from DEMA (2nd-order) and TEMA (3rd-order) in
+that T3's coefficient family tunes between under-shoot (v=0) and
+over-shoot (v=1) regimes continuously, whereas DEMA/TEMA are
+fixed points on that axis. STRONG_BULL / BULL / NEUTRAL / BEAR /
+STRONG_BEAR labels by ±2% deviation. Body reports bars_used,
+length, v_factor (0.70), t3_value, t3_prev, deviation_pct,
+last_close. Source: ADR-164 T3 window.
+
+#### 2.254 Variable Index Dynamic Average (VIDYA — ADR-164)
+
+Pulled from `research::get_vidya`. Tushar Chande's 1992 VIDYA
+adapts the EMA smoothing factor `α` to market volatility using the
+Chande Momentum Oscillator as the volatility proxy:
+`α_t = (2/(N+1)) · |CMO₉(close)_t| / 100`. When momentum magnitude
+is high (|CMO|→100) α approaches the standard EMA(N) α; when
+momentum is flat (|CMO|→0) α approaches zero and VIDYA effectively
+freezes. The result is a **fourth adaptive-α MA pathway** alongside
+KAMA (efficiency-ratio driven), MCGD (price-magnitude adaptive
+feedback), and FRAMA (fractal-dimension driven). VIDYA is distinct
+in using **momentum magnitude** as the driver — it accelerates
+during breakouts (high CMO) and stalls during consolidation (low
+CMO), the opposite bias from FRAMA (which smooths harder during
+trends). STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR labels
+by ±2% deviation. Requires ≥ 31 bars (length 20 + CMO(9) + 1) to
+emit. Body reports bars_used, length (20), cmo_length (9),
+vidya_value, vidya_prev, current_alpha, cmo_magnitude,
+deviation_pct, last_close. Source: ADR-164 VIDYA window.
+
+#### 2.255 Stochastic Momentum Index (SMI — ADR-164)
+
+Pulled from `research::get_smi`. William Blau's 1993 Stochastic
+Momentum Index redefines the stochastic oscillator to measure the
+**close's position relative to the mid-range midpoint** rather than
+the period low: `SMI = 100 · EMA₃(EMA₃(close − mid)) / EMA₃(EMA₃((H−L)/2))`
+where `mid = (highest_N + lowest_N) / 2`. The resulting oscillator
+is bounded `[−100, +100]` and crosses zero when the close sits
+exactly at the mid-range, making SMI a **bipolar momentum surface**
+— positive when the close leads the midpoint, negative when it
+trails. A 3-period EMA signal line gives BULL_CROSS / BULL /
+NEUTRAL / BEAR / BEAR_CROSS labels. Distinct from STOCH (close-in-
+range anchored to the period low, `[0,100]` asymmetric) and from
+STOCHRSI (stochastic applied to RSI, still `[0,100]`). The
+double-EMA smoothing eliminates most of the whipsaw noise that
+plagues the raw stochastic. Requires ≥ 21 bars (length 14 + 3+3
+EMA warm-up + 1); window enforces n≥21. Body reports bars_used,
+length (14), smooth_length (3), signal_length (3), smi_value,
+smi_prev, signal_value, signal_prev, last_close. Source: ADR-164
+SMI window.
+
+#### 2.256 Price Volume Trend (PVT — ADR-164)
+
+Pulled from `research::get_pvt`. Dysart & Lowry's 1966 Price Volume
+Trend is a **cumulative, percent-attribution volume oscillator**:
+`PVT_t = PVT_{t-1} + volume_t · (close_t − close_{t-1}) / close_{t-1}`.
+Unlike OBV (ADR-115, sign-of-Δclose times volume) which attributes
+the full bar volume regardless of how much price moved, PVT scales
+the attribution **proportional to the percent change** — a 5%
+up-day on 1M shares contributes 50,000 to PVT, while a 0.1% up-day
+contributes only 1,000. This makes PVT **divergence-sensitive on
+low-range bars**: sideways price action with persistent volume
+shows up as a flat PVT, while OBV would oscillate. Also distinct
+from CHAIKOSC (ADR-129, Accumulation/Distribution Line's MACD-
+difference, driven by high-low position rather than percent
+change). Includes a 21-period EMA of PVT for trend direction and
+an 8-bar slope calculation for acceleration detection. STRONG_BULL
+/ BULL / NEUTRAL / BEAR / STRONG_BEAR labels by slope sign and
+EMA-vs-PVT alignment. Requires ≥ 42 bars (enough for EMA(21) warm-
+up); window enforces n≥42. Body reports bars_used, pvt_value,
+pvt_prev, pvt_ema, pvt_slope, last_close. Source: ADR-164 PVT
+window.
+
+#### 2.257 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -3594,7 +3700,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.253 Sector peer comparison
+#### 2.258 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -3625,7 +3731,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.252 above.
+articles to the per-symbol bag consumed by sub-block 2.257 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -3854,8 +3960,43 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~78-150 KB**
-(up from 77-149 KB after ADR-161; ADR-163 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~79-151 KB**
+(up from 78-150 KB after ADR-163; ADR-164 adds five optional per-symbol
+blocks — TRIMA / T3 / VIDYA / SMI / PVT — each measuring ~2 k/v rows
+and adding ~200-280 bytes when populated, for a typical +1.24 KB per
+symbol; all five reuse the existing `research_historical_price` HP
+cache and the standard research-table LAN sync path with zero new API
+dependencies; TRIMA computes Legoux's 1997 Triangular Moving Average
+as `SMA_inner(SMA_inner(close))` with `inner = floor(N/2)+1`, the
+first centre-symmetric MA in the repo — distinct from every existing
+MA family (SMA, EMA, WMA, HMA, DEMA, TEMA, ALMA, ZLEMA, KAMA, MCGD,
+FRAMA) on the symmetry axis, since TRIMA is the only MA where the
+middle bar carries the largest weight; T3 computes Tillson's 1998 T3
+Moving Average with six cascaded EMAs and coefficients
+`c1 = −v³; c2 = 3v² + 3v³; c3 = −6v² − 3v − 3v³; c4 = 1 + 3v + v³ + 3v²`
+at v=0.7, generalising DEMA (2nd-order) and TEMA (3rd-order) into a
+continuous, tunable lag-reduction family — the v parameter shifts
+smoothly between under-shoot (v=0 → EMA) and over-shoot (v=1 →
+aggressive DEMA-like) regimes, whereas DEMA/TEMA are fixed points on
+that axis; VIDYA computes Chande's 1992 Variable Index Dynamic Average
+with `α_t = (2/(N+1)) · |CMO₉|/100`, a fourth adaptive-α pathway
+alongside KAMA (efficiency-ratio), MCGD (price-magnitude feedback),
+and FRAMA (fractal-dimension) — VIDYA accelerates during breakouts
+(high CMO magnitude) and stalls during consolidation, the opposite
+bias from FRAMA which smooths harder during trends; SMI computes
+Blau's 1993 Stochastic Momentum Index as double-EMA-smoothed
+close-vs-midrange `100 · EMA₃(EMA₃(close − mid)) / EMA₃(EMA₃((H−L)/2))`
+with a 3-EMA signal line — bipolar `[−100, +100]` oscillator distinct
+from STOCH (close-in-range anchored to the period low, asymmetric
+`[0, 100]`) and STOCHRSI (stochastic applied to RSI, still `[0, 100]`),
+with a zero-line cross when close sits at midrange; PVT computes
+Dysart & Lowry's 1966 Price Volume Trend as cumulative
+`PVT_t = PVT_{t-1} + volume_t · (close_t − close_{t-1})/close_{t-1}` —
+a percent-attribution volume oscillator distinct from OBV (ADR-115,
+sign-of-Δclose × full-volume attribution regardless of move size) and
+CHAIKOSC (ADR-129, high-low-position-driven A/D Line MACD), with a
+21-EMA trend-direction overlay and 8-bar slope for acceleration
+detection; ADR-163 previously added five optional per-symbol
 blocks — ALMA / ZLEMA / ELDERRAY / TSF / RVI — each measuring ~2 k/v
 rows and adding ~200-280 bytes when populated, for a typical +1.24 KB
 per symbol; all five reuse the existing `research_historical_price` HP
@@ -4277,7 +4418,7 @@ critical value at 5%; TSI computes the Blau 1991 True Strength Index
 = 100 · EMA₁₃(EMA₂₅(ΔP)) / EMA₁₃(EMA₂₅(|ΔP|)) with a short-EMA signal
 line, providing a double-smoothed momentum oscillator with cleaner
 zero-line behaviour than RSI and less lag than MACD); a 10-symbol
-basket now lands near **750-1470 KB**
+basket now lands near **760-1480 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).

@@ -434,6 +434,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_elderray",
     "research_tsf",
     "research_rvi",
+    // ── ADR-164 Round 53 ────────────────────────────
+    "research_trima",
+    "research_t3",
+    "research_vidya",
+    "research_smi",
+    "research_pvt",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2401,6 +2407,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-164 Round 53 ────────────────────────
+        "research_trima" => Some(
+            "CREATE TABLE IF NOT EXISTS research_trima (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_t3" => Some(
+            "CREATE TABLE IF NOT EXISTS research_t3 (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_vidya" => Some(
+            "CREATE TABLE IF NOT EXISTS research_vidya (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_smi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_smi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_pvt" => Some(
+            "CREATE TABLE IF NOT EXISTS research_pvt (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2699,6 +2741,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_elderray" => Some("updated_at"),
         "research_tsf" => Some("updated_at"),
         "research_rvi" => Some("updated_at"),
+        // ── ADR-164 Round 53 ──
+        "research_trima" => Some("updated_at"),
+        "research_t3" => Some("updated_at"),
+        "research_vidya" => Some("updated_at"),
+        "research_smi" => Some("updated_at"),
+        "research_pvt" => Some("updated_at"),
         _ => None,
     }
 }
