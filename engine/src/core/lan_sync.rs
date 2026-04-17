@@ -414,6 +414,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_disparity",
     "research_bop",
     "research_schaff",
+    // ── ADR-160 Round 50 ────────────────────────────
+    "research_stoch",
+    "research_macd",
+    "research_vwap",
+    "research_mcgd",
+    "research_rwi",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2259,6 +2265,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_stoch" => Some(
+            "CREATE TABLE IF NOT EXISTS research_stoch (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_macd" => Some(
+            "CREATE TABLE IF NOT EXISTS research_macd (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_vwap" => Some(
+            "CREATE TABLE IF NOT EXISTS research_vwap (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_mcgd" => Some(
+            "CREATE TABLE IF NOT EXISTS research_mcgd (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_rwi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_rwi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2537,6 +2578,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_disparity" => Some("updated_at"),
         "research_bop" => Some("updated_at"),
         "research_schaff" => Some("updated_at"),
+        // ── ADR-160 Round 50 ──
+        "research_stoch" => Some("updated_at"),
+        "research_macd" => Some("updated_at"),
+        "research_vwap" => Some("updated_at"),
+        "research_mcgd" => Some("updated_at"),
+        "research_rwi" => Some("updated_at"),
         _ => None,
     }
 }

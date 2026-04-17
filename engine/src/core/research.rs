@@ -5088,6 +5088,89 @@ pub struct SchaffSnapshot {
     pub note: String,
 }
 
+/// STOCH — Lane's classic Stochastic Oscillator (%K fast + %D slow).
+/// Distinct from STOCHRSI which applies the stochastic to RSI instead of price.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct StochSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub k_period: usize,               // 14
+    pub d_period: usize,               // 3
+    pub smoothing: usize,              // 3 (slow %K smoothing)
+    pub percent_k: f64,                // current slow %K in [0, 100]
+    pub percent_d: f64,                // current %D (SMA of %K)
+    pub last_close: f64,
+    pub stoch_label: String,           // OVERBOUGHT / BULL / NEUTRAL / BEAR / OVERSOLD / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// MACD — Gerald Appel (1979) Moving Average Convergence Divergence.
+/// 12/26 EMAs, 9-period signal EMA, histogram = MACD - signal.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MacdSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub fast_period: usize,            // 12
+    pub slow_period: usize,            // 26
+    pub signal_period: usize,          // 9
+    pub macd_value: f64,               // fast_ema - slow_ema
+    pub signal_value: f64,             // 9-EMA of macd_value
+    pub histogram: f64,                // macd_value - signal_value
+    pub histogram_prev: f64,           // previous bar's histogram (for direction)
+    pub last_close: f64,
+    pub macd_label: String,            // BULL_CROSS / BULL / NEUTRAL / BEAR / BEAR_CROSS / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// VWAP — Volume Weighted Average Price computed over a rolling window.
+/// VWAP = Σ(typical_price × volume) / Σ(volume) where typical_price = (H+L+C)/3.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct VwapSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub window: usize,                 // 20
+    pub vwap_value: f64,               // current VWAP over `window` bars
+    pub last_close: f64,
+    pub deviation_pct: f64,            // (last_close - vwap) / vwap × 100
+    pub vwap_label: String,            // STRONG_ABOVE / ABOVE / AT / BELOW / STRONG_BELOW / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// MCGD — John McGinley (1997) McGinley Dynamic adaptive moving average.
+/// MD[i] = MD[i-1] + (P - MD[i-1]) / (N × (P/MD[i-1])^4). Designed to resist whipsaws.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct McgdSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub mcgd_value: f64,               // current McGinley Dynamic
+    pub mcgd_prev: f64,                // prior bar (for slope direction)
+    pub last_close: f64,
+    pub deviation_pct: f64,            // (last_close - mcgd) / mcgd × 100
+    pub mcgd_label: String,            // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// RWI — Michael Poulos (1991) Random Walk Index.
+/// Measures how far price has moved vs a random-walk expectation. Ratios > 1
+/// mean the move is larger than what random noise would produce at that horizon.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct RwiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14 (max lookback used for ratios)
+    pub rwi_high: f64,                 // max ratio over 2..=length
+    pub rwi_low: f64,                  // max ratio over 2..=length
+    pub last_close: f64,
+    pub rwi_label: String,             // TRENDING_UP / TRENDING_DOWN / RANGE_BOUND / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -23452,6 +23535,338 @@ pub fn compute_schaff_snapshot(
     }
 }
 
+/// STOCH — Lane's classic Stochastic Oscillator with standard 14/3/3 params.
+/// Slow %K = SMA(raw %K, smoothing); %D = SMA(slow %K, d_period).
+pub fn compute_stoch_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> StochSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let k_period = 14usize;
+    let smoothing = 3usize;
+    let d_period = 3usize;
+    let min_bars = k_period + smoothing + d_period;
+    if n < min_bars {
+        return StochSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            k_period, d_period, smoothing,
+            stoch_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    // Raw %K at each bar i ≥ k_period-1: (close - lowest_low_k) / (highest_high_k - lowest_low_k).
+    let mut raw_k: Vec<f64> = Vec::with_capacity(n - k_period + 1);
+    for i in (k_period - 1)..n {
+        let win = &sorted[(i + 1 - k_period)..=i];
+        let lo = win.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
+        let hi = win.iter().map(|b| b.high).fold(f64::NEG_INFINITY, f64::max);
+        let c = sorted[i].close;
+        let v = if (hi - lo).abs() > 1e-12 { 100.0 * (c - lo) / (hi - lo) } else { 50.0 };
+        raw_k.push(v);
+    }
+    // Slow %K = SMA of raw %K over `smoothing` bars.
+    if raw_k.len() < smoothing {
+        return StochSnapshot {
+            symbol: sym, as_of: as_of.into(), bars_used: n,
+            k_period, d_period, smoothing,
+            stoch_label: "INSUFFICIENT_DATA".into(),
+            note: "raw %K too short for smoothing".into(),
+            ..Default::default()
+        };
+    }
+    let mut slow_k: Vec<f64> = Vec::with_capacity(raw_k.len() - smoothing + 1);
+    for i in (smoothing - 1)..raw_k.len() {
+        let s: f64 = raw_k[(i + 1 - smoothing)..=i].iter().sum();
+        slow_k.push(s / smoothing as f64);
+    }
+    if slow_k.len() < d_period {
+        return StochSnapshot {
+            symbol: sym, as_of: as_of.into(), bars_used: n,
+            k_period, d_period, smoothing,
+            stoch_label: "INSUFFICIENT_DATA".into(),
+            note: "slow %K too short for %D".into(),
+            ..Default::default()
+        };
+    }
+    let tail_d_sum: f64 = slow_k[slow_k.len() - d_period..].iter().sum();
+    let percent_d = tail_d_sum / d_period as f64;
+    let percent_k = *slow_k.last().unwrap();
+    let last_close = sorted[n - 1].close;
+    let label = if percent_k > 80.0 { "OVERBOUGHT" }
+        else if percent_k > 50.0 { "BULL" }
+        else if percent_k < 20.0 { "OVERSOLD" }
+        else if percent_k < 50.0 { "BEAR" }
+        else { "NEUTRAL" };
+    StochSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        k_period, d_period, smoothing,
+        percent_k, percent_d, last_close,
+        stoch_label: label.into(), note: String::new(),
+    }
+}
+
+/// MACD — Gerald Appel's 12/26/9 Moving Average Convergence Divergence.
+/// Labels BULL_CROSS when histogram just turned positive, BEAR_CROSS when just
+/// turned negative, otherwise BULL/BEAR/NEUTRAL by sign and magnitude.
+pub fn compute_macd_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MacdSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let fast_period = 12usize;
+    let slow_period = 26usize;
+    let signal_period = 9usize;
+    let min_bars = slow_period + signal_period + 2;
+    if n < min_bars {
+        return MacdSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            fast_period, slow_period, signal_period,
+            macd_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let ema = |src: &[f64], p: usize| -> Vec<f64> {
+        if src.len() < p { return Vec::new(); }
+        let alpha = 2.0 / (p as f64 + 1.0);
+        let seed: f64 = src[..p].iter().sum::<f64>() / p as f64;
+        let mut out = Vec::with_capacity(src.len() - p + 1);
+        out.push(seed);
+        for i in p..src.len() {
+            let prev = *out.last().unwrap();
+            out.push(alpha * src[i] + (1.0 - alpha) * prev);
+        }
+        out
+    };
+    let ema_fast = ema(&closes, fast_period);
+    let ema_slow = ema(&closes, slow_period);
+    if ema_fast.is_empty() || ema_slow.is_empty() {
+        return MacdSnapshot {
+            symbol: sym, as_of: as_of.into(), bars_used: n,
+            fast_period, slow_period, signal_period,
+            macd_label: "INSUFFICIENT_DATA".into(),
+            note: "ema series empty".into(),
+            ..Default::default()
+        };
+    }
+    // MACD[i] = ema_fast[i - (fast-1)] - ema_slow[i - (slow-1)] for i ≥ slow-1.
+    let macd_start = slow_period - 1;
+    let mut macd_series: Vec<f64> = Vec::with_capacity(n - macd_start);
+    for i in macd_start..n {
+        let f_idx = i - (fast_period - 1);
+        let s_idx = i - (slow_period - 1);
+        if f_idx >= ema_fast.len() || s_idx >= ema_slow.len() { break; }
+        macd_series.push(ema_fast[f_idx] - ema_slow[s_idx]);
+    }
+    if macd_series.len() < signal_period + 2 {
+        return MacdSnapshot {
+            symbol: sym, as_of: as_of.into(), bars_used: n,
+            fast_period, slow_period, signal_period,
+            macd_label: "INSUFFICIENT_DATA".into(),
+            note: format!("macd series {} < {}", macd_series.len(), signal_period + 2),
+            ..Default::default()
+        };
+    }
+    let signal_series = ema(&macd_series, signal_period);
+    if signal_series.len() < 2 {
+        return MacdSnapshot {
+            symbol: sym, as_of: as_of.into(), bars_used: n,
+            fast_period, slow_period, signal_period,
+            macd_label: "INSUFFICIENT_DATA".into(),
+            note: "signal series too short".into(),
+            ..Default::default()
+        };
+    }
+    let macd_value = *macd_series.last().unwrap();
+    let signal_value = *signal_series.last().unwrap();
+    // Align signal's index back into macd_series: signal covers macd_series[(signal-1)..].
+    let macd_prev_for_hist = macd_series[macd_series.len() - 2];
+    let signal_prev = signal_series[signal_series.len() - 2];
+    let histogram = macd_value - signal_value;
+    let histogram_prev = macd_prev_for_hist - signal_prev;
+    let last_close = sorted[n - 1].close;
+    let crossed_up = histogram > 0.0 && histogram_prev <= 0.0;
+    let crossed_down = histogram < 0.0 && histogram_prev >= 0.0;
+    let label = if crossed_up { "BULL_CROSS" }
+        else if crossed_down { "BEAR_CROSS" }
+        else if histogram > 0.0 { "BULL" }
+        else if histogram < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    MacdSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        fast_period, slow_period, signal_period,
+        macd_value, signal_value, histogram, histogram_prev,
+        last_close,
+        macd_label: label.into(), note: String::new(),
+    }
+}
+
+/// VWAP — rolling Volume Weighted Average Price over `window` bars.
+/// Typical price = (H+L+C)/3. Deviation buckets are ±0.5%/±2% around VWAP.
+pub fn compute_vwap_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> VwapSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let window = 20usize;
+    if n < window {
+        return VwapSnapshot {
+            symbol: sym, as_of: as_of.into(), window,
+            vwap_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", window, n),
+            ..Default::default()
+        };
+    }
+    let tail = &sorted[(n - window)..];
+    let mut num = 0.0f64;
+    let mut den = 0.0f64;
+    for b in tail {
+        let tp = (b.high + b.low + b.close) / 3.0;
+        let v = b.volume.max(0.0);
+        num += tp * v;
+        den += v;
+    }
+    if den <= 0.0 {
+        return VwapSnapshot {
+            symbol: sym, as_of: as_of.into(), bars_used: n, window,
+            vwap_label: "INSUFFICIENT_DATA".into(),
+            note: "zero total volume in window".into(),
+            ..Default::default()
+        };
+    }
+    let vwap_value = num / den;
+    let last_close = sorted[n - 1].close;
+    let deviation_pct = if vwap_value > 0.0 { (last_close - vwap_value) / vwap_value * 100.0 } else { 0.0 };
+    let label = if deviation_pct > 2.0 { "STRONG_ABOVE" }
+        else if deviation_pct > 0.5 { "ABOVE" }
+        else if deviation_pct < -2.0 { "STRONG_BELOW" }
+        else if deviation_pct < -0.5 { "BELOW" }
+        else { "AT" };
+    VwapSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, window,
+        vwap_value, last_close, deviation_pct,
+        vwap_label: label.into(), note: String::new(),
+    }
+}
+
+/// MCGD — McGinley Dynamic adaptive MA.
+/// MD[i] = MD[i-1] + (P - MD[i-1]) / (N × (P/MD[i-1])^4). Seeded from the first
+/// `length`-bar SMA, then iterated across the rest of the series.
+pub fn compute_mcgd_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> McgdSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 14usize;
+    let min_bars = length + 2;
+    if n < min_bars {
+        return McgdSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            mcgd_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let seed: f64 = closes[..length].iter().sum::<f64>() / length as f64;
+    let mut md = seed;
+    let mut mcgd_prev = md;
+    for i in length..n {
+        mcgd_prev = md;
+        if md.abs() < 1e-12 { md = closes[i]; continue; }
+        let ratio = closes[i] / md;
+        let denom = length as f64 * ratio.powi(4);
+        if denom.abs() < 1e-12 {
+            md = closes[i];
+        } else {
+            md = md + (closes[i] - md) / denom;
+        }
+    }
+    let last_close = sorted[n - 1].close;
+    let deviation_pct = if md.abs() > 1e-12 { (last_close - md) / md * 100.0 } else { 0.0 };
+    let label = if deviation_pct > 2.5 { "STRONG_BULL" }
+        else if deviation_pct > 0.5 { "BULL" }
+        else if deviation_pct < -2.5 { "STRONG_BEAR" }
+        else if deviation_pct < -0.5 { "BEAR" }
+        else { "NEUTRAL" };
+    McgdSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        mcgd_value: md, mcgd_prev, last_close, deviation_pct,
+        mcgd_label: label.into(), note: String::new(),
+    }
+}
+
+/// RWI — Random Walk Index (Poulos).
+/// RWI_high(n) = (H[0] - L[n]) / (ATR(n) × sqrt(n))
+/// RWI_low(n)  = (H[n] - L[0]) / (ATR(n) × sqrt(n))
+/// Scans n = 2..=length and keeps the maximum — whichever horizon shows the
+/// strongest non-random move dominates the label.
+pub fn compute_rwi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> RwiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 14usize;
+    let min_bars = length + 2;
+    if n < min_bars {
+        return RwiSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            rwi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    // Precompute True Range series (TR[i] for i ≥ 1).
+    let mut tr: Vec<f64> = Vec::with_capacity(n);
+    tr.push(sorted[0].high - sorted[0].low);
+    for i in 1..n {
+        let a = sorted[i].high - sorted[i].low;
+        let b = (sorted[i].high - sorted[i - 1].close).abs();
+        let c = (sorted[i].low - sorted[i - 1].close).abs();
+        tr.push(a.max(b).max(c));
+    }
+    let current = n - 1;
+    let mut best_up = 0.0f64;
+    let mut best_dn = 0.0f64;
+    for k in 2..=length {
+        if current < k { break; }
+        // ATR over the last k bars ending at `current`.
+        let atr_sum: f64 = tr[(current + 1 - k)..=current].iter().sum();
+        let atr = atr_sum / k as f64;
+        if atr <= 1e-12 { continue; }
+        let denom = atr * (k as f64).sqrt();
+        let h_now = sorted[current].high;
+        let l_then = sorted[current - k + 1].low;
+        let l_now = sorted[current].low;
+        let h_then = sorted[current - k + 1].high;
+        let up = (h_now - l_then) / denom;
+        let dn = (h_then - l_now) / denom;
+        if up > best_up { best_up = up; }
+        if dn > best_dn { best_dn = dn; }
+    }
+    let last_close = sorted[n - 1].close;
+    let label = if best_up > 1.0 && best_up > best_dn { "TRENDING_UP" }
+        else if best_dn > 1.0 && best_dn > best_up { "TRENDING_DOWN" }
+        else { "RANGE_BOUND" };
+    RwiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        rwi_high: best_up, rwi_low: best_dn, last_close,
+        rwi_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -30971,6 +31386,157 @@ pub fn get_schaff(conn: &Connection, symbol: &str) -> Result<Option<SchaffSnapsh
         .map_err(|e| format!("prepare get_schaff: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_schaff: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_schaff: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn create_research_tables_v51(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v50(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_stoch (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_stoch_updated ON research_stoch(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_macd (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_macd_updated ON research_macd(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_vwap (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_vwap_updated ON research_vwap(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_mcgd (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_mcgd_updated ON research_mcgd(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_rwi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_rwi_updated ON research_rwi(updated_at);",
+    ).map_err(|e| format!("create v51 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_stoch(conn: &Connection, symbol: &str, snap: &StochSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v51(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("stoch json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_stoch(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert stoch: {e}"))?;
+    Ok(())
+}
+
+pub fn get_stoch(conn: &Connection, symbol: &str) -> Result<Option<StochSnapshot>, String> {
+    let _ = create_research_tables_v51(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_stoch WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_stoch: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_stoch: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_stoch: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_macd(conn: &Connection, symbol: &str, snap: &MacdSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v51(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("macd json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_macd(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert macd: {e}"))?;
+    Ok(())
+}
+
+pub fn get_macd(conn: &Connection, symbol: &str) -> Result<Option<MacdSnapshot>, String> {
+    let _ = create_research_tables_v51(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_macd WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_macd: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_macd: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_macd: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_vwap(conn: &Connection, symbol: &str, snap: &VwapSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v51(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("vwap json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_vwap(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert vwap: {e}"))?;
+    Ok(())
+}
+
+pub fn get_vwap(conn: &Connection, symbol: &str) -> Result<Option<VwapSnapshot>, String> {
+    let _ = create_research_tables_v51(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_vwap WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_vwap: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_vwap: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_vwap: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_mcgd(conn: &Connection, symbol: &str, snap: &McgdSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v51(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("mcgd json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_mcgd(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert mcgd: {e}"))?;
+    Ok(())
+}
+
+pub fn get_mcgd(conn: &Connection, symbol: &str) -> Result<Option<McgdSnapshot>, String> {
+    let _ = create_research_tables_v51(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_mcgd WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_mcgd: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_mcgd: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_mcgd: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_rwi(conn: &Connection, symbol: &str, snap: &RwiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v51(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("rwi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_rwi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert rwi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_rwi(conn: &Connection, symbol: &str) -> Result<Option<RwiSnapshot>, String> {
+    let _ = create_research_tables_v51(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_rwi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_rwi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_rwi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_rwi: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -41058,6 +41624,148 @@ Trailing text.
             assert_eq!(snap.ema_fast, 23);
             assert_eq!(snap.ema_slow, 50);
             assert_eq!(snap.cycle, 10);
+        }
+    }
+
+    // ── ADR-160 Round 50 tests ──
+
+    #[test]
+    fn stoch_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = StochSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 60, k_period: 14, d_period: 3, smoothing: 3,
+            percent_k: 72.5, percent_d: 68.0, last_close: 150.0,
+            stoch_label: "BULL".into(), note: String::new(),
+        };
+        upsert_stoch(&conn, "TEST", &snap).unwrap();
+        let got = get_stoch(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.stoch_label, "BULL");
+        assert!((got.percent_k - 72.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stoch_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_stoch_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.stoch_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.stoch_label != "INSUFFICIENT_DATA" {
+            assert!(snap.percent_k >= 0.0 && snap.percent_k <= 100.0);
+            assert!(snap.percent_d >= 0.0 && snap.percent_d <= 100.0);
+            assert_eq!(snap.k_period, 14);
+        }
+    }
+
+    #[test]
+    fn macd_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MacdSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 120, fast_period: 12, slow_period: 26, signal_period: 9,
+            macd_value: 1.25, signal_value: 1.00, histogram: 0.25, histogram_prev: 0.10,
+            last_close: 150.0, macd_label: "BULL".into(), note: String::new(),
+        };
+        upsert_macd(&conn, "TEST", &snap).unwrap();
+        let got = get_macd(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.macd_label, "BULL");
+        assert!((got.histogram - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn macd_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_macd_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.macd_label.as_str(),
+            "BULL_CROSS" | "BULL" | "NEUTRAL" | "BEAR" | "BEAR_CROSS" | "INSUFFICIENT_DATA"));
+        if snap.macd_label != "INSUFFICIENT_DATA" {
+            assert!(snap.macd_value.is_finite());
+            assert!(snap.signal_value.is_finite());
+            assert!((snap.histogram - (snap.macd_value - snap.signal_value)).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn vwap_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = VwapSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 60, window: 20,
+            vwap_value: 148.5, last_close: 150.0, deviation_pct: 1.01,
+            vwap_label: "ABOVE".into(), note: String::new(),
+        };
+        upsert_vwap(&conn, "TEST", &snap).unwrap();
+        let got = get_vwap(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.vwap_label, "ABOVE");
+        assert!((got.deviation_pct - 1.01).abs() < 1e-9);
+    }
+
+    #[test]
+    fn vwap_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_vwap_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.vwap_label.as_str(),
+            "STRONG_ABOVE" | "ABOVE" | "AT" | "BELOW" | "STRONG_BELOW" | "INSUFFICIENT_DATA"));
+        if snap.vwap_label != "INSUFFICIENT_DATA" {
+            assert!(snap.vwap_value > 0.0);
+            assert!(snap.deviation_pct.is_finite());
+            assert_eq!(snap.window, 20);
+        }
+    }
+
+    #[test]
+    fn mcgd_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = McgdSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 60, length: 14,
+            mcgd_value: 149.0, mcgd_prev: 148.5, last_close: 150.0, deviation_pct: 0.67,
+            mcgd_label: "BULL".into(), note: String::new(),
+        };
+        upsert_mcgd(&conn, "TEST", &snap).unwrap();
+        let got = get_mcgd(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.mcgd_label, "BULL");
+        assert!((got.mcgd_value - 149.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn mcgd_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_mcgd_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.mcgd_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.mcgd_label != "INSUFFICIENT_DATA" {
+            assert!(snap.mcgd_value.is_finite() && snap.mcgd_value > 0.0);
+            assert!(snap.mcgd_prev.is_finite());
+            assert_eq!(snap.length, 14);
+        }
+    }
+
+    #[test]
+    fn rwi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = RwiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 60, length: 14,
+            rwi_high: 1.8, rwi_low: 0.6, last_close: 150.0,
+            rwi_label: "TRENDING_UP".into(), note: String::new(),
+        };
+        upsert_rwi(&conn, "TEST", &snap).unwrap();
+        let got = get_rwi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.rwi_label, "TRENDING_UP");
+        assert!((got.rwi_high - 1.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rwi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_rwi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.rwi_label.as_str(),
+            "TRENDING_UP" | "TRENDING_DOWN" | "RANGE_BOUND" | "INSUFFICIENT_DATA"));
+        if snap.rwi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.rwi_high >= 0.0 && snap.rwi_high.is_finite());
+            assert!(snap.rwi_low >= 0.0 && snap.rwi_low.is_finite());
+            assert_eq!(snap.length, 14);
         }
     }
 }

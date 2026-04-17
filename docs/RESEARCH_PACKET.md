@@ -3293,7 +3293,94 @@ n<80). Body reports bars_used, ema_fast (23), ema_slow (50), cycle
 combines two smoothing primitives (MACD + stochastic) in a recursive
 chain. Source: ADR-159 SCHAFF window.
 
-#### 2.237 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.237 Stochastic Oscillator (STOCH — ADR-160)
+
+Pulled from `research::get_stoch`. George C. Lane's 1950s canonical
+stochastic on raw prices: %K = 100 · (close − lowest_low_N) /
+(highest_high_N − lowest_low_N), smoothed by %D = SMA(%K, d), with
+an additional smoothing of %K itself. Canonical 14/3/3. Distinct
+from STOCHRSI (stochastic of RSI values, not prices), from RSI
+(smoothed gain/loss ratio), and from any high/low-threshold
+indicator (AROON, WILLR): STOCH reports where the current close
+sits inside the recent N-bar high/low range. Header gives
+**stoch_label** (OVERBOUGHT >80 / BULL >50 / NEUTRAL / BEAR <50 /
+OVERSOLD <20 / INSUFFICIENT_DATA for n<20). Body reports bars_used,
+k_period (14), d_period (3), smoothing (3), percent_k, percent_d,
+last_close. First surface we ship that runs Lane's stochastic
+directly on price. Source: ADR-160 STOCH window.
+
+#### 2.238 MACD — Appel (MACD — ADR-160)
+
+Pulled from `research::get_macd`. Gerald Appel's 1979 Moving Average
+Convergence Divergence: MACD = EMA(close, 12) − EMA(close, 26),
+signal = EMA(MACD, 9), histogram = MACD − signal. Canonical 12/26/9.
+Distinct from PPO (percentage form), SCHAFF (stochastic-of-MACD
+double-smoothed), and any single-EMA-difference read: MACD is the
+baseline against which virtually every other oscillator is
+benchmarked. Histogram sign-flips within the last 2 bars are
+explicitly called out — what MACD readers actually look for.
+Header gives **macd_label** (BULL_CROSS — histogram flipped >0 in
+last 2 bars / BULL >0 / NEUTRAL / BEAR <0 / BEAR_CROSS — histogram
+flipped <0 in last 2 bars / INSUFFICIENT_DATA for n<35). Body
+reports bars_used, fast_period (12), slow_period (26),
+signal_period (9), macd_value, signal_value, histogram,
+histogram_prev, last_close. Source: ADR-160 MACD window.
+
+#### 2.239 Volume-Weighted Average Price (VWAP — ADR-160)
+
+Pulled from `research::get_vwap`. Institutional "fair price"
+reference (Berkowitz / Logue / Noser formalisation, 1980s):
+VWAP = Σ(typical_price · volume) / Σ(volume) over a rolling 20-bar
+window (one trading month on daily tape — the canonical Bloomberg
+"VWAP 20"). Distinct from any plain MA (unweighted), from VROC
+(volume rate-of-change), and from volume oscillators (KLINGER,
+CHAIKOSC, OBV, CMF, AD): VWAP is a *price level* weighted by volume,
+not a volume indicator. Deviation reported as percentage of close
+from VWAP. Header gives **vwap_label** (STRONG_ABOVE >+2% / ABOVE
+>0 / AT / BELOW <0 / STRONG_BELOW <−2% / INSUFFICIENT_DATA for
+n<20 or zero-volume). Body reports bars_used, window (20),
+vwap_value, deviation_pct, last_close. First fair-price reference
+line we ship. Note: this is daily-bar rolling VWAP, not
+session-anchored intraday VWAP (latter gated on paid intraday
+data). Source: ADR-160 VWAP window.
+
+#### 2.240 McGinley Dynamic (MCGD — ADR-160)
+
+Pulled from `research::get_mcgd`. John R. McGinley's 1991 adaptive
+moving average: MCGD_t = MCGD_{t-1} + (close − MCGD_{t-1}) /
+(k · N · (close / MCGD_{t-1})^4), with k = 0.6 and N = 14. The
+fourth-power price-ratio feedback slows the MA during fast moves
+(reducing whipsaw) and speeds it up during slow drift — self-tuning
+responsiveness. Distinct from EMA (fixed α), KAMA (adapts by
+efficiency ratio), FRAMA (adapts by fractal dimension), HMA (a
+specific WMA chain): MCGD's adaptation is driven by the *price /
+MA* ratio raised to the 4th power — a unique feedback-loop axis.
+Header gives **mcgd_label** (STRONG_BULL >+2% deviation / BULL /
+NEUTRAL / BEAR / STRONG_BEAR <−2% / INSUFFICIENT_DATA for n<15).
+Body reports bars_used, length (14), mcgd_value, mcgd_prev,
+deviation_pct, last_close. First non-EMA-family adaptive MA in
+the repo. Source: ADR-160 MCGD window.
+
+#### 2.241 Random Walk Index (RWI — ADR-160)
+
+Pulled from `research::get_rwi`. E. Michael Poulos's 1991
+statistical trend test: RWI_high_t = max over i in 2..N of
+(high_t − low_{t−i+1}) / (ATR · sqrt(i)); symmetrically RWI_low.
+A reading above 1.0 indicates the move is larger than 1σ of a
+random walk over the same lookback — the rigorous null-hypothesis
+framing behind trend detection. Distinct from ADX (Wilder DMI
+strength), VORTEX (cross-period VI+/VI−), AROON (time-since-extremum):
+RWI explicitly models the "no trend exists" null and measures
+trend strength as σ-multiples of a random walk. Poulos's rule:
+RWI_high > 1.0 and > RWI_low → genuine uptrend; RWI_low > 1.0
+and > RWI_high → genuine downtrend; else range-bound. Header gives
+**rwi_label** (TRENDING_UP / TRENDING_DOWN / RANGE_BOUND /
+INSUFFICIENT_DATA for n<15 or zero ATR). Body reports bars_used,
+length (14), rwi_high, rwi_low, last_close. First surface we ship
+that explicitly frames the random-walk null as the threshold.
+Source: ADR-160 RWI window.
+
+#### 2.242 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -3309,7 +3396,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.238 Sector peer comparison
+#### 2.243 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -3569,13 +3656,56 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~75-147 KB**
-(up from 74-146 KB after ADR-158; ADR-159 adds five optional per-symbol
-blocks — CMO / QSTICK / DISPARITY / BOP / SCHAFF — each measuring ~2 k/v
-rows and adding ~200-230 bytes when populated, for a typical +1.06 KB per
+symbols. A single S&P 500 symbol now produces a packet around **~76-148 KB**
+(up from 75-147 KB after ADR-159; ADR-160 adds five optional per-symbol
+blocks — STOCH / MACD / VWAP / MCGD / RWI — each measuring ~2 k/v rows
+and adding ~200-250 bytes when populated, for a typical +1.08 KB per
 symbol; all five reuse the existing `research_historical_price` HP cache
 and the standard research-table LAN sync path with zero new API
-dependencies; CMO computes Chande's 1994 Momentum Oscillator as the raw
+dependencies; STOCH computes Lane's 1950s Stochastic Oscillator on raw
+prices with %K = 100·(close−lowest_low_14)/(highest_high_14−lowest_low_14),
+%D = SMA3, smoothing 3, with OVERBOUGHT (>80) / BULL / NEUTRAL / BEAR /
+OVERSOLD (<20) labels — first raw-price stochastic we ship, distinct from
+STOCHRSI (stochastic-of-RSI); MACD computes Appel's 1979 Moving Average
+Convergence Divergence as EMA12−EMA26 with signal EMA9 and histogram,
+with BULL_CROSS (histogram flipped >0 in last 2 bars) / BULL / NEUTRAL /
+BEAR / BEAR_CROSS labels — fills the "most-cited oscillator" gap, baseline
+against which every other oscillator is benchmarked; VWAP computes
+rolling 20-bar Volume-Weighted Average Price (canonical Bloomberg
+"VWAP 20") with STRONG_ABOVE (>+2% deviation) / ABOVE / AT / BELOW /
+STRONG_BELOW (<−2%) labels — first fair-price reference line we ship,
+daily-rolling variant (session-anchored intraday gated on paid data);
+MCGD computes McGinley's 1991 adaptive dynamic MA with self-tuning
+responsiveness (4th-power price-ratio feedback, length 14, k=0.6) with
+STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR labels based on
+deviation — first non-EMA-family adaptive MA in the repo, complements
+KAMA (ER-adaptive) and FRAMA (fractal-adaptive) on a third adaptation
+axis; RWI computes Poulos's 1991 Random Walk Index as ATR-normalised
+max excursion over lookback, with TRENDING_UP (RWI_high >1 && RWI_high >
+RWI_low) / TRENDING_DOWN (RWI_low >1 && RWI_low > RWI_high) /
+RANGE_BOUND labels — first surface we ship that explicitly frames
+trend detection as a random-walk null-hypothesis test; ADR-159 adds five
+optional per-symbol blocks — CMO / QSTICK / DISPARITY / BOP / SCHAFF —
+each measuring ~2 k/v rows and adding ~200-230 bytes when populated, for
+a typical +1.06 KB per symbol; all five reuse the existing
+`research_historical_price` HP cache and the standard research-table LAN
+sync path with zero new API dependencies; CMO computes Chande's 1994
+Momentum Oscillator as the raw gain/loss spread 100·(Σup−Σdn)/(Σup+Σdn)
+over 9 bars with OVERBOUGHT (>+50) / BULL / NEUTRAL / BEAR / OVERSOLD
+(<−50) labels — first raw un-smoothed gain/loss oscillator, complements
+RSI/STOCHRSI; QSTICK computes Chande's 1995 Q-Stick as SMA14(close−open)
+with STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR labels — first
+candle-body sentiment aggregator; DISPARITY computes the Japanese
+Disparity Index as (close/SMA14 − 1)·100 with STRONG_BULL (>3%) / BULL /
+NEUTRAL / BEAR / STRONG_BEAR (<−3%) labels — first raw percentage-
+deviation mean-reversion surface; BOP computes Livshin's Balance of
+Power as SMA14((close−open)/(high−low)) with STRONG_BULL (>0.5) / BULL /
+NEUTRAL / BEAR / STRONG_BEAR (<−0.5) labels — range-normalised intra-bar
+sentiment complementing QSTICK; SCHAFF computes Schaff's 2008 Trend
+Cycle as stochastic-of-MACD double-smoothed (23/50/10) on [0, 100] with
+OVERBOUGHT&&falling / BULL / NEUTRAL / BEAR / OVERSOLD&&rising labels —
+first double-smoothed double-stochastic oscillator, typically leads
+other momentum oscillators by 3-7 bars; CMO computes Chande's 1994 Momentum Oscillator as the raw
 gain/loss spread 100·(Σup−Σdn)/(Σup+Σdn) over 9 bars with OVERBOUGHT
 (>+50) / BULL / NEUTRAL / BEAR / OVERSOLD (<−50) labels — first raw
 un-smoothed gain/loss oscillator, complements RSI/STOCHRSI; QSTICK
