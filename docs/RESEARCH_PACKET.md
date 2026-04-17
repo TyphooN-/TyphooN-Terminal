@@ -3784,7 +3784,32 @@ window enforces n≥25. Body reports bars_used, length (14),
 momentum_length (5), rmi_value, rmi_prev, last_close.
 Source: ADR-165 RMI window.
 
-#### 2.262 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.262 Options Expiration Calendar (EXPCAL — ADR-166)
+
+Pulled from `research::get_symbol_expirations` — a per-symbol
+aggregation over the cached `research_options_chain` expirations
+list. Each upcoming expiration is classified as **WEEKLY /
+MONTHLY / QUARTERLY / TRIPLE_WITCHING / LEAPS** by pure date math
+(`is_third_friday` + month∈{3,6,9,12} + `days_out > 270` LEAPS
+threshold), then volume and open interest are summed across calls
+and puts, and the put/call ratio is computed per expiration.
+Emitted only when the symbol has at least one cached + parseable
+expiration date. Header gives **count of expirations + next
+triple-witching date + underlying price**; body emits the **top
+12 upcoming expirations** (nearest-first) with DTE, expiry type,
+call/put strike counts, total call/put volume, total call/put OI,
+and PCR (put/call ratio). Deterministic classifier means the same
+date gets the same label whether the user is browsing the offline
+market calendar (Tier 1, UI-only) or this per-symbol chain view
+(Tier 2). Requires an OPTIONS fetch to have populated the chain
+cache first; first-time symbols emit nothing. Distinct from the
+strike-oriented OPTIONS chain view (ADR-115) which lists every
+call/put strike per expiration — EXPCAL is the **date-axis
+aggregation layer** that answers "which upcoming expiration has
+the heaviest flow" without drilling into individual strikes.
+Source: ADR-166 EXPCAL window (Tier 2 tab).
+
+#### 2.263 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -3800,7 +3825,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.263 Sector peer comparison
+#### 2.264 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -3831,7 +3856,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.262 above.
+articles to the per-symbol bag consumed by sub-block 2.263 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -4060,8 +4085,24 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~80-152 KB**
-(up from 79-151 KB after ADR-164; ADR-165 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~80-153 KB**
+(up from 80-152 KB after ADR-165; ADR-166 adds one optional per-symbol block —
+EXPCAL (Options Expiration Calendar, Tier 2) — a date-axis aggregation
+over the cached options chain that classifies each upcoming expiration
+as WEEKLY / MONTHLY / QUARTERLY / TRIPLE_WITCHING / LEAPS by pure date
+math (`is_third_friday` + month ∈ {3,6,9,12} for triple witching, >270
+days out for LEAPS), sums call/put volume and open interest across
+strikes, computes per-expiration put/call ratio, and emits a header
+with count + next triple-witching date + underlying price plus up to
+12 expiration rows (nearest-first) with DTE / type / call+put strike
+counts / volumes / OI / PCR for ~400-1200 bytes when populated;
+deterministic classifier shared with the symbol-agnostic Tier 1
+market-calendar UI tab (7-730 day horizon, regenerable, UI-only so not
+emitted into packets); depends on a prior OPTIONS fetch to have
+populated `research_options_chain` for the symbol — first-time
+symbols emit nothing; the matching Tier 2 snapshot persists to
+`research_symbol_expirations` and LAN-syncs alongside every other
+research table; ADR-165 added five optional per-symbol
 blocks — AC / CHVOL / BBWIDTH / ELDERIMP / RMI — each measuring ~2 k/v
 rows and adding ~220-300 bytes when populated, for a typical +1.25 KB per
 symbol; all five reuse the existing `research_historical_price` HP
@@ -4553,7 +4594,7 @@ critical value at 5%; TSI computes the Blau 1991 True Strength Index
 = 100 · EMA₁₃(EMA₂₅(ΔP)) / EMA₁₃(EMA₂₅(|ΔP|)) with a short-EMA signal
 line, providing a double-smoothed momentum oscillator with cleaner
 zero-line behaviour than RSI and less lag than MACD); a 10-symbol
-basket now lands near **770-1490 KB**
+basket now lands near **780-1500 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).

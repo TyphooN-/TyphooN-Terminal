@@ -33650,6 +33650,212 @@ pub fn get_all_updm(conn: &Connection) -> Result<Vec<UpdmSnapshot>, String> {
     Ok(rows)
 }
 
+// ── ADR-166 Options Expiration Calendar ────────────────────────────────────
+
+/// Tier 1: entry in the offline market calendar — one expiration candidate
+/// generated from pure date math. `expiry_type` is the canonical
+/// classification (WEEKLY / MONTHLY / QUARTERLY / TRIPLE_WITCHING / LEAPS)
+/// and `is_triple_witching` is a convenience flag that is also true for the
+/// TRIPLE_WITCHING type. `days_from_now` is `(expiry_date - from_date)` at
+/// generation time; consumers should re-compute if they cache the struct.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CalendarExpiry {
+    pub date: String,                  // YYYY-MM-DD
+    pub weekday: String,               // e.g. "Friday"
+    pub days_from_now: i64,
+    pub expiry_type: String,           // WEEKLY / MONTHLY / QUARTERLY / TRIPLE_WITCHING / LEAPS
+    pub is_triple_witching: bool,
+}
+
+/// Tier 2: per-expiration aggregate derived from a concrete options chain
+/// snapshot. Volume and OI are summed across all strikes; `put_call_ratio`
+/// is `put_volume / call_volume` (0 if call volume is zero). Labelled
+/// `expiry_type` uses the same classifier as the Tier 1 generator.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SymbolExpiration {
+    pub date: String,                  // YYYY-MM-DD
+    pub days_to_expiry: i64,
+    pub expiry_type: String,           // WEEKLY / MONTHLY / QUARTERLY / TRIPLE_WITCHING / LEAPS
+    pub call_count: usize,             // number of call strikes
+    pub put_count: usize,              // number of put strikes
+    pub total_call_volume: f64,
+    pub total_put_volume: f64,
+    pub total_call_oi: f64,
+    pub total_put_oi: f64,
+    pub put_call_ratio: f64,           // put_volume / call_volume
+}
+
+/// Tier 2 snapshot: all upcoming expirations for a single symbol, derived
+/// from `research_options_chain.expirations[]`.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SymbolExpirationsSnapshot {
+    pub symbol: String,
+    pub as_of: String,                 // YYYY-MM-DD of the underlying chain snapshot
+    pub underlying_price: f64,
+    pub expirations: Vec<SymbolExpiration>,
+    pub next_triple_witching: String,  // YYYY-MM-DD or "" if none in chain
+    pub note: String,
+}
+
+/// True for the 3rd Friday of the month (canonical monthly equity-option
+/// expiration in US markets).
+pub fn is_third_friday(date: &chrono::NaiveDate) -> bool {
+    use chrono::Datelike;
+    date.weekday() == chrono::Weekday::Fri && (15..=21).contains(&date.day())
+}
+
+/// True for the 3rd Friday of March/June/September/December — the CBOE
+/// "triple witching" dates where stock options, stock-index options, and
+/// stock-index futures expire simultaneously.
+pub fn is_triple_witching(date: &chrono::NaiveDate) -> bool {
+    use chrono::Datelike;
+    matches!(date.month(), 3 | 6 | 9 | 12) && is_third_friday(date)
+}
+
+/// Classify an expiration date into one of: WEEKLY / MONTHLY / QUARTERLY /
+/// TRIPLE_WITCHING / LEAPS. `reference_year` is the current year; an
+/// expiration more than ~9 months after the reference year's January 3rd-
+/// Friday is considered LEAPS.
+pub fn classify_expiration(date: &chrono::NaiveDate, reference: &chrono::NaiveDate) -> String {
+    use chrono::Datelike;
+    if is_triple_witching(date) {
+        return "TRIPLE_WITCHING".to_string();
+    }
+    // LEAPS: more than ~9 months out (typically January expirations 1-2 years ahead)
+    let days_out = (date.num_days_from_ce() - reference.num_days_from_ce()).max(0);
+    if days_out > 270 && is_third_friday(date) {
+        return "LEAPS".to_string();
+    }
+    // Quarterly: last trading day of March/June/September/December (non-triple-witching
+    // monthly in those months is classified QUARTERLY)
+    if matches!(date.month(), 3 | 6 | 9 | 12) && is_third_friday(date) {
+        return "QUARTERLY".to_string();
+    }
+    if is_third_friday(date) {
+        return "MONTHLY".to_string();
+    }
+    "WEEKLY".to_string()
+}
+
+/// Generate Tier 1 offline market calendar entries for the next `horizon_days`
+/// from `from_date`. Emits every Friday within the horizon, classified.
+pub fn compute_market_calendar(from_date: chrono::NaiveDate, horizon_days: u32) -> Vec<CalendarExpiry> {
+    use chrono::{Datelike, Duration, Weekday};
+    let mut out = Vec::new();
+    let mut cursor = from_date;
+    // Advance to the next Friday (including today if today is Friday)
+    while cursor.weekday() != Weekday::Fri {
+        cursor += Duration::days(1);
+    }
+    let end = from_date + Duration::days(horizon_days as i64);
+    while cursor <= end {
+        let expiry_type = classify_expiration(&cursor, &from_date);
+        let is_tw = expiry_type == "TRIPLE_WITCHING";
+        let days_from_now = (cursor.num_days_from_ce() - from_date.num_days_from_ce()) as i64;
+        out.push(CalendarExpiry {
+            date: cursor.format("%Y-%m-%d").to_string(),
+            weekday: "Friday".to_string(),
+            days_from_now,
+            expiry_type,
+            is_triple_witching: is_tw,
+        });
+        cursor += Duration::days(7);
+    }
+    out
+}
+
+/// Tier 2: read the options chain snapshot from cache, aggregate volume/OI
+/// per expiration, classify each one, and return a SymbolExpirationsSnapshot.
+pub fn compute_symbol_expirations(conn: &Connection, symbol: &str) -> Result<SymbolExpirationsSnapshot, String> {
+    use chrono::NaiveDate;
+    let chain = match get_options_chain(conn, symbol)? {
+        Some(c) => c,
+        None => return Ok(SymbolExpirationsSnapshot {
+            symbol: symbol.to_uppercase(),
+            note: "No options chain cached for symbol; run OPTIONS first.".to_string(),
+            ..Default::default()
+        }),
+    };
+    let reference = chrono::Local::now().date_naive();
+    let mut expirations: Vec<SymbolExpiration> = Vec::with_capacity(chain.expirations.len());
+    let mut next_tw = String::new();
+    for e in &chain.expirations {
+        let parsed = match NaiveDate::parse_from_str(&e.expiration, "%Y-%m-%d") {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let ex_type = classify_expiration(&parsed, &reference);
+        if ex_type == "TRIPLE_WITCHING" && next_tw.is_empty() {
+            next_tw = e.expiration.clone();
+        }
+        let total_call_volume: f64 = e.calls.iter().map(|c| c.volume).sum();
+        let total_put_volume: f64 = e.puts.iter().map(|p| p.volume).sum();
+        let total_call_oi: f64 = e.calls.iter().map(|c| c.open_interest).sum();
+        let total_put_oi: f64 = e.puts.iter().map(|p| p.open_interest).sum();
+        let put_call_ratio = if total_call_volume > 0.0 {
+            total_put_volume / total_call_volume
+        } else { 0.0 };
+        expirations.push(SymbolExpiration {
+            date: e.expiration.clone(),
+            days_to_expiry: e.days_to_expiry,
+            expiry_type: ex_type,
+            call_count: e.calls.len(),
+            put_count: e.puts.len(),
+            total_call_volume,
+            total_put_volume,
+            total_call_oi,
+            total_put_oi,
+            put_call_ratio,
+        });
+    }
+    let note = if expirations.is_empty() {
+        "Chain present but no parseable expirations.".to_string()
+    } else { String::new() };
+    Ok(SymbolExpirationsSnapshot {
+        symbol: symbol.to_uppercase(),
+        as_of: chain.as_of,
+        underlying_price: chain.underlying_price,
+        expirations,
+        next_triple_witching: next_tw,
+        note,
+    })
+}
+
+pub fn create_research_tables_v56(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v55(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_symbol_expirations (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_symbol_expirations_updated ON research_symbol_expirations(updated_at);",
+    ).map_err(|e| format!("create v56 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_symbol_expirations(conn: &Connection, symbol: &str, snap: &SymbolExpirationsSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v56(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("symexp json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_symbol_expirations(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert symexp: {e}"))?;
+    Ok(())
+}
+
+pub fn get_symbol_expirations(conn: &Connection, symbol: &str) -> Result<Option<SymbolExpirationsSnapshot>, String> {
+    let _ = create_research_tables_v56(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_symbol_expirations WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_symexp: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_symexp: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_symexp: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 
@@ -44407,5 +44613,88 @@ Trailing text.
             assert!(snap.rmi_value.is_finite());
             assert!(snap.rmi_value >= 0.0 && snap.rmi_value <= 100.0);
         }
+    }
+
+    #[test]
+    fn third_friday_identification() {
+        use chrono::NaiveDate;
+        // 2026-04-17 is the 3rd Friday of April 2026
+        assert!(is_third_friday(&NaiveDate::from_ymd_opt(2026, 4, 17).unwrap()));
+        // 2026-04-10 is the 2nd Friday
+        assert!(!is_third_friday(&NaiveDate::from_ymd_opt(2026, 4, 10).unwrap()));
+        // 2026-03-20 is the 3rd Friday of March (triple witching)
+        assert!(is_third_friday(&NaiveDate::from_ymd_opt(2026, 3, 20).unwrap()));
+    }
+
+    #[test]
+    fn triple_witching_months() {
+        use chrono::NaiveDate;
+        // 3rd Fridays of Mar/Jun/Sep/Dec 2026
+        assert!(is_triple_witching(&NaiveDate::from_ymd_opt(2026, 3, 20).unwrap()));
+        assert!(is_triple_witching(&NaiveDate::from_ymd_opt(2026, 6, 19).unwrap()));
+        assert!(is_triple_witching(&NaiveDate::from_ymd_opt(2026, 9, 18).unwrap()));
+        assert!(is_triple_witching(&NaiveDate::from_ymd_opt(2026, 12, 18).unwrap()));
+        // April 3rd Friday is not TW
+        assert!(!is_triple_witching(&NaiveDate::from_ymd_opt(2026, 4, 17).unwrap()));
+    }
+
+    #[test]
+    fn classify_expiration_categories() {
+        use chrono::NaiveDate;
+        let ref_date = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
+        // Next week Friday (short horizon) → WEEKLY
+        let weekly = NaiveDate::from_ymd_opt(2026, 4, 24).unwrap();
+        assert_eq!(classify_expiration(&weekly, &ref_date), "WEEKLY");
+        // 3rd Friday of May 2026 → MONTHLY
+        let monthly = NaiveDate::from_ymd_opt(2026, 5, 15).unwrap();
+        assert_eq!(classify_expiration(&monthly, &ref_date), "MONTHLY");
+        // 3rd Friday of June 2026 → TRIPLE_WITCHING
+        let tw = NaiveDate::from_ymd_opt(2026, 6, 19).unwrap();
+        assert_eq!(classify_expiration(&tw, &ref_date), "TRIPLE_WITCHING");
+        // 3rd Friday > 270 days out → LEAPS
+        let leaps = NaiveDate::from_ymd_opt(2028, 1, 21).unwrap();
+        assert_eq!(classify_expiration(&leaps, &ref_date), "LEAPS");
+    }
+
+    #[test]
+    fn market_calendar_emits_fridays() {
+        use chrono::{NaiveDate, Datelike, Weekday};
+        let from = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
+        let cal = compute_market_calendar(from, 60);
+        assert!(!cal.is_empty());
+        for e in &cal {
+            let d = NaiveDate::parse_from_str(&e.date, "%Y-%m-%d").unwrap();
+            assert_eq!(d.weekday(), Weekday::Fri);
+            assert!(e.days_from_now >= 0);
+        }
+        // ~8-9 Fridays in a 60-day horizon starting from a Friday
+        assert!(cal.len() >= 8 && cal.len() <= 10);
+    }
+
+    #[test]
+    fn symbol_expirations_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = SymbolExpirationsSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-17".into(),
+            underlying_price: 150.0,
+            expirations: vec![SymbolExpiration {
+                date: "2026-04-24".into(),
+                days_to_expiry: 7,
+                expiry_type: "WEEKLY".into(),
+                call_count: 20, put_count: 20,
+                total_call_volume: 5000.0, total_put_volume: 3000.0,
+                total_call_oi: 15000.0, total_put_oi: 10000.0,
+                put_call_ratio: 0.6,
+            }],
+            next_triple_witching: "2026-06-19".into(),
+            note: String::new(),
+        };
+        upsert_symbol_expirations(&conn, "TEST", &snap).unwrap();
+        let got = get_symbol_expirations(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.symbol, "TEST");
+        assert_eq!(got.expirations.len(), 1);
+        assert_eq!(got.expirations[0].expiry_type, "WEEKLY");
+        assert!((got.expirations[0].put_call_ratio - 0.6).abs() < 1e-6);
     }
 }
