@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**two hundred and twenty-three sub-blocks**, each of which is skipped silently when its data
+**two hundred and twenty-eight sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -3074,7 +3074,79 @@ highest_high, lowest_low, willr_value, last_close. Mathematically
 convention makes divergence read differently in practice than
 Stochastic's 20/80. Source: ADR-155 WILLR window.
 
-#### 2.222 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.222 Mass Index (MASS — ADR-156)
+
+Pulled from `research::get_mass`. Donald Dorsey's June-1992 reversal
+detector via range expansion: per-bar range = H - L, single smoother
+= EMA(H-L, 9), double smoother = EMA(single, 9), single ratio =
+single/double. Mass Index = Σ(single ratio) over last 25 bars.
+Header gives **mass_label** (REVERSAL_BULGE mass>27 / WATCH mass>25
+/ NEUTRAL / INSUFFICIENT_DATA for n<45). Body reports bars_used,
+ema_period (9), sum_period (25), single_ratio, mass_value,
+last_close. Direction-agnostic — fires on volatility expansion
+before confirmed reversal, complementing the direction-aware
+oscillators (MACD/PPO/KST). Source: ADR-156 MASS window.
+
+#### 2.223 Chaikin Oscillator (CHAIKOSC — ADR-156)
+
+Pulled from `research::get_chaikosc`. Marc Chaikin's ~1982 momentum
+derivative of the A/D line: money-flow multiplier MFM =
+((C-L)-(H-C))/(H-L), money-flow volume MFV = MFM · volume, A/D =
+cumulative Σ(MFV). Oscillator = EMA(A/D, 3) − EMA(A/D, 10).
+Header gives **chaikosc_label** (STRONG_ACCUM osc>thresh>0 / ACCUM
+osc>0 / NEUTRAL / DIST osc<0 / STRONG_DIST osc<−thresh<0 /
+INSUFFICIENT_DATA for n<12). Body reports bars_used, fast_period
+(3), slow_period (10), ad_last, ema_fast_ad, ema_slow_ad,
+chaikosc_value, last_close. Derivates A/D so slope changes show
+up even when the cumulative line trends slowly. Source: ADR-156
+CHAIKOSC window.
+
+#### 2.224 Klinger Volume Oscillator (KLINGER — ADR-156)
+
+Pulled from `research::get_klinger`. Stephen Klinger's 1997
+volume-native MACD twin: trend direction sign = sign(HLC_t −
+HLC_{t−1}), range DM = H - L, cumulative range CM with trend-
+change reset, volume force VF = volume · 2 · ((DM/CM) − 1) ·
+sign · 100. KVO = EMA(VF, 34) − EMA(VF, 55). Signal = EMA(KVO,
+13). Header gives **klinger_label** (STRONG_BULL kvo>signal &&
+norm>1 / BULL kvo>signal / NEUTRAL / BEAR kvo<signal /
+STRONG_BEAR kvo<signal && norm<−1 / INSUFFICIENT_DATA for n<71).
+Body reports bars_used, fast_period (34), slow_period (55),
+signal_period (13), ema_fast_vf, ema_slow_vf, kvo_value,
+signal_value, histogram, last_close. Combines direction AND
+volume — divergences considered stronger than MACD-only ones.
+Source: ADR-156 KLINGER window.
+
+#### 2.225 Stochastic RSI (STOCHRSI — ADR-156)
+
+Pulled from `research::get_stochrsi`. Chande & Kroll's 1994
+oscillator-of-oscillator: Wilder-smoothed RSI(14) then Stochastic
+on its last 14 RSI values — raw = (RSI − min14) / (max14 − min14),
+%K = SMA(raw, 3) · 100, %D = SMA(%K, 3). Header gives
+**stochrsi_label** (OVERBOUGHT k>80 / BULL k>50 / NEUTRAL /
+BEAR k<50 / OVERSOLD k<20 / INSUFFICIENT_DATA for n<36). Body
+reports bars_used, rsi_period (14), stoch_period (14),
+k_period (3), d_period (3), rsi_value, rsi_min, rsi_max,
+stoch_rsi_raw, k_value, d_value, last_close. Forces plain RSI
+back onto [0, 100] of its own local range, so divergences
+and overbought/oversold triggers fire more reliably than for
+RSI clusters stuck in [40, 60]. Source: ADR-156 STOCHRSI window.
+
+#### 2.226 Awesome Oscillator (AWESOME — ADR-156)
+
+Pulled from `research::get_awesome`. Bill Williams' 1998 cleanest-
+possible momentum oscillator: AO = SMA(hl2, 5) − SMA(hl2, 34)
+where hl2 = (H+L)/2. Ao_color_up = (AO > prev AO). Header gives
+**awesome_label** (STRONG_BULL ao>0 && %pct>0.2 / BULL ao>0 /
+NEUTRAL / BEAR ao<0 / STRONG_BEAR ao<0 && %pct<−0.2 /
+INSUFFICIENT_DATA for n<36). Body reports bars_used, fast_period
+(5), slow_period (34), sma_fast, sma_slow, ao_value, ao_prev,
+ao_color_up (▲/▼), last_close. Uses bar-midpoint hl2 not close
+— Williams specifically chose it as "where price spent most of
+the bar". Serves as the simple baseline to confirm faster
+oscillators' signals. Source: ADR-156 AWESOME window.
+
+#### 2.227 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -3090,7 +3162,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.223 Sector peer comparison
+#### 2.228 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -3121,7 +3193,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.222 above.
+articles to the per-symbol bag consumed by sub-block 2.227 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -3350,8 +3422,34 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~72-143 KB**
-(up from 71-141 KB after ADR-154; ADR-155 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~73-145 KB**
+(up from 72-143 KB after ADR-155; ADR-156 adds five optional per-symbol
+blocks — MASS / CHAIKOSC / KLINGER / STOCHRSI / AWESOME — each measuring
+~2 k/v rows and adding ~200-300 bytes when populated, for a typical
++1.3 KB per symbol; all five reuse the existing `research_historical_price`
+HP cache and the standard research-table LAN sync path with zero new API
+dependencies; MASS computes Dorsey's 1992 Mass Index as Σ₂₅(EMA₉(H-L) /
+EMA₉(EMA₉(H-L))) with REVERSAL_BULGE (>27) / WATCH (>25) / NEUTRAL labels
+— first direction-agnostic reversal detector using range expansion
+regardless of price direction; CHAIKOSC computes Chaikin's ~1982 Chaikin
+Oscillator as EMA(A/D,3) − EMA(A/D,10) where A/D = cumulative Σ(MFM·V)
+with STRONG_ACCUM / ACCUM / NEUTRAL / DIST / STRONG_DIST labels — the
+derivative of A/D (raw A/D from Round 40) showing slope changes even
+when cumulative flow trends slowly; KLINGER computes Klinger's 1997
+Volume Oscillator as EMA(VF,34) − EMA(VF,55) with 13-bar signal,
+trend-change detection on HLC pivots, STRONG_BULL / BULL / NEUTRAL /
+BEAR / STRONG_BEAR labels — first volume-native MACD-family oscillator
+with explicit signal-line; STOCHRSI computes Chande & Kroll's 1994
+oscillator-of-oscillator (Stochastic %K/%D applied to RSI14 values,
+3/3 smoothing) with OVERBOUGHT (>80) / BULL / NEUTRAL / BEAR / OVERSOLD
+(<20) labels — forces plain RSI back onto [0, 100] of its own local
+range, flagging divergences reliably for tapes whose RSI stays in
+[40, 60]; AWESOME computes Bill Williams' 1998 Awesome Oscillator as
+SMA(hl2, 5) − SMA(hl2, 34) with ao_color_up flag and STRONG_BULL
+(ao>0, %pct>0.2) / BULL / NEUTRAL / BEAR / STRONG_BEAR labels —
+simplest SMA-only momentum oscillator, uses hl2=(H+L)/2 as Williams'
+chosen "where price spent most of the bar"; prior five (ADR-155)
+remain unchanged; ADR-155 adds five optional per-symbol
 blocks — PPO / DPO / KST / ULTOSC / WILLR — each measuring ~2 k/v rows
 and adding ~200-280 bytes when populated, for a typical +1.2 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the
@@ -3592,7 +3690,7 @@ critical value at 5%; TSI computes the Blau 1991 True Strength Index
 = 100 · EMA₁₃(EMA₂₅(ΔP)) / EMA₁₃(EMA₂₅(|ΔP|)) with a short-EMA signal
 line, providing a double-smoothed momentum oscillator with cleaner
 zero-line behaviour than RSI and less lag than MACD); a 10-symbol
-basket now lands near **720-1430 KB**
+basket now lands near **730-1450 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).

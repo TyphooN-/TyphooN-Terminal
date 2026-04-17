@@ -4851,6 +4851,96 @@ pub struct WillrSnapshot {
     pub note: String,
 }
 
+/// MASS — Donald Dorsey (1992) Mass Index: reversal-detection from H-L range expansion.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MassSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ema_period: usize,             // 9
+    pub sum_period: usize,             // 25
+    pub mass_value: f64,               // Σ(EMA₉(H−L) / EMA₉(EMA₉(H−L))) over 25 bars
+    pub single_ratio: f64,             // latest per-bar ratio
+    pub last_close: f64,
+    pub mass_label: String,            // REVERSAL_BULGE >27 crossing back <26.5 (sentinel NEAR) / WATCH >25 / NEUTRAL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// CHAIKOSC — Marc Chaikin Oscillator: MACD (fast-slow EMA) of the Accumulation/Distribution line.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ChaikoscSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub fast_period: usize,            // 3
+    pub slow_period: usize,            // 10
+    pub ad_last: f64,                  // latest A/D line
+    pub ema_fast_ad: f64,
+    pub ema_slow_ad: f64,
+    pub chaikosc_value: f64,           // ema_fast_ad − ema_slow_ad
+    pub last_close: f64,
+    pub chaikosc_label: String,        // STRONG_ACCUM / ACCUM / NEUTRAL / DIST / STRONG_DIST / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// KLINGER — Stephen Klinger Volume Oscillator: volume-force EMA spread with signal.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct KlingerSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub fast_period: usize,            // 34
+    pub slow_period: usize,            // 55
+    pub signal_period: usize,          // 13
+    pub ema_fast_vf: f64,
+    pub ema_slow_vf: f64,
+    pub kvo_value: f64,                // ema_fast_vf − ema_slow_vf
+    pub signal_value: f64,             // EMA(kvo, 13)
+    pub histogram: f64,                // kvo − signal
+    pub last_close: f64,
+    pub klinger_label: String,         // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// STOCHRSI — Tushar Chande (1994) Stochastic RSI: Stochastic applied to the RSI series.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct StochRsiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub rsi_period: usize,             // 14
+    pub stoch_period: usize,           // 14
+    pub k_period: usize,               // 3 (%K smoothing)
+    pub d_period: usize,               // 3 (%D smoothing)
+    pub rsi_value: f64,                // underlying RSI
+    pub rsi_min: f64,                  // min RSI over stoch_period
+    pub rsi_max: f64,                  // max RSI over stoch_period
+    pub stoch_rsi_raw: f64,            // (RSI − min) / (max − min) · 100
+    pub k_value: f64,                  // SMA(raw, 3)
+    pub d_value: f64,                  // SMA(%K, 3)
+    pub last_close: f64,
+    pub stochrsi_label: String,        // OVERBOUGHT >80 / BULL >50 / NEUTRAL / BEAR <50 / OVERSOLD <20 / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// AWESOME — Bill Williams Awesome Oscillator: SMA5(hl2) − SMA34(hl2).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AwesomeSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub fast_period: usize,            // 5
+    pub slow_period: usize,            // 34
+    pub sma_fast: f64,                 // SMA(hl2, 5)
+    pub sma_slow: f64,                 // SMA(hl2, 34)
+    pub ao_value: f64,                 // fast − slow
+    pub ao_prev: f64,                  // prior bar AO (for color signal)
+    pub ao_color_up: bool,             // true if ao_value > ao_prev
+    pub last_close: f64,
+    pub awesome_label: String,         // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -22277,6 +22367,341 @@ pub fn compute_willr_snapshot(
     }
 }
 
+/// MASS — Donald Dorsey Mass Index (EMA=9, sum window=25).
+pub fn compute_mass_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MassSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let ema_p = 9usize; let sum_p = 25usize;
+    let min_bars = 2 * ema_p + sum_p + 2;
+    if n < min_bars {
+        return MassSnapshot {
+            symbol: sym, as_of: as_of.into(), ema_period: ema_p, sum_period: sum_p,
+            mass_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let hl: Vec<f64> = sorted.iter().map(|b| b.high - b.low).collect();
+    let ema = |src: &[f64], p: usize, start: usize| -> Vec<f64> {
+        let mut out = vec![0.0_f64; src.len()];
+        if start + p > src.len() { return out; }
+        let k = 2.0 / (p as f64 + 1.0);
+        let seed: f64 = src[start..start + p].iter().sum::<f64>() / p as f64;
+        out[start + p - 1] = seed;
+        for i in (start + p)..src.len() {
+            out[i] = src[i] * k + out[i - 1] * (1.0 - k);
+        }
+        out
+    };
+    let e1 = ema(&hl, ema_p, 0);
+    let e2 = ema(&e1, ema_p, ema_p - 1);
+    let mut ratio = vec![0.0_f64; n];
+    for i in (2 * ema_p - 2)..n {
+        ratio[i] = if e2[i].abs() > f64::EPSILON { e1[i] / e2[i] } else { 0.0 };
+    }
+    let start = n - sum_p;
+    let mass: f64 = ratio[start..n].iter().sum();
+    let single_ratio = ratio[n - 1];
+    let label = if mass > 27.0 { "REVERSAL_BULGE" }
+        else if mass > 25.0 { "WATCH" }
+        else { "NEUTRAL" };
+    MassSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        ema_period: ema_p, sum_period: sum_p,
+        mass_value: mass, single_ratio,
+        last_close: sorted[n - 1].close,
+        mass_label: label.into(), note: String::new(),
+    }
+}
+
+/// CHAIKOSC — Chaikin Oscillator (fast 3, slow 10 EMAs of A/D line).
+pub fn compute_chaikosc_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ChaikoscSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let fast_p = 3usize; let slow_p = 10usize;
+    let min_bars = slow_p + 2;
+    if n < min_bars {
+        return ChaikoscSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            fast_period: fast_p, slow_period: slow_p,
+            chaikosc_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let mut ad = vec![0.0_f64; n];
+    for i in 0..n {
+        let h = sorted[i].high;
+        let l = sorted[i].low;
+        let c = sorted[i].close;
+        let v = sorted[i].volume as f64;
+        let range = h - l;
+        let mfm = if range > f64::EPSILON { ((c - l) - (h - c)) / range } else { 0.0 };
+        let mfv = mfm * v;
+        ad[i] = if i == 0 { mfv } else { ad[i - 1] + mfv };
+    }
+    let ema = |src: &[f64], p: usize| -> Vec<f64> {
+        let mut out = vec![0.0_f64; src.len()];
+        let k = 2.0 / (p as f64 + 1.0);
+        let seed: f64 = src[..p].iter().sum::<f64>() / p as f64;
+        out[p - 1] = seed;
+        for i in p..src.len() {
+            out[i] = src[i] * k + out[i - 1] * (1.0 - k);
+        }
+        out
+    };
+    let e_fast = ema(&ad, fast_p);
+    let e_slow = ema(&ad, slow_p);
+    let co = e_fast[n - 1] - e_slow[n - 1];
+    let abs_ad = ad[n - 1].abs().max(1.0);
+    let norm = co / abs_ad;
+    let label = if norm > 0.02 { "STRONG_ACCUM" }
+        else if norm > 0.002 { "ACCUM" }
+        else if norm < -0.02 { "STRONG_DIST" }
+        else if norm < -0.002 { "DIST" }
+        else { "NEUTRAL" };
+    ChaikoscSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        fast_period: fast_p, slow_period: slow_p,
+        ad_last: ad[n - 1], ema_fast_ad: e_fast[n - 1], ema_slow_ad: e_slow[n - 1],
+        chaikosc_value: co,
+        last_close: sorted[n - 1].close,
+        chaikosc_label: label.into(), note: String::new(),
+    }
+}
+
+/// KLINGER — Volume Oscillator (fast 34, slow 55, signal 13).
+pub fn compute_klinger_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> KlingerSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let fast_p = 34usize; let slow_p = 55usize; let signal_p = 13usize;
+    let min_bars = slow_p + signal_p + 3;
+    if n < min_bars {
+        return KlingerSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            fast_period: fast_p, slow_period: slow_p, signal_period: signal_p,
+            klinger_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let mut vf = vec![0.0_f64; n];
+    let mut prev_hlc = 0.0_f64;
+    let mut trend = 1_i32;
+    let mut dm_prev = 0.0_f64;
+    let mut cm_prev = 0.0_f64;
+    for i in 1..n {
+        let h = sorted[i].high;
+        let l = sorted[i].low;
+        let c = sorted[i].close;
+        let v = sorted[i].volume as f64;
+        let hlc = h + l + c;
+        let dm = h - l;
+        let cm = if (trend > 0 && i > 1) || (trend < 0 && i > 1) {
+            if trend.signum() == (if hlc > prev_hlc { 1 } else { -1 }) {
+                cm_prev + dm
+            } else {
+                dm_prev + dm
+            }
+        } else { dm };
+        let new_trend = if hlc > prev_hlc { 1 } else { -1 };
+        let signed = new_trend as f64;
+        let ratio = if cm.abs() > f64::EPSILON { dm / cm } else { 0.0 };
+        vf[i] = v * (2.0 * ratio - 1.0).abs() * signed * 100.0;
+        prev_hlc = hlc;
+        dm_prev = dm;
+        cm_prev = cm;
+        trend = new_trend;
+    }
+    let ema = |src: &[f64], p: usize| -> Vec<f64> {
+        let mut out = vec![0.0_f64; src.len()];
+        if p + 1 > src.len() { return out; }
+        let k = 2.0 / (p as f64 + 1.0);
+        let seed: f64 = src[1..=p].iter().sum::<f64>() / p as f64;
+        out[p] = seed;
+        for i in (p + 1)..src.len() {
+            out[i] = src[i] * k + out[i - 1] * (1.0 - k);
+        }
+        out
+    };
+    let e_fast = ema(&vf, fast_p);
+    let e_slow = ema(&vf, slow_p);
+    let mut kvo = vec![0.0_f64; n];
+    for i in slow_p..n {
+        kvo[i] = e_fast[i] - e_slow[i];
+    }
+    let sig_seed_end = slow_p + signal_p - 1;
+    let mut sig_series = vec![0.0_f64; n];
+    if sig_seed_end < n {
+        let k = 2.0 / (signal_p as f64 + 1.0);
+        let seed: f64 = kvo[slow_p..=sig_seed_end].iter().sum::<f64>() / signal_p as f64;
+        sig_series[sig_seed_end] = seed;
+        for i in (sig_seed_end + 1)..n {
+            sig_series[i] = kvo[i] * k + sig_series[i - 1] * (1.0 - k);
+        }
+    }
+    let kvo_now = kvo[n - 1];
+    let sig_now = sig_series[n - 1];
+    let hist = kvo_now - sig_now;
+    let abs_scale = (e_fast[n - 1].abs() + e_slow[n - 1].abs()).max(1.0);
+    let norm = kvo_now / abs_scale;
+    let label = if kvo_now > 0.0 && kvo_now > sig_now && norm.abs() > 0.05 { "STRONG_BULL" }
+        else if kvo_now > 0.0 { "BULL" }
+        else if kvo_now < 0.0 && kvo_now < sig_now && norm.abs() > 0.05 { "STRONG_BEAR" }
+        else if kvo_now < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    KlingerSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        fast_period: fast_p, slow_period: slow_p, signal_period: signal_p,
+        ema_fast_vf: e_fast[n - 1], ema_slow_vf: e_slow[n - 1],
+        kvo_value: kvo_now, signal_value: sig_now, histogram: hist,
+        last_close: sorted[n - 1].close,
+        klinger_label: label.into(), note: String::new(),
+    }
+}
+
+/// STOCHRSI — Chande Stochastic RSI (RSI=14, Stoch=14, %K smoothing=3, %D=3).
+pub fn compute_stochrsi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> StochRsiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let rsi_p = 14usize; let stoch_p = 14usize; let k_p = 3usize; let d_p = 3usize;
+    let min_bars = rsi_p + stoch_p + k_p + d_p + 2;
+    if n < min_bars {
+        return StochRsiSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            rsi_period: rsi_p, stoch_period: stoch_p, k_period: k_p, d_period: d_p,
+            stochrsi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let mut gain = vec![0.0_f64; n];
+    let mut loss = vec![0.0_f64; n];
+    for i in 1..n {
+        let d = closes[i] - closes[i - 1];
+        if d > 0.0 { gain[i] = d; } else { loss[i] = -d; }
+    }
+    let mut avg_g = vec![0.0_f64; n];
+    let mut avg_l = vec![0.0_f64; n];
+    let seed_end = rsi_p;
+    if seed_end < n {
+        avg_g[seed_end] = gain[1..=rsi_p].iter().sum::<f64>() / rsi_p as f64;
+        avg_l[seed_end] = loss[1..=rsi_p].iter().sum::<f64>() / rsi_p as f64;
+        for i in (seed_end + 1)..n {
+            avg_g[i] = (avg_g[i - 1] * (rsi_p - 1) as f64 + gain[i]) / rsi_p as f64;
+            avg_l[i] = (avg_l[i - 1] * (rsi_p - 1) as f64 + loss[i]) / rsi_p as f64;
+        }
+    }
+    let mut rsi = vec![0.0_f64; n];
+    for i in seed_end..n {
+        let rs = if avg_l[i] > f64::EPSILON { avg_g[i] / avg_l[i] } else { 100.0 };
+        rsi[i] = 100.0 - 100.0 / (1.0 + rs);
+    }
+    let mut raw = vec![0.0_f64; n];
+    for i in (seed_end + stoch_p - 1)..n {
+        let window = &rsi[(i + 1 - stoch_p)..=i];
+        let mn = window.iter().cloned().fold(f64::INFINITY, f64::min);
+        let mx = window.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        raw[i] = if (mx - mn).abs() > f64::EPSILON { (rsi[i] - mn) / (mx - mn) * 100.0 } else { 50.0 };
+    }
+    let sma = |src: &[f64], p: usize, start: usize| -> Vec<f64> {
+        let mut out = vec![0.0_f64; src.len()];
+        for i in (start + p - 1)..src.len() {
+            out[i] = src[(i + 1 - p)..=i].iter().sum::<f64>() / p as f64;
+        }
+        out
+    };
+    let raw_start = seed_end + stoch_p - 1;
+    let k_series = sma(&raw, k_p, raw_start);
+    let d_series = sma(&k_series, d_p, raw_start + k_p - 1);
+    let rsi_now = rsi[n - 1];
+    let rsi_window = &rsi[(n - stoch_p)..n];
+    let rsi_min = rsi_window.iter().cloned().fold(f64::INFINITY, f64::min);
+    let rsi_max = rsi_window.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let raw_now = raw[n - 1];
+    let k_now = k_series[n - 1];
+    let d_now = d_series[n - 1];
+    let label = if k_now > 80.0 { "OVERBOUGHT" }
+        else if k_now > 50.0 { "BULL" }
+        else if k_now < 20.0 { "OVERSOLD" }
+        else if k_now < 50.0 { "BEAR" }
+        else { "NEUTRAL" };
+    StochRsiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        rsi_period: rsi_p, stoch_period: stoch_p, k_period: k_p, d_period: d_p,
+        rsi_value: rsi_now, rsi_min, rsi_max,
+        stoch_rsi_raw: raw_now, k_value: k_now, d_value: d_now,
+        last_close: closes[n - 1],
+        stochrsi_label: label.into(), note: String::new(),
+    }
+}
+
+/// AWESOME — Bill Williams Awesome Oscillator: SMA5(hl2) − SMA34(hl2).
+pub fn compute_awesome_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AwesomeSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let fast_p = 5usize; let slow_p = 34usize;
+    let min_bars = slow_p + 2;
+    if n < min_bars {
+        return AwesomeSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            fast_period: fast_p, slow_period: slow_p,
+            awesome_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let hl2: Vec<f64> = sorted.iter().map(|b| (b.high + b.low) * 0.5).collect();
+    let sma = |src: &[f64], p: usize, idx: usize| -> f64 {
+        src[(idx + 1 - p)..=idx].iter().sum::<f64>() / p as f64
+    };
+    let t = n - 1;
+    let s_fast_t = sma(&hl2, fast_p, t);
+    let s_slow_t = sma(&hl2, slow_p, t);
+    let ao_t = s_fast_t - s_slow_t;
+    let s_fast_p = sma(&hl2, fast_p, t - 1);
+    let s_slow_p = sma(&hl2, slow_p, t - 1);
+    let ao_prev = s_fast_p - s_slow_p;
+    let color_up = ao_t > ao_prev;
+    let abs_scale = sorted[t].close.abs().max(1.0);
+    let norm_pct = ao_t / abs_scale * 100.0;
+    let label = if ao_t > 0.0 && color_up && norm_pct.abs() > 0.5 { "STRONG_BULL" }
+        else if ao_t > 0.0 { "BULL" }
+        else if ao_t < 0.0 && !color_up && norm_pct.abs() > 0.5 { "STRONG_BEAR" }
+        else if ao_t < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    AwesomeSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        fast_period: fast_p, slow_period: slow_p,
+        sma_fast: s_fast_t, sma_slow: s_slow_t,
+        ao_value: ao_t, ao_prev,
+        ao_color_up: color_up,
+        last_close: sorted[t].close,
+        awesome_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -29342,6 +29767,157 @@ pub fn get_willr(conn: &Connection, symbol: &str) -> Result<Option<WillrSnapshot
         .map_err(|e| format!("prepare get_willr: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_willr: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_willr: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn create_research_tables_v48(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v47(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_mass (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_mass_updated ON research_mass(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_chaikosc (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_chaikosc_updated ON research_chaikosc(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_klinger (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_klinger_updated ON research_klinger(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_stochrsi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_stochrsi_updated ON research_stochrsi(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_awesome (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_awesome_updated ON research_awesome(updated_at);",
+    ).map_err(|e| format!("create v48 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_mass(conn: &Connection, symbol: &str, snap: &MassSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v48(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("mass json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_mass(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert mass: {e}"))?;
+    Ok(())
+}
+
+pub fn get_mass(conn: &Connection, symbol: &str) -> Result<Option<MassSnapshot>, String> {
+    let _ = create_research_tables_v48(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_mass WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_mass: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_mass: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_mass: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_chaikosc(conn: &Connection, symbol: &str, snap: &ChaikoscSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v48(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("chaikosc json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_chaikosc(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert chaikosc: {e}"))?;
+    Ok(())
+}
+
+pub fn get_chaikosc(conn: &Connection, symbol: &str) -> Result<Option<ChaikoscSnapshot>, String> {
+    let _ = create_research_tables_v48(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_chaikosc WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_chaikosc: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_chaikosc: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_chaikosc: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_klinger(conn: &Connection, symbol: &str, snap: &KlingerSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v48(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("klinger json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_klinger(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert klinger: {e}"))?;
+    Ok(())
+}
+
+pub fn get_klinger(conn: &Connection, symbol: &str) -> Result<Option<KlingerSnapshot>, String> {
+    let _ = create_research_tables_v48(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_klinger WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_klinger: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_klinger: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_klinger: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_stochrsi(conn: &Connection, symbol: &str, snap: &StochRsiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v48(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("stochrsi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_stochrsi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert stochrsi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_stochrsi(conn: &Connection, symbol: &str) -> Result<Option<StochRsiSnapshot>, String> {
+    let _ = create_research_tables_v48(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_stochrsi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_stochrsi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_stochrsi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_stochrsi: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_awesome(conn: &Connection, symbol: &str, snap: &AwesomeSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v48(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("awesome json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_awesome(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert awesome: {e}"))?;
+    Ok(())
+}
+
+pub fn get_awesome(conn: &Connection, symbol: &str) -> Result<Option<AwesomeSnapshot>, String> {
+    let _ = create_research_tables_v48(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_awesome WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_awesome: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_awesome: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_awesome: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -38966,6 +39542,169 @@ Trailing text.
             assert!(snap.willr_value >= -100.0 && snap.willr_value <= 0.0);
             assert!(snap.highest_high >= snap.lowest_low);
             assert_eq!(snap.period, 14);
+        }
+    }
+
+    // ── ADR-156 Round 47 tests ──────────────────────────────────────────────
+
+    #[test]
+    fn mass_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MassSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, ema_period: 9, sum_period: 25,
+            mass_value: 25.7, single_ratio: 1.03,
+            last_close: 150.0,
+            mass_label: "NEUTRAL".into(), note: String::new(),
+        };
+        upsert_mass(&conn, "TEST", &snap).unwrap();
+        let got = get_mass(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.mass_label, "NEUTRAL");
+        assert!((got.mass_value - 25.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn mass_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_mass_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.mass_label.as_str(),
+            "REVERSAL_BULGE" | "WATCH" | "NEUTRAL" | "INSUFFICIENT_DATA"));
+        if snap.mass_label != "INSUFFICIENT_DATA" {
+            assert!(snap.mass_value.is_finite() && snap.mass_value >= 0.0);
+            assert!(snap.single_ratio.is_finite() && snap.single_ratio >= 0.0);
+            assert_eq!(snap.ema_period, 9);
+            assert_eq!(snap.sum_period, 25);
+        }
+    }
+
+    #[test]
+    fn chaikosc_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ChaikoscSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, fast_period: 3, slow_period: 10,
+            ad_last: 1_250_000.0,
+            ema_fast_ad: 1_260_000.0, ema_slow_ad: 1_230_000.0,
+            chaikosc_value: 30_000.0,
+            last_close: 150.0,
+            chaikosc_label: "ACCUM".into(), note: String::new(),
+        };
+        upsert_chaikosc(&conn, "TEST", &snap).unwrap();
+        let got = get_chaikosc(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.chaikosc_label, "ACCUM");
+        assert!((got.chaikosc_value - 30_000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn chaikosc_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_chaikosc_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.chaikosc_label.as_str(),
+            "STRONG_ACCUM" | "ACCUM" | "NEUTRAL" | "DIST" | "STRONG_DIST" | "INSUFFICIENT_DATA"));
+        if snap.chaikosc_label != "INSUFFICIENT_DATA" {
+            assert!(snap.chaikosc_value.is_finite());
+            assert!(snap.ema_fast_ad.is_finite());
+            assert!(snap.ema_slow_ad.is_finite());
+            assert_eq!(snap.fast_period, 3);
+            assert_eq!(snap.slow_period, 10);
+        }
+    }
+
+    #[test]
+    fn klinger_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = KlingerSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, fast_period: 34, slow_period: 55, signal_period: 13,
+            ema_fast_vf: 12_000.0, ema_slow_vf: 10_500.0,
+            kvo_value: 1_500.0, signal_value: 1_200.0, histogram: 300.0,
+            last_close: 150.0,
+            klinger_label: "BULL".into(), note: String::new(),
+        };
+        upsert_klinger(&conn, "TEST", &snap).unwrap();
+        let got = get_klinger(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.klinger_label, "BULL");
+        assert!((got.kvo_value - 1_500.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn klinger_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_klinger_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.klinger_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.klinger_label != "INSUFFICIENT_DATA" {
+            assert!(snap.kvo_value.is_finite());
+            assert!(snap.signal_value.is_finite());
+            assert_eq!(snap.fast_period, 34);
+            assert_eq!(snap.slow_period, 55);
+            assert_eq!(snap.signal_period, 13);
+        }
+    }
+
+    #[test]
+    fn stochrsi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = StochRsiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, rsi_period: 14, stoch_period: 14, k_period: 3, d_period: 3,
+            rsi_value: 55.0, rsi_min: 40.0, rsi_max: 70.0,
+            stoch_rsi_raw: 0.5, k_value: 55.0, d_value: 50.0,
+            last_close: 150.0,
+            stochrsi_label: "BULL".into(), note: String::new(),
+        };
+        upsert_stochrsi(&conn, "TEST", &snap).unwrap();
+        let got = get_stochrsi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.stochrsi_label, "BULL");
+        assert!((got.k_value - 55.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stochrsi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_stochrsi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.stochrsi_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.stochrsi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.rsi_value.is_finite());
+            assert!(snap.rsi_value >= 0.0 && snap.rsi_value <= 100.0);
+            assert!(snap.k_value >= 0.0 && snap.k_value <= 100.0);
+            assert!(snap.d_value >= 0.0 && snap.d_value <= 100.0);
+            assert!(snap.rsi_max >= snap.rsi_min);
+            assert_eq!(snap.rsi_period, 14);
+            assert_eq!(snap.stoch_period, 14);
+        }
+    }
+
+    #[test]
+    fn awesome_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = AwesomeSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, fast_period: 5, slow_period: 34,
+            sma_fast: 150.5, sma_slow: 149.0,
+            ao_value: 1.5, ao_prev: 1.2, ao_color_up: true,
+            last_close: 150.0,
+            awesome_label: "BULL".into(), note: String::new(),
+        };
+        upsert_awesome(&conn, "TEST", &snap).unwrap();
+        let got = get_awesome(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.awesome_label, "BULL");
+        assert!((got.ao_value - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn awesome_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_awesome_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.awesome_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.awesome_label != "INSUFFICIENT_DATA" {
+            assert!(snap.ao_value.is_finite());
+            assert!(snap.sma_fast > 0.0);
+            assert!(snap.sma_slow > 0.0);
+            assert_eq!(snap.fast_period, 5);
+            assert_eq!(snap.slow_period, 34);
         }
     }
 }
