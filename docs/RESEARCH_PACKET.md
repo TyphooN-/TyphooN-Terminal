@@ -3222,7 +3222,78 @@ bars the cross cadence is faster than Coppock's monthly-bar design;
 interpret relative to tape granularity. Source: ADR-158 COPPOCK
 window.
 
-#### 2.232 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.232 Chande Momentum Oscillator (CMO — ADR-159)
+
+Pulled from `research::get_cmo`. Tushar Chande's 1994 raw gain/loss
+spread: `100 · (Σ gains − Σ losses) / (Σ gains + Σ losses)` over a
+9-bar lookback. Bounded in [-100, +100] with 0 as neutral. Distinct
+from RSI (smoothed, bounded [0, 100]) and STOCHRSI (stochastic of
+RSI): CMO is raw, un-smoothed, and reports the spread directly.
+Header gives **cmo_label** (OVERBOUGHT >+50 / BULL >0 / NEUTRAL /
+BEAR <0 / OVERSOLD <−50 / INSUFFICIENT_DATA for n<11). Body reports
+bars_used, period (9), sum_up, sum_dn, cmo_value, last_close. First
+raw gain/loss spread surface we ship. Source: ADR-159 CMO window.
+
+#### 2.233 Q-Stick (QSTICK — ADR-159)
+
+Pulled from `research::get_qstick`. Tushar Chande's 1995 Q-Stick:
+SMA over the candle body `(close − open)`. Measures intra-bar
+sentiment directly — did buyers or sellers dominate inside each
+bar? Positive sustained value = consistent bullish candles; negative
+= consistent bearish candles. Header gives **qstick_label**
+(STRONG_BULL >0 && |body/close|>1% / BULL >0 / NEUTRAL / BEAR <0 /
+STRONG_BEAR <0 && |body/close|>1% / INSUFFICIENT_DATA for n<16).
+Body reports bars_used, period (14), qstick_value, qstick_prev,
+last_close. Ship with BOP since they share intra-bar sentiment but
+measure complementary axes (QSTICK magnitude; BOP range-normalised
+position). Source: ADR-159 QSTICK window.
+
+#### 2.234 Disparity Index (DISPARITY — ADR-159)
+
+Pulled from `research::get_disparity`. Japanese technical-analysis
+tradition (popularised in the West by Steve Nison): percentage
+deviation of close from its SMA, `(close / SMA(close, 14) − 1) · 100`.
+Positive = price above mean (bullish); extreme readings suggest
+mean-reversion pressure. Distinct from BOLLPCT (volatility-
+normalised) and from any MA-slope read: DISPARITY measures the
+*gap* between price and its smoother in raw percentage terms.
+Header gives **disparity_label** (STRONG_BULL >3% / BULL >0% /
+NEUTRAL / BEAR <0% / STRONG_BEAR <−3% / INSUFFICIENT_DATA for
+n<16). Body reports bars_used, period (14), sma_value,
+disparity_value, last_close. First raw percentage-deviation surface
+we ship. Source: ADR-159 DISPARITY window.
+
+#### 2.235 Balance of Power (BOP — ADR-159)
+
+Pulled from `research::get_bop`. Igor Livshin's Balance of Power:
+per-bar `(close − open) / (high − low)`, smoothed by SMA14.
+Bounded in [-1, +1] per bar. BOP > 0.5 = buyers dominated the bar's
+range (close in the upper half); BOP < -0.5 = sellers dominated.
+Distinct from QSTICK (raw body size) and from CMF / AD (volume-
+weighted): BOP is a pure price-action sentiment indicator,
+independent of volume and independent of magnitude (only the
+*position* of the close within the bar's range matters). Header
+gives **bop_label** (STRONG_BULL >0.5 / BULL >0 / NEUTRAL / BEAR <0 /
+STRONG_BEAR <−0.5 / INSUFFICIENT_DATA for n<16). Body reports
+bars_used, period (14), bop_value (smoothed), raw_bop (latest bar),
+last_close. Source: ADR-159 BOP window.
+
+#### 2.236 Schaff Trend Cycle (SCHAFF — ADR-159)
+
+Pulled from `research::get_schaff`. Doug Schaff's 2008 Trend Cycle:
+applies stochastic oscillator logic to the MACD line, smooths,
+applies stochastic again, smooths again. Bounded in [0, 100] with
+*much* tighter turning points than bare MACD or bare stochastic —
+typically leads other momentum oscillators by 3-7 bars. Schaff's
+original 2008 params: fast EMA = 23, slow EMA = 50, cycle = 10.
+Header gives **schaff_label** (OVERBOUGHT >75 && falling / BULL >50 /
+NEUTRAL / BEAR <50 / OVERSOLD <25 && rising / INSUFFICIENT_DATA for
+n<80). Body reports bars_used, ema_fast (23), ema_slow (50), cycle
+(10), stc_value, stc_prev, last_close. First surface we ship that
+combines two smoothing primitives (MACD + stochastic) in a recursive
+chain. Source: ADR-159 SCHAFF window.
+
+#### 2.237 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -3238,7 +3309,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.233 Sector peer comparison
+#### 2.238 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -3498,10 +3569,32 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~74-146 KB**
-(up from 73-145 KB after ADR-156; ADR-158 adds five optional per-symbol
-blocks — EFI / EMV / NVI / PVI / COPPOCK — each measuring ~2 k/v rows and
-adding ~190-240 bytes when populated, for a typical +1.06 KB per symbol;
+symbols. A single S&P 500 symbol now produces a packet around **~75-147 KB**
+(up from 74-146 KB after ADR-158; ADR-159 adds five optional per-symbol
+blocks — CMO / QSTICK / DISPARITY / BOP / SCHAFF — each measuring ~2 k/v
+rows and adding ~200-230 bytes when populated, for a typical +1.06 KB per
+symbol; all five reuse the existing `research_historical_price` HP cache
+and the standard research-table LAN sync path with zero new API
+dependencies; CMO computes Chande's 1994 Momentum Oscillator as the raw
+gain/loss spread 100·(Σup−Σdn)/(Σup+Σdn) over 9 bars with OVERBOUGHT
+(>+50) / BULL / NEUTRAL / BEAR / OVERSOLD (<−50) labels — first raw
+un-smoothed gain/loss oscillator, complements RSI/STOCHRSI; QSTICK
+computes Chande's 1995 Q-Stick as SMA14(close−open) with STRONG_BULL /
+BULL / NEUTRAL / BEAR / STRONG_BEAR labels — first candle-body sentiment
+aggregator; DISPARITY computes the Japanese Disparity Index as
+(close/SMA14 − 1)·100 with STRONG_BULL (>3%) / BULL / NEUTRAL / BEAR /
+STRONG_BEAR (<−3%) labels — first raw percentage-deviation mean-
+reversion surface; BOP computes Livshin's Balance of Power as
+SMA14((close−open)/(high−low)) with STRONG_BULL (>0.5) / BULL / NEUTRAL /
+BEAR / STRONG_BEAR (<−0.5) labels — range-normalised intra-bar sentiment
+complementing QSTICK; SCHAFF computes Schaff's 2008 Trend Cycle as
+stochastic-of-MACD double-smoothed (23/50/10) on [0, 100] with
+OVERBOUGHT&&falling / BULL / NEUTRAL / BEAR / OVERSOLD&&rising labels —
+first double-smoothed double-stochastic oscillator, typically leads
+other momentum oscillators by 3-7 bars; ADR-158 added five optional
+per-symbol blocks — EFI / EMV / NVI / PVI / COPPOCK — each measuring
+~2 k/v rows and adding ~190-240 bytes when populated, for a typical
++1.06 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the
 standard research-table LAN sync path with zero new API dependencies;
 EFI computes Elder's 1993 Force Index as EMA13(volume × Δclose) with

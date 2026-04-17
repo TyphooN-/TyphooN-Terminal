@@ -5015,6 +5015,79 @@ pub struct CoppockSnapshot {
     pub note: String,
 }
 
+/// CMO — Tushar Chande (1994) Momentum Oscillator: raw gain/loss spread on [-100, +100].
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CmoSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 9
+    pub sum_up: f64,                   // Σ positive close changes over period
+    pub sum_dn: f64,                   // Σ |negative close changes| over period
+    pub cmo_value: f64,                // 100 · (sum_up − sum_dn) / (sum_up + sum_dn)
+    pub last_close: f64,
+    pub cmo_label: String,             // OVERBOUGHT >50 / BULL >0 / NEUTRAL / BEAR <0 / OVERSOLD <−50 / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// QSTICK — Tushar Chande (1995) Q-Stick: SMA of candle body (close − open).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct QstickSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub qstick_value: f64,             // SMA(close − open, 14)
+    pub qstick_prev: f64,              // prior bar
+    pub last_close: f64,
+    pub qstick_label: String,          // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// DISPARITY — Steve Nison popularised (Japanese origin) Disparity Index: % deviation from SMA.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DisparitySnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub sma_value: f64,
+    pub disparity_value: f64,          // (close / SMA − 1) · 100
+    pub last_close: f64,
+    pub disparity_label: String,       // STRONG_BULL >3 / BULL >0 / NEUTRAL / BEAR <0 / STRONG_BEAR <−3 / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// BOP — Igor Livshin Balance of Power: (close − open) / (high − low), smoothed by SMA.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct BopSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub raw_bop: f64,                  // latest bar raw BOP
+    pub bop_value: f64,                // SMA14 of raw BOP
+    pub last_close: f64,
+    pub bop_label: String,             // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// SCHAFF — Doug Schaff (2008) Schaff Trend Cycle: stochastic-of-MACD, double-smoothed.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SchaffSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ema_fast: usize,               // 23
+    pub ema_slow: usize,               // 50
+    pub cycle: usize,                  // 10
+    pub stc_value: f64,                // current STC in [0, 100]
+    pub stc_prev: f64,                 // prior bar (for direction)
+    pub last_close: f64,
+    pub schaff_label: String,          // OVERBOUGHT / BULL / NEUTRAL / BEAR / OVERSOLD / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -23080,6 +23153,305 @@ pub fn compute_coppock_snapshot(
     }
 }
 
+/// CMO — Chande Momentum Oscillator: raw gain/loss spread on [-100, +100].
+/// Similar to RSI but uses signed gain/loss spread instead of ratio, giving
+/// a more linear response at extremes.
+pub fn compute_cmo_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CmoSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 9usize;
+    let min_bars = period + 2;
+    if n < min_bars {
+        return CmoSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            period,
+            cmo_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let mut sum_up = 0.0f64;
+    let mut sum_dn = 0.0f64;
+    let start = n - period;
+    for i in start..n {
+        let d = sorted[i].close - sorted[i-1].close;
+        if d > 0.0 { sum_up += d; } else if d < 0.0 { sum_dn += -d; }
+    }
+    let denom = sum_up + sum_dn;
+    let cmo = if denom > 1e-12 { 100.0 * (sum_up - sum_dn) / denom } else { 0.0 };
+    let last_close = sorted[n - 1].close;
+    let label = if cmo > 50.0 { "OVERBOUGHT" }
+        else if cmo > 0.0 { "BULL" }
+        else if cmo < -50.0 { "OVERSOLD" }
+        else if cmo < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    CmoSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        period,
+        sum_up, sum_dn,
+        cmo_value: cmo,
+        last_close,
+        cmo_label: label.into(), note: String::new(),
+    }
+}
+
+/// QSTICK — Q-Stick: simple N-bar average of candle body (close − open).
+/// Positive sustained value = consistent bullish candles; negative = bearish.
+pub fn compute_qstick_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> QstickSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    let min_bars = period + 2;
+    if n < min_bars {
+        return QstickSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            period,
+            qstick_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let bodies: Vec<f64> = sorted.iter().map(|b| b.close - b.open).collect();
+    let sma = |src: &[f64], p: usize, idx: usize| -> f64 {
+        src[(idx + 1 - p)..=idx].iter().sum::<f64>() / p as f64
+    };
+    let t = n - 1;
+    let qv = sma(&bodies, period, t);
+    let qp = sma(&bodies, period, t - 1);
+    let last_close = sorted[t].close;
+    let abs_scale = last_close.abs().max(1.0);
+    let norm = qv / abs_scale * 100.0;
+    let label = if qv > 0.0 && norm.abs() > 1.0 { "STRONG_BULL" }
+        else if qv > 0.0 { "BULL" }
+        else if qv < 0.0 && norm.abs() > 1.0 { "STRONG_BEAR" }
+        else if qv < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    QstickSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        period,
+        qstick_value: qv, qstick_prev: qp,
+        last_close,
+        qstick_label: label.into(), note: String::new(),
+    }
+}
+
+/// DISPARITY — Disparity Index: percentage deviation of close from its SMA.
+/// `(close / SMA(close, n) − 1) · 100`. Positive = price above MA (bullish);
+/// large magnitude suggests mean-reversion pressure.
+pub fn compute_disparity_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> DisparitySnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    let min_bars = period + 2;
+    if n < min_bars {
+        return DisparitySnapshot {
+            symbol: sym, as_of: as_of.into(),
+            period,
+            disparity_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let t = n - 1;
+    let sma: f64 = closes[(t + 1 - period)..=t].iter().sum::<f64>() / period as f64;
+    let last_close = sorted[t].close;
+    let disp = if sma.abs() > 1e-12 { (last_close / sma - 1.0) * 100.0 } else { 0.0 };
+    let label = if disp > 3.0 { "STRONG_BULL" }
+        else if disp > 0.0 { "BULL" }
+        else if disp < -3.0 { "STRONG_BEAR" }
+        else if disp < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    DisparitySnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        period,
+        sma_value: sma, disparity_value: disp,
+        last_close,
+        disparity_label: label.into(), note: String::new(),
+    }
+}
+
+/// BOP — Balance of Power: per-bar `(close − open) / (high − low)` smoothed
+/// by SMA14. Bounded to [-1, +1] per bar; the smoothed line measures
+/// sustained buyer vs seller dominance independent of volume.
+pub fn compute_bop_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> BopSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    let min_bars = period + 2;
+    if n < min_bars {
+        return BopSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            period,
+            bop_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let raw: Vec<f64> = sorted.iter().map(|b| {
+        let rng = (b.high - b.low).max(1e-9);
+        (b.close - b.open) / rng
+    }).collect();
+    let t = n - 1;
+    let bop: f64 = raw[(t + 1 - period)..=t].iter().sum::<f64>() / period as f64;
+    let raw_t = raw[t];
+    let last_close = sorted[t].close;
+    let label = if bop > 0.5 { "STRONG_BULL" }
+        else if bop > 0.0 { "BULL" }
+        else if bop < -0.5 { "STRONG_BEAR" }
+        else if bop < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    BopSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        period,
+        raw_bop: raw_t, bop_value: bop,
+        last_close,
+        bop_label: label.into(), note: String::new(),
+    }
+}
+
+/// SCHAFF — Schaff Trend Cycle: applies stochastic oscillator logic to MACD,
+/// then smooths the result, then applies stochastic again, then smooths again.
+/// Result is bounded [0, 100] with much tighter turning points than bare
+/// MACD or bare stochastic. Schaff's original 2008 params: 23/50/10.
+pub fn compute_schaff_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> SchaffSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let ema_fast = 23usize;
+    let ema_slow = 50usize;
+    let cycle = 10usize;
+    let min_bars = ema_slow + cycle * 3;
+    if n < min_bars {
+        return SchaffSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            ema_fast, ema_slow, cycle,
+            schaff_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let ema = |src: &[f64], p: usize| -> Vec<f64> {
+        if src.len() < p { return Vec::new(); }
+        let alpha = 2.0 / (p as f64 + 1.0);
+        let seed: f64 = src[..p].iter().sum::<f64>() / p as f64;
+        let mut out = Vec::with_capacity(src.len() - p + 1);
+        out.push(seed);
+        for i in p..src.len() {
+            let prev = *out.last().unwrap();
+            out.push(alpha * src[i] + (1.0 - alpha) * prev);
+        }
+        out
+    };
+    let ema_f = ema(&closes, ema_fast);
+    let ema_s = ema(&closes, ema_slow);
+    if ema_f.is_empty() || ema_s.is_empty() {
+        return SchaffSnapshot {
+            symbol: sym, as_of: as_of.into(), bars_used: n,
+            ema_fast, ema_slow, cycle,
+            schaff_label: "INSUFFICIENT_DATA".into(),
+            note: "ema series empty".into(),
+            ..Default::default()
+        };
+    }
+    // Align fast and slow EMAs — fast starts at index ema_fast-1, slow at ema_slow-1 in original closes.
+    // MACD series: MACD[i] = ema_f[i - (ema_fast-1)] - ema_s[i - (ema_slow-1)] for i ≥ ema_slow-1.
+    let macd_start = ema_slow - 1;
+    let mut macd: Vec<f64> = Vec::with_capacity(n - macd_start);
+    for i in macd_start..n {
+        let f_idx = i - (ema_fast - 1);
+        let s_idx = i - (ema_slow - 1);
+        if f_idx >= ema_f.len() || s_idx >= ema_s.len() { break; }
+        macd.push(ema_f[f_idx] - ema_s[s_idx]);
+    }
+    if macd.len() < cycle + cycle + 2 {
+        return SchaffSnapshot {
+            symbol: sym, as_of: as_of.into(), bars_used: n,
+            ema_fast, ema_slow, cycle,
+            schaff_label: "INSUFFICIENT_DATA".into(),
+            note: format!("macd series {} < needed {}", macd.len(), cycle * 2 + 2),
+            ..Default::default()
+        };
+    }
+    // First stochastic pass: normalise MACD against its cycle-bar range.
+    let mut stoch1: Vec<f64> = Vec::with_capacity(macd.len() - cycle + 1);
+    for i in (cycle - 1)..macd.len() {
+        let win = &macd[(i + 1 - cycle)..=i];
+        let lo = win.iter().cloned().fold(f64::INFINITY, f64::min);
+        let hi = win.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let v = if (hi - lo).abs() > 1e-12 { 100.0 * (macd[i] - lo) / (hi - lo) } else { 50.0 };
+        stoch1.push(v);
+    }
+    // Smoother pass 1: 0.5·stoch + 0.5·prev_pf
+    let mut pf: Vec<f64> = Vec::with_capacity(stoch1.len());
+    pf.push(stoch1[0]);
+    for i in 1..stoch1.len() {
+        let prev = *pf.last().unwrap();
+        pf.push(0.5 * stoch1[i] + 0.5 * prev);
+    }
+    // Second stochastic pass: normalise PF against its cycle-bar range.
+    if pf.len() < cycle + 2 {
+        return SchaffSnapshot {
+            symbol: sym, as_of: as_of.into(), bars_used: n,
+            ema_fast, ema_slow, cycle,
+            schaff_label: "INSUFFICIENT_DATA".into(),
+            note: format!("pf series {} < {}", pf.len(), cycle + 2),
+            ..Default::default()
+        };
+    }
+    let mut stoch2: Vec<f64> = Vec::with_capacity(pf.len() - cycle + 1);
+    for i in (cycle - 1)..pf.len() {
+        let win = &pf[(i + 1 - cycle)..=i];
+        let lo = win.iter().cloned().fold(f64::INFINITY, f64::min);
+        let hi = win.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let v = if (hi - lo).abs() > 1e-12 { 100.0 * (pf[i] - lo) / (hi - lo) } else { 50.0 };
+        stoch2.push(v);
+    }
+    // Smoother pass 2: 0.5·stoch + 0.5·prev_stc
+    let mut stc: Vec<f64> = Vec::with_capacity(stoch2.len());
+    stc.push(stoch2[0]);
+    for i in 1..stoch2.len() {
+        let prev = *stc.last().unwrap();
+        stc.push(0.5 * stoch2[i] + 0.5 * prev);
+    }
+    let stc_value = *stc.last().unwrap();
+    let stc_prev = stc.get(stc.len().saturating_sub(2)).copied().unwrap_or(stc_value);
+    let last_close = sorted[n - 1].close;
+    let rising = stc_value > stc_prev;
+    let label = if stc_value > 75.0 && !rising { "OVERBOUGHT" }
+        else if stc_value > 50.0 { "BULL" }
+        else if stc_value < 25.0 && rising { "OVERSOLD" }
+        else if stc_value < 50.0 { "BEAR" }
+        else { "NEUTRAL" };
+    SchaffSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        ema_fast, ema_slow, cycle,
+        stc_value, stc_prev,
+        last_close,
+        schaff_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -30448,6 +30820,157 @@ pub fn get_coppock(conn: &Connection, symbol: &str) -> Result<Option<CoppockSnap
         .map_err(|e| format!("prepare get_coppock: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_coppock: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_coppock: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn create_research_tables_v50(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v49(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_cmo (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cmo_updated ON research_cmo(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_qstick (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_qstick_updated ON research_qstick(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_disparity (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_disparity_updated ON research_disparity(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_bop (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_bop_updated ON research_bop(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_schaff (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_schaff_updated ON research_schaff(updated_at);",
+    ).map_err(|e| format!("create v50 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_cmo(conn: &Connection, symbol: &str, snap: &CmoSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v50(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cmo json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cmo(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cmo: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cmo(conn: &Connection, symbol: &str) -> Result<Option<CmoSnapshot>, String> {
+    let _ = create_research_tables_v50(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cmo WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_cmo: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_cmo: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_cmo: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_qstick(conn: &Connection, symbol: &str, snap: &QstickSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v50(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("qstick json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_qstick(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert qstick: {e}"))?;
+    Ok(())
+}
+
+pub fn get_qstick(conn: &Connection, symbol: &str) -> Result<Option<QstickSnapshot>, String> {
+    let _ = create_research_tables_v50(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_qstick WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_qstick: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_qstick: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_qstick: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_disparity(conn: &Connection, symbol: &str, snap: &DisparitySnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v50(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("disparity json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_disparity(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert disparity: {e}"))?;
+    Ok(())
+}
+
+pub fn get_disparity(conn: &Connection, symbol: &str) -> Result<Option<DisparitySnapshot>, String> {
+    let _ = create_research_tables_v50(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_disparity WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_disparity: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_disparity: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_disparity: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_bop(conn: &Connection, symbol: &str, snap: &BopSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v50(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("bop json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_bop(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert bop: {e}"))?;
+    Ok(())
+}
+
+pub fn get_bop(conn: &Connection, symbol: &str) -> Result<Option<BopSnapshot>, String> {
+    let _ = create_research_tables_v50(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_bop WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_bop: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_bop: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_bop: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_schaff(conn: &Connection, symbol: &str, snap: &SchaffSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v50(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("schaff json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_schaff(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert schaff: {e}"))?;
+    Ok(())
+}
+
+pub fn get_schaff(conn: &Connection, symbol: &str) -> Result<Option<SchaffSnapshot>, String> {
+    let _ = create_research_tables_v50(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_schaff WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_schaff: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_schaff: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_schaff: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -40385,6 +40908,156 @@ Trailing text.
             assert_eq!(snap.roc_fast, 11);
             assert_eq!(snap.roc_slow, 14);
             assert_eq!(snap.wma_period, 10);
+        }
+    }
+
+    #[test]
+    fn cmo_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CmoSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 9,
+            sum_up: 12.5, sum_dn: 7.5,
+            cmo_value: 25.0,
+            last_close: 150.0,
+            cmo_label: "BULL".into(), note: String::new(),
+        };
+        upsert_cmo(&conn, "TEST", &snap).unwrap();
+        let got = get_cmo(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cmo_label, "BULL");
+        assert!((got.cmo_value - 25.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cmo_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_cmo_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.cmo_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.cmo_label != "INSUFFICIENT_DATA" {
+            assert!(snap.cmo_value.is_finite());
+            assert!(snap.cmo_value >= -100.0 && snap.cmo_value <= 100.0);
+            assert_eq!(snap.period, 9);
+        }
+    }
+
+    #[test]
+    fn qstick_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = QstickSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 14,
+            qstick_value: 0.8, qstick_prev: 0.6,
+            last_close: 150.0,
+            qstick_label: "BULL".into(), note: String::new(),
+        };
+        upsert_qstick(&conn, "TEST", &snap).unwrap();
+        let got = get_qstick(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.qstick_label, "BULL");
+        assert!((got.qstick_value - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn qstick_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_qstick_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.qstick_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.qstick_label != "INSUFFICIENT_DATA" {
+            assert!(snap.qstick_value.is_finite());
+            assert!(snap.qstick_prev.is_finite());
+            assert_eq!(snap.period, 14);
+        }
+    }
+
+    #[test]
+    fn disparity_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = DisparitySnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 14,
+            sma_value: 148.0, disparity_value: 1.35,
+            last_close: 150.0,
+            disparity_label: "BULL".into(), note: String::new(),
+        };
+        upsert_disparity(&conn, "TEST", &snap).unwrap();
+        let got = get_disparity(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.disparity_label, "BULL");
+        assert!((got.disparity_value - 1.35).abs() < 1e-9);
+    }
+
+    #[test]
+    fn disparity_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_disparity_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.disparity_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.disparity_label != "INSUFFICIENT_DATA" {
+            assert!(snap.disparity_value.is_finite());
+            assert!(snap.sma_value.is_finite() && snap.sma_value > 0.0);
+            assert_eq!(snap.period, 14);
+        }
+    }
+
+    #[test]
+    fn bop_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = BopSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 14,
+            raw_bop: 0.35, bop_value: 0.22,
+            last_close: 150.0,
+            bop_label: "BULL".into(), note: String::new(),
+        };
+        upsert_bop(&conn, "TEST", &snap).unwrap();
+        let got = get_bop(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.bop_label, "BULL");
+        assert!((got.bop_value - 0.22).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bop_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_bop_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.bop_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.bop_label != "INSUFFICIENT_DATA" {
+            assert!(snap.bop_value.is_finite());
+            assert!(snap.bop_value >= -1.0 && snap.bop_value <= 1.0);
+            assert!(snap.raw_bop.is_finite());
+            assert_eq!(snap.period, 14);
+        }
+    }
+
+    #[test]
+    fn schaff_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = SchaffSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, ema_fast: 23, ema_slow: 50, cycle: 10,
+            stc_value: 62.5, stc_prev: 58.0,
+            last_close: 150.0,
+            schaff_label: "BULL".into(), note: String::new(),
+        };
+        upsert_schaff(&conn, "TEST", &snap).unwrap();
+        let got = get_schaff(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.schaff_label, "BULL");
+        assert!((got.stc_value - 62.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn schaff_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_schaff_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.schaff_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.schaff_label != "INSUFFICIENT_DATA" {
+            assert!(snap.stc_value.is_finite());
+            assert!(snap.stc_value >= 0.0 && snap.stc_value <= 100.0);
+            assert!(snap.stc_prev.is_finite());
+            assert_eq!(snap.ema_fast, 23);
+            assert_eq!(snap.ema_slow, 50);
+            assert_eq!(snap.cycle, 10);
         }
     }
 }

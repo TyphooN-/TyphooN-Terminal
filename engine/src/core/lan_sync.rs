@@ -408,6 +408,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_nvi",
     "research_pvi",
     "research_coppock",
+    // ── ADR-159 Round 49 ────────────────────────────
+    "research_cmo",
+    "research_qstick",
+    "research_disparity",
+    "research_bop",
+    "research_schaff",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2218,6 +2224,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_cmo" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cmo (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_qstick" => Some(
+            "CREATE TABLE IF NOT EXISTS research_qstick (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_disparity" => Some(
+            "CREATE TABLE IF NOT EXISTS research_disparity (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_bop" => Some(
+            "CREATE TABLE IF NOT EXISTS research_bop (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_schaff" => Some(
+            "CREATE TABLE IF NOT EXISTS research_schaff (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2490,6 +2531,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_nvi" => Some("updated_at"),
         "research_pvi" => Some("updated_at"),
         "research_coppock" => Some("updated_at"),
+        // ── ADR-159 Round 49 ──
+        "research_cmo" => Some("updated_at"),
+        "research_qstick" => Some("updated_at"),
+        "research_disparity" => Some("updated_at"),
+        "research_bop" => Some("updated_at"),
+        "research_schaff" => Some("updated_at"),
         _ => None,
     }
 }
