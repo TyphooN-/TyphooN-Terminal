@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**two hundred and eight sub-blocks**, each of which is skipped silently when its data
+**two hundred and thirteen sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -2875,7 +2875,72 @@ bars_since_low, last_close. Distinct from ADX/CHOP (trend-strength)
 trends earlier than strength-based indicators. Source: ADR-152 AROON
 window.
 
-#### 2.207 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.207 Wilder's Average Directional Index (ADX — ADR-153)
+
+Pulled from `research::get_adx`. Classical Wilder (1978) directional-movement
+system at period=14. +DM = max(H−H_prev, 0), −DM = max(L_prev−L, 0),
+winner of each bar smoothed by Wilder's averaging; +DI = 100·smoothed(+DM)/ATR,
+−DI = 100·smoothed(−DM)/ATR; DX = 100·|+DI − −DI|/(+DI + −DI); ADX is
+Wilder-smoothed DX. Header gives **adx_label** (STRONG_TREND adx≥40 / TREND
+≥25 / WEAK_TREND ≥15 / NO_TREND / INSUFFICIENT_DATA for n<30). Body reports
+bars_used, period (14), plus_di, minus_di, adx, dx, atr, last_close.
+Complements AROON (ADR-152) which measures *time-since-extreme* — ADX
+measures *strength regardless of time*. Source: ADR-153 ADX window.
+
+#### 2.208 Lambert Commodity Channel Index (CCI — ADR-153)
+
+Pulled from `research::get_cci`. Lambert (1980) mean-deviation-normalised
+momentum oscillator at period=20. TP=(H+L+C)/3, MAD = mean|TP − SMA(TP,20)|,
+CCI = (TP − SMA) / (0.015·MAD) — the 0.015 constant chosen by Lambert so
+~70–80% of values fall in [−100, +100]. Header gives **cci_label**
+(OVERBOUGHT >100 / BULL >0 / NEUTRAL / BEAR <0 / OVERSOLD <−100 /
+INSUFFICIENT_DATA for n<21). Body reports bars_used, period (20),
+typical_price, tp_sma, mean_abs_dev, cci_value, last_close. Distinct
+from RSI: mean-deviation normalisation rather than gain/loss ratio, so
+one-sided slow grinds register different extremes. Source: ADR-153 CCI window.
+
+#### 2.209 Chaikin Money Flow (CMF — ADR-153)
+
+Pulled from `research::get_cmf`. Chaikin (1980s) volume-weighted
+accumulation/distribution oscillator at period=20. MFV =
+((C−L) − (H−C))/(H−L) × volume (the "money flow volume" per bar);
+CMF = Σ MFV / Σ volume over 20 bars ∈ [−1, +1]. Header gives
+**cmf_label** (STRONG_ACCUM >0.25 / ACCUM >0.05 / NEUTRAL / DIST <−0.05
+/ STRONG_DIST <−0.25 / INSUFFICIENT_DATA for n<21). Body reports
+bars_used, period (20), cmf_value, money_flow_volume_sum, volume_sum,
+last_close. First volume-weighted accumulation-line surface we ship;
+flat doji bars (H==L) are epsilon-guarded so they emit MFV=0 rather than
+NaN. Source: ADR-153 CMF window.
+
+#### 2.210 Money Flow Index (MFI — ADR-153)
+
+Pulled from `research::get_mfi`. Quong & Soudack's (1989)
+volume-weighted RSI at period=14. Typical-price × volume = "raw money
+flow" per bar; bars with TP rising count toward positive flow, falling
+toward negative; ratio = Σpos / Σneg; MFI = 100 − 100/(1+ratio). Output
+∈ [0, 100]. Header gives **mfi_label** (OVERBOUGHT >80 / BULL >50 /
+NEUTRAL / BEAR <50 / OVERSOLD <20 / INSUFFICIENT_DATA for n<15).
+Body reports bars_used, period (14), mfi_value, positive_mf_sum,
+negative_mf_sum, money_flow_ratio, last_close. Volume-weighted
+complement to RSI — bars with heavy volume count more toward the
+oscillator. Source: ADR-153 MFI window.
+
+#### 2.211 Wilder Parabolic Stop-And-Reverse (PSAR — ADR-153)
+
+Pulled from `research::get_psar`. Wilder's (1978) accelerating
+trailing-stop. Initial acceleration factor (AF) 0.02, increment 0.02
+each time a new extreme point (EP) is made, capped at 0.20. SAR_next =
+SAR + AF·(EP − SAR); flips when price crosses SAR, with the new SAR
+clamped to the prior-two-bar low (long→short) or high (short→long).
+Header gives **psar_label** (STRONG_UP / UP / FLAT / DOWN / STRONG_DOWN
+/ INSUFFICIENT_DATA for n<6). Body reports bars_used, af_start,
+af_step, af_max, sar_value, extreme_point, acceleration_factor,
+trend_is_up, bars_in_trend, distance_pct, last_close. Complements
+SUPERTREND (ADR-152): PSAR accelerates (AF grows each new EP),
+SuperTrend is ATR-proportional and does not accelerate — so PSAR fires
+trailing-stop exits earlier in mature trends. Source: ADR-153 PSAR window.
+
+#### 2.212 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -2891,7 +2956,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.208 Sector peer comparison
+#### 2.213 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -2922,7 +2987,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.207 above.
+articles to the per-symbol bag consumed by sub-block 2.212 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -3151,10 +3216,37 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~69-137 KB**
-(up from 68-135 KB after ADR-151; ADR-152 adds five optional per-symbol
-blocks — ICHIMOKU / SUPERTREND / KELTNER / FISHER / AROON — each
-measuring ~2 k/v rows and adding ~190-300 bytes when populated, for
+symbols. A single S&P 500 symbol now produces a packet around **~70-139 KB**
+(up from 69-137 KB after ADR-152; ADR-153 adds five optional per-symbol
+blocks — ADX / CCI / CMF / MFI / PSAR — each measuring ~2 k/v rows and
+adding ~210-270 bytes when populated, for a typical +1.15 KB per symbol;
+all five reuse the existing `research_historical_price` HP cache and the
+standard research-table LAN sync path with zero new API dependencies;
+ADX computes Wilder's 1978 directional-movement system at period=14
+(+DM/−DM winner-takes-bar, Wilder-smoothed, normalised by ATR, ADX =
+Wilder-smoothed DX) with STRONG_TREND (≥40) / TREND (≥25) / WEAK_TREND
+(≥15) / NO_TREND labels — the trend-*strength* complement to AROON's
+time-since-extreme measure; CCI computes Lambert's 1980 mean-deviation-
+normalised oscillator (TP − SMA)/(0.015·MAD) at period=20 with
+OVERBOUGHT (>100) / BULL / NEUTRAL / BEAR / OVERSOLD (<−100) labels —
+mean-deviation normalisation gives different extremes than RSI's
+gain/loss ratio on one-sided slow grinds; CMF computes Chaikin's
+volume-weighted accumulation MFV = ((C−L) − (H−C))/(H−L)·volume summed
+over 20 bars and normalised by volume sum to [−1, +1] with STRONG_ACCUM
+(>0.25) / ACCUM / NEUTRAL / DIST / STRONG_DIST (<−0.25) labels — the
+first volume-weighted accumulation-line surface, with H==L flat bars
+epsilon-guarded to MFV=0; MFI computes Quong & Soudack's 1989
+volume-weighted RSI at period=14 (raw money flow = TP × volume,
+positive/negative by TP direction, ratio-based 100 − 100/(1+ratio))
+with OVERBOUGHT (>80) / BULL / NEUTRAL / BEAR / OVERSOLD (<20) labels —
+bars with heavy volume count more toward the oscillator than price-only
+RSI; PSAR computes Wilder's accelerating trailing-stop (AF 0.02/0.02/0.20
+with EP tracking and prior-two-bar flip clamp) with STRONG_UP / UP /
+FLAT / DOWN / STRONG_DOWN labels — complements SUPERTREND by accelerating
+in mature trends where SuperTrend's constant-multiplier ATR band does
+not; prior five (ADR-152) remain unchanged; ADR-152 adds five optional
+per-symbol blocks — ICHIMOKU / SUPERTREND / KELTNER / FISHER / AROON —
+each measuring ~2 k/v rows and adding ~190-300 bytes when populated, for
 a typical +1.2 KB per symbol; all five reuse the existing
 `research_historical_price` HP cache and the standard research-table
 LAN sync path with zero new API dependencies; ICHIMOKU computes the

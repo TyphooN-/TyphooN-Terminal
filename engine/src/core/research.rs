@@ -4587,6 +4587,95 @@ pub struct AroonSnapshot {
     pub note: String,
 }
 
+/// ADX — Wilder's Average Directional Index (period 14).
+/// Reports +DI, -DI, ADX and directional-movement smoothed averages.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AdxSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub plus_di: f64,
+    pub minus_di: f64,
+    pub adx: f64,
+    pub dx: f64,                       // instantaneous |+DI − −DI|/(+DI + −DI) × 100
+    pub atr: f64,
+    pub last_close: f64,
+    pub adx_label: String,             // STRONG_TREND adx≥40 / TREND ≥25 / WEAK_TREND ≥15 / NO_TREND / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// CCI — Lambert's Commodity Channel Index (period 20).
+/// CCI = (TP − SMA(TP)) / (0.015 × MD) where TP=(H+L+C)/3, MD is mean absolute deviation.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CciSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 20
+    pub typical_price: f64,
+    pub tp_sma: f64,
+    pub mean_abs_dev: f64,
+    pub cci_value: f64,
+    pub last_close: f64,
+    pub cci_label: String,             // OVERBOUGHT >100 / BULL >0 / NEUTRAL / BEAR <0 / OVERSOLD <−100 / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// CMF — Chaikin Money Flow (period 20).
+/// Σ(MFV)/Σ(volume) over window, where MFV = ((close−low) − (high−close))/(high−low) × volume.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CmfSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 20
+    pub cmf_value: f64,                // −1..+1
+    pub money_flow_volume_sum: f64,
+    pub volume_sum: f64,
+    pub last_close: f64,
+    pub cmf_label: String,             // STRONG_ACCUM >0.25 / ACCUM >0.05 / NEUTRAL / DIST <−0.05 / STRONG_DIST <−0.25 / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// MFI — Quong & Soudack's Money Flow Index (period 14).
+/// Volume-weighted RSI: uses typical price × volume as "money flow".
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MfiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub mfi_value: f64,                // 0..100
+    pub positive_mf_sum: f64,
+    pub negative_mf_sum: f64,
+    pub money_flow_ratio: f64,
+    pub last_close: f64,
+    pub mfi_label: String,             // OVERBOUGHT >80 / BULL >50 / NEUTRAL / BEAR <50 / OVERSOLD <20 / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// PSAR — Wilder's Parabolic Stop-And-Reverse.
+/// Initial AF 0.02, increment 0.02, cap 0.20. Flips when price crosses SAR.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PsarSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub af_start: f64,                 // 0.02
+    pub af_step: f64,                  // 0.02
+    pub af_max: f64,                   // 0.20
+    pub sar_value: f64,                // latest SAR
+    pub extreme_point: f64,            // EP (highest high in long trend, lowest low in short)
+    pub acceleration_factor: f64,      // current AF
+    pub trend_is_up: bool,
+    pub bars_in_trend: usize,
+    pub distance_pct: f64,             // (close - sar) / sar × 100
+    pub last_close: f64,
+    pub psar_label: String,            // STRONG_UP / UP / FLAT / DOWN / STRONG_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -21178,6 +21267,297 @@ pub fn compute_aroon_snapshot(
     }
 }
 
+/// ADX — Wilder's Average Directional Index (period 14) with +DI / −DI / DX / ADX.
+pub fn compute_adx_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AdxSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    // Need 2·period + 1 bars for DX smoothing to have a full period.
+    let min_bars = 2 * period + 1;
+    if n < min_bars {
+        return AdxSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            adx_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let mut tr = vec![0.0_f64; n];
+    let mut plus_dm = vec![0.0_f64; n];
+    let mut minus_dm = vec![0.0_f64; n];
+    for i in 1..n {
+        let hi = sorted[i].high;
+        let lo = sorted[i].low;
+        let pc = sorted[i - 1].close;
+        tr[i] = (hi - lo).max((hi - pc).abs()).max((lo - pc).abs());
+        let up_move = hi - sorted[i - 1].high;
+        let dn_move = sorted[i - 1].low - lo;
+        plus_dm[i] = if up_move > dn_move && up_move > 0.0 { up_move } else { 0.0 };
+        minus_dm[i] = if dn_move > up_move && dn_move > 0.0 { dn_move } else { 0.0 };
+    }
+    // Wilder smoothing of TR / +DM / −DM.
+    let mut atr = vec![0.0_f64; n];
+    let mut plus_di = vec![0.0_f64; n];
+    let mut minus_di = vec![0.0_f64; n];
+    let mut dx = vec![0.0_f64; n];
+    let p_f = period as f64;
+    let tr_init: f64 = tr[1..=period].iter().sum();
+    let plus_init: f64 = plus_dm[1..=period].iter().sum();
+    let minus_init: f64 = minus_dm[1..=period].iter().sum();
+    atr[period] = tr_init / p_f;
+    let mut tr_smooth = tr_init;
+    let mut plus_smooth = plus_init;
+    let mut minus_smooth = minus_init;
+    if tr_smooth > 0.0 {
+        plus_di[period] = 100.0 * plus_smooth / tr_smooth;
+        minus_di[period] = 100.0 * minus_smooth / tr_smooth;
+        let s = plus_di[period] + minus_di[period];
+        if s > 0.0 { dx[period] = 100.0 * (plus_di[period] - minus_di[period]).abs() / s; }
+    }
+    for i in (period + 1)..n {
+        tr_smooth = tr_smooth - tr_smooth / p_f + tr[i];
+        plus_smooth = plus_smooth - plus_smooth / p_f + plus_dm[i];
+        minus_smooth = minus_smooth - minus_smooth / p_f + minus_dm[i];
+        atr[i] = tr_smooth / p_f;
+        if tr_smooth > 0.0 {
+            plus_di[i] = 100.0 * plus_smooth / tr_smooth;
+            minus_di[i] = 100.0 * minus_smooth / tr_smooth;
+            let s = plus_di[i] + minus_di[i];
+            if s > 0.0 { dx[i] = 100.0 * (plus_di[i] - minus_di[i]).abs() / s; }
+        }
+    }
+    // ADX = Wilder-smoothed DX (again over `period`), seeded at index 2·period.
+    let adx_seed_idx = 2 * period;
+    let mut adx_cur = dx[(period + 1)..=adx_seed_idx].iter().sum::<f64>() / p_f;
+    for i in (adx_seed_idx + 1)..n {
+        adx_cur = (adx_cur * (p_f - 1.0) + dx[i]) / p_f;
+    }
+    let plus_now = plus_di[n - 1];
+    let minus_now = minus_di[n - 1];
+    let dx_now = dx[n - 1];
+    let atr_now = atr[n - 1];
+    let label = if adx_cur >= 40.0 { "STRONG_TREND" }
+        else if adx_cur >= 25.0 { "TREND" }
+        else if adx_cur >= 15.0 { "WEAK_TREND" }
+        else { "NO_TREND" };
+    AdxSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        plus_di: plus_now, minus_di: minus_now,
+        adx: adx_cur, dx: dx_now, atr: atr_now,
+        last_close: sorted[n - 1].close,
+        adx_label: label.into(), note: String::new(),
+    }
+}
+
+/// CCI — Lambert's Commodity Channel Index (period 20).
+pub fn compute_cci_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CciSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 20usize;
+    if n < period {
+        return CciSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            cci_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", period, n),
+            ..Default::default()
+        };
+    }
+    let tp: Vec<f64> = sorted.iter().map(|b| (b.high + b.low + b.close) / 3.0).collect();
+    let window = &tp[(n - period)..n];
+    let sma: f64 = window.iter().sum::<f64>() / period as f64;
+    let mad: f64 = window.iter().map(|x| (x - sma).abs()).sum::<f64>() / period as f64;
+    let tp_now = tp[n - 1];
+    let cci = if mad > 0.0 { (tp_now - sma) / (0.015 * mad) } else { 0.0 };
+    let label = if cci > 100.0 { "OVERBOUGHT" }
+        else if cci > 0.0 { "BULL" }
+        else if cci < -100.0 { "OVERSOLD" }
+        else if cci < 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    CciSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        typical_price: tp_now, tp_sma: sma, mean_abs_dev: mad,
+        cci_value: cci,
+        last_close: sorted[n - 1].close,
+        cci_label: label.into(), note: String::new(),
+    }
+}
+
+/// CMF — Chaikin Money Flow (period 20).
+pub fn compute_cmf_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CmfSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 20usize;
+    if n < period {
+        return CmfSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            cmf_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", period, n),
+            ..Default::default()
+        };
+    }
+    let window = &sorted[(n - period)..n];
+    let mut mfv_sum = 0.0_f64;
+    let mut vol_sum = 0.0_f64;
+    for b in window {
+        let rng = b.high - b.low;
+        let mfm = if rng > 0.0 { ((b.close - b.low) - (b.high - b.close)) / rng } else { 0.0 };
+        let mfv = mfm * b.volume;
+        mfv_sum += mfv;
+        vol_sum += b.volume;
+    }
+    let cmf = if vol_sum > 0.0 { mfv_sum / vol_sum } else { 0.0 };
+    let label = if cmf > 0.25 { "STRONG_ACCUM" }
+        else if cmf > 0.05 { "ACCUM" }
+        else if cmf < -0.25 { "STRONG_DIST" }
+        else if cmf < -0.05 { "DIST" }
+        else { "NEUTRAL" };
+    CmfSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        cmf_value: cmf,
+        money_flow_volume_sum: mfv_sum, volume_sum: vol_sum,
+        last_close: sorted[n - 1].close,
+        cmf_label: label.into(), note: String::new(),
+    }
+}
+
+/// MFI — Money Flow Index (period 14).
+pub fn compute_mfi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MfiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    if n < period + 1 {
+        return MfiSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            mfi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", period + 1, n),
+            ..Default::default()
+        };
+    }
+    let tp: Vec<f64> = sorted.iter().map(|b| (b.high + b.low + b.close) / 3.0).collect();
+    let mf: Vec<f64> = sorted.iter().enumerate().map(|(i, b)| tp[i] * b.volume).collect();
+    let mut pos_sum = 0.0_f64;
+    let mut neg_sum = 0.0_f64;
+    for i in (n - period)..n {
+        if i == 0 { continue; }
+        if tp[i] > tp[i - 1] { pos_sum += mf[i]; }
+        else if tp[i] < tp[i - 1] { neg_sum += mf[i]; }
+    }
+    let ratio = if neg_sum > 0.0 { pos_sum / neg_sum } else { f64::INFINITY };
+    let mfi = if ratio.is_finite() { 100.0 - (100.0 / (1.0 + ratio)) } else { 100.0 };
+    let label = if mfi > 80.0 { "OVERBOUGHT" }
+        else if mfi > 50.0 { "BULL" }
+        else if mfi < 20.0 { "OVERSOLD" }
+        else if mfi < 50.0 { "BEAR" }
+        else { "NEUTRAL" };
+    MfiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        mfi_value: mfi,
+        positive_mf_sum: pos_sum, negative_mf_sum: neg_sum,
+        money_flow_ratio: if ratio.is_finite() { ratio } else { 0.0 },
+        last_close: sorted[n - 1].close,
+        mfi_label: label.into(), note: String::new(),
+    }
+}
+
+/// PSAR — Wilder's Parabolic Stop-And-Reverse.
+pub fn compute_psar_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PsarSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let af_start = 0.02_f64;
+    let af_step = 0.02_f64;
+    let af_max = 0.20_f64;
+    if n < 4 {
+        return PsarSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            af_start, af_step, af_max,
+            psar_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥4 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    // Seed: trend direction by comparing first two bars' closes.
+    let mut trend_up = sorted[1].close >= sorted[0].close;
+    let mut sar = if trend_up { sorted[0].low } else { sorted[0].high };
+    let mut ep = if trend_up { sorted[0].high } else { sorted[0].low };
+    let mut af = af_start;
+    let mut bars_in_trend = 1usize;
+    for i in 1..n {
+        let hi = sorted[i].high;
+        let lo = sorted[i].low;
+        sar = sar + af * (ep - sar);
+        if trend_up {
+            // SAR must not exceed prior two lows.
+            let prev_lo = sorted[i - 1].low;
+            let prev2_lo = if i >= 2 { sorted[i - 2].low } else { prev_lo };
+            sar = sar.min(prev_lo).min(prev2_lo);
+            if lo < sar {
+                // Flip to down
+                trend_up = false;
+                sar = ep;
+                ep = lo;
+                af = af_start;
+                bars_in_trend = 1;
+            } else {
+                if hi > ep { ep = hi; af = (af + af_step).min(af_max); }
+                bars_in_trend += 1;
+            }
+        } else {
+            let prev_hi = sorted[i - 1].high;
+            let prev2_hi = if i >= 2 { sorted[i - 2].high } else { prev_hi };
+            sar = sar.max(prev_hi).max(prev2_hi);
+            if hi > sar {
+                trend_up = true;
+                sar = ep;
+                ep = hi;
+                af = af_start;
+                bars_in_trend = 1;
+            } else {
+                if lo < ep { ep = lo; af = (af + af_step).min(af_max); }
+                bars_in_trend += 1;
+            }
+        }
+    }
+    let last_close = sorted[n - 1].close;
+    let dist_pct = if sar.abs() > f64::EPSILON { (last_close - sar) / sar * 100.0 } else { 0.0 };
+    let label = if trend_up && dist_pct > 3.0 { "STRONG_UP" }
+        else if trend_up { "UP" }
+        else if !trend_up && dist_pct < -3.0 { "STRONG_DOWN" }
+        else if !trend_up { "DOWN" }
+        else { "FLAT" };
+    PsarSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        af_start, af_step, af_max,
+        sar_value: sar,
+        extreme_point: ep,
+        acceleration_factor: af,
+        trend_is_up: trend_up,
+        bars_in_trend,
+        distance_pct: dist_pct,
+        last_close,
+        psar_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -27790,6 +28170,157 @@ pub fn get_aroon(conn: &Connection, symbol: &str) -> Result<Option<AroonSnapshot
         .map_err(|e| format!("prepare get_aroon: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_aroon: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_aroon: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn create_research_tables_v45(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v44(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_adx (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_adx_updated ON research_adx(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cci (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cci_updated ON research_cci(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cmf (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cmf_updated ON research_cmf(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_mfi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_mfi_updated ON research_mfi(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_psar (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_psar_updated ON research_psar(updated_at);",
+    ).map_err(|e| format!("create v45 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_adx(conn: &Connection, symbol: &str, snap: &AdxSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v45(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("adx json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_adx(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert adx: {e}"))?;
+    Ok(())
+}
+
+pub fn get_adx(conn: &Connection, symbol: &str) -> Result<Option<AdxSnapshot>, String> {
+    let _ = create_research_tables_v45(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_adx WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_adx: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_adx: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_adx: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cci(conn: &Connection, symbol: &str, snap: &CciSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v45(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cci json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cci(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cci: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cci(conn: &Connection, symbol: &str) -> Result<Option<CciSnapshot>, String> {
+    let _ = create_research_tables_v45(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cci WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_cci: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_cci: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_cci: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cmf(conn: &Connection, symbol: &str, snap: &CmfSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v45(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cmf json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cmf(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cmf: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cmf(conn: &Connection, symbol: &str) -> Result<Option<CmfSnapshot>, String> {
+    let _ = create_research_tables_v45(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cmf WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_cmf: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_cmf: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_cmf: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_mfi(conn: &Connection, symbol: &str, snap: &MfiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v45(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("mfi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_mfi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert mfi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_mfi(conn: &Connection, symbol: &str) -> Result<Option<MfiSnapshot>, String> {
+    let _ = create_research_tables_v45(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_mfi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_mfi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_mfi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_mfi: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_psar(conn: &Connection, symbol: &str, snap: &PsarSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v45(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("psar json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_psar(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert psar: {e}"))?;
+    Ok(())
+}
+
+pub fn get_psar(conn: &Connection, symbol: &str) -> Result<Option<PsarSnapshot>, String> {
+    let _ = create_research_tables_v45(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_psar WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_psar: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_psar: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_psar: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -36934,6 +37465,164 @@ Trailing text.
             assert!(snap.aroon_down >= 0.0 && snap.aroon_down <= 100.0);
             assert!(snap.aroon_oscillator >= -100.0 && snap.aroon_oscillator <= 100.0);
             assert_eq!(snap.period, 25);
+        }
+    }
+
+    // ── ADR-153 Round 44 tests ──────────────────────────────────────────────
+
+    #[test]
+    fn adx_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = AdxSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 14,
+            plus_di: 28.0, minus_di: 14.0, adx: 32.0, dx: 33.0, atr: 1.9,
+            last_close: 150.0,
+            adx_label: "TREND".into(), note: String::new(),
+        };
+        upsert_adx(&conn, "TEST", &snap).unwrap();
+        let got = get_adx(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.adx_label, "TREND");
+        assert_eq!(got.period, 14);
+        assert!((got.adx - 32.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn adx_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_adx_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.adx_label.as_str(),
+            "STRONG_TREND" | "TREND" | "WEAK_TREND" | "NO_TREND" | "INSUFFICIENT_DATA"));
+        if snap.adx_label != "INSUFFICIENT_DATA" {
+            assert!(snap.plus_di >= 0.0);
+            assert!(snap.minus_di >= 0.0);
+            assert!(snap.adx >= 0.0 && snap.adx <= 100.0);
+            assert!(snap.atr >= 0.0);
+            assert_eq!(snap.period, 14);
+        }
+    }
+
+    #[test]
+    fn cci_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CciSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 20,
+            typical_price: 150.0, tp_sma: 148.5, mean_abs_dev: 1.2,
+            cci_value: 83.3, last_close: 150.5,
+            cci_label: "BULL".into(), note: String::new(),
+        };
+        upsert_cci(&conn, "TEST", &snap).unwrap();
+        let got = get_cci(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cci_label, "BULL");
+        assert_eq!(got.period, 20);
+    }
+
+    #[test]
+    fn cci_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_cci_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.cci_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.cci_label != "INSUFFICIENT_DATA" {
+            assert!(snap.typical_price.is_finite());
+            assert!(snap.tp_sma.is_finite());
+            assert!(snap.mean_abs_dev >= 0.0);
+            assert!(snap.cci_value.is_finite());
+            assert_eq!(snap.period, 20);
+        }
+    }
+
+    #[test]
+    fn cmf_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CmfSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 20,
+            cmf_value: 0.18, money_flow_volume_sum: 1.8e8, volume_sum: 1.0e9,
+            last_close: 150.0,
+            cmf_label: "ACCUM".into(), note: String::new(),
+        };
+        upsert_cmf(&conn, "TEST", &snap).unwrap();
+        let got = get_cmf(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cmf_label, "ACCUM");
+        assert!((got.cmf_value - 0.18).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cmf_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_cmf_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.cmf_label.as_str(),
+            "STRONG_ACCUM" | "ACCUM" | "NEUTRAL" | "DIST" | "STRONG_DIST" | "INSUFFICIENT_DATA"));
+        if snap.cmf_label != "INSUFFICIENT_DATA" {
+            assert!(snap.cmf_value >= -1.0 && snap.cmf_value <= 1.0);
+            assert!(snap.volume_sum >= 0.0);
+            assert_eq!(snap.period, 20);
+        }
+    }
+
+    #[test]
+    fn mfi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MfiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 14,
+            mfi_value: 62.0, positive_mf_sum: 2.1e8, negative_mf_sum: 1.3e8,
+            money_flow_ratio: 1.615, last_close: 150.0,
+            mfi_label: "BULL".into(), note: String::new(),
+        };
+        upsert_mfi(&conn, "TEST", &snap).unwrap();
+        let got = get_mfi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.mfi_label, "BULL");
+        assert_eq!(got.period, 14);
+    }
+
+    #[test]
+    fn mfi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_mfi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.mfi_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.mfi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.mfi_value >= 0.0 && snap.mfi_value <= 100.0);
+            assert!(snap.positive_mf_sum >= 0.0);
+            assert!(snap.negative_mf_sum >= 0.0);
+            assert_eq!(snap.period, 14);
+        }
+    }
+
+    #[test]
+    fn psar_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = PsarSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252,
+            af_start: 0.02, af_step: 0.02, af_max: 0.20,
+            sar_value: 148.0, extreme_point: 152.0,
+            acceleration_factor: 0.06, trend_is_up: true,
+            bars_in_trend: 8, distance_pct: 1.35, last_close: 150.0,
+            psar_label: "UP".into(), note: String::new(),
+        };
+        upsert_psar(&conn, "TEST", &snap).unwrap();
+        let got = get_psar(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.psar_label, "UP");
+        assert!(got.trend_is_up);
+        assert!((got.sar_value - 148.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn psar_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_psar_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.psar_label.as_str(),
+            "STRONG_UP" | "UP" | "FLAT" | "DOWN" | "STRONG_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.psar_label != "INSUFFICIENT_DATA" {
+            assert!(snap.sar_value.is_finite());
+            assert!(snap.extreme_point.is_finite());
+            assert!(snap.acceleration_factor >= snap.af_start);
+            assert!(snap.acceleration_factor <= snap.af_max);
+            assert!(snap.bars_in_trend >= 1);
         }
     }
 }
