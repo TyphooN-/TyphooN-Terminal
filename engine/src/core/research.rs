@@ -4389,6 +4389,102 @@ pub struct KendallTauSnapshot {
     pub note: String,
 }
 
+// ── ADR-151 Round 42 surfaces ─────────────────────────────────────────────
+
+/// SQUEEZE — composite short-squeeze outlier score per symbol.
+/// Fuses five orthogonal axes: short-float %, days-to-cover, 20d momentum,
+/// relative volume, and IV-rank. Each axis is normalised to 0..100 and the
+/// composite is the weighted mean.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SqueezeSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub short_percent_of_float: f64,   // raw % of float short
+    pub days_to_cover: f64,            // raw days-to-cover (short / 20d vol)
+    pub momentum_20d_pct: f64,         // (close_t / close_{t-20}) − 1, in %
+    pub relvol_20d: f64,               // current volume / 20d avg
+    pub iv_rank: f64,                  // 0..100 from IvolSnapshot
+    pub short_float_score: f64,        // 0..100 contribution
+    pub days_to_cover_score: f64,      // 0..100 contribution
+    pub momentum_score: f64,           // 0..100 contribution
+    pub relvol_score: f64,             // 0..100 contribution
+    pub iv_rank_score: f64,            // 0..100 contribution
+    pub composite_score: f64,          // 0..100 weighted mean
+    pub inputs_present: usize,         // how many of the 5 axes had data (0..5)
+    pub squeeze_label: String,         // NO_SQUEEZE / WATCH / ELEVATED / STRONG / EXTREME / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// SQUEEZERANK — cross-symbol percentile rank of SQUEEZE composite scores.
+/// Populated by a table-scan across all symbols with a SQUEEZE row.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SqueezeRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub composite_score: f64,          // mirror of SQUEEZE.composite_score
+    pub peer_count: usize,             // symbols scanned
+    pub rank: usize,                   // 1 = highest composite
+    pub percentile: f64,               // 0..100
+    pub squeezerank_label: String,     // TOP_1PCT / TOP_5PCT / TOP_10PCT / ABOVE_MEDIAN / BELOW_MEDIAN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// BBSQUEEZE — Bollinger-Band squeeze detector.
+/// Uses 20-bar SMA ±2σ; BB-width = (upper-lower)/mid. A "squeeze" is when
+/// the current BB-width is in the low tail of its 120-bar history.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct BbsqueezeSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 20
+    pub bb_width_current: f64,         // (upper - lower) / mid at last bar
+    pub bb_width_min_120: f64,
+    pub bb_width_max_120: f64,
+    pub bb_width_percentile: f64,      // 0..100 current rank in 120-bar history
+    pub upper_band: f64,
+    pub lower_band: f64,
+    pub mid_band: f64,
+    pub last_close: f64,
+    pub bbsqueeze_label: String,       // TIGHT_SQUEEZE / MODERATE_SQUEEZE / NORMAL / EXPANSION / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// DONCHIAN — Donchian-channel breakout detector (20-bar default).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DonchianSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 20
+    pub upper_channel: f64,            // max(high) over period
+    pub lower_channel: f64,            // min(low) over period
+    pub mid_channel: f64,              // (upper + lower)/2
+    pub last_close: f64,
+    pub channel_position_pct: f64,     // 0..100, (close-lower)/(upper-lower)
+    pub breakout_upper: bool,          // close ≥ prior upper
+    pub breakout_lower: bool,          // close ≤ prior lower
+    pub donchian_label: String,        // BREAKOUT_UP / APPROACH_UP / NEUTRAL / APPROACH_DOWN / BREAKOUT_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// KAMA — Kaufman Adaptive Moving Average efficiency ratio.
+/// Efficiency Ratio = |close_t - close_{t-n}| / Σ|close_i - close_{i-1}|.
+/// High ER = trending; low ER = choppy.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct KamaSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 10
+    pub efficiency_ratio: f64,         // 0..1
+    pub kama_value: f64,               // adaptive MA at last bar
+    pub last_close: f64,
+    pub kama_slope_pct: f64,           // (kama_t / kama_{t-5} - 1) × 100
+    pub kama_label: String,            // STRONG_TREND / MODERATE_TREND / WEAK_TREND / CHOPPY / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -20294,6 +20390,359 @@ pub fn compute_kendalltau_snapshot(
     }
 }
 
+// ── ADR-151 Round 42 compute functions ────────────────────────────────────
+
+/// SQUEEZE — composite short-squeeze outlier score.
+/// Fuses five axes (short-float %, days-to-cover, 20d momentum, relvol, IV
+/// rank) into a single 0..100 composite. Each axis is converted to a score
+/// by its own saturating curve; missing axes are skipped and `inputs_present`
+/// reflects how many contributed.
+pub fn compute_squeeze_snapshot(
+    symbol: &str,
+    as_of: &str,
+    bars: &[HistoricalPriceRow],
+    short_interest: Option<&ShortInterestSnapshot>,
+    ivol: Option<&IvolSnapshot>,
+    relvol: Option<&RelVolSnapshot>,
+) -> SqueezeSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+
+    // 20d momentum on close-to-close
+    let momentum_20d_pct = if sorted.len() >= 21 {
+        let n = sorted.len();
+        let last = sorted[n - 1].close;
+        let prior = sorted[n - 21].close;
+        if prior > 0.0 { (last / prior - 1.0) * 100.0 } else { f64::NAN }
+    } else { f64::NAN };
+
+    // Axis 1: short_percent_of_float (saturate at 40% = score 100)
+    let (sf_raw, sf_score, sf_present) = match short_interest.map(|s| s.short_percent_of_float) {
+        Some(v) if v.is_finite() && v >= 0.0 => {
+            let s = (v / 40.0 * 100.0).min(100.0);
+            (v, s, true)
+        }
+        _ => (f64::NAN, 0.0, false),
+    };
+
+    // Axis 2: days_to_cover (saturate at 10 days = score 100)
+    let (dtc_raw, dtc_score, dtc_present) = match short_interest.map(|s| s.days_to_cover) {
+        Some(v) if v.is_finite() && v >= 0.0 => {
+            let s = (v / 10.0 * 100.0).min(100.0);
+            (v, s, true)
+        }
+        _ => (f64::NAN, 0.0, false),
+    };
+
+    // Axis 3: 20d momentum (positive momentum boosts squeeze; saturate at +30% = 100)
+    let (mom_score, mom_present) = if momentum_20d_pct.is_finite() {
+        // Clip negative to 0 (a falling stock is not squeezing)
+        let s = (momentum_20d_pct.max(0.0) / 30.0 * 100.0).min(100.0);
+        (s, true)
+    } else { (0.0, false) };
+
+    // Axis 4: relvol_20d (saturate at 3.0× = score 100)
+    let (rv_raw, rv_score, rv_present) = match relvol.map(|r| r.rel_volume_20d) {
+        Some(v) if v.is_finite() && v >= 0.0 => {
+            let s = (v / 3.0 * 100.0).min(100.0);
+            (v, s, true)
+        }
+        _ => (f64::NAN, 0.0, false),
+    };
+
+    // Axis 5: IV rank (already 0..100)
+    let (iv_raw, iv_score, iv_present) = match ivol.map(|i| i.iv_rank) {
+        Some(v) if v.is_finite() && v >= 0.0 => (v, v.clamp(0.0, 100.0), true),
+        _ => (f64::NAN, 0.0, false),
+    };
+
+    let inputs_present = [sf_present, dtc_present, mom_present, rv_present, iv_present]
+        .iter().filter(|b| **b).count();
+
+    if inputs_present < 3 {
+        return SqueezeSnapshot {
+            symbol: sym,
+            as_of: as_of.into(),
+            short_percent_of_float: sf_raw,
+            days_to_cover: dtc_raw,
+            momentum_20d_pct,
+            relvol_20d: rv_raw,
+            iv_rank: iv_raw,
+            inputs_present,
+            squeeze_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥3 axes with data, got {}", inputs_present),
+            ..Default::default()
+        };
+    }
+
+    // Weighted mean: short_float and days_to_cover carry 1.5× weight (core
+    // squeeze mechanics); momentum, relvol, iv_rank carry 1.0×.
+    let mut num = 0.0; let mut den = 0.0;
+    if sf_present { num += 1.5 * sf_score; den += 1.5; }
+    if dtc_present { num += 1.5 * dtc_score; den += 1.5; }
+    if mom_present { num += 1.0 * mom_score; den += 1.0; }
+    if rv_present { num += 1.0 * rv_score; den += 1.0; }
+    if iv_present { num += 1.0 * iv_score; den += 1.0; }
+    let composite = if den > 0.0 { num / den } else { 0.0 };
+
+    let label = if composite >= 80.0 { "EXTREME" }
+        else if composite >= 60.0 { "STRONG" }
+        else if composite >= 40.0 { "ELEVATED" }
+        else if composite >= 20.0 { "WATCH" }
+        else { "NO_SQUEEZE" };
+
+    SqueezeSnapshot {
+        symbol: sym,
+        as_of: as_of.into(),
+        short_percent_of_float: sf_raw,
+        days_to_cover: dtc_raw,
+        momentum_20d_pct,
+        relvol_20d: rv_raw,
+        iv_rank: iv_raw,
+        short_float_score: sf_score,
+        days_to_cover_score: dtc_score,
+        momentum_score: mom_score,
+        relvol_score: rv_score,
+        iv_rank_score: iv_score,
+        composite_score: composite,
+        inputs_present,
+        squeeze_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// SQUEEZERANK — cross-symbol percentile rank of the SQUEEZE composite.
+pub fn compute_squeezerank_snapshot(
+    symbol: &str,
+    as_of: &str,
+    subject: Option<&SqueezeSnapshot>,
+    all: &[SqueezeSnapshot],
+) -> SqueezeRankSnapshot {
+    let sym = symbol.to_uppercase();
+    let subj = match subject {
+        Some(s) if s.squeeze_label != "INSUFFICIENT_DATA" && s.composite_score.is_finite() => s,
+        _ => {
+            return SqueezeRankSnapshot {
+                symbol: sym, as_of: as_of.into(),
+                squeezerank_label: "INSUFFICIENT_DATA".into(),
+                note: "subject has no SQUEEZE composite".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let scored: Vec<f64> = all.iter()
+        .filter(|s| s.squeeze_label != "INSUFFICIENT_DATA" && s.composite_score.is_finite())
+        .map(|s| s.composite_score)
+        .collect();
+    if scored.len() < 5 {
+        return SqueezeRankSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            composite_score: subj.composite_score,
+            peer_count: scored.len(),
+            squeezerank_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥5 peers in SQUEEZE table, got {}", scored.len()),
+            ..Default::default()
+        };
+    }
+    let subj_score = subj.composite_score;
+    // Rank: 1 = highest composite
+    let mut sorted = scored.clone();
+    sorted.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let rank = sorted.iter().position(|&x| (x - subj_score).abs() < 1e-9).map(|p| p + 1).unwrap_or(sorted.len());
+    let below_or_equal = scored.iter().filter(|&&x| x <= subj_score).count();
+    let percentile = below_or_equal as f64 / scored.len() as f64 * 100.0;
+    let label = if percentile >= 99.0 { "TOP_1PCT" }
+        else if percentile >= 95.0 { "TOP_5PCT" }
+        else if percentile >= 90.0 { "TOP_10PCT" }
+        else if percentile >= 50.0 { "ABOVE_MEDIAN" }
+        else { "BELOW_MEDIAN" };
+    SqueezeRankSnapshot {
+        symbol: sym, as_of: as_of.into(),
+        composite_score: subj_score,
+        peer_count: scored.len(),
+        rank,
+        percentile,
+        squeezerank_label: label.into(),
+        note: String::new(),
+    }
+}
+
+/// BBSQUEEZE — Bollinger-Band width squeeze detector.
+pub fn compute_bbsqueeze_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> BbsqueezeSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 20usize;
+    let hist_window = 120usize;
+    if n < period + hist_window {
+        return BbsqueezeSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            bbsqueeze_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", period + hist_window, n),
+            ..Default::default()
+        };
+    }
+    // Compute a rolling BB-width series for the trailing (hist_window) bars.
+    let mut widths: Vec<f64> = Vec::with_capacity(hist_window);
+    for end in (n - hist_window)..n {
+        let start = end + 1 - period;
+        let slice: &[&HistoricalPriceRow] = &sorted[start..=end];
+        let sum: f64 = slice.iter().map(|b| b.close).sum();
+        let mean = sum / period as f64;
+        let var: f64 = slice.iter().map(|b| (b.close - mean).powi(2)).sum::<f64>() / period as f64;
+        let sd = var.sqrt();
+        if mean > 0.0 {
+            widths.push((2.0 * 2.0 * sd) / mean); // (upper - lower)/mid = (2*2σ)/mean
+        } else {
+            widths.push(0.0);
+        }
+    }
+    let current = *widths.last().unwrap();
+    let min_w = widths.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max_w = widths.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let below = widths.iter().filter(|&&x| x <= current).count();
+    let pct = below as f64 / widths.len() as f64 * 100.0;
+    // Re-derive current bands for display
+    let end = n - 1;
+    let start = end + 1 - period;
+    let slice = &sorted[start..=end];
+    let sum: f64 = slice.iter().map(|b| b.close).sum();
+    let mid = sum / period as f64;
+    let var: f64 = slice.iter().map(|b| (b.close - mid).powi(2)).sum::<f64>() / period as f64;
+    let sd = var.sqrt();
+    let upper = mid + 2.0 * sd;
+    let lower = mid - 2.0 * sd;
+    let label = if pct <= 10.0 { "TIGHT_SQUEEZE" }
+        else if pct <= 25.0 { "MODERATE_SQUEEZE" }
+        else if pct >= 90.0 { "EXPANSION" }
+        else { "NORMAL" };
+    BbsqueezeSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        bb_width_current: current,
+        bb_width_min_120: min_w,
+        bb_width_max_120: max_w,
+        bb_width_percentile: pct,
+        upper_band: upper, lower_band: lower, mid_band: mid,
+        last_close: sorted[n - 1].close,
+        bbsqueeze_label: label.into(), note: String::new(),
+    }
+}
+
+/// DONCHIAN — 20-bar Donchian channel breakout detector.
+pub fn compute_donchian_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> DonchianSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 20usize;
+    if n < period + 1 {
+        return DonchianSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            donchian_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", period + 1, n),
+            ..Default::default()
+        };
+    }
+    // Prior channel uses bars [n-period-1 .. n-2] (exclude current bar); breakout
+    // is defined as current close vs that prior channel.
+    let prior_slice = &sorted[(n - period - 1)..(n - 1)];
+    let prior_upper = prior_slice.iter().map(|b| b.high).fold(f64::NEG_INFINITY, f64::max);
+    let prior_lower = prior_slice.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
+    // Display channel uses full trailing period including current.
+    let disp_slice = &sorted[(n - period)..n];
+    let upper = disp_slice.iter().map(|b| b.high).fold(f64::NEG_INFINITY, f64::max);
+    let lower = disp_slice.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
+    let mid = (upper + lower) / 2.0;
+    let last_close = sorted[n - 1].close;
+    let breakout_up = last_close >= prior_upper;
+    let breakout_dn = last_close <= prior_lower;
+    let width = (upper - lower).max(f64::EPSILON);
+    let pos = ((last_close - lower) / width * 100.0).clamp(0.0, 100.0);
+    let label = if breakout_up { "BREAKOUT_UP" }
+        else if breakout_dn { "BREAKOUT_DOWN" }
+        else if pos >= 80.0 { "APPROACH_UP" }
+        else if pos <= 20.0 { "APPROACH_DOWN" }
+        else { "NEUTRAL" };
+    DonchianSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        upper_channel: upper, lower_channel: lower, mid_channel: mid,
+        last_close, channel_position_pct: pos,
+        breakout_upper: breakout_up, breakout_lower: breakout_dn,
+        donchian_label: label.into(), note: String::new(),
+    }
+}
+
+/// KAMA — Kaufman adaptive moving average + efficiency ratio.
+pub fn compute_kama_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> KamaSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 10usize;
+    // Need period + warmup + slope window
+    if n < period + 15 {
+        return KamaSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            kama_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", period + 15, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    // Efficiency Ratio at last bar
+    let last = closes[n - 1];
+    let prior = closes[n - 1 - period];
+    let direction = (last - prior).abs();
+    let mut volatility = 0.0;
+    for i in (n - period)..n {
+        volatility += (closes[i] - closes[i - 1]).abs();
+    }
+    let er = if volatility > f64::EPSILON { (direction / volatility).clamp(0.0, 1.0) } else { 0.0 };
+    // KAMA recursion (standard fast=2, slow=30 constants).
+    let fast_sc = 2.0 / (2.0 + 1.0);
+    let slow_sc = 2.0 / (30.0 + 1.0);
+    // Seed KAMA with SMA over the first `period` bars.
+    let seed_end = period;
+    let seed: f64 = closes[..seed_end].iter().sum::<f64>() / period as f64;
+    let mut kama_series: Vec<f64> = vec![0.0; n];
+    for i in 0..seed_end { kama_series[i] = seed; }
+    for i in seed_end..n {
+        let dir_i = (closes[i] - closes[i - period]).abs();
+        let mut vol_i = 0.0;
+        for k in (i - period + 1)..=i {
+            vol_i += (closes[k] - closes[k - 1]).abs();
+        }
+        let er_i = if vol_i > f64::EPSILON { (dir_i / vol_i).clamp(0.0, 1.0) } else { 0.0 };
+        let sc = (er_i * (fast_sc - slow_sc) + slow_sc).powi(2);
+        kama_series[i] = kama_series[i - 1] + sc * (closes[i] - kama_series[i - 1]);
+    }
+    let kama_last = kama_series[n - 1];
+    let kama_prior = kama_series[n - 6];
+    let slope_pct = if kama_prior.abs() > f64::EPSILON {
+        (kama_last / kama_prior - 1.0) * 100.0
+    } else { 0.0 };
+    let label = if er >= 0.7 { "STRONG_TREND" }
+        else if er >= 0.4 { "MODERATE_TREND" }
+        else if er >= 0.2 { "WEAK_TREND" }
+        else { "CHOPPY" };
+    KamaSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        efficiency_ratio: er,
+        kama_value: kama_last,
+        last_close: last,
+        kama_slope_pct: slope_pct,
+        kama_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -21534,6 +21983,19 @@ pub fn get_short_interest(conn: &Connection, symbol: &str) -> Result<Option<Shor
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
+}
+
+/// Whole-table scan of symbols with a `research_short_interest` row. Used by
+/// the SQUEEZE watchlist refresh to drive the recompute set.
+pub fn get_all_short_interest_symbols(conn: &Connection) -> Result<Vec<String>, String> {
+    let _ = create_research_tables_v10(conn);
+    let mut stmt = conn.prepare("SELECT symbol FROM research_short_interest")
+        .map_err(|e| format!("prepare get_all_short_interest_symbols: {e}"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query_map get_all_short_interest_symbols: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
 }
 
 // ── ADR-118 Godel Parity Round 11 schema + helpers ─────────────────────────
@@ -26574,6 +27036,172 @@ pub fn get_kendalltau(conn: &Connection, symbol: &str) -> Result<Option<KendallT
         .map_err(|e| format!("prepare get_kendalltau: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_kendalltau: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_kendalltau: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+// ── ADR-151 Round 42 schema ────────────────────────────────────────────────
+
+pub fn create_research_tables_v43(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v42(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_squeeze (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_squeeze_updated ON research_squeeze(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_squeezerank (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_squeezerank_updated ON research_squeezerank(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_bbsqueeze (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_bbsqueeze_updated ON research_bbsqueeze(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_donchian (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_donchian_updated ON research_donchian(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_kama (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_kama_updated ON research_kama(updated_at);",
+    ).map_err(|e| format!("create v43 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_squeeze(conn: &Connection, symbol: &str, snap: &SqueezeSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v43(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("squeeze json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_squeeze(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert squeeze: {e}"))?;
+    Ok(())
+}
+
+pub fn get_squeeze(conn: &Connection, symbol: &str) -> Result<Option<SqueezeSnapshot>, String> {
+    let _ = create_research_tables_v43(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_squeeze WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_squeeze: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_squeeze: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_squeeze: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+/// Whole-table scan of `research_squeeze`. Used by SQUEEZERANK and the standalone watchlist UI.
+pub fn get_all_squeeze(conn: &Connection) -> Result<Vec<SqueezeSnapshot>, String> {
+    let _ = create_research_tables_v43(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_squeeze")
+        .map_err(|e| format!("prepare get_all_squeeze: {e}"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query_map get_all_squeeze: {e}"))?
+        .filter_map(|r| r.ok())
+        .filter_map(|j| serde_json::from_str::<SqueezeSnapshot>(&j).ok())
+        .collect();
+    Ok(rows)
+}
+
+pub fn upsert_squeezerank(conn: &Connection, symbol: &str, snap: &SqueezeRankSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v43(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("squeezerank json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_squeezerank(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert squeezerank: {e}"))?;
+    Ok(())
+}
+
+pub fn get_squeezerank(conn: &Connection, symbol: &str) -> Result<Option<SqueezeRankSnapshot>, String> {
+    let _ = create_research_tables_v43(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_squeezerank WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_squeezerank: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_squeezerank: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_squeezerank: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_bbsqueeze(conn: &Connection, symbol: &str, snap: &BbsqueezeSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v43(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("bbsqueeze json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_bbsqueeze(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert bbsqueeze: {e}"))?;
+    Ok(())
+}
+
+pub fn get_bbsqueeze(conn: &Connection, symbol: &str) -> Result<Option<BbsqueezeSnapshot>, String> {
+    let _ = create_research_tables_v43(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_bbsqueeze WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_bbsqueeze: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_bbsqueeze: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_bbsqueeze: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_donchian(conn: &Connection, symbol: &str, snap: &DonchianSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v43(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("donchian json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_donchian(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert donchian: {e}"))?;
+    Ok(())
+}
+
+pub fn get_donchian(conn: &Connection, symbol: &str) -> Result<Option<DonchianSnapshot>, String> {
+    let _ = create_research_tables_v43(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_donchian WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_donchian: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_donchian: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_donchian: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_kama(conn: &Connection, symbol: &str, snap: &KamaSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v43(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("kama json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_kama(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert kama: {e}"))?;
+    Ok(())
+}
+
+pub fn get_kama(conn: &Connection, symbol: &str) -> Result<Option<KamaSnapshot>, String> {
+    let _ = create_research_tables_v43(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_kama WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_kama: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_kama: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_kama: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -35368,6 +35996,196 @@ Trailing text.
             assert!(snap.concordant + snap.discordant <= snap.pair_count);
             assert!(snap.z_stat.is_finite());
             assert!(snap.p_value_two_sided >= 0.0 && snap.p_value_two_sided <= 1.0);
+        }
+    }
+
+    // ── ADR-151 Round 42 tests ──
+
+    #[test]
+    fn squeeze_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = SqueezeSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            short_percent_of_float: 28.0, days_to_cover: 6.2,
+            momentum_20d_pct: 18.5, relvol_20d: 2.4, iv_rank: 78.0,
+            short_float_score: 70.0, days_to_cover_score: 62.0,
+            momentum_score: 61.6, relvol_score: 80.0, iv_rank_score: 78.0,
+            composite_score: 71.2, inputs_present: 5,
+            squeeze_label: "STRONG".into(), note: String::new(),
+        };
+        upsert_squeeze(&conn, "TEST", &snap).unwrap();
+        let got = get_squeeze(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.squeeze_label, "STRONG");
+        assert!((got.composite_score - 71.2).abs() < 1e-9);
+        assert_eq!(got.inputs_present, 5);
+    }
+
+    #[test]
+    fn squeeze_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        // With no short/ivol/relvol inputs the oscillating fixture should
+        // yield INSUFFICIENT_DATA (only momentum axis is available).
+        let snap = compute_squeeze_snapshot("T", "2026-04-17", &bars, None, None, None);
+        assert!(matches!(snap.squeeze_label.as_str(),
+            "NO_SQUEEZE" | "WATCH" | "ELEVATED" | "STRONG" | "EXTREME" | "INSUFFICIENT_DATA"));
+        // With 3 synthetic inputs we should get a real label.
+        let si = ShortInterestSnapshot {
+            symbol: "T".into(),
+            short_percent_of_float: 25.0,
+            days_to_cover: 5.0,
+            ..Default::default()
+        };
+        let iv = IvolSnapshot { symbol: "T".into(), iv_rank: 70.0, ..Default::default() };
+        let rv = RelVolSnapshot { symbol: "T".into(), rel_volume_20d: 2.0, ..Default::default() };
+        let s2 = compute_squeeze_snapshot("T", "2026-04-17", &bars, Some(&si), Some(&iv), Some(&rv));
+        assert!(s2.squeeze_label != "INSUFFICIENT_DATA");
+        assert!(s2.composite_score.is_finite());
+        assert!(s2.composite_score >= 0.0 && s2.composite_score <= 100.0);
+        assert!(s2.inputs_present >= 3);
+        assert!(s2.short_float_score >= 0.0 && s2.short_float_score <= 100.0);
+        assert!(s2.iv_rank_score >= 0.0 && s2.iv_rank_score <= 100.0);
+    }
+
+    #[test]
+    fn squeezerank_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = SqueezeRankSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            composite_score: 85.0, peer_count: 120, rank: 3, percentile: 97.5,
+            squeezerank_label: "TOP_5PCT".into(), note: String::new(),
+        };
+        upsert_squeezerank(&conn, "TEST", &snap).unwrap();
+        let got = get_squeezerank(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.squeezerank_label, "TOP_5PCT");
+        assert_eq!(got.rank, 3);
+        assert!((got.percentile - 97.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn squeezerank_compute_oscillating() {
+        let _ = synthetic_oscillating_bars_150();
+        // Build a synthetic peer set with varying composite scores.
+        let mut peers: Vec<SqueezeSnapshot> = Vec::new();
+        for i in 0..10 {
+            peers.push(SqueezeSnapshot {
+                symbol: format!("SYM{}", i),
+                composite_score: (i as f64) * 10.0,
+                inputs_present: 5,
+                squeeze_label: "ELEVATED".into(),
+                ..Default::default()
+            });
+        }
+        let top = peers.iter().find(|s| s.symbol == "SYM9").cloned().unwrap();
+        let snap = compute_squeezerank_snapshot("SYM9", "2026-04-17", Some(&top), &peers);
+        assert!(matches!(snap.squeezerank_label.as_str(),
+            "TOP_1PCT" | "TOP_5PCT" | "TOP_10PCT" | "ABOVE_MEDIAN" | "BELOW_MEDIAN" | "INSUFFICIENT_DATA"));
+        if snap.squeezerank_label != "INSUFFICIENT_DATA" {
+            assert_eq!(snap.peer_count, 10);
+            assert_eq!(snap.rank, 1);
+            assert!(snap.percentile >= 0.0 && snap.percentile <= 100.0);
+        }
+        // Small-peer-set path: fewer than 5 peers is INSUFFICIENT_DATA.
+        let tiny: Vec<SqueezeSnapshot> = peers.iter().take(3).cloned().collect();
+        let s2 = compute_squeezerank_snapshot("SYM0", "2026-04-17", tiny.first(), &tiny);
+        assert_eq!(s2.squeezerank_label, "INSUFFICIENT_DATA");
+    }
+
+    #[test]
+    fn bbsqueeze_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = BbsqueezeSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 20,
+            bb_width_current: 0.015, bb_width_min_120: 0.010,
+            bb_width_max_120: 0.080, bb_width_percentile: 8.3,
+            upper_band: 155.2, lower_band: 150.1, mid_band: 152.65,
+            last_close: 153.0,
+            bbsqueeze_label: "TIGHT_SQUEEZE".into(), note: String::new(),
+        };
+        upsert_bbsqueeze(&conn, "TEST", &snap).unwrap();
+        let got = get_bbsqueeze(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.bbsqueeze_label, "TIGHT_SQUEEZE");
+        assert!((got.bb_width_current - 0.015).abs() < 1e-9);
+        assert_eq!(got.period, 20);
+    }
+
+    #[test]
+    fn bbsqueeze_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_bbsqueeze_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.bbsqueeze_label.as_str(),
+            "TIGHT_SQUEEZE" | "MODERATE_SQUEEZE" | "NORMAL" | "EXPANSION" | "INSUFFICIENT_DATA"));
+        if snap.bbsqueeze_label != "INSUFFICIENT_DATA" {
+            assert!(snap.bb_width_current.is_finite() && snap.bb_width_current >= 0.0);
+            assert!(snap.bb_width_min_120 <= snap.bb_width_max_120);
+            assert!(snap.bb_width_percentile >= 0.0 && snap.bb_width_percentile <= 100.0);
+            assert!(snap.upper_band >= snap.mid_band);
+            assert!(snap.mid_band >= snap.lower_band);
+            assert_eq!(snap.period, 20);
+        }
+    }
+
+    #[test]
+    fn donchian_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = DonchianSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 20,
+            upper_channel: 160.0, lower_channel: 140.0, mid_channel: 150.0,
+            last_close: 162.5, channel_position_pct: 100.0,
+            breakout_upper: true, breakout_lower: false,
+            donchian_label: "BREAKOUT_UP".into(), note: String::new(),
+        };
+        upsert_donchian(&conn, "TEST", &snap).unwrap();
+        let got = get_donchian(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.donchian_label, "BREAKOUT_UP");
+        assert!(got.breakout_upper);
+        assert!((got.upper_channel - 160.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn donchian_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_donchian_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.donchian_label.as_str(),
+            "BREAKOUT_UP" | "APPROACH_UP" | "NEUTRAL" | "APPROACH_DOWN" | "BREAKOUT_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.donchian_label != "INSUFFICIENT_DATA" {
+            assert!(snap.upper_channel >= snap.lower_channel);
+            assert!(snap.channel_position_pct >= 0.0 && snap.channel_position_pct <= 100.0);
+            assert!(snap.last_close.is_finite());
+            assert_eq!(snap.period, 20);
+        }
+    }
+
+    #[test]
+    fn kama_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = KamaSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(),
+            bars_used: 252, period: 10,
+            efficiency_ratio: 0.65, kama_value: 152.3, last_close: 155.0,
+            kama_slope_pct: 1.4,
+            kama_label: "MODERATE_TREND".into(), note: String::new(),
+        };
+        upsert_kama(&conn, "TEST", &snap).unwrap();
+        let got = get_kama(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.kama_label, "MODERATE_TREND");
+        assert!((got.efficiency_ratio - 0.65).abs() < 1e-9);
+        assert_eq!(got.period, 10);
+    }
+
+    #[test]
+    fn kama_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_kama_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.kama_label.as_str(),
+            "STRONG_TREND" | "MODERATE_TREND" | "WEAK_TREND" | "CHOPPY" | "INSUFFICIENT_DATA"));
+        if snap.kama_label != "INSUFFICIENT_DATA" {
+            assert!(snap.efficiency_ratio >= 0.0 && snap.efficiency_ratio <= 1.0);
+            assert!(snap.kama_value.is_finite());
+            assert!(snap.last_close.is_finite());
+            assert!(snap.kama_slope_pct.is_finite());
+            assert_eq!(snap.period, 10);
         }
     }
 }

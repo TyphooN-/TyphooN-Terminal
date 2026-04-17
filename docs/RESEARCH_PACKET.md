@@ -2737,7 +2737,76 @@ bars_used, pair_count, concordant, discordant, tau, z_stat,
 p_value_two_sided. Rank-based complement to DURBINWATSON's linear AR(1)
 and RANKAC's Spearman lag. Source: ADR-150 KENDALLTAU window.
 
-#### 2.197 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.197 Composite Short-Squeeze Score (SQUEEZE — ADR-151)
+
+Pulled from `research::get_squeeze`. Composite short-squeeze probability
+score combining five orthogonal axes: short % of float (saturates at 40%),
+days-to-cover (saturates at 10 days, SI/20d-avg-volume), 20-day price
+momentum (saturates at 30% move), relative volume vs 20d average (saturates
+at 3× RV), and IV-rank percentile (0..100). Each axis is normalised to a
+0..100 score via a saturating linear curve; the composite is a weighted
+mean with **1.5× weight on short-float and days-to-cover** (the mechanical
+axes) and **1.0× on momentum / relvol / IV-rank** (the trigger axes), then
+re-normalised to 0..100 by the active weight sum. Header gives
+**squeeze_label** (NO_SQUEEZE <20 / WATCH <40 / ELEVATED <60 / STRONG <80 /
+EXTREME ≥80 / INSUFFICIENT_DATA when <3 axes have data). Body reports
+bars_used, the five raw inputs, the five per-axis scores, composite_score,
+and inputs_present (0..5). Source: ADR-151 SQUEEZE window.
+
+#### 2.198 Cross-Symbol Short-Squeeze Rank (SQUEEZERANK — ADR-151)
+
+Pulled from `research::get_squeezerank`. Cross-symbol percentile rank of
+SQUEEZE composite scores across every symbol with a populated SQUEEZE row.
+Scanned by the SQUEEZE watchlist driver. Header gives **squeezerank_label**
+(TOP_1PCT / TOP_5PCT / TOP_10PCT / ABOVE_MEDIAN / BELOW_MEDIAN /
+INSUFFICIENT_DATA for peer_count<10). Body reports composite_score (mirror
+of SQUEEZE), peer_count, rank (1 = highest), percentile. Complements SQUEEZE
+with peer-group context — a 60-composite score means very different things
+when the sector tape is quiet versus running hot. Source: ADR-151 SQUEEZERANK.
+
+#### 2.199 Bollinger Band Width Squeeze (BBSQUEEZE — ADR-151)
+
+Pulled from `research::get_bbsqueeze`. Classical Bollinger-band-width
+percentile-rank squeeze detector: computes BB-width = (upper − lower) / mid
+over period=20 with 2σ bands on the trailing 120-bar window, then ranks the
+current bar's width against its own 120-bar distribution. Header gives
+**bbsqueeze_label** (TIGHT_SQUEEZE percentile ≤10 / MODERATE_SQUEEZE ≤25 /
+NORMAL ≤75 / EXPANSION >75 / INSUFFICIENT_DATA for n<140). Body reports
+bars_used, period, bb_width_current, bb_width_min_120, bb_width_max_120,
+bb_width_percentile, upper/lower/mid band values, last_close. The
+volatility-contraction complement to the position-price SQUEEZE composite —
+BBSQUEEZE flags *range compression* regardless of short interest. Source:
+ADR-151 BBSQUEEZE window.
+
+#### 2.200 Donchian Channel Breakout (DONCHIAN — ADR-151)
+
+Pulled from `research::get_donchian`. 20-bar Donchian-channel breakout
+detector. upper_channel = max(high_{t-19..t-1}), lower_channel =
+min(low_{t-19..t-1}); breakout flags are set when the current close equals
+or exceeds the **prior** channel (excluding self-reference). Header gives
+**donchian_label** (BREAKOUT_UP / APPROACH_UP position ≥80 / NEUTRAL /
+APPROACH_DOWN ≤20 / BREAKOUT_DOWN / INSUFFICIENT_DATA for n<21). Body
+reports bars_used, period, upper_channel, lower_channel, mid_channel,
+last_close, channel_position_pct (0..100), breakout_upper/lower flags.
+Classical trend-following breakout surface (Turtle Traders). Source:
+ADR-151 DONCHIAN window.
+
+#### 2.201 Kaufman Adaptive Moving Average (KAMA — ADR-151)
+
+Pulled from `research::get_kama`. Kaufman Adaptive Moving Average with its
+Efficiency Ratio. ER = |close_t − close_{t-n}| / Σ|close_i − close_{i-1}|
+at n=10 — the ratio of net-directional move to path-length. Smoothing
+constant SC = [ER·(2/(fast+1)) + (1−ER)·(2/(slow+1))]² with fast=2,
+slow=30. KAMA is the recursive filter KAMA_t = KAMA_{t-1} + SC·(close −
+KAMA_{t-1}), seeded from the n-bar SMA. Header gives **kama_label**
+(STRONG_TREND ER>0.5 / MODERATE_TREND >0.3 / WEAK_TREND >0.15 / CHOPPY /
+INSUFFICIENT_DATA for n<16). Body reports bars_used, period (10),
+efficiency_ratio (0..1), kama_value, last_close, kama_slope_pct over 5
+bars. Trend-quality complement to DONCHIAN's breakout detector — DONCHIAN
+answers *did we break*, KAMA answers *is the move clean enough to trade*.
+Source: ADR-151 KAMA window.
+
+#### 2.202 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -2753,7 +2822,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.198 Sector peer comparison
+#### 2.203 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -3013,8 +3082,41 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **67-134 KB**
-(up from 65-131 KB after ADR-149; ADR-150 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **68-135 KB**
+(up from 67-134 KB after ADR-150; ADR-151 adds five optional per-symbol
+blocks — SQUEEZE / SQUEEZERANK / BBSQUEEZE / DONCHIAN / KAMA — each
+measuring ~2 k/v rows and adding ~180-320 bytes when populated, for
+a typical +1.3 KB per symbol; four of the five reuse the existing
+`research_historical_price` HP cache and SQUEEZE additionally reads
+`research_short_interest` / `research_ivol` / `research_rvol` with the
+standard research-table LAN sync path and zero new API dependencies;
+SQUEEZE computes a composite 0..100 short-squeeze probability score over
+five orthogonal axes (short % of float saturating at 40%, days-to-cover
+saturating at 10 days, 20d price momentum saturating at 30%, relative
+volume vs 20d average saturating at 3×, IV-rank 0..100) with 1.5× weight
+on the mechanical axes (short-float + DTC) and 1.0× on the trigger axes
+(momentum + relvol + IV-rank), re-normalised by active weight sum —
+first multi-axis squeeze-screen surface with NO_SQUEEZE / WATCH /
+ELEVATED / STRONG / EXTREME labels; SQUEEZERANK scans
+`research_squeeze` across all symbols and emits TOP_1PCT / TOP_5PCT /
+TOP_10PCT / ABOVE_MEDIAN / BELOW_MEDIAN labels driven by percentile —
+the cross-symbol-rank complement to the single-symbol composite;
+BBSQUEEZE computes 20-period Bollinger-band width (upper-lower)/mid and
+ranks the current bar against its own trailing 120-bar history with
+TIGHT_SQUEEZE (≤10th percentile) / MODERATE_SQUEEZE (≤25th) / NORMAL
+/ EXPANSION (>75th) labels — the volatility-contraction complement to
+the position-price SQUEEZE composite; DONCHIAN computes 20-bar
+upper/lower channels using the *prior* window (excluding the current
+bar to avoid self-reference) and flags BREAKOUT_UP / APPROACH_UP
+(position ≥80) / NEUTRAL / APPROACH_DOWN (≤20) / BREAKOUT_DOWN — the
+classical Turtle-Traders breakout surface; KAMA computes the Kaufman
+Adaptive Moving Average with Efficiency Ratio = net move / path length
+at n=10, fast=2, slow=30, reporting STRONG_TREND (ER>0.5) /
+MODERATE_TREND (>0.3) / WEAK_TREND (>0.15) / CHOPPY labels — the
+trend-quality complement to DONCHIAN's breakout detector (DONCHIAN
+asks *did we break?*, KAMA asks *is the move clean enough to trade?*);
+prior five (ADR-150) remain unchanged;
+ADR-150 adds five optional per-symbol
 blocks — MCLEODLI / OUFIT / GPH / BURGSPEC / KENDALLTAU — each
 measuring ~2 k/v rows and adding ~200-280 bytes when populated, for
 a typical +1.2 KB per symbol; all five reuse the existing
@@ -3103,7 +3205,7 @@ critical value at 5%; TSI computes the Blau 1991 True Strength Index
 = 100 · EMA₁₃(EMA₂₅(ΔP)) / EMA₁₃(EMA₂₅(|ΔP|)) with a short-EMA signal
 line, providing a double-smoothed momentum oscillator with cleaner
 zero-line behaviour than RSI and less lag than MACD); a 10-symbol
-basket now lands near **670-1340 KB**
+basket now lands near **680-1350 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).
