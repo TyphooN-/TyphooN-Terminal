@@ -3684,7 +3684,107 @@ up); window enforces n≥42. Body reports bars_used, pvt_value,
 pvt_prev, pvt_ema, pvt_slope, last_close. Source: ADR-164 PVT
 window.
 
-#### 2.257 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.257 Accelerator Oscillator (AC — ADR-165)
+
+Pulled from `research::get_ac`. Bill Williams's Accelerator
+Oscillator is the **first derivative of the Awesome Oscillator**:
+`AO = SMA₅(medprice) − SMA₃₄(medprice); AC = AO − SMA₅(AO)`
+where `medprice = (high + low) / 2`. Where AO (ADR-156) measures
+momentum as the 5-vs-34 median crossover, AC measures the *change
+in momentum* — it crosses zero before AO does, making it the
+earliest turn signal in the Williams Chaos Theory toolkit
+(Alligator ADR-151 + AO ADR-156 + AC). Conceptually analogous to
+how MACD's histogram is the derivative of MACD itself: AC asks
+"is momentum accelerating or decelerating?" rather than "is
+momentum positive or negative?" STRONG_BULL (AC > 0 and rising) /
+BULL (AC > 0) / NEUTRAL (AC ≈ 0) / BEAR (AC < 0) / STRONG_BEAR
+(AC < 0 and falling) labels driven jointly by sign of AC and
+sign of `AC − AC_prev`. Requires ≥ 40 bars for the nested
+SMA₅(SMA_of_AO) to emit; window enforces n≥40. Body reports
+bars_used, ac_value, ac_prev, ao_value (underlying Awesome),
+ao_sma5 (SMA₅ of AO), last_close. Source: ADR-165 AC window.
+
+#### 2.258 Chaikin Volatility (CHVOL — ADR-165)
+
+Pulled from `research::get_chvol`. Marc Chaikin's 1966 volatility
+indicator is the **percentage rate-of-change of the EMA of the
+bar's high-low range**:
+`EMA_range_t = EMA₁₀(high_t − low_t);
+CHVOL_t = 100 · (EMA_range_t − EMA_range_{t−10}) / EMA_range_{t−10}`.
+Positive readings indicate range expansion over the last ROC
+window (bars getting wider → volatility accelerating); negative
+readings indicate range contraction (compression, possibly
+pre-breakout). Distinct from ATR (ADR-113, exponential smoothing
+of true range — a *level* measure), BBWIDTH (below, stddev-based
+bandwidth), and Volatility Regime (ADR-117, realized-vol term
+structure). CHVOL is the only volatility surface in the packet
+that directly measures **whether range expansion is accelerating
+or decelerating**. Canonical ±10% thresholds separate EXPANDING /
+NEUTRAL / CONTRACTING. Requires ≥ 25 bars (EMA₁₀ + ROC-10 + some
+buffer); window enforces n≥25. Body reports bars_used,
+ema_length (10), roc_length (10), chvol_value, chvol_prev,
+ema_range (current EMA of H−L), last_close. Source: ADR-165
+CHVOL window.
+
+#### 2.259 Bollinger Bandwidth (BBWIDTH — ADR-165)
+
+Pulled from `research::get_bbwidth`. John Bollinger's Bandwidth
+is defined as `BBW = (upper − lower) / middle` where the bands
+are the standard SMA₂₀ ± 2σ. Low readings indicate a **"squeeze"
+regime** (pending volatility expansion); high readings indicate
+range expansion already underway. Distinct from BBSQUEEZE
+(ADR-127, which compares Bollinger Bandwidth to Keltner Channel
+width as a **boolean** squeeze trigger) — BBWIDTH is the
+underlying **continuous** bandwidth value plus a 125-bar
+percentile ranking, so the AI sees not just whether we're
+squeezing but how extreme the squeeze is on a 0–100 scale.
+SQUEEZE (pct < 10) / LOW (pct < 30) / NORMAL / EXPANDED
+(pct > 75) labels driven by percentile rank over the last 125
+bars. Requires ≥ 20 bars for the bands; 125 bars for a full-
+window percentile (below 125 the percentile is computed on the
+available sample and the note field surfaces the caveat); window
+enforces n≥20. Body reports bars_used, length (20), num_stdev
+(2.0), bbw_value, bbw_prev, bbw_percentile, middle (SMA₂₀),
+upper, lower, last_close. Source: ADR-165 BBWIDTH window.
+
+#### 2.260 Elder Impulse System (ELDERIMP — ADR-165)
+
+Pulled from `research::get_elderimp`. Alexander Elder's 2002
+Impulse System is a **regime filter** that colour-codes bars
+using the sign agreement between a 13-EMA slope and the MACD
+histogram slope: GREEN when both rising (buy-side impulse, do
+not short); RED when both falling (sell-side impulse, do not
+long); BLUE when signs disagree or either is flat (no impulse,
+regime undefined, either direction permitted). Distinct from
+Elder Ray (ADR-163, bull-power and bear-power oscillators
+around a 13-EMA) — Elder Ray is the **oscillator**, Impulse
+System is the **regime filter**. Together they form Elder's
+classic two-layer trade-filter combo. Requires ≥ 35 bars (EMA 13
++ MACD 12/26/9 warm-up); window enforces n≥35. Body reports
+bars_used, ema_length (13), ema_value, ema_slope, macd_hist,
+macd_hist_prev, macd_hist_slope, last_close. Source: ADR-165
+ELDERIMP window.
+
+#### 2.261 Relative Momentum Index (RMI — ADR-165)
+
+Pulled from `research::get_rmi`. Roger Altman's 1993 Relative
+Momentum Index is a **RSI variant applied to the N-bar momentum
+series** `close_t − close_{t−N}` rather than the standard 1-bar
+diff used by RSI. The momentum series is Wilder-smoothed with
+length 14 to produce a 0–100 oscillator that behaves like RSI
+but with smoother extremes during strong trends — the 5-bar
+momentum series has persistence that the 1-bar diff lacks, so
+RMI stays overbought longer in trending markets. Distinct from
+RSI (1-bar diff), STOCHRSI (stochastic-of-RSI), CMO (Chande,
+sum-of-ups / sum-of-totals using 1-bar diffs), and QSTICK
+(EMA of close-open). OVERBOUGHT (>70) / BULL (>55) / NEUTRAL /
+BEAR (<45) / OVERSOLD (<30) labels driven by the 0–100 value.
+Requires ≥ (length + momentum_length + 1) = 20 bars to emit;
+window enforces n≥25. Body reports bars_used, length (14),
+momentum_length (5), rmi_value, rmi_prev, last_close.
+Source: ADR-165 RMI window.
+
+#### 2.262 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -3700,7 +3800,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.258 Sector peer comparison
+#### 2.263 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -3731,7 +3831,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.257 above.
+articles to the per-symbol bag consumed by sub-block 2.262 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -3960,8 +4060,43 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~79-151 KB**
-(up from 78-150 KB after ADR-163; ADR-164 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~80-152 KB**
+(up from 79-151 KB after ADR-164; ADR-165 adds five optional per-symbol
+blocks — AC / CHVOL / BBWIDTH / ELDERIMP / RMI — each measuring ~2 k/v
+rows and adding ~220-300 bytes when populated, for a typical +1.25 KB per
+symbol; all five reuse the existing `research_historical_price` HP
+cache and the standard research-table LAN sync path with zero new API
+dependencies; AC computes Bill Williams's Accelerator Oscillator as
+`AO − SMA₅(AO)` where `AO = SMA₅(medprice) − SMA₃₄(medprice)` — the
+first derivative of AO (ADR-156), completing the Williams Chaos Theory
+trio (Alligator ADR-151 + AO ADR-156 + AC) with the earliest turn
+signal in the family (analogous to how MACD's histogram is the
+derivative of MACD itself); CHVOL computes Marc Chaikin's 1966
+volatility as `100 · (EMA₁₀(H−L) − EMA₁₀(H−L)[−10]) / EMA₁₀(H−L)[−10]`,
+the **percentage rate-of-change of a 10-bar EMA of the high-low
+range** — distinct from ATR (ADR-113, exponential TR *level*),
+BBWIDTH (below, stddev bandwidth), and Volatility Regime (ADR-117,
+realized-vol term structure), CHVOL is the one volatility surface
+measuring whether range expansion is accelerating or decelerating;
+BBWIDTH computes John Bollinger's `(upper − lower)/middle` on the
+standard SMA₂₀ ± 2σ bands with a 125-bar percentile ranking — the
+**continuous** bandwidth value underlying BBSQUEEZE (ADR-127, which
+only exposes a boolean squeeze trigger via Keltner comparison),
+giving the AI a 0-100 percentile view of squeeze intensity with
+SQUEEZE / LOW / NORMAL / EXPANDED labels; ELDERIMP computes
+Alexander Elder's 2002 Impulse System regime filter using sign
+agreement between a 13-EMA slope and MACD histogram slope — GREEN
+(both rising → no-short), RED (both falling → no-long), BLUE (mixed
+or flat → both directions permitted), distinct from Elder Ray
+(ADR-163, the oscillator) as the **regime filter** half of Elder's
+classic two-layer combo; RMI computes Roger Altman's 1993 Relative
+Momentum Index as a **RSI variant on N-bar momentum** `close_t −
+close_{t−N}` with Wilder smoothing at length=14 and momentum=5 —
+distinct from RSI (1-bar diff), STOCHRSI (stochastic-of-RSI), CMO
+(Chande, sum-of-ups/totals), and QSTICK (EMA of close-open), RMI
+stays overbought longer in trending regimes than RSI does because
+the 5-bar momentum series has persistence the 1-bar diff lacks;
+ADR-164 previously added five optional per-symbol
 blocks — TRIMA / T3 / VIDYA / SMI / PVT — each measuring ~2 k/v rows
 and adding ~200-280 bytes when populated, for a typical +1.24 KB per
 symbol; all five reuse the existing `research_historical_price` HP
@@ -4418,7 +4553,7 @@ critical value at 5%; TSI computes the Blau 1991 True Strength Index
 = 100 · EMA₁₃(EMA₂₅(ΔP)) / EMA₁₃(EMA₂₅(|ΔP|)) with a short-EMA signal
 line, providing a double-smoothed momentum oscillator with cleaner
 zero-line behaviour than RSI and less lag than MACD); a 10-symbol
-basket now lands near **760-1480 KB**
+basket now lands near **770-1490 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).

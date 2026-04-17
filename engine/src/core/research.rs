@@ -5468,6 +5468,103 @@ pub struct PvtSnapshot {
     pub note: String,
 }
 
+// ── ADR-165 Round 54: AC / CHVOL / BBWIDTH / ELDERIMP / RMI ───────────────
+
+/// Bill Williams's Accelerator Oscillator — a second-derivative momentum
+/// indicator built as `AC = AO − SMA₅(AO)` where
+/// `AO = SMA₅(medprice) − SMA₃₄(medprice)`. Flags acceleration direction
+/// relative to the AO trend.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AcSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ac_value: f64,                 // AO − SMA5(AO)
+    pub ac_prev: f64,
+    pub ao_value: f64,                 // current Awesome Oscillator
+    pub ao_sma5: f64,                  // 5-SMA of AO
+    pub last_close: f64,
+    pub ac_label: String,              // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Marc Chaikin's Volatility indicator — the rate-of-change of the 10-bar
+/// EMA of the high-low range over a 10-bar lookback. Positive readings
+/// indicate range expansion; negative readings indicate contraction.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ChvolSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ema_length: usize,             // 10
+    pub roc_length: usize,             // 10
+    pub chvol_value: f64,              // 100 · (EMA − EMA[−roc])/EMA[−roc]
+    pub chvol_prev: f64,
+    pub ema_range: f64,                // EMA₁₀(H−L) at last bar
+    pub last_close: f64,
+    pub chvol_label: String,           // EXPANDING / CONTRACTING / NEUTRAL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// John Bollinger's Bandwidth — `BBW = (upper − lower)/middle` using the
+/// standard SMA₂₀ ± 2σ bands. Low readings indicate a "squeeze" of
+/// pending volatility expansion; the percentile over a 125-bar window
+/// quantifies how extreme the current reading is.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct BbwidthSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 20
+    pub num_stdev: f64,                // 2.0
+    pub bbw_value: f64,
+    pub bbw_prev: f64,
+    pub bbw_percentile: f64,           // rank of bbw_value over last 125 bars, 0..100
+    pub middle: f64,                   // SMA₂₀
+    pub upper: f64,
+    pub lower: f64,
+    pub last_close: f64,
+    pub bbw_label: String,             // SQUEEZE / LOW / NORMAL / EXPANDED / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Alexander Elder's Impulse System — colour-codes bars using the sign
+/// agreement between a 13-EMA slope and the MACD histogram. GREEN when
+/// both rise, RED when both fall, BLUE (neutral/transition) otherwise.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ElderImpulseSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ema_length: usize,             // 13
+    pub ema_value: f64,
+    pub ema_slope: f64,                // EMA − EMA[−1]
+    pub macd_hist: f64,                // current MACD histogram
+    pub macd_hist_prev: f64,
+    pub macd_hist_slope: f64,          // hist − hist[−1]
+    pub last_close: f64,
+    pub impulse_label: String,         // GREEN / BLUE / RED / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Roger Altman's Relative Momentum Index — RSI variant applied to the
+/// N-bar momentum series `close − close[−N]` instead of the 1-bar change.
+/// Tends to lag RSI slightly but produces smoother overbought/oversold
+/// signals during strong trends.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct RmiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub momentum_length: usize,        // 5
+    pub rmi_value: f64,                // 0..100
+    pub rmi_prev: f64,
+    pub last_close: f64,
+    pub rmi_label: String,             // OVERBOUGHT / BULL / NEUTRAL / BEAR / OVERSOLD / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -24951,6 +25048,289 @@ pub fn compute_pvt_snapshot(
     }
 }
 
+// ── ADR-165 Round 54 compute functions ───────────────────────────────────
+
+/// Bill Williams's Accelerator Oscillator (AC).
+///
+/// Awesome Oscillator = `SMA₅(medprice) − SMA₃₄(medprice)`.
+/// AC = `AO − SMA₅(AO)`.
+/// AC is the "acceleration" of price momentum — positive + rising means
+/// momentum is accelerating to the upside.
+pub fn compute_ac_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AcSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let min_bars = 34 + 5 + 2;
+    if n < min_bars {
+        return AcSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            ac_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let medprice: Vec<f64> = sorted.iter()
+        .map(|b| 0.5 * (b.high + b.low)).collect();
+    let sma5  = sma_series(&medprice, 5);
+    let sma34 = sma_series(&medprice, 34);
+    let mut ao = vec![0.0; n];
+    for i in 0..n { ao[i] = sma5[i] - sma34[i]; }
+    let ao_sma5 = sma_series(&ao, 5);
+    let mut ac = vec![0.0; n];
+    for i in 0..n { ac[i] = ao[i] - ao_sma5[i]; }
+    let ac_value = ac[n - 1];
+    let ac_prev  = ac[n - 2];
+    let last_close = sorted[n - 1].close;
+    let rising = ac_value > ac_prev;
+    let label = if ac_value > 0.0 &&  rising { "STRONG_BULL" }
+        else if ac_value > 0.0 && !rising { "BULL" }
+        else if ac_value < 0.0 && !rising { "STRONG_BEAR" }
+        else if ac_value < 0.0 &&  rising { "BEAR" }
+        else { "NEUTRAL" };
+    AcSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        ac_value, ac_prev,
+        ao_value: ao[n - 1], ao_sma5: ao_sma5[n - 1],
+        last_close, ac_label: label.into(), note: String::new(),
+    }
+}
+
+/// Marc Chaikin's Volatility. `CHV = 100·(EMA₁₀(H−L) − EMA₁₀(H−L)[−10])/
+/// EMA₁₀(H−L)[−10]`. Positive = range expansion; negative = contraction.
+pub fn compute_chvol_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ChvolSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let ema_length = 10usize;
+    let roc_length = 10usize;
+    let min_bars = ema_length + roc_length + 2;
+    if n < min_bars {
+        return ChvolSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            ema_length, roc_length,
+            chvol_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let range: Vec<f64> = sorted.iter().map(|b| (b.high - b.low).max(0.0)).collect();
+    let ema = ema_series(&range, ema_length);
+    let mut chv = vec![0.0; n];
+    for i in roc_length..n {
+        let base = ema[i - roc_length].abs().max(1e-12);
+        chv[i] = 100.0 * (ema[i] - ema[i - roc_length]) / base;
+    }
+    let chvol_value = chv[n - 1];
+    let chvol_prev  = chv[n - 2];
+    let label = if chvol_value > 5.0 { "EXPANDING" }
+        else if chvol_value < -5.0 { "CONTRACTING" }
+        else { "NEUTRAL" };
+    ChvolSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        ema_length, roc_length,
+        chvol_value, chvol_prev,
+        ema_range: ema[n - 1],
+        last_close: sorted[n - 1].close,
+        chvol_label: label.into(), note: String::new(),
+    }
+}
+
+/// John Bollinger's Bandwidth. `BBW = (upper − lower)/middle` with
+/// middle = SMA₂₀(close) and ±2σ bands. The 125-bar percentile flags
+/// how extreme the current squeeze is.
+pub fn compute_bbwidth_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> BbwidthSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 20usize;
+    let num_stdev = 2.0f64;
+    let lookback = 125usize;
+    let min_bars = length + 2;
+    if n < min_bars {
+        return BbwidthSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            length, num_stdev,
+            bbw_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let mut bbw = vec![0.0; n];
+    let mut last_middle = 0.0;
+    let mut last_upper  = 0.0;
+    let mut last_lower  = 0.0;
+    for i in (length - 1)..n {
+        let window = &closes[(i + 1 - length)..=i];
+        let mean: f64 = window.iter().sum::<f64>() / length as f64;
+        let var: f64  = window.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
+                      / length as f64;
+        let sd = var.sqrt();
+        let upper = mean + num_stdev * sd;
+        let lower = mean - num_stdev * sd;
+        bbw[i] = if mean.abs() > 1e-12 { (upper - lower) / mean } else { 0.0 };
+        if i == n - 1 {
+            last_middle = mean; last_upper = upper; last_lower = lower;
+        }
+    }
+    let bbw_value = bbw[n - 1];
+    let bbw_prev  = bbw[n - 2];
+    let history_start = n.saturating_sub(lookback);
+    let history: Vec<f64> = bbw[history_start..n]
+        .iter().cloned().filter(|x| x.abs() > 1e-12).collect();
+    let pct = if history.is_empty() { 0.0 } else {
+        let below = history.iter().filter(|&&x| x < bbw_value).count() as f64;
+        100.0 * below / history.len() as f64
+    };
+    let label = if pct <= 5.0 { "SQUEEZE" }
+        else if pct <= 25.0 { "LOW" }
+        else if pct >= 95.0 { "EXPANDED" }
+        else { "NORMAL" };
+    BbwidthSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        length, num_stdev,
+        bbw_value, bbw_prev, bbw_percentile: pct,
+        middle: last_middle, upper: last_upper, lower: last_lower,
+        last_close: sorted[n - 1].close,
+        bbw_label: label.into(), note: String::new(),
+    }
+}
+
+/// Dr. Alexander Elder's Impulse System.
+///
+/// Colour = GREEN when 13-EMA rises AND MACD histogram rises.
+/// RED when 13-EMA falls AND MACD histogram falls.
+/// BLUE (mixed/transition) otherwise.
+/// MACD uses standard 12/26/9 parameters.
+pub fn compute_elder_impulse_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ElderImpulseSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let ema_length = 13usize;
+    let min_bars = 26 + 9 + 2;
+    if n < min_bars {
+        return ElderImpulseSnapshot {
+            symbol: sym, as_of: as_of.into(), ema_length,
+            impulse_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let ema13 = ema_series(&closes, ema_length);
+    let ema12 = ema_series(&closes, 12);
+    let ema26 = ema_series(&closes, 26);
+    let mut macd_line = vec![0.0; n];
+    for i in 0..n { macd_line[i] = ema12[i] - ema26[i]; }
+    let signal = ema_series(&macd_line, 9);
+    let mut hist = vec![0.0; n];
+    for i in 0..n { hist[i] = macd_line[i] - signal[i]; }
+    let ema_value = ema13[n - 1];
+    let ema_prev  = ema13[n - 2];
+    let ema_slope = ema_value - ema_prev;
+    let macd_hist = hist[n - 1];
+    let macd_hist_prev = hist[n - 2];
+    let macd_hist_slope = macd_hist - macd_hist_prev;
+    let label = if ema_slope > 0.0 && macd_hist_slope > 0.0 { "GREEN" }
+        else if ema_slope < 0.0 && macd_hist_slope < 0.0 { "RED" }
+        else { "BLUE" };
+    ElderImpulseSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        ema_length, ema_value, ema_slope,
+        macd_hist, macd_hist_prev, macd_hist_slope,
+        last_close: sorted[n - 1].close,
+        impulse_label: label.into(), note: String::new(),
+    }
+}
+
+/// Roger Altman's Relative Momentum Index.
+///
+/// Like RSI but applied to the N-bar momentum `close − close[−M]` rather
+/// than the 1-bar change. Gain = max(mom, 0); Loss = max(-mom, 0);
+/// Wilder-smoothed with length L; `RMI = 100 − 100/(1 + avg_gain/avg_loss)`.
+pub fn compute_rmi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> RmiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 14usize;
+    let momentum_length = 5usize;
+    let min_bars = length + momentum_length + 2;
+    if n < min_bars {
+        return RmiSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            length, momentum_length,
+            rmi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let mut gains = vec![0.0; n];
+    let mut losses = vec![0.0; n];
+    for i in momentum_length..n {
+        let m = closes[i] - closes[i - momentum_length];
+        if m > 0.0 { gains[i] = m; } else { losses[i] = -m; }
+    }
+    // Wilder smoothing with seed = SMA over first `length` valid obs
+    let mut avg_gain = vec![0.0; n];
+    let mut avg_loss = vec![0.0; n];
+    let seed_end = momentum_length + length - 1;
+    if seed_end >= n {
+        return RmiSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            length, momentum_length,
+            rmi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", seed_end + 2, n),
+            ..Default::default()
+        };
+    }
+    let seed_g: f64 = gains[momentum_length..=seed_end].iter().sum::<f64>() / length as f64;
+    let seed_l: f64 = losses[momentum_length..=seed_end].iter().sum::<f64>() / length as f64;
+    avg_gain[seed_end] = seed_g;
+    avg_loss[seed_end] = seed_l;
+    for i in (seed_end + 1)..n {
+        avg_gain[i] = (avg_gain[i - 1] * (length as f64 - 1.0) + gains[i]) / length as f64;
+        avg_loss[i] = (avg_loss[i - 1] * (length as f64 - 1.0) + losses[i]) / length as f64;
+    }
+    let rmi_of = |i: usize| -> f64 {
+        let g = avg_gain[i];
+        let l = avg_loss[i];
+        if l.abs() < 1e-12 { 100.0 } else {
+            let rs = g / l;
+            100.0 - 100.0 / (1.0 + rs)
+        }
+    };
+    let rmi_value = rmi_of(n - 1);
+    let rmi_prev  = rmi_of(n - 2);
+    let label = if rmi_value >= 70.0 { "OVERBOUGHT" }
+        else if rmi_value <= 30.0 { "OVERSOLD" }
+        else if rmi_value > 50.0 { "BULL" }
+        else if rmi_value < 50.0 { "BEAR" }
+        else { "NEUTRAL" };
+    RmiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        length, momentum_length,
+        rmi_value, rmi_prev,
+        last_close: sorted[n - 1].close,
+        rmi_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -33074,6 +33454,158 @@ pub fn get_pvt(conn: &Connection, symbol: &str) -> Result<Option<PvtSnapshot>, S
         .map_err(|e| format!("prepare get_pvt: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_pvt: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_pvt: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+/// ADR-165 Round 54 schema: AC / CHVOL / BBWIDTH / ELDERIMP / RMI
+pub fn create_research_tables_v55(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v54(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_ac (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ac_updated ON research_ac(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_chvol (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_chvol_updated ON research_chvol(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_bbwidth (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_bbwidth_updated ON research_bbwidth(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_elderimp (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_elderimp_updated ON research_elderimp(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_rmi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_rmi_updated ON research_rmi(updated_at);",
+    ).map_err(|e| format!("create v55 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_ac(conn: &Connection, symbol: &str, snap: &AcSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v55(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ac json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ac(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ac: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ac(conn: &Connection, symbol: &str) -> Result<Option<AcSnapshot>, String> {
+    let _ = create_research_tables_v55(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ac WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_ac: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_ac: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_ac: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_chvol(conn: &Connection, symbol: &str, snap: &ChvolSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v55(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("chvol json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_chvol(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert chvol: {e}"))?;
+    Ok(())
+}
+
+pub fn get_chvol(conn: &Connection, symbol: &str) -> Result<Option<ChvolSnapshot>, String> {
+    let _ = create_research_tables_v55(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_chvol WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_chvol: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_chvol: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_chvol: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_bbwidth(conn: &Connection, symbol: &str, snap: &BbwidthSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v55(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("bbwidth json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_bbwidth(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert bbwidth: {e}"))?;
+    Ok(())
+}
+
+pub fn get_bbwidth(conn: &Connection, symbol: &str) -> Result<Option<BbwidthSnapshot>, String> {
+    let _ = create_research_tables_v55(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_bbwidth WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_bbwidth: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_bbwidth: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_bbwidth: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_elderimp(conn: &Connection, symbol: &str, snap: &ElderImpulseSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v55(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("elderimp json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_elderimp(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert elderimp: {e}"))?;
+    Ok(())
+}
+
+pub fn get_elderimp(conn: &Connection, symbol: &str) -> Result<Option<ElderImpulseSnapshot>, String> {
+    let _ = create_research_tables_v55(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_elderimp WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_elderimp: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_elderimp: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_elderimp: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_rmi(conn: &Connection, symbol: &str, snap: &RmiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v55(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("rmi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_rmi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert rmi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_rmi(conn: &Connection, symbol: &str) -> Result<Option<RmiSnapshot>, String> {
+    let _ = create_research_tables_v55(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_rmi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_rmi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_rmi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_rmi: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -43732,6 +44264,148 @@ Trailing text.
         if snap.pvt_label != "INSUFFICIENT_DATA" {
             assert!(snap.pvt_value.is_finite());
             assert!(snap.pvt_ema.is_finite());
+        }
+    }
+
+    #[test]
+    fn ac_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = AcSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 60,
+            ac_value: 0.42, ac_prev: 0.20,
+            ao_value: 1.15, ao_sma5: 0.73,
+            last_close: 101.2,
+            ac_label: "STRONG_BULL".into(), note: String::new(),
+        };
+        upsert_ac(&conn, "TEST", &snap).unwrap();
+        let got = get_ac(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.ac_label, "STRONG_BULL");
+        assert!((got.ac_value - 0.42).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ac_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ac_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.ac_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.ac_label != "INSUFFICIENT_DATA" {
+            assert!(snap.ac_value.is_finite());
+            assert!(snap.ao_value.is_finite());
+        }
+    }
+
+    #[test]
+    fn chvol_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ChvolSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 60,
+            ema_length: 10, roc_length: 10,
+            chvol_value: 12.5, chvol_prev: 10.0,
+            ema_range: 2.3, last_close: 100.0,
+            chvol_label: "EXPANDING".into(), note: String::new(),
+        };
+        upsert_chvol(&conn, "TEST", &snap).unwrap();
+        let got = get_chvol(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.chvol_label, "EXPANDING");
+        assert!((got.chvol_value - 12.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn chvol_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_chvol_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.chvol_label.as_str(),
+            "EXPANDING" | "CONTRACTING" | "NEUTRAL" | "INSUFFICIENT_DATA"));
+        if snap.chvol_label != "INSUFFICIENT_DATA" {
+            assert!(snap.chvol_value.is_finite());
+            assert!(snap.ema_range >= 0.0);
+        }
+    }
+
+    #[test]
+    fn bbwidth_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = BbwidthSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 130,
+            length: 20, num_stdev: 2.0,
+            bbw_value: 0.08, bbw_prev: 0.12, bbw_percentile: 3.5,
+            middle: 100.0, upper: 104.0, lower: 96.0,
+            last_close: 100.0,
+            bbw_label: "SQUEEZE".into(), note: String::new(),
+        };
+        upsert_bbwidth(&conn, "TEST", &snap).unwrap();
+        let got = get_bbwidth(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.bbw_label, "SQUEEZE");
+        assert!((got.bbw_percentile - 3.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bbwidth_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_bbwidth_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.bbw_label.as_str(),
+            "SQUEEZE" | "LOW" | "NORMAL" | "EXPANDED" | "INSUFFICIENT_DATA"));
+        if snap.bbw_label != "INSUFFICIENT_DATA" {
+            assert!(snap.bbw_value.is_finite());
+            assert!(snap.bbw_value >= 0.0);
+            assert!(snap.bbw_percentile >= 0.0 && snap.bbw_percentile <= 100.0);
+        }
+    }
+
+    #[test]
+    fn elder_impulse_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ElderImpulseSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 50,
+            ema_length: 13, ema_value: 100.5, ema_slope: 0.3,
+            macd_hist: 0.5, macd_hist_prev: 0.2, macd_hist_slope: 0.3,
+            last_close: 101.0,
+            impulse_label: "GREEN".into(), note: String::new(),
+        };
+        upsert_elderimp(&conn, "TEST", &snap).unwrap();
+        let got = get_elderimp(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.impulse_label, "GREEN");
+        assert!((got.ema_slope - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn elder_impulse_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_elder_impulse_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.impulse_label.as_str(),
+            "GREEN" | "RED" | "BLUE" | "INSUFFICIENT_DATA"));
+        if snap.impulse_label != "INSUFFICIENT_DATA" {
+            assert!(snap.ema_value.is_finite());
+            assert!(snap.macd_hist.is_finite());
+        }
+    }
+
+    #[test]
+    fn rmi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = RmiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 40,
+            length: 14, momentum_length: 5,
+            rmi_value: 72.5, rmi_prev: 68.0,
+            last_close: 100.0,
+            rmi_label: "OVERBOUGHT".into(), note: String::new(),
+        };
+        upsert_rmi(&conn, "TEST", &snap).unwrap();
+        let got = get_rmi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.rmi_label, "OVERBOUGHT");
+        assert!((got.rmi_value - 72.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rmi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_rmi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.rmi_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.rmi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.rmi_value.is_finite());
+            assert!(snap.rmi_value >= 0.0 && snap.rmi_value <= 100.0);
         }
     }
 }
