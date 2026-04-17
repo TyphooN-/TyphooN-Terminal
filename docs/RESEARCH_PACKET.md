@@ -3380,7 +3380,99 @@ length (14), rwi_high, rwi_low, last_close. First surface we ship
 that explicitly frames the random-walk null as the threshold.
 Source: ADR-160 RWI window.
 
-#### 2.242 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.242 Double Exponential Moving Average (DEMA — ADR-161)
+
+Pulled from `research::get_dema`. Patrick Mulloy's 1994 Double EMA
+defined as DEMA = 2·EMA(N) − EMA(EMA(N)), length 20. Subtracting the
+lag component of EMA(EMA(N)) — which lags the EMA the same way EMA
+lags price — yields an MA with roughly half the lag of a standard
+EMA(20). First surface we ship in the Mulloy lag-reduction family.
+Header gives **dema_label** (STRONG_BULL >+2% deviation / BULL /
+NEUTRAL / BEAR / STRONG_BEAR <−2% / INSUFFICIENT_DATA for n<42).
+Body reports bars_used, length (20), dema_value, dema_prev,
+deviation_pct, last_close. Complements MCGD (ADR-160, adaptive-by-
+feedback) and KAMA (ADR-151, adaptive-by-efficiency-ratio) on the
+"reduced-lag MA" axis: DEMA reduces lag *algebraically* (subtracting
+the lag term) rather than adaptively. Source: ADR-161 DEMA window.
+
+#### 2.243 Triple Exponential Moving Average (TEMA — ADR-161)
+
+Pulled from `research::get_tema`. Patrick Mulloy's 1994 Triple EMA
+defined as TEMA = 3·EMA(N) − 3·EMA(EMA(N)) + EMA(EMA(EMA(N))),
+length 20. Extends DEMA's algebraic lag cancellation to a third
+order, further reducing the residual lag that DEMA leaves after
+cancelling EMA's first-order lag. Header gives **tema_label**
+(STRONG_BULL >+2% deviation / BULL / NEUTRAL / BEAR / STRONG_BEAR
+<−2% / INSUFFICIENT_DATA for n<63). Body reports bars_used, length
+(20), tema_value, tema_prev, deviation_pct, last_close. Pairs with
+DEMA for the full Mulloy family; TEMA lags less than DEMA at the
+cost of more warm-up bars and slightly more overshoot on sudden
+price shocks. Distinct from TRIX (ADR-154, *rate-of-change* of
+triple EMA) — TEMA is a price level MA, TRIX is an oscillator
+derived from the same triple-EMA chain. Source: ADR-161 TEMA window.
+
+#### 2.244 Linear Regression Channel (LINREG — ADR-161)
+
+Pulled from `research::get_linreg`. OLS linear regression fit
+y = slope·t + intercept over the last N=20 closes, with R²
+coefficient of determination [0, 1] and σ = standard error of
+residuals. Channel bounds at fit_value ± 2σ bracket the fair-value
+envelope under the regression hypothesis. Header gives
+**linreg_label** (STRONG_UP_TREND for slope > 0 and R² ≥ 0.7 /
+UP_TREND for slope > 0 and R² ≥ 0.4 / RANGE for R² < 0.4 /
+DOWN_TREND and STRONG_DOWN_TREND symmetrically / INSUFFICIENT_DATA
+for n<20). Body reports bars_used, length (20), slope, intercept,
+r_squared, sigma, fit_value, channel_upper, channel_lower,
+last_close. First parametric fair-value surface we ship: unlike
+VWAP (volume-weighted mean) or MCGD (adaptive MA), LINREG provides
+an explicit goodness-of-fit score so the AI can discount the
+channel when R² is low. Complements BBSQUEEZE (ADR-151) and
+DONCHIAN (ADR-151) on the channel/envelope axis. Source: ADR-161
+LINREG window.
+
+#### 2.245 Floor-Trader Pivot Points (PIVOTS — ADR-161)
+
+Pulled from `research::get_pivots`. Classic floor-trader daily
+pivot points computed from the prior bar's OHLC: PP = (H+L+C)/3;
+R1 = 2·PP − L; S1 = 2·PP − H; R2 = PP + (H−L); S2 = PP − (H−L).
+The single most-recognised intraday support/resistance framework
+in US equities, traceable back to the Chicago pit floor; still the
+default overlay on Bloomberg, TradingView, and most retail charting
+stacks. Header gives **pivots_label** describing where the current
+close sits relative to the grid (ABOVE_R2 / BETWEEN_R1_R2 /
+BETWEEN_PP_R1 / AT_PP / BETWEEN_S1_PP / BETWEEN_S2_S1 / BELOW_S2 /
+INSUFFICIENT_DATA for n<2). Body reports bars_used, pp, r1, r2, s1,
+s2, prior_high, prior_low, prior_close, last_close. Distinct from
+SUPERTREND (ADR-152, ATR-channel), DONCHIAN (ADR-151, N-bar H/L),
+and BBSQUEEZE (ADR-151, σ-envelope): PIVOTS is a *prior-bar-
+derived fixed grid* — no moving averages, no volatility scaling,
+just the canonical floor-pit arithmetic. Source: ADR-161 PIVOTS
+window.
+
+#### 2.246 Heikin-Ashi Candle (HEIKIN — ADR-161)
+
+Pulled from `research::get_heikin`. Heikin Ashi ("average bar" in
+Japanese) recursive candle transformation: HA_close = (O+H+L+C)/4;
+HA_open = (prior_HA_open + prior_HA_close)/2; HA_high = max(H,
+HA_open, HA_close); HA_low = min(L, HA_open, HA_close). The
+recursive definition smooths noise by partially averaging
+consecutive bars, producing cleaner uninterrupted colour runs than
+raw candles. Particularly effective at filtering single-bar
+reversals that otherwise create false-signal chop. Header gives
+**heikin_label** (STRONG_BULL_RUN for ≥4 consecutive same-colour
+bullish candles / BULL for current bullish candle / DOJI for tiny
+body / BEAR / STRONG_BEAR_RUN symmetrically / INSUFFICIENT_DATA for
+n<2). Body reports bars_used, ha_open, ha_high, ha_low, ha_close,
+body_abs, upper_wick, lower_wick, consecutive_same_color,
+last_close. First sentiment-run-length surface in the packet:
+unlike RUNLEN (ADR-129, *raw-close* run length), HEIKIN measures
+run length after the HA smoothing — which the AI can compare to
+detect raw/smoothed divergence. Note: the chart-type switch
+`HEIKINASHI` remains wired as the canonical chart transform; this
+snapshot is the *numerical* complement shipped into the packet.
+Source: ADR-161 HEIKIN window.
+
+#### 2.247 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -3396,7 +3488,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.243 Sector peer comparison
+#### 2.248 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -3656,13 +3748,46 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~76-148 KB**
-(up from 75-147 KB after ADR-159; ADR-160 adds five optional per-symbol
-blocks — STOCH / MACD / VWAP / MCGD / RWI — each measuring ~2 k/v rows
-and adding ~200-250 bytes when populated, for a typical +1.08 KB per
+symbols. A single S&P 500 symbol now produces a packet around **~77-149 KB**
+(up from 76-148 KB after ADR-160; ADR-161 adds five optional per-symbol
+blocks — DEMA / TEMA / LINREG / PIVOTS / HEIKIN — each measuring ~2 k/v
+rows and adding ~200-250 bytes when populated, for a typical +1.10 KB per
 symbol; all five reuse the existing `research_historical_price` HP cache
 and the standard research-table LAN sync path with zero new API
-dependencies; STOCH computes Lane's 1950s Stochastic Oscillator on raw
+dependencies; DEMA computes Mulloy's 1994 Double EMA = 2·EMA(20) −
+EMA(EMA(20)) with STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR
+labels driven by ±2% deviation thresholds — first algebraic-lag-
+reduction MA in the repo, complementing MCGD's feedback-adaptive and
+KAMA's efficiency-adaptive approaches on a third lag-reduction axis;
+TEMA extends DEMA to triple order = 3·EMA − 3·EMA(EMA) + EMA(EMA(EMA))
+with the same 5-bucket labels — less residual lag than DEMA at the
+cost of more warm-up bars and slightly more overshoot, distinct from
+TRIX (ADR-154) which is an *oscillator derivative* of the same triple-
+EMA chain; LINREG runs OLS regression over last 20 closes providing
+slope, intercept, R² fit quality, σ residual error, and ±2σ channel
+bounds with STRONG_UP_TREND (slope>0 and R²≥0.7) / UP_TREND / RANGE
+(R²<0.4) / DOWN_TREND / STRONG_DOWN_TREND labels — first parametric
+fair-value surface with explicit goodness-of-fit so the AI can
+discount the channel when R² is low; PIVOTS emits classic floor-
+trader arithmetic PP = (H+L+C)/3, R1 = 2PP−L, S1 = 2PP−H, R2 = PP+(H−L),
+S2 = PP−(H−L) computed from the prior bar with ABOVE_R2 / BETWEEN_R1_R2
+/ BETWEEN_PP_R1 / AT_PP / BETWEEN_S1_PP / BETWEEN_S2_S1 / BELOW_S2
+labels — the single most-recognised intraday S/R framework in US
+equities, fixed-grid complement to SUPERTREND's ATR-channel and
+DONCHIAN's N-bar H/L; HEIKIN emits the Heikin-Ashi recursive candle
+transform (HA_close = OHLC/4, HA_open = prior-HA midpoint) with body,
+wick, and consecutive-same-colour run-length diagnostics and
+STRONG_BULL_RUN (≥4 bars) / BULL / DOJI / BEAR / STRONG_BEAR_RUN
+labels — first sentiment-run-length surface ships the *smoothed* run
+complement to RUNLEN's (ADR-129) raw-close run so the AI can detect
+raw/smoothed divergence; note the chart-type switch `HEIKINASHI`
+remains wired as the canonical chart transform while this snapshot is
+the *numerical* complement shipped into the packet; ADR-160 added five
+optional per-symbol blocks — STOCH / MACD / VWAP / MCGD / RWI — each
+measuring ~2 k/v rows and adding ~200-250 bytes when populated, for a
+typical +1.08 KB per symbol; all five reuse the existing
+`research_historical_price` HP cache and the standard research-table
+LAN sync path with zero new API dependencies; STOCH computes Lane's 1950s Stochastic Oscillator on raw
 prices with %K = 100·(close−lowest_low_14)/(highest_high_14−lowest_low_14),
 %D = SMA3, smoothing 3, with OVERBOUGHT (>80) / BULL / NEUTRAL / BEAR /
 OVERSOLD (<20) labels — first raw-price stochastic we ship, distinct from
@@ -4012,7 +4137,7 @@ critical value at 5%; TSI computes the Blau 1991 True Strength Index
 = 100 · EMA₁₃(EMA₂₅(ΔP)) / EMA₁₃(EMA₂₅(|ΔP|)) with a short-EMA signal
 line, providing a double-smoothed momentum oscillator with cleaner
 zero-line behaviour than RSI and less lag than MACD); a 10-symbol
-basket now lands near **730-1450 KB**
+basket now lands near **740-1460 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).

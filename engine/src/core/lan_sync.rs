@@ -420,6 +420,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_vwap",
     "research_mcgd",
     "research_rwi",
+    // ── ADR-161 Round 51 ────────────────────────────
+    "research_dema",
+    "research_tema",
+    "research_linreg",
+    "research_pivots",
+    "research_heikin",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2300,6 +2306,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_dema" => Some(
+            "CREATE TABLE IF NOT EXISTS research_dema (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_tema" => Some(
+            "CREATE TABLE IF NOT EXISTS research_tema (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_linreg" => Some(
+            "CREATE TABLE IF NOT EXISTS research_linreg (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_pivots" => Some(
+            "CREATE TABLE IF NOT EXISTS research_pivots (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_heikin" => Some(
+            "CREATE TABLE IF NOT EXISTS research_heikin (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2584,6 +2625,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_vwap" => Some("updated_at"),
         "research_mcgd" => Some("updated_at"),
         "research_rwi" => Some("updated_at"),
+        // ── ADR-161 Round 51 ──
+        "research_dema" => Some("updated_at"),
+        "research_tema" => Some("updated_at"),
+        "research_linreg" => Some("updated_at"),
+        "research_pivots" => Some("updated_at"),
+        "research_heikin" => Some("updated_at"),
         _ => None,
     }
 }
