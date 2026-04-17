@@ -360,6 +360,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_breuschpagan",
     "research_turnpts",
     "research_periodogram",
+    // ── ADR-150 Round 41 ────────────────────────────
+    "research_mcleodli",
+    "research_oufit",
+    "research_gph",
+    "research_burgspec",
+    "research_kendalltau",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -1883,6 +1889,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-150 Round 41 ──
+        "research_mcleodli" => Some(
+            "CREATE TABLE IF NOT EXISTS research_mcleodli (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_oufit" => Some(
+            "CREATE TABLE IF NOT EXISTS research_oufit (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_gph" => Some(
+            "CREATE TABLE IF NOT EXISTS research_gph (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_burgspec" => Some(
+            "CREATE TABLE IF NOT EXISTS research_burgspec (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_kendalltau" => Some(
+            "CREATE TABLE IF NOT EXISTS research_kendalltau (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2107,6 +2149,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_breuschpagan" => Some("updated_at"),
         "research_turnpts" => Some("updated_at"),
         "research_periodogram" => Some("updated_at"),
+        // ── ADR-150 Round 41 ──
+        "research_mcleodli" => Some("updated_at"),
+        "research_oufit" => Some("updated_at"),
+        "research_gph" => Some("updated_at"),
+        "research_burgspec" => Some("updated_at"),
+        "research_kendalltau" => Some("updated_at"),
         _ => None,
     }
 }

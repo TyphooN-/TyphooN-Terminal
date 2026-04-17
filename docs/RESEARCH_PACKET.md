@@ -110,7 +110,7 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
 emitted in the order the user specified them. A section is composed of up to
-**one hundred and eighty-eight sub-blocks**, each of which is skipped silently when its data
+**one hundred and ninety-three sub-blocks**, each of which is skipped silently when its data
 source is empty.
 
 #### 2.1 Company header + description
@@ -2672,7 +2672,72 @@ DFA/MFDFA/AUTOMI family. Leakage is uncorrected (no windowing); for
 exact peak positioning cross-check with a multitaper estimator.
 Source: ADR-149 PERIODOGRAM window.
 
-#### 2.192 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.192 McLeod-Li Squared-Returns Portmanteau (MCLEODLI — ADR-150)
+
+Pulled from `research::get_mcleodli`. Portmanteau Ljung-Box-style test
+applied to *squared* log-returns (not levels) to detect ARCH effects.
+Q = n(n+2) Σ_k=1..h ρ̂²(k)/(n−k) where ρ̂(k) is the sample autocorrelation
+of r_t² at lag k. Compared against χ²(h), h = max(5, min(10, n/5)). Header
+gives **mcleodli_label** (NO_ARCH p≥0.05 / MILD_ARCH Q<2·critical /
+STRONG_ARCH otherwise / INSUFFICIENT_DATA for n<30). Body reports
+bars_used, lag_h, q_stat, df, critical_95, p_value, reject_null.
+Complements ARCHLM (LM regression) and LJUNGB (portmanteau on levels).
+Source: ADR-150 MCLEODLI window.
+
+#### 2.193 Ornstein-Uhlenbeck Mean-Reversion Fit (OUFIT — ADR-150)
+
+Pulled from `research::get_oufit`. Fits an OLS AR(1) on log-prices
+x_{t+1} = a + b·x_t + ε and derives the continuous-time OU
+parametrization θ = −ln(b), μ = a/(1−b), σ = residual sd, half-life =
+ln(2)/θ. Header gives **oufit_label** (TRENDING θ≤0 / SLOW_REVERT
+HL > n/3 / MODERATE_REVERT HL > n/10 / FAST_REVERT otherwise /
+INSUFFICIENT_DATA for n<30). Body reports bars_used, theta, mu, sigma,
+half_life_bars (∞ when θ≤0), residual_sd, r_squared. First explicit
+SDE-parametrization surface; complements MRHL's implied-half-life view.
+Source: ADR-150 OUFIT window.
+
+#### 2.194 Geweke-Porter-Hudak Long-Memory d̂ (GPH — ADR-150)
+
+Pulled from `research::get_gph`. Semiparametric log-periodogram
+regression for the fractional integration order d. Computes I(λ_j) on
+Fourier frequencies j=1..m where m = floor(n^0.5), then regresses
+ln I(λ_j) on −2 ln|2 sin(λ_j/2)| and extracts d = −slope/2. Reports the
+π²/(24m)-stderr, the t-statistic for H0: d=0, and the two-sided
+p-value. Header gives **gph_label** (ANTIPERSISTENT d<−0.1 /
+SHORT_MEMORY |d|≤0.1 / LONG_MEMORY 0.1<d<0.5 / NONSTATIONARY d≥0.5 /
+INSUFFICIENT_DATA for n<64). Body reports bars_used, m_freqs,
+d_estimate, d_stderr, t_stat, p_value_two_sided. Classical
+semiparametric complement to HURST/DFA/HIGUCHI/MFDFA's fractal-dimension
+angles. Source: ADR-150 GPH window.
+
+#### 2.195 Burg Maximum-Entropy AR Spectrum (BURGSPEC — ADR-150)
+
+Pulled from `research::get_burgspec`. Parametric spectral estimator:
+fits an AR(p) model via the Burg lattice recursion (Marple 1987, §6.6),
+p = min(20, n/4), then evaluates the resulting spectral density on a
+256-point grid over (0, 0.5] and reports the dominant peak. Header
+gives **burgspec_label** (NO_AR_CYCLE peak/mean≤2 / WEAK_AR_CYCLE ≤4 /
+MODERATE_AR_CYCLE ≤8 / STRONG_AR_CYCLE otherwise / INSUFFICIENT_DATA
+for n<32). Body reports bars_used, ar_order, dominant_freq,
+dominant_period_bars, peak_power, mean_power, peak_to_mean_ratio.
+Parametric complement to the non-parametric PERIODOGRAM. Better peak
+resolution on short series at the cost of AR-order sensitivity.
+Source: ADR-150 BURGSPEC window.
+
+#### 2.196 Kendall's Tau Lag-1 Rank Autocorrelation (KENDALLTAU — ADR-150)
+
+Pulled from `research::get_kendalltau`. Non-parametric rank
+autocorrelation on log-returns at lag-1. Pairs (r_i, r_{i+1}) form the
+working series; τ = (C − D) / [m(m−1)/2] where C and D count
+concordant vs discordant index pairs. Asymptotic z-statistic
+τ/sqrt(2(2m+5)/(9m(m−1))). Header gives **kendalltau_label**
+(STRONG_POS τ>0.1 / WEAK_POS >0.03 / NO_RANK_AUTO / WEAK_NEG <−0.03 /
+STRONG_NEG <−0.1 / INSUFFICIENT_DATA for n<30). Body reports
+bars_used, pair_count, concordant, discordant, tau, z_stat,
+p_value_two_sided. Rank-based complement to DURBINWATSON's linear AR(1)
+and RANKAC's Spearman lag. Source: ADR-150 KENDALLTAU window.
+
+#### 2.197 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -2688,7 +2753,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.193 Sector peer comparison
+#### 2.198 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -2719,7 +2784,7 @@ asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
 `INGEST_RESEARCH` command (and any future auto-ingest listener) scans
 model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.192 above.
+articles to the per-symbol bag consumed by sub-block 2.197 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -2948,8 +3013,38 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **65-131 KB**
-(up from 64-129 KB after ADR-146; ADR-147 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **67-134 KB**
+(up from 65-131 KB after ADR-149; ADR-150 adds five optional per-symbol
+blocks — MCLEODLI / OUFIT / GPH / BURGSPEC / KENDALLTAU — each
+measuring ~2 k/v rows and adding ~200-280 bytes when populated, for
+a typical +1.2 KB per symbol; all five reuse the existing
+`research_historical_price` HP cache and the standard research-table
+LAN sync path with zero new API dependencies; MCLEODLI runs the
+McLeod-Li 1983 portmanteau Q = n(n+2) Σ ρ̂²(k)/(n-k) on squared returns
+out to lag h = max(5, min(10, n/5)), compared against χ²(h) — a direct
+ARCH-on-squared-returns diagnostic complementing ARCHLM and LJUNGB with
+NO_ARCH / MILD_ARCH / STRONG_ARCH labels; OUFIT fits an OLS AR(1) on
+log-prices and derives the continuous-time Ornstein-Uhlenbeck
+parametrization θ = −ln(b), μ = a/(1−b), σ = residual sd, half-life =
+ln(2)/θ — the first explicit SDE-parametrization surface, reporting
+TRENDING / SLOW_REVERT / MODERATE_REVERT / FAST_REVERT labels driven
+by the half-life-vs-window ratio; GPH computes the Geweke-Porter-Hudak
+1983 semiparametric log-periodogram regression for the fractional
+integration order d using m = floor(n^0.5) low frequencies, with
+π²/(24m)-stderr t-test against H0: d=0 — the classical semiparametric
+complement to HURST / DFA / HIGUCHI / MFDFA's fractal-dimension angles
+with ANTIPERSISTENT / SHORT_MEMORY / LONG_MEMORY / NONSTATIONARY
+labels; BURGSPEC fits an AR(p) with p = min(20, n/4) via the Burg
+lattice recursion and evaluates the resulting spectral density on a
+256-point grid — the parametric AR-spectrum complement to PERIODOGRAM's
+non-parametric DFT with NO_AR_CYCLE / WEAK_AR_CYCLE / MODERATE_AR_CYCLE
+/ STRONG_AR_CYCLE labels driven by peak-to-mean ratio; KENDALLTAU
+computes the non-parametric Kendall tau lag-1 rank autocorrelation on
+log-returns with asymptotic z-statistic — the rank-based complement to
+DURBINWATSON's linear AR(1) and RANKAC's Spearman lag with STRONG_POS /
+WEAK_POS / NO_RANK_AUTO / WEAK_NEG / STRONG_NEG labels; prior five
+(ADR-149) remain unchanged;
+up from 64-129 KB after ADR-146; ADR-147 adds five optional per-symbol
 blocks — GARCH11 / SADF / CORDIM / SKSPEC / AUTOMI — each
 measuring ~2 k/v rows and adding ~200-500 bytes when populated, for
 a typical +1 KB per symbol and +2 KB worst case; all five reuse the
@@ -3008,7 +3103,7 @@ critical value at 5%; TSI computes the Blau 1991 True Strength Index
 = 100 · EMA₁₃(EMA₂₅(ΔP)) / EMA₁₃(EMA₂₅(|ΔP|)) with a short-EMA signal
 line, providing a double-smoothed momentum oscillator with cleaner
 zero-line behaviour than RSI and less lag than MACD); a 10-symbol
-basket now lands near **650-1310 KB**
+basket now lands near **670-1340 KB**
 when every symbol has a fully populated ingest bag (the global
 context and the Return Path footer are each emitted exactly once,
 so multi-symbol overhead is still bounded by the per-symbol blocks).

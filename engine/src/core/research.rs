@@ -4308,6 +4308,87 @@ pub struct PeriodogramSnapshot {
     pub note: String,
 }
 
+// ── ADR-150 Round 41 surfaces ─────────────────────────────────────────────
+
+/// MCLEODLI — McLeod-Li test (Ljung-Box on squared returns for ARCH effects).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct McLeodLiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub lag_h: usize,               // portmanteau window on squared returns
+    pub q_stat: f64,                // n(n+2) Σ ρ̂²(k)/(n-k) on squared returns
+    pub df: usize,                  // lag_h
+    pub critical_95: f64,           // χ²(df) 95% critical value
+    pub p_value: f64,               // Pr(χ²_df > q_stat)
+    pub reject_null: bool,          // true if q_stat > critical_95
+    pub mcleodli_label: String,     // NO_ARCH / MILD_ARCH / STRONG_ARCH / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// OUFIT — Ornstein-Uhlenbeck mean-reversion fit on log-price.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct OuFitSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub theta: f64,                 // mean-reversion speed (per bar)
+    pub mu: f64,                    // long-run mean log-price
+    pub sigma: f64,                 // diffusion scale (residual sd of discrete fit)
+    pub half_life_bars: f64,        // ln(2) / θ; +∞ if θ ≤ 0
+    pub residual_sd: f64,           // sd of (x_{t+1} − â − b̂·x_t) residuals
+    pub r_squared: f64,             // R² of the AR(1) fit on log-price
+    pub oufit_label: String,        // TRENDING / SLOW_REVERT / MODERATE_REVERT / FAST_REVERT / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// GPH — Geweke-Porter-Hudak log-periodogram long-memory d estimator.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct GphSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub m_freqs: usize,             // truncation m = floor(n^0.5)
+    pub d_estimate: f64,            // fractional integration order
+    pub d_stderr: f64,              // √(π²/24m)
+    pub t_stat: f64,                // d / stderr (H0: d=0)
+    pub p_value_two_sided: f64,
+    pub gph_label: String,          // ANTIPERSISTENT / SHORT_MEMORY / LONG_MEMORY / NONSTATIONARY / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// BURGSPEC — Burg maximum-entropy AR-based spectral estimator.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct BurgSpecSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ar_order: usize,            // p = min(20, n/4)
+    pub dominant_freq: f64,         // cycles per bar at AR-spectrum peak
+    pub dominant_period_bars: f64,  // 1 / dominant_freq
+    pub peak_power: f64,            // AR spectrum at peak
+    pub mean_power: f64,            // mean AR-spectrum density over grid
+    pub peak_to_mean_ratio: f64,    // peak_power / mean_power
+    pub burgspec_label: String,     // NO_AR_CYCLE / WEAK_AR_CYCLE / MODERATE_AR_CYCLE / STRONG_AR_CYCLE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// KENDALLTAU — Kendall's tau lag-1 rank autocorrelation.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct KendallTauSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pair_count: usize,          // n·(n-1)/2
+    pub concordant: usize,
+    pub discordant: usize,
+    pub tau: f64,                   // (C − D) / [n(n−1)/2]
+    pub z_stat: f64,                // τ / √(2(2n+5)/(9n(n−1)))
+    pub p_value_two_sided: f64,
+    pub kendalltau_label: String,   // STRONG_POS / WEAK_POS / NO_RANK_AUTO / WEAK_NEG / STRONG_NEG / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -19878,6 +19959,341 @@ pub fn compute_periodogram_snapshot(
     }
 }
 
+// ── ADR-150 Round 41 computes ─────────────────────────────────────────────
+
+/// MCLEODLI compute: McLeod-Li portmanteau on squared log-returns.
+/// Q = n(n+2) Σ_k=1..h ρ̂²(k) / (n-k), compared against χ²(h).
+pub fn compute_mcleodli_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> McLeodLiSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let n = log_rets.len();
+    if n < 30 {
+        return McLeodLiSnapshot { symbol: sym, as_of: as_of.into(),
+            mcleodli_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥30 returns, got {}", n), ..Default::default() };
+    }
+    let mean_r: f64 = log_rets.iter().sum::<f64>() / n as f64;
+    let sq: Vec<f64> = log_rets.iter().map(|&r| (r - mean_r).powi(2)).collect();
+    let mean_sq: f64 = sq.iter().sum::<f64>() / n as f64;
+    let var_sq: f64 = sq.iter().map(|&s| (s - mean_sq).powi(2)).sum::<f64>() / n as f64;
+    if var_sq <= f64::EPSILON {
+        return McLeodLiSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            mcleodli_label: "INSUFFICIENT_DATA".into(),
+            note: "zero variance of squared returns".into(), ..Default::default() };
+    }
+    let h = (10.min(n / 5)).max(5);
+    let mut q = 0.0f64;
+    for k in 1..=h {
+        let mut num = 0.0f64;
+        for t in k..n {
+            num += (sq[t] - mean_sq) * (sq[t - k] - mean_sq);
+        }
+        let denom = n as f64 * var_sq;
+        let rho_k = num / denom;
+        q += rho_k * rho_k / (n as f64 - k as f64);
+    }
+    q *= n as f64 * (n as f64 + 2.0);
+    let critical_95 = match h {
+        1 => 3.841, 2 => 5.991, 3 => 7.815, 4 => 9.488, 5 => 11.07,
+        6 => 12.592, 7 => 14.067, 8 => 15.507, 9 => 16.919, 10 => 18.307,
+        _ => 18.307 + (h as f64 - 10.0) * 1.4,
+    };
+    let p = chi2_upper_tail(q, h);
+    let reject = q > critical_95;
+    let label = if !reject { "NO_ARCH" }
+        else if q < 2.0 * critical_95 { "MILD_ARCH" }
+        else { "STRONG_ARCH" };
+    McLeodLiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        lag_h: h, q_stat: q, df: h, critical_95, p_value: p, reject_null: reject,
+        mcleodli_label: label.into(), note: String::new(),
+    }
+}
+
+/// OUFIT compute: Ornstein-Uhlenbeck fit via AR(1) on log-price.
+/// x_{t+1} = a + b · x_t + ε  ⇒  θ = −ln(b), μ = a/(1−b), half-life = ln(2)/θ.
+pub fn compute_oufit_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> OuFitSnapshot {
+    let sym = symbol.to_uppercase();
+    let (window, _) = trailing_log_returns(bars);
+    let n = window.len();
+    if n < 30 {
+        return OuFitSnapshot { symbol: sym, as_of: as_of.into(),
+            oufit_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥30 bars, got {}", n), ..Default::default() };
+    }
+    let x: Vec<f64> = window.iter().filter_map(|r| if r.close > 0.0 { Some(r.close.ln()) } else { None }).collect();
+    let m = x.len();
+    if m < 30 {
+        return OuFitSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            oufit_label: "INSUFFICIENT_DATA".into(), note: "need positive closes".into(),
+            ..Default::default() };
+    }
+    // AR(1): y = x[1..], x_lag = x[0..m-1]
+    let nn = m - 1;
+    let mut sx = 0.0f64; let mut sy = 0.0f64;
+    for i in 0..nn { sx += x[i]; sy += x[i + 1]; }
+    let mx = sx / nn as f64; let my = sy / nn as f64;
+    let mut sxx = 0.0f64; let mut sxy = 0.0f64; let mut syy = 0.0f64;
+    for i in 0..nn {
+        let dx = x[i] - mx; let dy = x[i + 1] - my;
+        sxx += dx * dx; sxy += dx * dy; syy += dy * dy;
+    }
+    if sxx <= f64::EPSILON {
+        return OuFitSnapshot { symbol: sym, as_of: as_of.into(), bars_used: m,
+            oufit_label: "INSUFFICIENT_DATA".into(), note: "constant log-price".into(),
+            ..Default::default() };
+    }
+    let b = sxy / sxx;
+    let a = my - b * mx;
+    let r_sq = if syy > f64::EPSILON { (sxy * sxy) / (sxx * syy) } else { 0.0 };
+    let mut ss_res = 0.0f64;
+    for i in 0..nn {
+        let resid = x[i + 1] - (a + b * x[i]);
+        ss_res += resid * resid;
+    }
+    let residual_sd = (ss_res / nn as f64).sqrt();
+    // θ from discrete b: assumes unit time step
+    let (theta, half_life) = if b > 0.0 && b < 1.0 {
+        let th = -b.ln();
+        (th, std::f64::consts::LN_2 / th)
+    } else {
+        (0.0, f64::INFINITY)
+    };
+    let mu = if (1.0 - b).abs() > f64::EPSILON { a / (1.0 - b) } else { mx };
+    let sigma = residual_sd;  // diffusion scale (per unit time)
+    let label = if theta <= 0.0 { "TRENDING" }
+        else {
+            let nf = m as f64;
+            if half_life > nf / 3.0 { "SLOW_REVERT" }
+            else if half_life > nf / 10.0 { "MODERATE_REVERT" }
+            else { "FAST_REVERT" }
+        };
+    OuFitSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: m,
+        theta, mu, sigma, half_life_bars: half_life,
+        residual_sd, r_squared: r_sq,
+        oufit_label: label.into(), note: String::new(),
+    }
+}
+
+/// GPH compute: Geweke-Porter-Hudak log-periodogram long-memory d estimator.
+/// m = floor(n^0.5); regress ln I(λ_j) on −2 ln(2 sin(λ_j/2)) to get d.
+pub fn compute_gph_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> GphSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let n = log_rets.len();
+    if n < 64 {
+        return GphSnapshot { symbol: sym, as_of: as_of.into(),
+            gph_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥64 returns, got {}", n), ..Default::default() };
+    }
+    let mean: f64 = log_rets.iter().sum::<f64>() / n as f64;
+    let x: Vec<f64> = log_rets.iter().map(|&r| r - mean).collect();
+    let m = (n as f64).sqrt().floor() as usize;
+    let m = m.max(4).min(n / 2);
+    let tau = 2.0 * std::f64::consts::PI;
+    // Compute periodogram at Fourier frequencies j = 1..=m
+    let mut xs = Vec::with_capacity(m); // log |2 sin(λ/2)|
+    let mut ys = Vec::with_capacity(m); // ln periodogram
+    for j in 1..=m {
+        let lam = tau * j as f64 / n as f64;
+        let mut re = 0.0f64; let mut im = 0.0f64;
+        for t in 0..n {
+            let theta = lam * t as f64;
+            re += x[t] * theta.cos();
+            im += x[t] * theta.sin();
+        }
+        let p_j = (re * re + im * im) / (tau * n as f64);
+        if p_j <= 0.0 { continue; }
+        let denom = 2.0 * (lam / 2.0).sin();
+        if denom.abs() <= f64::EPSILON { continue; }
+        let reg = (denom.abs()).ln();
+        xs.push(reg);
+        ys.push(p_j.ln());
+    }
+    let k = xs.len();
+    if k < 4 {
+        return GphSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n, m_freqs: k,
+            gph_label: "INSUFFICIENT_DATA".into(), note: "too few usable frequencies".into(),
+            ..Default::default() };
+    }
+    let mx: f64 = xs.iter().sum::<f64>() / k as f64;
+    let my: f64 = ys.iter().sum::<f64>() / k as f64;
+    let mut sxx = 0.0f64; let mut sxy = 0.0f64;
+    for i in 0..k {
+        let dx = xs[i] - mx;
+        sxx += dx * dx;
+        sxy += dx * (ys[i] - my);
+    }
+    if sxx <= f64::EPSILON {
+        return GphSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n, m_freqs: k,
+            gph_label: "INSUFFICIENT_DATA".into(), note: "singular regression".into(),
+            ..Default::default() };
+    }
+    let slope = sxy / sxx;
+    // d = −slope / 2 in the log-periodogram GPH regression
+    let d = -slope * 0.5;
+    let stderr = (std::f64::consts::PI * std::f64::consts::PI / (24.0 * k as f64)).sqrt();
+    let t = if stderr > f64::EPSILON { d / stderr } else { 0.0 };
+    let p = 2.0 * (1.0 - std_normal_cdf(t.abs()));
+    let label = if d >= 0.5 { "NONSTATIONARY" }
+        else if d > 0.1 { "LONG_MEMORY" }
+        else if d >= -0.1 { "SHORT_MEMORY" }
+        else { "ANTIPERSISTENT" };
+    GphSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, m_freqs: k,
+        d_estimate: d, d_stderr: stderr, t_stat: t, p_value_two_sided: p,
+        gph_label: label.into(), note: String::new(),
+    }
+}
+
+/// BURGSPEC compute: Burg maximum-entropy AR spectral estimator.
+/// AR coefficients via Burg recursion; AR spectrum evaluated on a freq grid.
+pub fn compute_burgspec_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> BurgSpecSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let n = log_rets.len();
+    if n < 32 {
+        return BurgSpecSnapshot { symbol: sym, as_of: as_of.into(),
+            burgspec_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥32 returns, got {}", n), ..Default::default() };
+    }
+    let mean: f64 = log_rets.iter().sum::<f64>() / n as f64;
+    let x: Vec<f64> = log_rets.iter().map(|&r| r - mean).collect();
+    let p = (n / 4).min(20).max(2);
+    // Burg recursion (Marple 1987, §6.6).
+    let mut f: Vec<f64> = x.clone();
+    let mut b: Vec<f64> = x.clone();
+    let mut a: Vec<f64> = vec![0.0; p + 1];
+    a[0] = 1.0;
+    let mut e: f64 = x.iter().map(|&v| v * v).sum::<f64>() / n as f64;
+    if e <= f64::EPSILON {
+        return BurgSpecSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n, ar_order: p,
+            burgspec_label: "INSUFFICIENT_DATA".into(), note: "zero variance".into(),
+            ..Default::default() };
+    }
+    for m in 1..=p {
+        let mut num = 0.0f64; let mut den = 0.0f64;
+        for k in m..n {
+            num += f[k] * b[k - 1];
+            den += f[k] * f[k] + b[k - 1] * b[k - 1];
+        }
+        let k_m = if den.abs() > f64::EPSILON { -2.0 * num / den } else { 0.0 };
+        // Update a[0..=m]
+        let mut a_new = a.clone();
+        for j in 1..m {
+            a_new[j] = a[j] + k_m * a[m - j];
+        }
+        a_new[m] = k_m;
+        a = a_new;
+        // Update f, b
+        let f_old = f.clone();
+        for k in (m..n).rev() {
+            f[k] = f_old[k] + k_m * b[k - 1];
+            b[k] = b[k - 1] + k_m * f_old[k];
+        }
+        e *= 1.0 - k_m * k_m;
+        if e <= f64::EPSILON { break; }
+    }
+    // Spectral grid
+    let tau = 2.0 * std::f64::consts::PI;
+    let grid_n = 256usize;
+    let mut peak_f = 0.0f64; let mut peak_p = 0.0f64;
+    let mut sum_p = 0.0f64; let mut count = 0usize;
+    for g in 1..grid_n {
+        let freq = g as f64 / (2.0 * grid_n as f64);  // 0 .. 0.5 (Nyquist)
+        let omega = tau * freq;
+        let mut re = 1.0f64; let mut im = 0.0f64;
+        for j in 1..=p {
+            let theta = omega * j as f64;
+            re += a[j] * theta.cos();
+            im -= a[j] * theta.sin();
+        }
+        let denom = re * re + im * im;
+        if denom <= f64::EPSILON { continue; }
+        let psd = e / denom;
+        if psd > peak_p { peak_p = psd; peak_f = freq; }
+        sum_p += psd;
+        count += 1;
+    }
+    if count == 0 || peak_p <= 0.0 {
+        return BurgSpecSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n, ar_order: p,
+            burgspec_label: "INSUFFICIENT_DATA".into(), note: "degenerate AR spectrum".into(),
+            ..Default::default() };
+    }
+    let mean_p = sum_p / count as f64;
+    let ratio = if mean_p > f64::EPSILON { peak_p / mean_p } else { 0.0 };
+    let period = if peak_f > 0.0 { 1.0 / peak_f } else { 0.0 };
+    let label = if ratio > 8.0 { "STRONG_AR_CYCLE" }
+        else if ratio > 4.0 { "MODERATE_AR_CYCLE" }
+        else if ratio > 2.0 { "WEAK_AR_CYCLE" }
+        else { "NO_AR_CYCLE" };
+    BurgSpecSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, ar_order: p,
+        dominant_freq: peak_f, dominant_period_bars: period,
+        peak_power: peak_p, mean_power: mean_p,
+        peak_to_mean_ratio: ratio,
+        burgspec_label: label.into(), note: String::new(),
+    }
+}
+
+/// KENDALLTAU compute: lag-1 Kendall's tau rank autocorrelation on log-returns.
+/// Pairs (r_t, r_{t+1}); concordant if both coordinates move same direction.
+pub fn compute_kendalltau_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> KendallTauSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let n = log_rets.len();
+    if n < 30 {
+        return KendallTauSnapshot { symbol: sym, as_of: as_of.into(),
+            kendalltau_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥30 returns, got {}", n), ..Default::default() };
+    }
+    // Build lag-1 pairs (a_i, b_i) = (r_i, r_{i+1}) for i=0..n-2.
+    let m = n - 1;
+    let a: Vec<f64> = log_rets[..m].to_vec();
+    let b: Vec<f64> = log_rets[1..].to_vec();
+    let mut c = 0usize; let mut d = 0usize;
+    for i in 0..m {
+        for j in (i + 1)..m {
+            let da = a[j] - a[i]; let db = b[j] - b[i];
+            let s = da * db;
+            if s > 0.0 { c += 1; } else if s < 0.0 { d += 1; }
+        }
+    }
+    let total = m * (m - 1) / 2;
+    if total == 0 {
+        return KendallTauSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            kendalltau_label: "INSUFFICIENT_DATA".into(),
+            note: "too few pairs".into(), ..Default::default() };
+    }
+    let tau = (c as f64 - d as f64) / total as f64;
+    let mf = m as f64;
+    let var_tau = 2.0 * (2.0 * mf + 5.0) / (9.0 * mf * (mf - 1.0));
+    let z = if var_tau > f64::EPSILON { tau / var_tau.sqrt() } else { 0.0 };
+    let p = 2.0 * (1.0 - std_normal_cdf(z.abs()));
+    let label = if tau > 0.1 { "STRONG_POS" }
+        else if tau > 0.03 { "WEAK_POS" }
+        else if tau < -0.1 { "STRONG_NEG" }
+        else if tau < -0.03 { "WEAK_NEG" }
+        else { "NO_RANK_AUTO" };
+    KendallTauSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pair_count: total, concordant: c, discordant: d,
+        tau, z_stat: z, p_value_two_sided: p,
+        kendalltau_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -26005,6 +26421,159 @@ pub fn get_periodogram(conn: &Connection, symbol: &str) -> Result<Option<Periodo
         .map_err(|e| format!("prepare get_periodogram: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_periodogram: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_periodogram: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+/// ADR-150 Round 41 schema v42: adds `research_mcleodli`, `research_oufit`,
+/// `research_gph`, `research_burgspec`, `research_kendalltau`. Additive over v41.
+pub fn create_research_tables_v42(conn: &Connection) -> Result<(), String> {
+    let _ = create_research_tables_v41(conn);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_mcleodli (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_mcleodli_updated ON research_mcleodli(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_oufit (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_oufit_updated ON research_oufit(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_gph (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_gph_updated ON research_gph(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_burgspec (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_burgspec_updated ON research_burgspec(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_kendalltau (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_kendalltau_updated ON research_kendalltau(updated_at);",
+    ).map_err(|e| format!("create v42 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_mcleodli(conn: &Connection, symbol: &str, snap: &McLeodLiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v42(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("mcleodli json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_mcleodli(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert mcleodli: {e}"))?;
+    Ok(())
+}
+
+pub fn get_mcleodli(conn: &Connection, symbol: &str) -> Result<Option<McLeodLiSnapshot>, String> {
+    let _ = create_research_tables_v42(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_mcleodli WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_mcleodli: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_mcleodli: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_mcleodli: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_oufit(conn: &Connection, symbol: &str, snap: &OuFitSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v42(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("oufit json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_oufit(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert oufit: {e}"))?;
+    Ok(())
+}
+
+pub fn get_oufit(conn: &Connection, symbol: &str) -> Result<Option<OuFitSnapshot>, String> {
+    let _ = create_research_tables_v42(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_oufit WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_oufit: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_oufit: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_oufit: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_gph(conn: &Connection, symbol: &str, snap: &GphSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v42(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("gph json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_gph(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert gph: {e}"))?;
+    Ok(())
+}
+
+pub fn get_gph(conn: &Connection, symbol: &str) -> Result<Option<GphSnapshot>, String> {
+    let _ = create_research_tables_v42(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_gph WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_gph: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_gph: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_gph: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_burgspec(conn: &Connection, symbol: &str, snap: &BurgSpecSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v42(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("burgspec json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_burgspec(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert burgspec: {e}"))?;
+    Ok(())
+}
+
+pub fn get_burgspec(conn: &Connection, symbol: &str) -> Result<Option<BurgSpecSnapshot>, String> {
+    let _ = create_research_tables_v42(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_burgspec WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_burgspec: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_burgspec: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_burgspec: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_kendalltau(conn: &Connection, symbol: &str, snap: &KendallTauSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v42(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("kendalltau json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_kendalltau(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert kendalltau: {e}"))?;
+    Ok(())
+}
+
+pub fn get_kendalltau(conn: &Connection, symbol: &str) -> Result<Option<KendallTauSnapshot>, String> {
+    let _ = create_research_tables_v42(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_kendalltau WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_kendalltau: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_kendalltau: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_kendalltau: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -34639,6 +35208,166 @@ Trailing text.
             assert!(snap.dominant_power >= 0.0);
             assert!(snap.total_power > 0.0);
             assert!(snap.dominant_power_ratio >= 0.0 && snap.dominant_power_ratio <= 1.0);
+        }
+    }
+
+    // ── ADR-150 Round 41 tests ──
+
+    #[test]
+    fn mcleodli_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = McLeodLiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 252,
+            lag_h: 10, q_stat: 22.5, df: 10, critical_95: 18.307,
+            p_value: 0.013, reject_null: true,
+            mcleodli_label: "MILD_ARCH".into(), note: String::new(),
+        };
+        upsert_mcleodli(&conn, "TEST", &snap).unwrap();
+        let got = get_mcleodli(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.mcleodli_label, "MILD_ARCH");
+        assert!((got.q_stat - 22.5).abs() < 1e-9);
+        assert_eq!(got.lag_h, 10);
+    }
+
+    #[test]
+    fn mcleodli_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_mcleodli_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.mcleodli_label.as_str(),
+            "NO_ARCH" | "MILD_ARCH" | "STRONG_ARCH" | "INSUFFICIENT_DATA"));
+        if snap.mcleodli_label != "INSUFFICIENT_DATA" {
+            assert!(snap.q_stat.is_finite() && snap.q_stat >= 0.0);
+            assert!(snap.lag_h >= 5);
+            assert!(snap.critical_95 > 0.0);
+            assert!(snap.p_value >= 0.0 && snap.p_value <= 1.0);
+            assert_eq!(snap.df, snap.lag_h);
+        }
+    }
+
+    #[test]
+    fn oufit_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = OuFitSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 252,
+            theta: 0.045, mu: 4.2, sigma: 0.018, half_life_bars: 15.4,
+            residual_sd: 0.018, r_squared: 0.91,
+            oufit_label: "MODERATE_REVERT".into(), note: String::new(),
+        };
+        upsert_oufit(&conn, "TEST", &snap).unwrap();
+        let got = get_oufit(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.oufit_label, "MODERATE_REVERT");
+        assert!((got.theta - 0.045).abs() < 1e-9);
+        assert!((got.half_life_bars - 15.4).abs() < 1e-9);
+    }
+
+    #[test]
+    fn oufit_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_oufit_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.oufit_label.as_str(),
+            "TRENDING" | "SLOW_REVERT" | "MODERATE_REVERT" | "FAST_REVERT" | "INSUFFICIENT_DATA"));
+        if snap.oufit_label != "INSUFFICIENT_DATA" {
+            assert!(snap.theta.is_finite());
+            assert!(snap.mu.is_finite());
+            assert!(snap.sigma.is_finite() && snap.sigma >= 0.0);
+            assert!(snap.residual_sd >= 0.0);
+            assert!(snap.r_squared >= 0.0 && snap.r_squared <= 1.0);
+        }
+    }
+
+    #[test]
+    fn gph_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = GphSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 252,
+            m_freqs: 16, d_estimate: 0.12, d_stderr: 0.09,
+            t_stat: 1.33, p_value_two_sided: 0.18,
+            gph_label: "LONG_MEMORY".into(), note: String::new(),
+        };
+        upsert_gph(&conn, "TEST", &snap).unwrap();
+        let got = get_gph(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.gph_label, "LONG_MEMORY");
+        assert!((got.d_estimate - 0.12).abs() < 1e-9);
+        assert_eq!(got.m_freqs, 16);
+    }
+
+    #[test]
+    fn gph_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_gph_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.gph_label.as_str(),
+            "ANTIPERSISTENT" | "SHORT_MEMORY" | "LONG_MEMORY" | "NONSTATIONARY" | "INSUFFICIENT_DATA"));
+        if snap.gph_label != "INSUFFICIENT_DATA" {
+            assert!(snap.d_estimate.is_finite());
+            assert!(snap.d_stderr > 0.0);
+            assert!(snap.t_stat.is_finite());
+            assert!(snap.p_value_two_sided >= 0.0 && snap.p_value_two_sided <= 1.0);
+            assert!(snap.m_freqs >= 4);
+        }
+    }
+
+    #[test]
+    fn burgspec_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = BurgSpecSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 252,
+            ar_order: 12, dominant_freq: 0.04, dominant_period_bars: 25.0,
+            peak_power: 4.2e-3, mean_power: 1.1e-3, peak_to_mean_ratio: 3.82,
+            burgspec_label: "WEAK_AR_CYCLE".into(), note: String::new(),
+        };
+        upsert_burgspec(&conn, "TEST", &snap).unwrap();
+        let got = get_burgspec(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.burgspec_label, "WEAK_AR_CYCLE");
+        assert_eq!(got.ar_order, 12);
+        assert!((got.dominant_period_bars - 25.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn burgspec_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_burgspec_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.burgspec_label.as_str(),
+            "NO_AR_CYCLE" | "WEAK_AR_CYCLE" | "MODERATE_AR_CYCLE" | "STRONG_AR_CYCLE" | "INSUFFICIENT_DATA"));
+        if snap.burgspec_label != "INSUFFICIENT_DATA" {
+            assert!(snap.ar_order >= 2);
+            assert!(snap.dominant_freq > 0.0);
+            assert!(snap.dominant_period_bars > 0.0);
+            assert!(snap.peak_power >= 0.0);
+            assert!(snap.mean_power > 0.0);
+            assert!(snap.peak_to_mean_ratio >= 0.0);
+        }
+    }
+
+    #[test]
+    fn kendalltau_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = KendallTauSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 252,
+            pair_count: 31626, concordant: 15800, discordant: 15826,
+            tau: -0.0008, z_stat: -0.012, p_value_two_sided: 0.99,
+            kendalltau_label: "NO_RANK_AUTO".into(), note: String::new(),
+        };
+        upsert_kendalltau(&conn, "TEST", &snap).unwrap();
+        let got = get_kendalltau(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.kendalltau_label, "NO_RANK_AUTO");
+        assert_eq!(got.concordant, 15800);
+        assert!((got.tau - -0.0008).abs() < 1e-9);
+    }
+
+    #[test]
+    fn kendalltau_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_kendalltau_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.kendalltau_label.as_str(),
+            "STRONG_POS" | "WEAK_POS" | "NO_RANK_AUTO" | "WEAK_NEG" | "STRONG_NEG" | "INSUFFICIENT_DATA"));
+        if snap.kendalltau_label != "INSUFFICIENT_DATA" {
+            assert!(snap.tau >= -1.0 && snap.tau <= 1.0);
+            let m = snap.bars_used - 1;
+            assert_eq!(snap.pair_count, m * (m - 1) / 2);
+            // ties contribute 0 to C and 0 to D; oscillating fixture has many ties
+            assert!(snap.concordant + snap.discordant <= snap.pair_count);
+            assert!(snap.z_stat.is_finite());
+            assert!(snap.p_value_two_sided >= 0.0 && snap.p_value_two_sided <= 1.0);
         }
     }
 }
