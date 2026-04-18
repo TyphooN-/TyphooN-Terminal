@@ -1088,11 +1088,16 @@ pub async fn scrape_batch(
 }
 
 /// Extract unique stock tickers from Darwinex MT5 cache keys.
-/// Cache keys look like "mt5:CC:SLV:4Hour" — we extract "SLV".
+/// BarCacheWriter's bar key shape is `mt5:{SYM}:{TF}` (e.g. `mt5:SLV:4Hour`
+/// → `SLV`). Metadata rows under `mt5:__NAME__:…` are skipped.
 /// Filters out known currency pairs, indices, and crypto.
 pub fn extract_stock_tickers_from_cache(conn: &Connection) -> Result<Vec<String>, String> {
-    // Only query MT5-sourced keys — Alpaca/Kraken/CryptoCompare keys are separate sources
-    let mut stmt = conn.prepare("SELECT DISTINCT key FROM bar_cache WHERE key LIKE 'mt5:%'")
+    // Bar rows only — the trailing `:__` guard strips metadata
+    // (__SYMBOLS__/__SPECS__/__SERVER__/__HEARTBEAT__) at the SQL level so
+    // the Rust side doesn't need a second filter.
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT key FROM bar_cache WHERE key LIKE 'mt5:%' AND key NOT LIKE 'mt5:\\_\\_%' ESCAPE '\\'"
+    )
         .map_err(|e| format!("Prepare cache keys failed: {e}"))?;
 
     let keys: Vec<String> = stmt.query_map([], |row| row.get(0))
@@ -1118,77 +1123,69 @@ pub fn extract_stock_tickers_from_cache(conn: &Connection) -> Result<Vec<String>
         "LE", "HE", "GF", "DX", "VX"];
 
     for key in &keys {
-        // Parse "mt5:CC:SLV:4Hour" → parts = ["mt5", "CC", "SLV", "4Hour"]
-        let parts: Vec<&str> = key.split(':').collect();
-        if parts.len() >= 3 {
-            let sym = if parts[0] == "mt5" && parts.len() >= 4 {
-                parts[2] // "mt5:CC:SLV:4Hour" → "SLV"
-            } else {
-                parts[1] // "CC:SLV:4Hour" → "SLV"
-            };
+        // `mt5:{SYM}:{TF}` — metadata already stripped at the SQL level.
+        let mut it = key.split(':');
+        let _prefix = match it.next() { Some(p) => p, None => continue };
+        let sym = match it.next() { Some(s) if !s.is_empty() => s, _ => continue };
+        let _tf = match it.next() { Some(s) => s, _ => continue };
+        if it.next().is_some() { continue; } // ignore any stray >3-part rows
 
-            let sym_upper = sym.to_uppercase();
-
-            // Skip internal/meta keys (BarCacheWriter stores __SERVER__, __SPECS__, __SYMBOLS__)
-            if sym.starts_with("__") || sym.starts_with("_") && sym.ends_with("_") {
-                continue;
-            }
-            // Skip forex (pairs like EURUSD, GBPJPY, NZDUSD — any length ending in currency code)
-            if forex_suffixes.iter().any(|s| sym_upper.ends_with(s) && sym_upper.len() >= 5 && sym_upper.len() <= 7) {
-                continue;
-            }
-            // Skip symbols starting with currency code + another currency (AUDCAD, NZDCHF, etc.)
-            let forex_prefixes = ["AUD", "CAD", "CHF", "EUR", "GBP", "JPY", "NZD", "USD", "SEK", "NOK", "TRY", "MXN", "ZAR", "PLN", "HKD", "SGD", "CZK", "HUF"];
-            if forex_prefixes.iter().any(|p| sym_upper.starts_with(p) && sym_upper.len() >= 6 && sym_upper.len() <= 7
-                && forex_suffixes.iter().any(|s| sym_upper.ends_with(s))) {
-                continue;
-            }
-            // Skip crypto — exact match or with USD/USDT suffix
-            if crypto_patterns.iter().any(|c| {
-                sym_upper == *c
-                || sym_upper.starts_with(c) && (sym_upper.ends_with("USD") || sym_upper.ends_with("USDT") || sym_upper.ends_with("BTC") || sym_upper.ends_with("ETH"))
-            }) {
-                continue;
-            }
-            // Skip futures contracts (contain _M, _H, _U, _Z suffixes or known roots with underscore)
-            if futures_suffixes.iter().any(|s| sym_upper.ends_with(s)) {
-                continue;
-            }
-            // Skip known futures root symbols (exact match or with digits)
-            if futures_roots.iter().any(|r| sym_upper == *r || (sym_upper.starts_with(r) && sym_upper.len() <= r.len() + 2 && sym_upper[r.len()..].chars().all(|c| c.is_ascii_digit()))) {
-                continue;
-            }
-            // Skip indices (start with #, ., or are known index names)
-            if sym.starts_with('#') || sym.starts_with('.') {
-                continue;
-            }
-            // Skip symbols with only digits (contract codes)
-            if sym_upper.chars().all(|c| c.is_ascii_digit()) {
-                continue;
-            }
-            // Skip very short symbols (likely not stocks)
-            if sym_upper.len() < 1 {
-                continue;
-            }
-            // Skip CFDs, metals, indices, and non-Yahoo symbols
-            let skip_exact = ["XNGUSD", "XNG", "XAGUSD", "XAUUSD", "XPDUSD", "XPTUSD",
-                "AUS200", "NI225", "SP500", "STOXX50E", "GDAXI", "SPA35", "FCHI40",
-                "FTSE100", "DAX40", "CAC40", "NIKKEI", "HSI", "KOSPI", "MASI",
-                "US30", "US500", "US2000", "USTEC", "JP225", "UK100", "DE40", "FR40",
-                "EU50", "HK50", "CN50", "PAPER", "TPL"];
-            if skip_exact.iter().any(|&s| sym_upper == s) {
-                continue;
-            }
-            // Skip symbols with digits in them (likely indices: AUS200, NI225, etc.)
-            if sym_upper.len() > 3 && sym_upper.chars().any(|c| c.is_ascii_digit()) && !sym_upper.chars().all(|c| c.is_ascii_uppercase()) {
-                // Has mixed letters+digits and is longer than 3 chars — likely an index
-                let letter_count = sym_upper.chars().filter(|c| c.is_ascii_alphabetic()).count();
-                let digit_count = sym_upper.chars().filter(|c| c.is_ascii_digit()).count();
-                if digit_count >= 2 && letter_count >= 2 { continue; } // e.g., AUS200, NI225, SP500
-            }
-
-            symbols.insert(sym_upper);
+        let sym_upper = sym.to_uppercase();
+        // Skip forex (pairs like EURUSD, GBPJPY, NZDUSD — any length ending in currency code)
+        if forex_suffixes.iter().any(|s| sym_upper.ends_with(s) && sym_upper.len() >= 5 && sym_upper.len() <= 7) {
+            continue;
         }
+        // Skip symbols starting with currency code + another currency (AUDCAD, NZDCHF, etc.)
+        let forex_prefixes = ["AUD", "CAD", "CHF", "EUR", "GBP", "JPY", "NZD", "USD", "SEK", "NOK", "TRY", "MXN", "ZAR", "PLN", "HKD", "SGD", "CZK", "HUF"];
+        if forex_prefixes.iter().any(|p| sym_upper.starts_with(p) && sym_upper.len() >= 6 && sym_upper.len() <= 7
+            && forex_suffixes.iter().any(|s| sym_upper.ends_with(s))) {
+            continue;
+        }
+        // Skip crypto — exact match or with USD/USDT suffix
+        if crypto_patterns.iter().any(|c| {
+            sym_upper == *c
+            || sym_upper.starts_with(c) && (sym_upper.ends_with("USD") || sym_upper.ends_with("USDT") || sym_upper.ends_with("BTC") || sym_upper.ends_with("ETH"))
+        }) {
+            continue;
+        }
+        // Skip futures contracts (contain _M, _H, _U, _Z suffixes or known roots with underscore)
+        if futures_suffixes.iter().any(|s| sym_upper.ends_with(s)) {
+            continue;
+        }
+        // Skip known futures root symbols (exact match or with digits)
+        if futures_roots.iter().any(|r| sym_upper == *r || (sym_upper.starts_with(r) && sym_upper.len() <= r.len() + 2 && sym_upper[r.len()..].chars().all(|c| c.is_ascii_digit()))) {
+            continue;
+        }
+        // Skip indices (start with #, ., or are known index names)
+        if sym.starts_with('#') || sym.starts_with('.') {
+            continue;
+        }
+        // Skip symbols with only digits (contract codes)
+        if sym_upper.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        // Skip very short symbols (likely not stocks)
+        if sym_upper.len() < 1 {
+            continue;
+        }
+        // Skip CFDs, metals, indices, and non-Yahoo symbols
+        let skip_exact = ["XNGUSD", "XNG", "XAGUSD", "XAUUSD", "XPDUSD", "XPTUSD",
+            "AUS200", "NI225", "SP500", "STOXX50E", "GDAXI", "SPA35", "FCHI40",
+            "FTSE100", "DAX40", "CAC40", "NIKKEI", "HSI", "KOSPI", "MASI",
+            "US30", "US500", "US2000", "USTEC", "JP225", "UK100", "DE40", "FR40",
+            "EU50", "HK50", "CN50", "PAPER", "TPL"];
+        if skip_exact.iter().any(|&s| sym_upper == s) {
+            continue;
+        }
+        // Skip symbols with digits in them (likely indices: AUS200, NI225, etc.)
+        if sym_upper.len() > 3 && sym_upper.chars().any(|c| c.is_ascii_digit()) && !sym_upper.chars().all(|c| c.is_ascii_uppercase()) {
+            // Has mixed letters+digits and is longer than 3 chars — likely an index
+            let letter_count = sym_upper.chars().filter(|c| c.is_ascii_alphabetic()).count();
+            let digit_count = sym_upper.chars().filter(|c| c.is_ascii_digit()).count();
+            if digit_count >= 2 && letter_count >= 2 { continue; } // e.g., AUS200, NI225, SP500
+        }
+
+        symbols.insert(sym_upper);
     }
 
     let mut sorted: Vec<String> = symbols.into_iter().collect();
