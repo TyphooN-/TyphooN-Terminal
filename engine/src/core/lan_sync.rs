@@ -3386,6 +3386,22 @@ fn export_table_as_json_since(conn: &rusqlite::Connection, table: &str, since_ts
         return Err(format!("Table '{}' not in whitelist", table));
     }
 
+    // Whitelist entries are aspirational — a table is only created on the
+    // server when its producer runs for the first time (e.g. research_news
+    // gets created by the first news scrape, research_macd by the first
+    // indicator export). A client requesting a full table list during the
+    // server's cold-start window used to emit 300+ "no such table" WARN
+    // lines per sync. Check sqlite_master once and treat a missing table
+    // as "0 rows"; the caller already skips empty results.
+    let exists: bool = conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1 LIMIT 1",
+        rusqlite::params![table],
+        |r| r.get::<_, i64>(0),
+    ).map(|_| true).unwrap_or(false);
+    if !exists {
+        return Ok(("[]".to_string(), 0));
+    }
+
     let ts_col = table_timestamp_column(table);
     let use_filter = since_ts > 0 && ts_col.is_some();
     let sql = if let (true, Some(col)) = (use_filter, ts_col) {
