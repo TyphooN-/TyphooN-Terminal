@@ -2,6 +2,38 @@
 //! Provides OHLCV data back to BTC genesis (2010) with 2000 bars per request.
 //! Replaces Kraken OHLC as primary crypto backfill source.
 
+use std::sync::atomic::{AtomicI64, Ordering};
+
+/// Process-wide back-off clock. When CryptoCompare hits a rate limit
+/// (HTTP 429 or in-body "rate limit"/"upgrade" message), this gets set
+/// to `now + RATE_LIMIT_BACKOFF_SECS` and `fetch_ohlcv` short-circuits
+/// until the clock passes. Callers should probe via
+/// `rate_limited_for_secs()` BEFORE dispatching a call so they can
+/// route to an alternate source (Kraken) instead of burning a
+/// round-trip just to re-learn the back-off.
+static RATE_LIMITED_UNTIL_SECS: AtomicI64 = AtomicI64::new(0);
+
+/// How long to sit out after a rate-limit hit. CryptoCompare's free
+/// tier resets on a ~minute cadence but the in-body rate-limit message
+/// often means "you've consumed your hour budget", so a 10 min back-off
+/// avoids ping-ponging while still recovering in the same session.
+const RATE_LIMIT_BACKOFF_SECS: i64 = 10 * 60;
+
+/// Remaining seconds in the CryptoCompare back-off window.
+/// `None` = API is free to call; `Some(s)` = `s` seconds until retry.
+/// Intended for callers that can fall back to another source — they
+/// skip CryptoCompare entirely while in back-off.
+pub fn rate_limited_for_secs() -> Option<i64> {
+    let now = chrono::Utc::now().timestamp();
+    let until = RATE_LIMITED_UNTIL_SECS.load(Ordering::Relaxed);
+    if until > now { Some(until - now) } else { None }
+}
+
+fn mark_rate_limited() {
+    let until = chrono::Utc::now().timestamp().saturating_add(RATE_LIMIT_BACKOFF_SECS);
+    RATE_LIMITED_UNTIL_SECS.store(until, Ordering::Relaxed);
+}
+
 /// Map TyphooN timeframes to CryptoCompare endpoints.
 fn endpoint_for_tf(tf: &str) -> Option<(&'static str, u32)> {
     match tf {
@@ -27,6 +59,17 @@ pub async fn fetch_ohlcv(
     start_ms: i64,
     end_ms: i64,
 ) -> Result<Vec<serde_json::Value>, String> {
+    // Short-circuit during process-wide back-off. Returning immediately
+    // (instead of calling the API and re-paying a 15 s sleep on each TF
+    // × symbol combination) is the whole point of the back-off clock —
+    // the caller is expected to route to Kraken while we're sitting out.
+    if let Some(secs) = rate_limited_for_secs() {
+        return Err(format!(
+            "CryptoCompare in rate-limit back-off ({}s remaining) — caller should use Kraken",
+            secs
+        ));
+    }
+
     // For timeframes without direct support, fetch base TF and aggregate
     let (endpoint, _multiplier) = match endpoint_for_tf(timeframe) {
         Some(e) => e,
@@ -75,26 +118,28 @@ pub async fn fetch_ohlcv(
             endpoint, fsym, to_ts
         );
 
-        // Rate limit handling: wait and retry up to 3 times
-        let mut resp = None;
-        for attempt in 0..3 {
-            match client.get(&url)
-                .timeout(std::time::Duration::from_secs(30))
-                .send().await {
-                Ok(r) => {
-                    if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                        let wait = (attempt + 1) * 10; // 10s, 20s, 30s backoff
-                        tracing::warn!("CryptoCompare rate limited, waiting {}s (attempt {}/3)", wait, attempt + 1);
-                        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
-                        continue;
-                    }
-                    resp = Some(r);
-                    break;
+        // HTTP 429 → arm the process-wide back-off clock and bail.
+        // Previously this retried up to 3× with 10/20/30 s sleeps inside
+        // the call, so N TFs × M symbols paid the penalty repeatedly and
+        // the terminal appeared hung for minutes. Now the first 429
+        // returns immediately; callers check `rate_limited_for_secs()`
+        // up front on the next pass and route to Kraken instead.
+        let resp = match client.get(&url)
+            .timeout(std::time::Duration::from_secs(30))
+            .send().await {
+            Ok(r) => {
+                if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    mark_rate_limited();
+                    tracing::warn!(
+                        "CryptoCompare HTTP 429 — entering {}s back-off; caller should fall back to Kraken",
+                        RATE_LIMIT_BACKOFF_SECS
+                    );
+                    return Err("CryptoCompare rate-limited (HTTP 429)".into());
                 }
-                Err(e) => return Err(format!("CryptoCompare request failed: {e}")),
+                r
             }
-        }
-        let resp = resp.ok_or("CryptoCompare rate limited after 3 retries")?;
+            Err(e) => return Err(format!("CryptoCompare request failed: {e}")),
+        };
 
         if !resp.status().is_success() {
             return Err(format!("CryptoCompare HTTP {}", resp.status()));
@@ -106,9 +151,17 @@ pub async fn fetch_ohlcv(
         if body["Response"].as_str() != Some("Success") {
             let msg = body["Message"].as_str().unwrap_or("unknown");
             if msg.contains("rate limit") || msg.contains("upgrade") {
-                // Wait and break — return what we have so far
-                tracing::warn!("CryptoCompare API rate limit in response body, returning {} bars collected", all_bars.len());
-                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                // Arm the process-wide back-off clock, drop the 15 s
+                // in-call sleep (callers will route to Kraken on the
+                // next pass), and return what we have so far — if
+                // we're mid-pagination we keep the bars already
+                // collected, otherwise an empty Vec signals "fall
+                // back to Kraken".
+                mark_rate_limited();
+                tracing::warn!(
+                    "CryptoCompare rate limit in response body — entering {}s back-off; caller should fall back to Kraken (collected {} bars before the cap)",
+                    RATE_LIMIT_BACKOFF_SECS, all_bars.len()
+                );
                 break;
             }
             return Err(format!("CryptoCompare error: {msg}"));
