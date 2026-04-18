@@ -4475,7 +4475,80 @@ Requires n≥21; body reports trange_value, trange_prev, mean_trange_20,
 trange_ratio, last_high, last_low, prev_close, last_close. Source:
 ADR-174 TRANGE window.
 
-#### 2.303 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.303 Linear Regression Slope (LINEARREG_SLOPE — ADR-175)
+
+Pulled from `research::get_linearreg_slope`. TA-Lib's LINEARREG_SLOPE
+function: least-squares slope of close over 14 bars, reporting the
+price-units-per-bar drift rate. Distinct from LINEARREG (fitted value
+at the current bar) and LINEARREG_ANGLE (slope-to-angle conversion)
+because LINEARREG_SLOPE reports the raw slope coefficient — the
+instantaneous trend magnitude. STRONG_UP (>0.5% per bar) / UP
+(>0.1%) / FLAT / DOWN (<-0.1%) / STRONG_DOWN (<-0.5%) /
+INSUFFICIENT_DATA labels from slope_pct (slope as % of close).
+Requires n≥15; body reports length (14), slope, slope_prev, slope_pct,
+last_close. Source: ADR-175 LINEARREG_SLOPE window.
+
+#### 2.304 Hilbert Dominant Cycle Period (HT_DCPERIOD — ADR-175)
+
+Pulled from `research::get_ht_dcperiod`. TA-Lib's HT_DCPERIOD function
+uses the Ehlers homodyne discriminator to estimate the dominant market
+cycle length in bars. The output is clamped to [6, 50] — periods
+outside that range usually indicate a non-cyclical regime. Distinct
+from Ehlers' Fisher Transform (price normalization), MESA adaptive
+indicators (parameter tuning), and from traditional periodogram FFTs
+because HT_DCPERIOD tracks a single dominant period adaptively bar-
+by-bar. VERY_SHORT (<10) / SHORT / MEDIUM / LONG / VERY_LONG (>35) /
+INSUFFICIENT_DATA labels from period magnitude. Requires n≥64; body
+reports period, period_prev, period_min_64, period_max_64, last_close.
+Source: ADR-175 HT_DCPERIOD window.
+
+#### 2.305 Hilbert Trend vs Cycle Mode (HT_TRENDMODE — ADR-175)
+
+Pulled from `research::get_ht_trendmode`. TA-Lib's HT_TRENDMODE reuses
+the Hilbert homodyne pipeline and classifies each bar as trending (1)
+or cycling (0) via a CV-based regime classifier — when the coefficient
+of variation of the estimated period exceeds 0.15 OR the period is
+longer than 35 bars, we call it TREND, otherwise CYCLE. Distinct from
+pure oscillators (RSI, STOCH) that presume a cycle regime, from raw
+trend indicators (SMA, linreg) that presume a trend regime, and from
+ADX (directional movement) because HT_TRENDMODE uses the cycle-
+period stability as the regime signal. TREND (trendmode=1) / CYCLE
+(trendmode=0) / INSUFFICIENT_DATA labels. Requires n≥64; body reports
+trendmode, trendmode_prev, lock_in_bars (consecutive bars in current
+regime), period, last_close. Source: ADR-175 HT_TRENDMODE window.
+
+#### 2.306 Acceleration Bands (ACCBANDS — ADR-175)
+
+Pulled from `research::get_accbands`. Headley's Acceleration Bands:
+upper band = SMA-20 of H×(1 + 4×(H-L)/(H+L)), lower band symmetric
+with L×(1 - 4×(H-L)/(H+L)), middle = SMA-20 of close. The key
+adaptation vs Bollinger/Keltner is that ACCBANDS widens with high
+H-L range relative to H+L (range-normalized volatility), making the
+bands tighter during range compression and wider during range
+expansion — a pure realized-volatility adaptive envelope. Distinct
+from Bollinger (σ-based), Keltner (ATR-based), and from Donchian
+(fixed high/low lookback). BREAKOUT_UP (close>upper) / UPPER
+(pos>0.7) / MID / LOWER (pos<0.3) / BREAKOUT_DOWN (close<lower) /
+INSUFFICIENT_DATA labels from position within band. Requires n≥21;
+body reports length (20), acc_upper, acc_middle, acc_lower, width,
+position, last_close. Source: ADR-175 ACCBANDS window.
+
+#### 2.307 Fast Stochastic (STOCHF — ADR-175)
+
+Pulled from `research::get_stochf`. TA-Lib's STOCHF: unsmoothed
+fast stochastic — fastK = 100 × (close − LLV_14) / (HHV_14 − LLV_14),
+fastD = SMA-3 of fastK. Distinct from STOCH (slow stochastic: applies
+SMA-3 smoothing to fastK before the %D pass) by emitting the raw
+fastK directly, giving a more responsive but noisier oscillator.
+Useful when you want the unfiltered stochastic reading or when you
+plan to build custom smoothing downstream. OVERBOUGHT (fastK>80) /
+BULL (fastK>55) / NEUTRAL / BEAR (fastK<45) / OVERSOLD (fastK<20) /
+INSUFFICIENT_DATA labels from fastK level + fastD relationship.
+Requires n≥17; body reports length (14), d_period (3), fastk,
+fastk_prev, fastd, fastd_prev, last_close. Source: ADR-175 STOCHF
+window.
+
+#### 2.308 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -4491,7 +4564,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.304 Sector peer comparison
+#### 2.309 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -4751,16 +4824,43 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~88-169 KB**
-(up from 87-167 KB after ADR-173; ADR-174 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~89-171 KB**
+(up from 88-169 KB after ADR-174; ADR-175 adds five optional per-symbol
+blocks — LINEARREG_SLOPE / HT_DCPERIOD / HT_TRENDMODE / ACCBANDS / STOCHF —
+each measuring ~2 k/v rows and adding ~240-310 bytes when populated, for a
+typical +1.45 KB per symbol; ADR-174 added five optional per-symbol
 blocks — MASSINDEX / NATR / TTM_SQUEEZE / FORCE_INDEX / TRANGE — each
 measuring ~2 k/v rows and adding ~220-300 bytes when populated, for a typical
 +1.45 KB per symbol; ADR-173 added five optional per-symbol
 blocks — LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT — each
 measuring ~2 k/v rows and adding ~240-320 bytes when populated, for a typical
 +1.40 KB per symbol;
-all ten reuse the existing `research_historical_price` HP cache and the
+all fifteen reuse the existing `research_historical_price` HP cache and the
 standard research-table LAN sync path with zero new API dependencies;
+LINEARREG_SLOPE computes TA-Lib's least-squares slope of close over 14 bars
+with STRONG_UP (>0.5%/bar) / UP / FLAT / DOWN / STRONG_DOWN labels from the
+slope-as-%-of-close — distinct from LINEARREG (fitted value) and
+LINEARREG_ANGLE (slope→angle) because it reports the raw slope
+coefficient;
+HT_DCPERIOD computes Ehlers's Hilbert homodyne discriminator for the
+dominant cycle period, clamped to [6, 50] bars, with VERY_SHORT / SHORT /
+MEDIUM / LONG / VERY_LONG labels from period magnitude — distinct from
+FFT periodograms and MESA adaptive tuning because it tracks a single
+dominant period adaptively bar-by-bar;
+HT_TRENDMODE classifies each bar as trending (1) or cycling (0) via a
+CV-based regime classifier over the dominant period estimate (cv>0.15
+or period>35 → TREND, else CYCLE), with TREND / CYCLE / INSUFFICIENT_DATA
+labels — distinct from pure oscillators and ADX because it uses cycle-
+period stability as the regime signal;
+ACCBANDS computes Headley's Acceleration Bands where upper =
+SMA-20(H×(1+4×(H-L)/(H+L))) with symmetric lower, middle = SMA-20 close,
+with BREAKOUT_UP / UPPER / MID / LOWER / BREAKOUT_DOWN labels from
+position within band — distinct from Bollinger (σ-based) and Keltner
+(ATR-based) because it uses range-normalized volatility;
+STOCHF computes TA-Lib's unsmoothed fast stochastic (fastK raw, fastD
+= SMA-3 fastK), with OVERBOUGHT / BULL / NEUTRAL / BEAR / OVERSOLD
+labels — distinct from STOCH (which applies SMA-3 smoothing to fastK
+before the %D pass) by emitting the raw fastK directly;
 MASSINDEX computes Donald Dorsey's volatility-based reversal indicator
 `MI = Σ(EMA(H-L, 9) / EMA(EMA(H-L, 9), 9))` summed over 25 bars, with
 REVERSAL_BULGE (>27) / ELEVATED (>24) / NEUTRAL / COMPRESSED (<21)

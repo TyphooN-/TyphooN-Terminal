@@ -6569,6 +6569,117 @@ pub struct TrangeSnapshot {
     pub note: String,
 }
 
+/// Linear Regression Slope (LINEARREG_SLOPE) — TA-Lib's linreg slope
+/// function: the least-squares slope of an N-bar linear regression
+/// on close prices, in price-units-per-bar. Distinct from TSF (value
+/// of linear regression line at the current bar, ADR-140) and from
+/// LINEARREG (the regression line value) because this emits just
+/// the slope coefficient β. A positive slope indicates trending up;
+/// the magnitude captures the rate of trend acceleration.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct LinearregSlopeSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub slope: f64,                    // price/bar
+    pub slope_prev: f64,
+    pub slope_pct: f64,                // slope / last_close × 100 (bar-pct)
+    pub last_close: f64,
+    pub slope_label: String,           // STRONG_UP / UP / FLAT / DOWN / STRONG_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Hilbert Dominant Cycle Period (HT_DCPERIOD) — Ehlers's Hilbert-
+/// transform homodyne discriminator applied to close prices to
+/// detect the dominant cycle period in bars. Distinct from HT_TRENDLINE
+/// (ADR-173) which uses the period to drive a WMA smoother, and from
+/// MESA_SINE / MAMA which use the period for adaptive α rescaling.
+/// This snapshot emits just the detected period itself — useful for
+/// choosing adaptive parameters on other indicators, or for regime
+/// detection where cycle-length dynamics matter.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct HtDcperiodSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: f64,                   // dominant cycle in bars (smoothed)
+    pub period_prev: f64,
+    pub period_min_64: f64,            // min over last 64 bars
+    pub period_max_64: f64,            // max over last 64 bars
+    pub last_close: f64,
+    pub period_label: String,          // VERY_SHORT / SHORT / MEDIUM / LONG / VERY_LONG / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Hilbert Trend-vs-Cycle Mode (HT_TRENDMODE) — Ehlers's regime
+/// classifier derived from the dominant cycle period and discriminator
+/// stability: 0 = cycle mode (mean-reverting), 1 = trend mode
+/// (directional). Paired with a "lock-in" duration counter showing how
+/// many bars the current regime has persisted. Distinct from HT_DCPERIOD
+/// which emits the period itself — this emits the binary regime flag.
+/// Useful for enabling/disabling mean-reversion vs trend-following
+/// strategies in real time.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct HtTrendmodeSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub trendmode: i32,                // 0 or 1
+    pub trendmode_prev: i32,
+    pub lock_in_bars: usize,           // how many bars in current mode
+    pub period: f64,                   // concurrent detected period
+    pub last_close: f64,
+    pub mode_label: String,            // TREND / CYCLE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Acceleration Bands (ACCBANDS) — Price Headley's ACCBANDS:
+/// `acc_upper = H × (1 + 4×(H−L)/(H+L))`, `acc_lower = L × (1 − 4×(H−L)/(H+L))`,
+/// each SMA-smoothed over N=20 periods. The bands are a price-envelope
+/// that expands with volatility relative to price level. Breakouts
+/// outside the bands signal trend strength. Distinct from Bollinger
+/// (σ-based), Keltner (ATR-based), and Donchian (HHV/LLV) because
+/// ACCBANDS scales by the range-to-midprice ratio.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AccbandsSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 20
+    pub acc_upper: f64,
+    pub acc_middle: f64,               // SMA of close
+    pub acc_lower: f64,
+    pub width: f64,                    // (upper - lower) / middle
+    pub position: f64,                 // (close - lower) / (upper - lower), [0,1]
+    pub last_close: f64,
+    pub accbands_label: String,        // BREAKOUT_UP / UPPER / MID / LOWER / BREAKOUT_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Fast Stochastic (STOCHF) — TA-Lib's STOCHF: the unsmoothed
+/// stochastic oscillator pair (%K, %D) without the inner 3-bar
+/// smoothing of slow STOCH. `%K = 100 × (C − LLV(N)) / (HHV(N) − LLV(N))`
+/// with N=14, and %D = SMA(%K, 3). Distinct from STOCH (ADR-110 slow
+/// stochastic with inner smoothing applied), STOCHRSI (ADR-137 applied
+/// to RSI), and SMI (ADR-140 scaled MIDPRICE). Faster, noisier, more
+/// responsive to immediate price action.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct StochfSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub d_period: usize,               // 3
+    pub fastk: f64,                    // 0..100
+    pub fastk_prev: f64,
+    pub fastd: f64,                    // SMA(fastk, 3)
+    pub fastd_prev: f64,
+    pub last_close: f64,
+    pub stochf_label: String,          // OVERBOUGHT / BULL / NEUTRAL / BEAR / OVERSOLD / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -28652,6 +28763,294 @@ pub fn compute_trange_snapshot(
     }
 }
 
+pub fn compute_linearreg_slope_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> LinearregSlopeSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length: usize = 14;
+    if n < length + 1 {
+        return LinearregSlopeSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            slope_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 1, n),
+            ..Default::default()
+        };
+    }
+    let slope_at = |end: usize| -> f64 {
+        let start = end + 1 - length;
+        let n_f = length as f64;
+        let mut sx = 0.0_f64; let mut sy = 0.0_f64;
+        let mut sxy = 0.0_f64; let mut sxx = 0.0_f64;
+        for i in 0..length {
+            let x = i as f64;
+            let y = sorted[start + i].close;
+            sx += x; sy += y; sxy += x * y; sxx += x * x;
+        }
+        let denom = n_f * sxx - sx * sx;
+        if denom.abs() > 1e-12 { (n_f * sxy - sx * sy) / denom } else { 0.0 }
+    };
+    let slope = slope_at(n - 1);
+    let slope_prev = slope_at(n - 2);
+    let last_close = sorted[n - 1].close;
+    let slope_pct = if last_close.abs() > 1e-12 { 100.0 * slope / last_close } else { 0.0 };
+    let label = if slope_pct > 0.5 { "STRONG_UP" }
+        else if slope_pct > 0.1 { "UP" }
+        else if slope_pct < -0.5 { "STRONG_DOWN" }
+        else if slope_pct < -0.1 { "DOWN" }
+        else { "FLAT" };
+    LinearregSlopeSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        slope, slope_prev, slope_pct, last_close,
+        slope_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_ht_dcperiod_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> HtDcperiodSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 64 {
+        return HtDcperiodSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            period_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥64 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    // Ehlers Hilbert-transform homodyne discriminator — simplified.
+    let mut smooth = vec![0.0_f64; n];
+    for i in 3..n {
+        smooth[i] = (4.0 * sorted[i].close + 3.0 * sorted[i - 1].close
+            + 2.0 * sorted[i - 2].close + sorted[i - 3].close) / 10.0;
+    }
+    let mut detrender = vec![0.0_f64; n];
+    let mut period = vec![0.0_f64; n];
+    let mut q1 = vec![0.0_f64; n]; let mut i1 = vec![0.0_f64; n];
+    let mut ji = vec![0.0_f64; n]; let mut jq = vec![0.0_f64; n];
+    let mut i2 = vec![0.0_f64; n]; let mut q2 = vec![0.0_f64; n];
+    let mut re = vec![0.0_f64; n]; let mut im = vec![0.0_f64; n];
+    for i in 6..n {
+        let prev_period = if i > 0 { period[i - 1] } else { 0.0 };
+        let mult = 0.075 * prev_period + 0.54;
+        detrender[i] = (0.0962 * smooth[i] + 0.5769 * smooth[i - 2]
+            - 0.5769 * smooth[i - 4] - 0.0962 * smooth[i - 6]) * mult;
+        q1[i] = (0.0962 * detrender[i] + 0.5769 * detrender[i - 2]
+            - 0.5769 * detrender[i - 4] - 0.0962 * detrender[i - 6]) * mult;
+        i1[i] = detrender[i - 3];
+        ji[i] = (0.0962 * i1[i] + 0.5769 * i1[i - 2]
+            - 0.5769 * i1[i - 4] - 0.0962 * i1[i - 6]) * mult;
+        jq[i] = (0.0962 * q1[i] + 0.5769 * q1[i - 2]
+            - 0.5769 * q1[i - 4] - 0.0962 * q1[i - 6]) * mult;
+        i2[i] = i1[i] - jq[i];
+        q2[i] = q1[i] + ji[i];
+        i2[i] = 0.2 * i2[i] + 0.8 * i2[i - 1];
+        q2[i] = 0.2 * q2[i] + 0.8 * q2[i - 1];
+        re[i] = i2[i] * i2[i - 1] + q2[i] * q2[i - 1];
+        im[i] = i2[i] * q2[i - 1] - q2[i] * i2[i - 1];
+        re[i] = 0.2 * re[i] + 0.8 * re[i - 1];
+        im[i] = 0.2 * im[i] + 0.8 * im[i - 1];
+        let mut p = if im[i].abs() > 1e-12 && re[i].abs() > 1e-12 {
+            360.0 / (im[i] / re[i]).atan().to_degrees()
+        } else { prev_period };
+        if p.is_nan() || p.is_infinite() { p = prev_period; }
+        if p > 1.5 * prev_period && prev_period > 0.0 { p = 1.5 * prev_period; }
+        if p < 0.67 * prev_period && prev_period > 0.0 { p = 0.67 * prev_period; }
+        if p < 6.0 { p = 6.0; }
+        if p > 50.0 { p = 50.0; }
+        period[i] = 0.2 * p + 0.8 * prev_period;
+    }
+    let per = period[n - 1];
+    let per_prev = period[n - 2];
+    let start = n.saturating_sub(64);
+    let p_slice = &period[start..n];
+    let p_min = p_slice.iter().cloned().fold(f64::INFINITY, f64::min);
+    let p_max = p_slice.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let label = if per > 40.0 { "VERY_LONG" }
+        else if per > 25.0 { "LONG" }
+        else if per > 15.0 { "MEDIUM" }
+        else if per > 8.0 { "SHORT" }
+        else { "VERY_SHORT" };
+    HtDcperiodSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        period: per, period_prev: per_prev,
+        period_min_64: p_min, period_max_64: p_max,
+        last_close: sorted[n - 1].close,
+        period_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_ht_trendmode_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> HtTrendmodeSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 64 {
+        return HtTrendmodeSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            mode_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥64 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    // Reuse the HT_DCPERIOD pipeline (simplified) to get a period
+    // series, then classify trend vs cycle based on recent period stability.
+    let mut smooth = vec![0.0_f64; n];
+    for i in 3..n {
+        smooth[i] = (4.0 * sorted[i].close + 3.0 * sorted[i - 1].close
+            + 2.0 * sorted[i - 2].close + sorted[i - 3].close) / 10.0;
+    }
+    let mut period = vec![0.0_f64; n];
+    let mut detrender = vec![0.0_f64; n];
+    let mut q1 = vec![0.0_f64; n]; let mut i1 = vec![0.0_f64; n];
+    let mut ji = vec![0.0_f64; n]; let mut jq = vec![0.0_f64; n];
+    let mut i2 = vec![0.0_f64; n]; let mut q2 = vec![0.0_f64; n];
+    let mut re = vec![0.0_f64; n]; let mut im = vec![0.0_f64; n];
+    for i in 6..n {
+        let prev_period = if i > 0 { period[i - 1] } else { 0.0 };
+        let mult = 0.075 * prev_period + 0.54;
+        detrender[i] = (0.0962 * smooth[i] + 0.5769 * smooth[i - 2]
+            - 0.5769 * smooth[i - 4] - 0.0962 * smooth[i - 6]) * mult;
+        q1[i] = (0.0962 * detrender[i] + 0.5769 * detrender[i - 2]
+            - 0.5769 * detrender[i - 4] - 0.0962 * detrender[i - 6]) * mult;
+        i1[i] = detrender[i - 3];
+        ji[i] = (0.0962 * i1[i] + 0.5769 * i1[i - 2]
+            - 0.5769 * i1[i - 4] - 0.0962 * i1[i - 6]) * mult;
+        jq[i] = (0.0962 * q1[i] + 0.5769 * q1[i - 2]
+            - 0.5769 * q1[i - 4] - 0.0962 * q1[i - 6]) * mult;
+        i2[i] = 0.2 * (i1[i] - jq[i]) + 0.8 * i2[i - 1];
+        q2[i] = 0.2 * (q1[i] + ji[i]) + 0.8 * q2[i - 1];
+        re[i] = 0.2 * (i2[i] * i2[i - 1] + q2[i] * q2[i - 1]) + 0.8 * re[i - 1];
+        im[i] = 0.2 * (i2[i] * q2[i - 1] - q2[i] * i2[i - 1]) + 0.8 * im[i - 1];
+        let mut p = if im[i].abs() > 1e-12 && re[i].abs() > 1e-12 {
+            360.0 / (im[i] / re[i]).atan().to_degrees()
+        } else { prev_period };
+        if p.is_nan() || p.is_infinite() { p = prev_period; }
+        if p > 1.5 * prev_period && prev_period > 0.0 { p = 1.5 * prev_period; }
+        if p < 0.67 * prev_period && prev_period > 0.0 { p = 0.67 * prev_period; }
+        if p < 6.0 { p = 6.0; }
+        if p > 50.0 { p = 50.0; }
+        period[i] = 0.2 * p + 0.8 * prev_period;
+    }
+    // Trendmode classifier: compare recent period variance vs mean.
+    // Stable period → cycle mode. Erratic or long/accelerating → trend mode.
+    let mut trendmode = vec![0_i32; n];
+    for i in 20..n {
+        let slice = &period[i - 20..=i];
+        let mean = slice.iter().sum::<f64>() / slice.len() as f64;
+        let var = slice.iter().map(|p| (p - mean).powi(2)).sum::<f64>() / slice.len() as f64;
+        let cv = if mean > 1e-12 { var.sqrt() / mean } else { 0.0 };
+        trendmode[i] = if cv > 0.15 || period[i] > 35.0 { 1 } else { 0 };
+    }
+    let mode_now = trendmode[n - 1];
+    let mode_prev = trendmode[n - 2];
+    let mut lock_in = 1_usize;
+    for i in (0..n - 1).rev() {
+        if trendmode[i] == mode_now { lock_in += 1; } else { break; }
+    }
+    let label = match mode_now { 1 => "TREND", _ => "CYCLE" };
+    HtTrendmodeSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        trendmode: mode_now, trendmode_prev: mode_prev, lock_in_bars: lock_in,
+        period: period[n - 1],
+        last_close: sorted[n - 1].close,
+        mode_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_accbands_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AccbandsSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length: usize = 20;
+    if n < length {
+        return AccbandsSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            accbands_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length, n),
+            ..Default::default()
+        };
+    }
+    let mut sum_up = 0.0_f64; let mut sum_mid = 0.0_f64; let mut sum_lo = 0.0_f64;
+    for i in (n - length)..n {
+        let h = sorted[i].high; let l = sorted[i].low;
+        let span = if (h + l).abs() > 1e-12 { 4.0 * (h - l) / (h + l) } else { 0.0 };
+        sum_up += h * (1.0 + span);
+        sum_mid += sorted[i].close;
+        sum_lo += l * (1.0 - span);
+    }
+    let n_f = length as f64;
+    let upper = sum_up / n_f; let middle = sum_mid / n_f; let lower = sum_lo / n_f;
+    let width = if middle.abs() > 1e-12 { (upper - lower) / middle } else { 0.0 };
+    let close = sorted[n - 1].close;
+    let pos = if (upper - lower).abs() > 1e-12 { (close - lower) / (upper - lower) } else { 0.5 };
+    let label = if close > upper { "BREAKOUT_UP" }
+        else if close < lower { "BREAKOUT_DOWN" }
+        else if pos > 0.66 { "UPPER" }
+        else if pos < 0.34 { "LOWER" }
+        else { "MID" };
+    AccbandsSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        acc_upper: upper, acc_middle: middle, acc_lower: lower,
+        width, position: pos, last_close: close,
+        accbands_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_stochf_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> StochfSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length: usize = 14;
+    let d_period: usize = 3;
+    let need = length + d_period + 1;
+    if n < need {
+        return StochfSnapshot {
+            symbol: sym, as_of: as_of.into(), length, d_period,
+            stochf_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", need, n),
+            ..Default::default()
+        };
+    }
+    let fastk_at = |end: usize| -> f64 {
+        let start = end + 1 - length;
+        let mut hh = f64::NEG_INFINITY; let mut ll = f64::INFINITY;
+        for i in start..=end {
+            if sorted[i].high > hh { hh = sorted[i].high; }
+            if sorted[i].low < ll { ll = sorted[i].low; }
+        }
+        if (hh - ll).abs() > 1e-12 { 100.0 * (sorted[end].close - ll) / (hh - ll) } else { 50.0 }
+    };
+    let fastk = fastk_at(n - 1);
+    let fastk_prev = fastk_at(n - 2);
+    let fastd: f64 = (0..d_period).map(|k| fastk_at(n - 1 - k)).sum::<f64>() / d_period as f64;
+    let fastd_prev: f64 = (0..d_period).map(|k| fastk_at(n - 2 - k)).sum::<f64>() / d_period as f64;
+    let label = if fastk > 80.0 { "OVERBOUGHT" }
+        else if fastk > 60.0 { "BULL" }
+        else if fastk < 20.0 { "OVERSOLD" }
+        else if fastk < 40.0 { "BEAR" }
+        else { "NEUTRAL" };
+    StochfSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length, d_period,
+        fastk, fastk_prev, fastd, fastd_prev,
+        last_close: sorted[n - 1].close,
+        stochf_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -37945,6 +38344,167 @@ pub fn create_research_tables_v64(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_research_trange_updated ON research_trange(updated_at);",
     ).map_err(|e| format!("create v64 tables: {e}"))?;
     Ok(())
+}
+
+pub fn create_research_tables_v65(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v64(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_linearreg_slope (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_linearreg_slope_updated ON research_linearreg_slope(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_ht_dcperiod (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ht_dcperiod_updated ON research_ht_dcperiod(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_ht_trendmode (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ht_trendmode_updated ON research_ht_trendmode(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_accbands (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_accbands_updated ON research_accbands(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_stochf (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_stochf_updated ON research_stochf(updated_at);",
+    ).map_err(|e| format!("create v65 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_linearreg_slope(conn: &Connection, symbol: &str, snap: &LinearregSlopeSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v65(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("linearreg_slope json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_linearreg_slope (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert linearreg_slope: {e}"))?;
+    Ok(())
+}
+
+pub fn get_linearreg_slope(conn: &Connection, symbol: &str) -> Result<Option<LinearregSlopeSnapshot>, String> {
+    let _ = create_research_tables_v65(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_linearreg_slope WHERE symbol = ?1")
+        .map_err(|e| format!("prep linearreg_slope: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query linearreg_slope: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row linearreg_slope: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get linearreg_slope: {e}"))?;
+        let snap: LinearregSlopeSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse linearreg_slope: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ht_dcperiod(conn: &Connection, symbol: &str, snap: &HtDcperiodSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v65(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ht_dcperiod json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ht_dcperiod (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ht_dcperiod: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ht_dcperiod(conn: &Connection, symbol: &str) -> Result<Option<HtDcperiodSnapshot>, String> {
+    let _ = create_research_tables_v65(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ht_dcperiod WHERE symbol = ?1")
+        .map_err(|e| format!("prep ht_dcperiod: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query ht_dcperiod: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row ht_dcperiod: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get ht_dcperiod: {e}"))?;
+        let snap: HtDcperiodSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse ht_dcperiod: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ht_trendmode(conn: &Connection, symbol: &str, snap: &HtTrendmodeSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v65(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ht_trendmode json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ht_trendmode (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ht_trendmode: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ht_trendmode(conn: &Connection, symbol: &str) -> Result<Option<HtTrendmodeSnapshot>, String> {
+    let _ = create_research_tables_v65(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ht_trendmode WHERE symbol = ?1")
+        .map_err(|e| format!("prep ht_trendmode: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query ht_trendmode: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row ht_trendmode: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get ht_trendmode: {e}"))?;
+        let snap: HtTrendmodeSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse ht_trendmode: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_accbands(conn: &Connection, symbol: &str, snap: &AccbandsSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v65(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("accbands json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_accbands (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert accbands: {e}"))?;
+    Ok(())
+}
+
+pub fn get_accbands(conn: &Connection, symbol: &str) -> Result<Option<AccbandsSnapshot>, String> {
+    let _ = create_research_tables_v65(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_accbands WHERE symbol = ?1")
+        .map_err(|e| format!("prep accbands: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query accbands: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row accbands: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get accbands: {e}"))?;
+        let snap: AccbandsSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse accbands: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_stochf(conn: &Connection, symbol: &str, snap: &StochfSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v65(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("stochf json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_stochf (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert stochf: {e}"))?;
+    Ok(())
+}
+
+pub fn get_stochf(conn: &Connection, symbol: &str) -> Result<Option<StochfSnapshot>, String> {
+    let _ = create_research_tables_v65(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_stochf WHERE symbol = ?1")
+        .map_err(|e| format!("prep stochf: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query stochf: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row stochf: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get stochf: {e}"))?;
+        let snap: StochfSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse stochf: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
 }
 
 pub fn upsert_mass_index(conn: &Connection, symbol: &str, snap: &MassIndexSnapshot) -> Result<(), String> {
@@ -50395,6 +50955,140 @@ Trailing text.
         if snap.trange_label != "INSUFFICIENT_DATA" {
             assert!(snap.trange_value >= 0.0);
             assert!(snap.mean_trange_20 >= 0.0);
+        }
+    }
+
+    // ── ADR-175 Round 63 tests ──
+
+    #[test]
+    fn linearreg_slope_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = LinearregSlopeSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 50,
+            length: 14, slope: 0.25, slope_prev: 0.22, slope_pct: 0.25,
+            last_close: 100.0, slope_label: "UP".into(), note: String::new(),
+        };
+        upsert_linearreg_slope(&conn, "TEST", &snap).unwrap();
+        let got = get_linearreg_slope(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.slope_label, "UP");
+        assert!((got.slope - 0.25).abs() < 1e-6);
+        assert_eq!(got.length, 14);
+    }
+
+    #[test]
+    fn linearreg_slope_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_linearreg_slope_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.slope_label.as_str(),
+            "STRONG_UP" | "UP" | "FLAT" | "DOWN" | "STRONG_DOWN" | "INSUFFICIENT_DATA"));
+    }
+
+    #[test]
+    fn ht_dcperiod_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = HtDcperiodSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 120,
+            period: 18.5, period_prev: 18.2,
+            period_min_64: 12.0, period_max_64: 24.0,
+            last_close: 100.0, period_label: "MEDIUM".into(), note: String::new(),
+        };
+        upsert_ht_dcperiod(&conn, "TEST", &snap).unwrap();
+        let got = get_ht_dcperiod(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.period_label, "MEDIUM");
+        assert!((got.period - 18.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ht_dcperiod_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ht_dcperiod_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.period_label.as_str(),
+            "VERY_SHORT" | "SHORT" | "MEDIUM" | "LONG" | "VERY_LONG" | "INSUFFICIENT_DATA"));
+        if snap.period_label != "INSUFFICIENT_DATA" {
+            assert!(snap.period >= 6.0 && snap.period <= 50.0);
+        }
+    }
+
+    #[test]
+    fn ht_trendmode_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = HtTrendmodeSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 120,
+            trendmode: 1, trendmode_prev: 0, lock_in_bars: 5,
+            period: 25.0, last_close: 100.0,
+            mode_label: "TREND".into(), note: String::new(),
+        };
+        upsert_ht_trendmode(&conn, "TEST", &snap).unwrap();
+        let got = get_ht_trendmode(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.mode_label, "TREND");
+        assert_eq!(got.trendmode, 1);
+        assert_eq!(got.lock_in_bars, 5);
+    }
+
+    #[test]
+    fn ht_trendmode_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ht_trendmode_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.mode_label.as_str(),
+            "TREND" | "CYCLE" | "INSUFFICIENT_DATA"));
+        if snap.mode_label != "INSUFFICIENT_DATA" {
+            assert!(snap.trendmode == 0 || snap.trendmode == 1);
+            assert!(snap.lock_in_bars >= 1);
+        }
+    }
+
+    #[test]
+    fn accbands_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = AccbandsSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 40,
+            length: 20, acc_upper: 105.0, acc_middle: 100.0, acc_lower: 95.0,
+            width: 0.10, position: 0.60, last_close: 101.0,
+            accbands_label: "UPPER".into(), note: String::new(),
+        };
+        upsert_accbands(&conn, "TEST", &snap).unwrap();
+        let got = get_accbands(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.accbands_label, "UPPER");
+        assert!((got.acc_upper - 105.0).abs() < 1e-6);
+        assert_eq!(got.length, 20);
+    }
+
+    #[test]
+    fn accbands_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_accbands_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.accbands_label.as_str(),
+            "BREAKOUT_UP" | "UPPER" | "MID" | "LOWER" | "BREAKOUT_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.accbands_label != "INSUFFICIENT_DATA" {
+            assert!(snap.acc_upper >= snap.acc_lower);
+        }
+    }
+
+    #[test]
+    fn stochf_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = StochfSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 30,
+            length: 14, d_period: 3, fastk: 75.0, fastk_prev: 72.0,
+            fastd: 73.0, fastd_prev: 70.0, last_close: 100.0,
+            stochf_label: "BULL".into(), note: String::new(),
+        };
+        upsert_stochf(&conn, "TEST", &snap).unwrap();
+        let got = get_stochf(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.stochf_label, "BULL");
+        assert!((got.fastk - 75.0).abs() < 1e-6);
+        assert_eq!(got.length, 14);
+    }
+
+    #[test]
+    fn stochf_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_stochf_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.stochf_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.stochf_label != "INSUFFICIENT_DATA" {
+            assert!(snap.fastk >= 0.0 && snap.fastk <= 100.0);
+            assert!(snap.fastd >= 0.0 && snap.fastd <= 100.0);
         }
     }
 }
