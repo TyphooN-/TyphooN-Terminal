@@ -1331,9 +1331,23 @@ impl SqliteCache {
             .query(params![key_pattern])
             .map_err(|e| format!("Query heartbeat failed: {e}"))?;
         if let Some(row) = rows.next().map_err(|e| format!("Row next failed: {e}"))? {
-            let blob: Vec<u8> = row.get(0).map_err(|e| format!("Heartbeat blob get failed: {e}"))?;
+            // SQLite uses dynamic typing: BCW's DatabaseBind(stmt, col, string)
+            // stores the JSON with TEXT affinity even though bar_cache.data is
+            // declared BLOB. rusqlite refuses to implicitly coerce TEXT→Vec<u8>,
+            // so `row.get::<_, Vec<u8>>(0)` errors with "Invalid column type
+            // Text at index 0". Read via ValueRef and handle both so we're
+            // robust to however the EA ended up binding the value.
+            use rusqlite::types::ValueRef;
+            let json = match row.get_ref(0).map_err(|e| format!("Heartbeat col 0 ref failed: {e}"))? {
+                ValueRef::Text(bytes) => std::str::from_utf8(bytes)
+                    .map_err(|e| format!("Heartbeat TEXT not UTF-8: {e}"))?
+                    .to_string(),
+                ValueRef::Blob(bytes) => std::str::from_utf8(bytes)
+                    .map_err(|e| format!("Heartbeat BLOB not UTF-8: {e}"))?
+                    .to_string(),
+                other => return Err(format!("Heartbeat unexpected column type: {:?}", other.data_type())),
+            };
             let ts: i64 = row.get(1).map_err(|e| format!("Heartbeat ts get failed: {e}"))?;
-            let json = String::from_utf8(blob).map_err(|e| format!("Heartbeat not UTF-8: {e}"))?;
             Ok(Some((json, ts)))
         } else {
             Ok(None)
