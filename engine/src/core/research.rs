@@ -6315,6 +6315,135 @@ pub struct IbsSnapshot {
     pub note: String,
 }
 
+// ── ADR-173 Round 61 — LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT ──
+
+/// Ehlers Laguerre RSI — a bounded [0, 1] oscillator built from
+/// Ehlers's 4-stage Laguerre filter (γ=0.5). The 4-stage filter
+/// smooths the close and produces L0, L1, L2, L3 intermediate
+/// outputs; the Laguerre RSI is then computed from the count of
+/// upward differences vs total differences across the stages,
+/// yielding a cleaner oscillator than classic RSI with no
+/// divergence false signals near extremes. Distinct from RSI
+/// (Wilder smoothing of gains/losses, ADR-108), STOCHRSI (ADR-137),
+/// CRSI (Connors, ADR-167), QQE (ADR-169), and IFT_RSI (ADR-170).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct LaguerreRsiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub gamma: f64,                    // 0.5
+    pub l0: f64,
+    pub l1: f64,
+    pub l2: f64,
+    pub l3: f64,
+    pub laguerre_rsi: f64,             // [0, 1]
+    pub laguerre_rsi_prev: f64,
+    pub last_close: f64,
+    pub lrsi_label: String,            // OVERBOUGHT / BULL / NEUTRAL / BEAR / OVERSOLD / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// ZigZag pattern detector — reports the most recent confirmed
+/// swing high and swing low using a fixed percentage threshold
+/// (default 5%). A new pivot forms when price reverses by at least
+/// threshold_pct from the prior extreme. The snapshot emits the
+/// last high pivot (value + bars_ago), the last low pivot, the
+/// active leg direction (UP/DOWN), and the projected reversal
+/// level. Distinct from FRACTALS (ADR-170, Bill Williams 5-bar
+/// strict peaks) and from PIVOTS (ADR-161, prior-session math),
+/// which use fundamentally different construction — ZigZag is a
+/// %-threshold reversal detector.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ZigzagSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub threshold_pct: f64,            // 5.0 (percent)
+    pub last_high_value: f64,
+    pub last_high_bars_ago: usize,
+    pub last_low_value: f64,
+    pub last_low_bars_ago: usize,
+    pub current_leg: String,           // UP / DOWN / INSUFFICIENT_DATA
+    pub reversal_level: f64,           // threshold from active extreme
+    pub last_close: f64,
+    pub zigzag_label: String,          // UP_LEG / DOWN_LEG / AT_REVERSAL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Mark Johnson's Pretty Good Oscillator (PGO) — measures the
+/// distance of the current close from an N-period SMA expressed
+/// in multiples of the N-period ATR:
+/// `pgo = (close − SMA(close, N)) / EMA(TR, N)` with N=14. Extreme
+/// readings of ±3 were found to be rare and persistent, making
+/// PGO a trend-following signal rather than mean-reversion — the
+/// "pretty good" name reflects Johnson's empirical observation that
+/// it filters noise better than raw ROC. Distinct from ROC
+/// (unscaled price change), PPO (percentage-scaled MACD, ADR-115),
+/// and RSI/STOCH (bounded oscillators) because PGO's scaling is by
+/// volatility, not percent.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PgoSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub sma_value: f64,
+    pub atr_value: f64,                // EMA of TR over N
+    pub pgo_value: f64,                // (close - sma) / atr
+    pub pgo_prev: f64,
+    pub last_close: f64,
+    pub pgo_label: String,             // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Hilbert Transform Instantaneous Trendline (HT_TRENDLINE) — a
+/// smoothed trendline based on the dominant cycle period derived
+/// from Ehlers's Hilbert-transform homodyne discriminator. Unlike
+/// MAMA (ADR-170) which outputs an adaptive MA proper,
+/// HT_TRENDLINE reports the `trendline = WMA(close, period)` over
+/// the detected cycle period — a lag-matched smoother that
+/// follows the dominant trend without the adaptive α rescaling.
+/// Distinct from MAMA (adaptive α), FRAMA (ADR-172 fractal-
+/// dimension α), and every fixed-length smoother.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct HtTrendlineSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: f64,                   // detected dominant cycle
+    pub trendline_value: f64,
+    pub trendline_prev: f64,
+    pub spread: f64,                   // close - trendline
+    pub spread_pct: f64,
+    pub last_close: f64,
+    pub ht_label: String,              // BULL / WEAK_BULL / NEUTRAL / WEAK_BEAR / BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Midpoint of N — `midpoint = (HHV(N) + LLV(N)) / 2` emitting
+/// the midpoint of the N-bar range along with the HHV, LLV, and
+/// the close's position within the range. N=14. TA-Lib's MIDPOINT
+/// function; useful as a simple anchor for detecting where price
+/// sits relative to the most recent trading range. Distinct from
+/// Donchian channel (ADR-151, raw HHV/LLV bands), from SMA, and
+/// from pivot systems (ADR-161) because it uses only HHV+LLV
+/// extremes rather than OHLC4 or session math.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MidpointSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub hhv: f64,
+    pub llv: f64,
+    pub midpoint: f64,                 // (HHV + LLV) / 2
+    pub midpoint_prev: f64,
+    pub close_position: f64,           // (close - LLV) / (HHV - LLV), bounded [0, 1]
+    pub last_close: f64,
+    pub midpoint_label: String,        // UPPER / NEAR_UPPER / MIDRANGE / NEAR_LOWER / LOWER / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -27851,6 +27980,298 @@ pub fn compute_ibs_snapshot(
     }
 }
 
+// ── ADR-173 Round 61 compute fns ──────────────────────────────────────────
+
+pub fn compute_laguerre_rsi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> LaguerreRsiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 20 {
+        return LaguerreRsiSnapshot {
+            symbol: sym, as_of: as_of.into(), gamma: 0.5,
+            lrsi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥20 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let gamma = 0.5_f64;
+    let mut l0 = 0.0_f64; let mut l1 = 0.0_f64;
+    let mut l2 = 0.0_f64; let mut l3 = 0.0_f64;
+    let mut lrsi_prev = 0.5_f64;
+    let mut lrsi = 0.5_f64;
+    for i in 0..n {
+        let price = sorted[i].close;
+        let l0_new = (1.0 - gamma) * price + gamma * l0;
+        let l1_new = -gamma * l0_new + l0 + gamma * l1;
+        let l2_new = -gamma * l1_new + l1 + gamma * l2;
+        let l3_new = -gamma * l2_new + l2 + gamma * l3;
+        let mut cu = 0.0_f64; let mut cd = 0.0_f64;
+        if l0_new >= l1_new { cu += l0_new - l1_new; } else { cd += l1_new - l0_new; }
+        if l1_new >= l2_new { cu += l1_new - l2_new; } else { cd += l2_new - l1_new; }
+        if l2_new >= l3_new { cu += l2_new - l3_new; } else { cd += l3_new - l2_new; }
+        lrsi_prev = lrsi;
+        lrsi = if cu + cd > 1e-12 { cu / (cu + cd) } else { 0.5 };
+        l0 = l0_new; l1 = l1_new; l2 = l2_new; l3 = l3_new;
+    }
+    let label = if lrsi > 0.85 { "OVERBOUGHT" }
+        else if lrsi > 0.60 { "BULL" }
+        else if lrsi < 0.15 { "OVERSOLD" }
+        else if lrsi < 0.40 { "BEAR" }
+        else { "NEUTRAL" };
+    LaguerreRsiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        gamma, l0, l1, l2, l3,
+        laguerre_rsi: lrsi, laguerre_rsi_prev: lrsi_prev,
+        last_close: sorted[n - 1].close,
+        lrsi_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_zigzag_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ZigzagSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 10 {
+        return ZigzagSnapshot {
+            symbol: sym, as_of: as_of.into(), threshold_pct: 5.0,
+            current_leg: "INSUFFICIENT_DATA".into(),
+            zigzag_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥10 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let threshold_pct = 5.0_f64;
+    let threshold = threshold_pct / 100.0;
+    let mut pivot_high_val = sorted[0].high;
+    let mut pivot_high_idx: usize = 0;
+    let mut pivot_low_val = sorted[0].low;
+    let mut pivot_low_idx: usize = 0;
+    let mut leg: &str = "UP";
+    for i in 1..n {
+        let bar = sorted[i];
+        if leg == "UP" {
+            if bar.high > pivot_high_val { pivot_high_val = bar.high; pivot_high_idx = i; }
+            if (pivot_high_val - bar.low) / pivot_high_val >= threshold {
+                leg = "DOWN";
+                pivot_low_val = bar.low;
+                pivot_low_idx = i;
+            }
+        } else {
+            if bar.low < pivot_low_val { pivot_low_val = bar.low; pivot_low_idx = i; }
+            if (bar.high - pivot_low_val) / pivot_low_val >= threshold {
+                leg = "UP";
+                pivot_high_val = bar.high;
+                pivot_high_idx = i;
+            }
+        }
+    }
+    let last_high_bars_ago = n - 1 - pivot_high_idx;
+    let last_low_bars_ago = n - 1 - pivot_low_idx;
+    let reversal_level = if leg == "UP" {
+        pivot_high_val * (1.0 - threshold)
+    } else {
+        pivot_low_val * (1.0 + threshold)
+    };
+    let last_close = sorted[n - 1].close;
+    let near_rev = (last_close - reversal_level).abs() / reversal_level < 0.01;
+    let label = if near_rev { "AT_REVERSAL" }
+        else if leg == "UP" { "UP_LEG" }
+        else { "DOWN_LEG" };
+    ZigzagSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, threshold_pct,
+        last_high_value: pivot_high_val, last_high_bars_ago,
+        last_low_value: pivot_low_val, last_low_bars_ago,
+        current_leg: leg.into(), reversal_level, last_close,
+        zigzag_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_pgo_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PgoSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 14usize;
+    if n < length + 2 {
+        return PgoSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            pgo_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 2, n),
+            ..Default::default()
+        };
+    }
+    let sma_at = |end_idx: usize| -> f64 {
+        let mut s = 0.0_f64;
+        for k in 0..length { s += sorted[end_idx - k].close; }
+        s / length as f64
+    };
+    let tr = |i: usize| -> f64 {
+        if i == 0 { sorted[0].high - sorted[0].low }
+        else {
+            let h = sorted[i].high; let l = sorted[i].low; let pc = sorted[i - 1].close;
+            (h - l).max((h - pc).abs()).max((l - pc).abs())
+        }
+    };
+    let alpha = 2.0 / (length as f64 + 1.0);
+    let mut ema_tr = {
+        let mut s = 0.0_f64;
+        for k in 0..length { s += tr(k); }
+        s / length as f64
+    };
+    for i in length..n {
+        ema_tr = alpha * tr(i) + (1.0 - alpha) * ema_tr;
+    }
+    let sma_now = sma_at(n - 1);
+    let sma_prev = sma_at(n - 2);
+    let pgo = if ema_tr > 1e-12 { (sorted[n - 1].close - sma_now) / ema_tr } else { 0.0 };
+    let mut ema_tr_prev = {
+        let mut s = 0.0_f64;
+        for k in 0..length { s += tr(k); }
+        s / length as f64
+    };
+    for i in length..n - 1 {
+        ema_tr_prev = alpha * tr(i) + (1.0 - alpha) * ema_tr_prev;
+    }
+    let pgo_prev = if ema_tr_prev > 1e-12 { (sorted[n - 2].close - sma_prev) / ema_tr_prev } else { 0.0 };
+    let label = if pgo > 3.0 { "STRONG_BULL" }
+        else if pgo > 1.0 { "BULL" }
+        else if pgo < -3.0 { "STRONG_BEAR" }
+        else if pgo < -1.0 { "BEAR" }
+        else { "NEUTRAL" };
+    PgoSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        sma_value: sma_now, atr_value: ema_tr,
+        pgo_value: pgo, pgo_prev,
+        last_close: sorted[n - 1].close,
+        pgo_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_ht_trendline_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> HtTrendlineSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 64 {
+        return HtTrendlineSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            ht_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥64 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let mut smooth = vec![0.0_f64; n];
+    for i in 3..n {
+        smooth[i] = (4.0 * closes[i] + 3.0 * closes[i - 1]
+            + 2.0 * closes[i - 2] + closes[i - 3]) / 10.0;
+    }
+    let detrender = |i: usize, src: &[f64]| -> f64 {
+        if i < 6 { return 0.0; }
+        (0.0962 * src[i] + 0.5769 * src[i - 2]
+            - 0.5769 * src[i - 4] - 0.0962 * src[i - 6]) * 0.85
+    };
+    let mut dt = vec![0.0_f64; n];
+    for i in 6..n { dt[i] = detrender(i, &smooth); }
+    let mut q = vec![0.0_f64; n];
+    let mut i_sig = vec![0.0_f64; n];
+    for i in 6..n {
+        q[i] = detrender(i, &dt);
+        i_sig[i] = if i >= 3 { dt[i - 3] } else { 0.0 };
+    }
+    let mut period = 20.0_f64;
+    for i in 32..n {
+        let re = i_sig[i] * i_sig[i - 1] + q[i] * q[i - 1];
+        let im = i_sig[i] * q[i - 1] - q[i] * i_sig[i - 1];
+        let p = if re.abs() > 1e-12 { 2.0 * std::f64::consts::PI / (im / re).atan() } else { period };
+        period = p.abs().clamp(6.0, 50.0);
+    }
+    let period_usize = period.round() as usize;
+    let mut num = 0.0_f64; let mut den = 0.0_f64;
+    for k in 0..period_usize.min(n) {
+        let w = (period_usize - k) as f64;
+        num += closes[n - 1 - k] * w;
+        den += w;
+    }
+    let trendline = num / den;
+    let mut num_p = 0.0_f64; let mut den_p = 0.0_f64;
+    for k in 0..period_usize.min(n - 1) {
+        let w = (period_usize - k) as f64;
+        num_p += closes[n - 2 - k] * w;
+        den_p += w;
+    }
+    let trendline_prev = num_p / den_p;
+    let close = closes[n - 1];
+    let spread = close - trendline;
+    let spread_pct = if trendline.abs() > 1e-12 { spread / trendline } else { 0.0 };
+    let label = if spread_pct > 0.02 { "BULL" }
+        else if spread_pct > 0.005 { "WEAK_BULL" }
+        else if spread_pct < -0.02 { "BEAR" }
+        else if spread_pct < -0.005 { "WEAK_BEAR" }
+        else { "NEUTRAL" };
+    HtTrendlineSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        period, trendline_value: trendline, trendline_prev,
+        spread, spread_pct, last_close: close,
+        ht_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_midpoint_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MidpointSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 14usize;
+    if n < length + 1 {
+        return MidpointSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            midpoint_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 1, n),
+            ..Default::default()
+        };
+    }
+    let hhv_llv = |end_idx: usize| -> (f64, f64) {
+        let mut hi = f64::NEG_INFINITY; let mut lo = f64::INFINITY;
+        for k in 0..length {
+            let b = sorted[end_idx - k];
+            if b.high > hi { hi = b.high; }
+            if b.low < lo { lo = b.low; }
+        }
+        (hi, lo)
+    };
+    let (hhv, llv) = hhv_llv(n - 1);
+    let (hhv_p, llv_p) = hhv_llv(n - 2);
+    let midpoint = (hhv + llv) / 2.0;
+    let midpoint_prev = (hhv_p + llv_p) / 2.0;
+    let rng = hhv - llv;
+    let close = sorted[n - 1].close;
+    let pos = if rng.abs() > 1e-12 { ((close - llv) / rng).clamp(0.0, 1.0) } else { 0.5 };
+    let label = if pos > 0.85 { "UPPER" }
+        else if pos > 0.60 { "NEAR_UPPER" }
+        else if pos < 0.15 { "LOWER" }
+        else if pos < 0.40 { "NEAR_LOWER" }
+        else { "MIDRANGE" };
+    MidpointSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        hhv, llv, midpoint, midpoint_prev, close_position: pos,
+        last_close: close,
+        midpoint_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -37062,6 +37483,167 @@ pub fn create_research_tables_v62(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_research_ibs_updated ON research_ibs(updated_at);",
     ).map_err(|e| format!("create v62 tables: {e}"))?;
     Ok(())
+}
+
+pub fn create_research_tables_v63(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v62(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_laguerre_rsi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_laguerre_rsi_updated ON research_laguerre_rsi(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_zigzag (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_zigzag_updated ON research_zigzag(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_pgo (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_pgo_updated ON research_pgo(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_ht_trendline (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ht_trendline_updated ON research_ht_trendline(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_midpoint (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_midpoint_updated ON research_midpoint(updated_at);",
+    ).map_err(|e| format!("create v63 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_laguerre_rsi(conn: &Connection, symbol: &str, snap: &LaguerreRsiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v63(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("laguerre_rsi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_laguerre_rsi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert laguerre_rsi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_laguerre_rsi(conn: &Connection, symbol: &str) -> Result<Option<LaguerreRsiSnapshot>, String> {
+    let _ = create_research_tables_v63(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_laguerre_rsi WHERE symbol = ?1")
+        .map_err(|e| format!("prep laguerre_rsi: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query laguerre_rsi: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row laguerre_rsi: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get laguerre_rsi: {e}"))?;
+        let snap: LaguerreRsiSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse laguerre_rsi: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_zigzag(conn: &Connection, symbol: &str, snap: &ZigzagSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v63(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("zigzag json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_zigzag(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert zigzag: {e}"))?;
+    Ok(())
+}
+
+pub fn get_zigzag(conn: &Connection, symbol: &str) -> Result<Option<ZigzagSnapshot>, String> {
+    let _ = create_research_tables_v63(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_zigzag WHERE symbol = ?1")
+        .map_err(|e| format!("prep zigzag: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query zigzag: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row zigzag: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get zigzag: {e}"))?;
+        let snap: ZigzagSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse zigzag: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_pgo(conn: &Connection, symbol: &str, snap: &PgoSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v63(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("pgo json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_pgo(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert pgo: {e}"))?;
+    Ok(())
+}
+
+pub fn get_pgo(conn: &Connection, symbol: &str) -> Result<Option<PgoSnapshot>, String> {
+    let _ = create_research_tables_v63(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_pgo WHERE symbol = ?1")
+        .map_err(|e| format!("prep pgo: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query pgo: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row pgo: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get pgo: {e}"))?;
+        let snap: PgoSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse pgo: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ht_trendline(conn: &Connection, symbol: &str, snap: &HtTrendlineSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v63(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ht_trendline json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ht_trendline(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ht_trendline: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ht_trendline(conn: &Connection, symbol: &str) -> Result<Option<HtTrendlineSnapshot>, String> {
+    let _ = create_research_tables_v63(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ht_trendline WHERE symbol = ?1")
+        .map_err(|e| format!("prep ht_trendline: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query ht_trendline: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row ht_trendline: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get ht_trendline: {e}"))?;
+        let snap: HtTrendlineSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse ht_trendline: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_midpoint(conn: &Connection, symbol: &str, snap: &MidpointSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v63(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("midpoint json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_midpoint(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert midpoint: {e}"))?;
+    Ok(())
+}
+
+pub fn get_midpoint(conn: &Connection, symbol: &str) -> Result<Option<MidpointSnapshot>, String> {
+    let _ = create_research_tables_v63(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_midpoint WHERE symbol = ?1")
+        .map_err(|e| format!("prep midpoint: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query midpoint: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row midpoint: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get midpoint: {e}"))?;
+        let snap: MidpointSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse midpoint: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
 }
 
 pub fn upsert_wma(conn: &Connection, symbol: &str, snap: &WmaSnapshot) -> Result<(), String> {
@@ -48988,6 +49570,145 @@ Trailing text.
         if snap.ibs_label != "INSUFFICIENT_DATA" {
             assert!(snap.ibs_raw >= 0.0 && snap.ibs_raw <= 1.0);
             assert!(snap.ibs_smoothed >= 0.0 && snap.ibs_smoothed <= 1.0);
+        }
+    }
+
+    #[test]
+    fn laguerre_rsi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = LaguerreRsiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            gamma: 0.5, l0: 100.1, l1: 100.05, l2: 100.0, l3: 99.95,
+            laguerre_rsi: 0.78, laguerre_rsi_prev: 0.72, last_close: 101.0,
+            lrsi_label: "BULL".into(), note: String::new(),
+        };
+        upsert_laguerre_rsi(&conn, "TEST", &snap).unwrap();
+        let got = get_laguerre_rsi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.lrsi_label, "BULL");
+        assert!((got.laguerre_rsi - 0.78).abs() < 1e-6);
+    }
+
+    #[test]
+    fn laguerre_rsi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_laguerre_rsi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.lrsi_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.lrsi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.laguerre_rsi >= 0.0 && snap.laguerre_rsi <= 1.0);
+            assert!((snap.gamma - 0.5).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn zigzag_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ZigzagSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            threshold_pct: 5.0,
+            last_high_value: 105.2, last_high_bars_ago: 3,
+            last_low_value: 98.5, last_low_bars_ago: 12,
+            current_leg: "UP".into(), reversal_level: 99.94, last_close: 104.0,
+            zigzag_label: "UP_LEG".into(), note: String::new(),
+        };
+        upsert_zigzag(&conn, "TEST", &snap).unwrap();
+        let got = get_zigzag(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.zigzag_label, "UP_LEG");
+        assert_eq!(got.current_leg, "UP");
+        assert!((got.threshold_pct - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn zigzag_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_zigzag_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.zigzag_label.as_str(),
+            "UP_LEG" | "DOWN_LEG" | "AT_REVERSAL" | "INSUFFICIENT_DATA"));
+        if snap.zigzag_label != "INSUFFICIENT_DATA" {
+            assert!(matches!(snap.current_leg.as_str(), "UP" | "DOWN"));
+            assert!(snap.last_high_value >= snap.last_low_value);
+        }
+    }
+
+    #[test]
+    fn pgo_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = PgoSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            length: 14, sma_value: 100.0, atr_value: 1.5,
+            pgo_value: 2.3, pgo_prev: 1.8, last_close: 103.45,
+            pgo_label: "BULL".into(), note: String::new(),
+        };
+        upsert_pgo(&conn, "TEST", &snap).unwrap();
+        let got = get_pgo(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.pgo_label, "BULL");
+        assert!((got.pgo_value - 2.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pgo_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_pgo_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.pgo_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.pgo_label != "INSUFFICIENT_DATA" {
+            assert_eq!(snap.length, 14);
+            assert!(snap.atr_value.is_finite() && snap.atr_value >= 0.0);
+        }
+    }
+
+    #[test]
+    fn ht_trendline_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = HtTrendlineSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            period: 22.0, trendline_value: 100.4, trendline_prev: 100.2,
+            spread: 0.6, spread_pct: 0.006, last_close: 101.0,
+            ht_label: "WEAK_BULL".into(), note: String::new(),
+        };
+        upsert_ht_trendline(&conn, "TEST", &snap).unwrap();
+        let got = get_ht_trendline(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.ht_label, "WEAK_BULL");
+        assert!((got.period - 22.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ht_trendline_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ht_trendline_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.ht_label.as_str(),
+            "BULL" | "WEAK_BULL" | "NEUTRAL" | "WEAK_BEAR" | "BEAR" | "INSUFFICIENT_DATA"));
+        if snap.ht_label != "INSUFFICIENT_DATA" {
+            assert!(snap.period >= 6.0 && snap.period <= 50.0);
+            assert!(snap.trendline_value.is_finite());
+        }
+    }
+
+    #[test]
+    fn midpoint_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MidpointSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            length: 14, hhv: 105.0, llv: 95.0,
+            midpoint: 100.0, midpoint_prev: 99.8,
+            close_position: 0.72, last_close: 102.2,
+            midpoint_label: "NEAR_UPPER".into(), note: String::new(),
+        };
+        upsert_midpoint(&conn, "TEST", &snap).unwrap();
+        let got = get_midpoint(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.midpoint_label, "NEAR_UPPER");
+        assert!((got.midpoint - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn midpoint_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_midpoint_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.midpoint_label.as_str(),
+            "UPPER" | "NEAR_UPPER" | "MIDRANGE" | "NEAR_LOWER" | "LOWER" | "INSUFFICIENT_DATA"));
+        if snap.midpoint_label != "INSUFFICIENT_DATA" {
+            assert!(snap.hhv >= snap.llv);
+            assert!(snap.close_position >= 0.0 && snap.close_position <= 1.0);
         }
     }
 }

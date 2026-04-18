@@ -4321,7 +4321,90 @@ Requires n≥15; body reports length (14), ibs_raw, ibs_smoothed,
 ibs_prev, last_high, last_low, last_close.
 Source: ADR-172 IBS window.
 
-#### 2.293 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.293 Ehlers Laguerre RSI (LAGUERRE_RSI — ADR-173)
+
+Pulled from `research::get_laguerre_rsi`. Bounded [0, 1] oscillator
+built from Ehlers's 4-stage Laguerre filter with γ=0.5. The
+4-stage filter smooths the close and produces L0, L1, L2, L3
+intermediate outputs; the Laguerre RSI is then computed from the
+count of upward differences vs total differences across the
+stages, yielding a cleaner oscillator than classic RSI with no
+divergence false signals near extremes. Distinct from RSI (Wilder
+smoothing of gains/losses, ADR-108), STOCHRSI (ADR-137), CRSI
+(Connors, ADR-167), QQE (ADR-169), and IFT_RSI (ADR-170).
+OVERBOUGHT (>0.85) / BULL (>0.60) / NEUTRAL / BEAR (<0.40) /
+OVERSOLD (<0.15) labels from the laguerre_rsi magnitude. Requires
+n≥20; body reports γ, L0-L3, laguerre_rsi, laguerre_rsi_prev,
+last_close. Source: ADR-173 LAGUERRE_RSI window.
+
+#### 2.294 ZigZag Pattern Detector (ZIGZAG — ADR-173)
+
+Pulled from `research::get_zigzag`. Most recent confirmed swing
+high and swing low using a fixed percentage threshold (default
+5%). A new pivot forms when price reverses by at least
+threshold_pct from the prior extreme. The snapshot emits the
+last high pivot (value + bars_ago), the last low pivot, the
+active leg direction (UP/DOWN), and the projected reversal
+level. Distinct from FRACTALS (ADR-170, Bill Williams 5-bar
+strict peaks) and from PIVOTS (ADR-161, prior-session math),
+which use fundamentally different construction — ZigZag is a
+%-threshold reversal detector. UP_LEG / DOWN_LEG / AT_REVERSAL
+labels from current leg and proximity to reversal level.
+Requires n≥10; body reports threshold_pct (5%),
+last_high_value, last_high_bars_ago, last_low_value,
+last_low_bars_ago, current_leg, reversal_level, last_close.
+Source: ADR-173 ZIGZAG window.
+
+#### 2.295 Pretty Good Oscillator (PGO — ADR-173)
+
+Pulled from `research::get_pgo`. Mark Johnson's Pretty Good
+Oscillator measures the distance of the current close from an
+N-period SMA expressed in multiples of the N-period ATR:
+`pgo = (close − SMA(close, N)) / EMA(TR, N)` with N=14. Extreme
+readings of ±3 were found to be rare and persistent, making
+PGO a trend-following signal rather than mean-reversion — the
+"pretty good" name reflects Johnson's empirical observation that
+it filters noise better than raw ROC. Distinct from ROC
+(unscaled price change), PPO (percentage-scaled MACD, ADR-115),
+and RSI/STOCH (bounded oscillators) because PGO's scaling is by
+volatility, not percent. STRONG_BULL (>3) / BULL (>1) / NEUTRAL /
+BEAR (<-1) / STRONG_BEAR (<-3) labels from pgo magnitude.
+Requires n≥16; body reports length (14), sma_value, atr_value,
+pgo_value, pgo_prev, last_close. Source: ADR-173 PGO window.
+
+#### 2.296 Hilbert Instantaneous Trendline (HT_TRENDLINE — ADR-173)
+
+Pulled from `research::get_ht_trendline`. Smoothed trendline
+based on the dominant cycle period derived from Ehlers's
+Hilbert-transform homodyne discriminator. Unlike MAMA (ADR-170)
+which outputs an adaptive MA proper, HT_TRENDLINE reports the
+`trendline = WMA(close, period)` over the detected cycle
+period — a lag-matched smoother that follows the dominant
+trend without the adaptive α rescaling. Distinct from MAMA
+(adaptive α), FRAMA (ADR-172 fractal-dimension α), and every
+fixed-length smoother. BULL (>2%) / WEAK_BULL (>0.5%) /
+NEUTRAL / WEAK_BEAR (<-0.5%) / BEAR (<-2%) labels from
+spread_pct (close vs trendline). Requires n≥64; body reports
+detected period, trendline_value, trendline_prev, spread,
+spread_pct, last_close. Source: ADR-173 HT_TRENDLINE window.
+
+#### 2.297 Midpoint of N (MIDPOINT — ADR-173)
+
+Pulled from `research::get_midpoint`. TA-Lib's MIDPOINT
+function: `midpoint = (HHV(N) + LLV(N)) / 2` emitting the
+midpoint of the N-bar range along with the HHV, LLV, and the
+close's position within the range. N=14. Useful as a simple
+anchor for detecting where price sits relative to the most
+recent trading range. Distinct from Donchian channel (ADR-151,
+raw HHV/LLV bands), from SMA, and from pivot systems (ADR-161)
+because it uses only HHV+LLV extremes rather than OHLC4 or
+session math. UPPER (>0.85) / NEAR_UPPER (>0.60) / MIDRANGE /
+NEAR_LOWER (<0.40) / LOWER (<0.15) labels from close_position.
+Requires n≥15; body reports length (14), hhv, llv, midpoint,
+midpoint_prev, close_position, last_close. Source: ADR-173
+MIDPOINT window.
+
+#### 2.298 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -4337,7 +4420,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.294 Sector peer comparison
+#### 2.299 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -4597,8 +4680,45 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~86-165 KB**
-(up from 85-163 KB after ADR-171; ADR-172 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~87-167 KB**
+(up from 86-165 KB after ADR-172; ADR-173 adds five optional per-symbol
+blocks — LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT — each
+measuring ~2 k/v rows and adding ~240-320 bytes when populated, for a typical
++1.40 KB per symbol;
+all five reuse the existing `research_historical_price` HP cache and the
+standard research-table LAN sync path with zero new API dependencies;
+LAGUERRE_RSI computes Ehlers's 4-stage Laguerre filter (γ=0.5) with
+L0..L3 intermediate outputs and emits the bounded [0, 1] RSI from
+the count of upward differences across stages, with OVERBOUGHT
+(>0.85) / BULL (>0.60) / NEUTRAL / BEAR (<0.40) / OVERSOLD (<0.15)
+labels — distinct from RSI (ADR-108 Wilder), STOCHRSI (ADR-137),
+CRSI (ADR-167), QQE (ADR-169), and IFT_RSI (ADR-170);
+ZIGZAG computes a 5%-threshold pivot reversal detector emitting the
+last swing high/low values + bars_ago, the current leg direction,
+and the projected reversal level, with UP_LEG / DOWN_LEG /
+AT_REVERSAL labels — distinct from FRACTALS (ADR-170 Bill Williams
+5-bar peaks) and PIVOTS (ADR-161 prior-session math) because it is
+a %-threshold reversal detector, not a structural peak;
+PGO computes Mark Johnson's Pretty Good Oscillator as
+`(close − SMA(14)) / EMA(TR, 14)` expressing deviation from a 14-bar
+SMA in multiples of 14-bar ATR, with STRONG_BULL (>3) / BULL (>1) /
+NEUTRAL / BEAR (<-1) / STRONG_BEAR (<-3) labels — distinct from ROC
+(unscaled), PPO (ADR-115 percentage MACD), and bounded oscillators
+because PGO scales by volatility rather than percent;
+HT_TRENDLINE computes Ehlers's Hilbert-transform homodyne
+discriminator to detect the dominant cycle period, then reports
+`WMA(close, period)` as a lag-matched trendline along with the
+spread (close - trendline), with BULL / WEAK_BULL / NEUTRAL /
+WEAK_BEAR / BEAR labels from spread_pct thresholds — distinct
+from MAMA (ADR-170 adaptive α), FRAMA (ADR-172 fractal α), and
+every fixed-length smoother;
+MIDPOINT computes TA-Lib's `(HHV(14) + LLV(14)) / 2` plus the
+close's position within the 14-bar range [0, 1], with UPPER
+(>0.85) / NEAR_UPPER (>0.60) / MIDRANGE / NEAR_LOWER (<0.40) /
+LOWER (<0.15) labels — distinct from Donchian (ADR-151 raw
+HHV/LLV bands), from SMA, and from pivot systems (ADR-161)
+because it uses only the two extremes of the range;
+ADR-172 adds five optional per-symbol
 blocks — WMA / RAINBOW / MESA_SINE / FRAMA / IBS — each measuring ~2 k/v rows
 and adding ~260-340 bytes when populated, for a typical +1.46 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the

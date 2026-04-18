@@ -484,6 +484,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_mesa_sine",
     "research_frama",
     "research_ibs",
+    // ── ADR-173 Round 61 ────────────────────────────
+    "research_laguerre_rsi",
+    "research_zigzag",
+    "research_pgo",
+    "research_ht_trendline",
+    "research_midpoint",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2740,6 +2746,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_laguerre_rsi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_laguerre_rsi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_zigzag" => Some(
+            "CREATE TABLE IF NOT EXISTS research_zigzag (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_pgo" => Some(
+            "CREATE TABLE IF NOT EXISTS research_pgo (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_ht_trendline" => Some(
+            "CREATE TABLE IF NOT EXISTS research_ht_trendline (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_midpoint" => Some(
+            "CREATE TABLE IF NOT EXISTS research_midpoint (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -3087,6 +3128,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_mesa_sine" => Some("updated_at"),
         "research_frama" => Some("updated_at"),
         "research_ibs" => Some("updated_at"),
+        // ── ADR-173 Round 61 ──
+        "research_laguerre_rsi" => Some("updated_at"),
+        "research_zigzag" => Some("updated_at"),
+        "research_pgo" => Some("updated_at"),
+        "research_ht_trendline" => Some("updated_at"),
+        "research_midpoint" => Some("updated_at"),
         _ => None,
     }
 }
