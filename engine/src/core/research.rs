@@ -6444,6 +6444,131 @@ pub struct MidpointSnapshot {
     pub note: String,
 }
 
+/// Donald Dorsey's Mass Index — an exhaustion/reversal indicator
+/// built from a 25-period sum of the ratio of 9-period EMA(H−L) to
+/// 9-period EMA of that EMA (EMA of EMA). A classic "reversal
+/// bulge" crosses above 27 then below 26.5 signalling a likely
+/// reversal independent of direction. Distinct from ATR (range
+/// magnitude, ADR-108) because Mass Index is a unitless ratio of
+/// range smoothings and from CHOP (ADR-123) because it measures
+/// range expansion/contraction via nested EMAs rather than
+/// high-low efficiency.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MassIndexSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ema_len: usize,                // 9
+    pub sum_len: usize,                // 25
+    pub ema_range: f64,                // EMA(H-L) latest
+    pub ema_ema_range: f64,            // EMA of EMA(H-L) latest
+    pub ratio: f64,                    // ema_range / ema_ema_range
+    pub mass_index: f64,               // Σ(ratio) over sum_len
+    pub mass_index_prev: f64,
+    pub last_close: f64,
+    pub mass_label: String,            // REVERSAL_BULGE / ELEVATED / NEUTRAL / COMPRESSED / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Normalized ATR (NATR) — TA-Lib's `natr = 100 × ATR(N) / close`,
+/// expressing Wilder's Average True Range as a percentage of the
+/// closing price. This makes ATR scale-invariant so it can be
+/// compared across symbols of different price levels (a $5 ATR
+/// means different things for a $10 stock vs a $500 stock).
+/// Distinct from plain ATR (raw dollar volatility, ADR-108) and
+/// from stddev-based vols (ADR-171 STDDEV) because NATR uses the
+/// true range directly rather than log return variance.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct NatrSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub atr_value: f64,                // Wilder ATR(14)
+    pub natr_value: f64,               // 100 × ATR / close
+    pub natr_prev: f64,
+    pub last_close: f64,
+    pub natr_label: String,            // HIGH_VOL / ELEVATED / NORMAL / LOW_VOL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// John Carter's TTM Squeeze — a regime flag indicating whether
+/// Bollinger Bands (2σ) fit entirely inside Keltner Channels
+/// (1.5×ATR). When BB ⊂ KC, volatility is compressed and a
+/// breakout is imminent ("squeeze on"). When BB expands outside
+/// KC, the squeeze fires ("squeeze off") and directional
+/// momentum typically follows. Paired with a linear-regression
+/// histogram to indicate breakout direction (up vs down).
+/// Distinct from BBW (ADR-115 Bollinger Band Width regime) and
+/// from Keltner (ADR-151 standalone bands) because TTM Squeeze
+/// tests the geometric relation between both systems.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct TtmSqueezeSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 20
+    pub bb_upper: f64,
+    pub bb_lower: f64,
+    pub kc_upper: f64,                 // middle + 1.5×ATR
+    pub kc_lower: f64,                 // middle − 1.5×ATR
+    pub squeeze_on: bool,              // BB ⊂ KC
+    pub momentum: f64,                 // linreg of (close - midrange)
+    pub momentum_prev: f64,
+    pub last_close: f64,
+    pub squeeze_label: String,         // SQUEEZE_ON / FIRE_UP / FIRE_DOWN / NEUTRAL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Alexander Elder's Force Index — `force = volume × (close −
+/// close_prev)`, smoothed by a 13-period EMA. Measures the buying
+/// / selling pressure behind price moves: strong positive Force
+/// means high volume on an up move (bullish conviction); strong
+/// negative means heavy selling. Zero-line crossings flag
+/// momentum shifts; extreme readings warn of exhaustion.
+/// Distinct from OBV (cumulative sign-weighted volume, ADR-108)
+/// because Force Index weights by the size of the price change
+/// not just the direction, and from CMF (money-flow-multiplier,
+/// ADR-109) which uses H/L rather than bar-over-bar close change.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ForceIndexSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 13
+    pub force_raw: f64,                // latest raw force
+    pub force_ema: f64,                // EMA-smoothed
+    pub force_ema_prev: f64,
+    pub last_close: f64,
+    pub last_volume: f64,
+    pub force_label: String,           // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// True Range (raw, single-bar) — TA-Lib's TRANGE function:
+/// `tr = max(H − L, |H − C_prev|, |L − C_prev|)`. The single-bar
+/// volatility measure that underlies Wilder's ATR (ADR-108) but
+/// reports the current bar's TR directly without any smoothing.
+/// Useful for gap-aware bar-size comparisons and for building
+/// custom volatility systems. Distinct from ATR (N-period EMA of
+/// TR) and from the bar's raw range (H − L) which ignores gaps.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct TrangeSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub trange_value: f64,             // latest true range
+    pub trange_prev: f64,
+    pub mean_trange_20: f64,            // 20-bar mean TR
+    pub trange_ratio: f64,             // latest / mean_20 (expansion ratio)
+    pub last_high: f64,
+    pub last_low: f64,
+    pub last_close: f64,
+    pub prev_close: f64,
+    pub trange_label: String,          // EXPANSION / NORMAL / CONTRACTION / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -28272,6 +28397,261 @@ pub fn compute_midpoint_snapshot(
     }
 }
 
+pub fn compute_mass_index_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MassIndexSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let ema_len = 9usize; let sum_len = 25usize;
+    let min_needed = ema_len * 2 + sum_len;
+    if n < min_needed {
+        return MassIndexSnapshot {
+            symbol: sym, as_of: as_of.into(), ema_len, sum_len,
+            mass_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_needed, n),
+            ..Default::default()
+        };
+    }
+    let alpha = 2.0 / (ema_len as f64 + 1.0);
+    let mut ema1 = vec![0.0_f64; n];
+    let mut ema2 = vec![0.0_f64; n];
+    ema1[0] = sorted[0].high - sorted[0].low;
+    for i in 1..n {
+        let range = sorted[i].high - sorted[i].low;
+        ema1[i] = alpha * range + (1.0 - alpha) * ema1[i - 1];
+    }
+    ema2[0] = ema1[0];
+    for i in 1..n {
+        ema2[i] = alpha * ema1[i] + (1.0 - alpha) * ema2[i - 1];
+    }
+    let ratio_at = |i: usize| -> f64 {
+        if ema2[i].abs() > 1e-12 { ema1[i] / ema2[i] } else { 1.0 }
+    };
+    let mut mass_index = 0.0_f64;
+    for k in 0..sum_len { mass_index += ratio_at(n - 1 - k); }
+    let mut mass_prev = 0.0_f64;
+    for k in 0..sum_len { mass_prev += ratio_at(n - 2 - k); }
+    let label = if mass_index > 27.0 { "REVERSAL_BULGE" }
+        else if mass_index > 26.0 { "ELEVATED" }
+        else if mass_index < 24.0 { "COMPRESSED" }
+        else { "NEUTRAL" };
+    MassIndexSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        ema_len, sum_len,
+        ema_range: ema1[n - 1], ema_ema_range: ema2[n - 1],
+        ratio: ratio_at(n - 1),
+        mass_index, mass_index_prev: mass_prev,
+        last_close: sorted[n - 1].close,
+        mass_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_natr_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> NatrSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 14usize;
+    if n < length + 2 {
+        return NatrSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            natr_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 2, n),
+            ..Default::default()
+        };
+    }
+    let tr = |i: usize| -> f64 {
+        if i == 0 { sorted[0].high - sorted[0].low }
+        else {
+            let h = sorted[i].high; let l = sorted[i].low; let pc = sorted[i - 1].close;
+            (h - l).max((h - pc).abs()).max((l - pc).abs())
+        }
+    };
+    let mut atr = {
+        let mut s = 0.0_f64;
+        for k in 0..length { s += tr(k); }
+        s / length as f64
+    };
+    for i in length..n - 1 {
+        atr = (atr * (length - 1) as f64 + tr(i)) / length as f64;
+    }
+    let atr_final = (atr * (length - 1) as f64 + tr(n - 1)) / length as f64;
+    let close = sorted[n - 1].close;
+    let close_prev = sorted[n - 2].close;
+    let natr = if close.abs() > 1e-12 { 100.0 * atr_final / close } else { 0.0 };
+    let natr_prev = if close_prev.abs() > 1e-12 { 100.0 * atr / close_prev } else { 0.0 };
+    let label = if natr > 5.0 { "HIGH_VOL" }
+        else if natr > 2.5 { "ELEVATED" }
+        else if natr < 1.0 { "LOW_VOL" }
+        else { "NORMAL" };
+    NatrSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        atr_value: atr_final, natr_value: natr, natr_prev,
+        last_close: close,
+        natr_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_ttm_squeeze_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> TtmSqueezeSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 20usize;
+    if n < length + 2 {
+        return TtmSqueezeSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            squeeze_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 2, n),
+            ..Default::default()
+        };
+    }
+    let sma = |end_idx: usize| -> f64 {
+        let mut s = 0.0_f64;
+        for k in 0..length { s += sorted[end_idx - k].close; }
+        s / length as f64
+    };
+    let stddev = |end_idx: usize, mean: f64| -> f64 {
+        let mut ss = 0.0_f64;
+        for k in 0..length { let d = sorted[end_idx - k].close - mean; ss += d * d; }
+        (ss / length as f64).sqrt()
+    };
+    let tr = |i: usize| -> f64 {
+        if i == 0 { sorted[0].high - sorted[0].low }
+        else {
+            let h = sorted[i].high; let l = sorted[i].low; let pc = sorted[i - 1].close;
+            (h - l).max((h - pc).abs()).max((l - pc).abs())
+        }
+    };
+    let atr = {
+        let mut s = 0.0_f64;
+        for k in 0..length { s += tr(n - 1 - k); }
+        s / length as f64
+    };
+    let mid = sma(n - 1);
+    let sd = stddev(n - 1, mid);
+    let bb_upper = mid + 2.0 * sd;
+    let bb_lower = mid - 2.0 * sd;
+    let kc_upper = mid + 1.5 * atr;
+    let kc_lower = mid - 1.5 * atr;
+    let squeeze_on = bb_upper < kc_upper && bb_lower > kc_lower;
+    let hhv = |end_idx: usize| -> f64 {
+        let mut hi = f64::NEG_INFINITY;
+        for k in 0..length { if sorted[end_idx - k].high > hi { hi = sorted[end_idx - k].high; } }
+        hi
+    };
+    let llv = |end_idx: usize| -> f64 {
+        let mut lo = f64::INFINITY;
+        for k in 0..length { if sorted[end_idx - k].low < lo { lo = sorted[end_idx - k].low; } }
+        lo
+    };
+    let momentum = sorted[n - 1].close - (hhv(n - 1) + llv(n - 1)) / 2.0;
+    let momentum_prev = sorted[n - 2].close - (hhv(n - 2) + llv(n - 2)) / 2.0;
+    let label = if squeeze_on { "SQUEEZE_ON" }
+        else if momentum > 0.0 && momentum_prev <= 0.0 { "FIRE_UP" }
+        else if momentum < 0.0 && momentum_prev >= 0.0 { "FIRE_DOWN" }
+        else { "NEUTRAL" };
+    TtmSqueezeSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        bb_upper, bb_lower, kc_upper, kc_lower,
+        squeeze_on, momentum, momentum_prev,
+        last_close: sorted[n - 1].close,
+        squeeze_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_force_index_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ForceIndexSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 13usize;
+    if n < length + 2 {
+        return ForceIndexSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            force_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 2, n),
+            ..Default::default()
+        };
+    }
+    let force_at = |i: usize| -> f64 {
+        if i == 0 { 0.0 }
+        else { (sorted[i].close - sorted[i - 1].close) * sorted[i].volume as f64 }
+    };
+    let alpha = 2.0 / (length as f64 + 1.0);
+    let mut ema = force_at(1);
+    for i in 2..n - 1 {
+        ema = alpha * force_at(i) + (1.0 - alpha) * ema;
+    }
+    let ema_final = alpha * force_at(n - 1) + (1.0 - alpha) * ema;
+    let mut abs_sum = 0.0_f64;
+    for i in n.saturating_sub(50).max(1)..n { abs_sum += force_at(i).abs(); }
+    let mean_abs = abs_sum / (n - n.saturating_sub(50).max(1)) as f64;
+    let ratio = if mean_abs > 1e-12 { ema_final / mean_abs } else { 0.0 };
+    let label = if ratio > 1.5 { "STRONG_BULL" }
+        else if ratio > 0.25 { "BULL" }
+        else if ratio < -1.5 { "STRONG_BEAR" }
+        else if ratio < -0.25 { "BEAR" }
+        else { "NEUTRAL" };
+    ForceIndexSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        force_raw: force_at(n - 1), force_ema: ema_final, force_ema_prev: ema,
+        last_close: sorted[n - 1].close,
+        last_volume: sorted[n - 1].volume as f64,
+        force_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_trange_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> TrangeSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 21 {
+        return TrangeSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            trange_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥21 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let tr = |i: usize| -> f64 {
+        if i == 0 { sorted[0].high - sorted[0].low }
+        else {
+            let h = sorted[i].high; let l = sorted[i].low; let pc = sorted[i - 1].close;
+            (h - l).max((h - pc).abs()).max((l - pc).abs())
+        }
+    };
+    let trange_now = tr(n - 1);
+    let trange_prev = tr(n - 2);
+    let mut sum = 0.0_f64;
+    for k in 0..20 { sum += tr(n - 1 - k); }
+    let mean_20 = sum / 20.0;
+    let ratio = if mean_20 > 1e-12 { trange_now / mean_20 } else { 1.0 };
+    let label = if ratio > 1.5 { "EXPANSION" }
+        else if ratio < 0.5 { "CONTRACTION" }
+        else { "NORMAL" };
+    TrangeSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        trange_value: trange_now, trange_prev,
+        mean_trange_20: mean_20, trange_ratio: ratio,
+        last_high: sorted[n - 1].high, last_low: sorted[n - 1].low,
+        last_close: sorted[n - 1].close,
+        prev_close: sorted[n - 2].close,
+        trange_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -37524,6 +37904,167 @@ pub fn create_research_tables_v63(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_research_midpoint_updated ON research_midpoint(updated_at);",
     ).map_err(|e| format!("create v63 tables: {e}"))?;
     Ok(())
+}
+
+pub fn create_research_tables_v64(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v63(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_mass_index (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_mass_index_updated ON research_mass_index(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_natr (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_natr_updated ON research_natr(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_ttm_squeeze (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ttm_squeeze_updated ON research_ttm_squeeze(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_force_index (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_force_index_updated ON research_force_index(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_trange (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_trange_updated ON research_trange(updated_at);",
+    ).map_err(|e| format!("create v64 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_mass_index(conn: &Connection, symbol: &str, snap: &MassIndexSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v64(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("mass_index json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_mass_index(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert mass_index: {e}"))?;
+    Ok(())
+}
+
+pub fn get_mass_index(conn: &Connection, symbol: &str) -> Result<Option<MassIndexSnapshot>, String> {
+    let _ = create_research_tables_v64(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_mass_index WHERE symbol = ?1")
+        .map_err(|e| format!("prep mass_index: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query mass_index: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row mass_index: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get mass_index: {e}"))?;
+        let snap: MassIndexSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse mass_index: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_natr(conn: &Connection, symbol: &str, snap: &NatrSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v64(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("natr json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_natr(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert natr: {e}"))?;
+    Ok(())
+}
+
+pub fn get_natr(conn: &Connection, symbol: &str) -> Result<Option<NatrSnapshot>, String> {
+    let _ = create_research_tables_v64(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_natr WHERE symbol = ?1")
+        .map_err(|e| format!("prep natr: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query natr: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row natr: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get natr: {e}"))?;
+        let snap: NatrSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse natr: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ttm_squeeze(conn: &Connection, symbol: &str, snap: &TtmSqueezeSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v64(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ttm_squeeze json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ttm_squeeze(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ttm_squeeze: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ttm_squeeze(conn: &Connection, symbol: &str) -> Result<Option<TtmSqueezeSnapshot>, String> {
+    let _ = create_research_tables_v64(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ttm_squeeze WHERE symbol = ?1")
+        .map_err(|e| format!("prep ttm_squeeze: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query ttm_squeeze: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row ttm_squeeze: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get ttm_squeeze: {e}"))?;
+        let snap: TtmSqueezeSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse ttm_squeeze: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_force_index(conn: &Connection, symbol: &str, snap: &ForceIndexSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v64(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("force_index json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_force_index(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert force_index: {e}"))?;
+    Ok(())
+}
+
+pub fn get_force_index(conn: &Connection, symbol: &str) -> Result<Option<ForceIndexSnapshot>, String> {
+    let _ = create_research_tables_v64(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_force_index WHERE symbol = ?1")
+        .map_err(|e| format!("prep force_index: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query force_index: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row force_index: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get force_index: {e}"))?;
+        let snap: ForceIndexSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse force_index: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_trange(conn: &Connection, symbol: &str, snap: &TrangeSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v64(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("trange json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_trange(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert trange: {e}"))?;
+    Ok(())
+}
+
+pub fn get_trange(conn: &Connection, symbol: &str) -> Result<Option<TrangeSnapshot>, String> {
+    let _ = create_research_tables_v64(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_trange WHERE symbol = ?1")
+        .map_err(|e| format!("prep trange: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query trange: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row trange: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get trange: {e}"))?;
+        let snap: TrangeSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse trange: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
 }
 
 pub fn upsert_laguerre_rsi(conn: &Connection, symbol: &str, snap: &LaguerreRsiSnapshot) -> Result<(), String> {
@@ -49709,6 +50250,151 @@ Trailing text.
         if snap.midpoint_label != "INSUFFICIENT_DATA" {
             assert!(snap.hhv >= snap.llv);
             assert!(snap.close_position >= 0.0 && snap.close_position <= 1.0);
+        }
+    }
+
+    // ── ADR-174 Round 62 tests ──
+
+    #[test]
+    fn mass_index_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MassIndexSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 80,
+            ema_len: 9, sum_len: 25,
+            ema_range: 2.4, ema_ema_range: 2.2, ratio: 1.0909,
+            mass_index: 26.5, mass_index_prev: 26.2, last_close: 100.0,
+            mass_label: "ELEVATED".into(), note: String::new(),
+        };
+        upsert_mass_index(&conn, "TEST", &snap).unwrap();
+        let got = get_mass_index(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.mass_label, "ELEVATED");
+        assert!((got.mass_index - 26.5).abs() < 1e-6);
+        assert_eq!(got.ema_len, 9);
+        assert_eq!(got.sum_len, 25);
+    }
+
+    #[test]
+    fn mass_index_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_mass_index_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.mass_label.as_str(),
+            "REVERSAL_BULGE" | "ELEVATED" | "NEUTRAL" | "COMPRESSED" | "INSUFFICIENT_DATA"));
+        if snap.mass_label != "INSUFFICIENT_DATA" {
+            assert!(snap.ratio > 0.0);
+            assert!(snap.mass_index > 0.0);
+            assert!(snap.ema_range >= 0.0);
+            assert!(snap.ema_ema_range >= 0.0);
+        }
+    }
+
+    #[test]
+    fn natr_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = NatrSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 50,
+            length: 14, atr_value: 2.5, natr_value: 2.5, natr_prev: 2.4,
+            last_close: 100.0, natr_label: "ELEVATED".into(),
+            note: String::new(),
+        };
+        upsert_natr(&conn, "TEST", &snap).unwrap();
+        let got = get_natr(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.natr_label, "ELEVATED");
+        assert!((got.natr_value - 2.5).abs() < 1e-6);
+        assert_eq!(got.length, 14);
+    }
+
+    #[test]
+    fn natr_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_natr_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.natr_label.as_str(),
+            "HIGH_VOL" | "ELEVATED" | "NORMAL" | "LOW_VOL" | "INSUFFICIENT_DATA"));
+        if snap.natr_label != "INSUFFICIENT_DATA" {
+            assert!(snap.atr_value >= 0.0);
+            assert!(snap.natr_value >= 0.0);
+        }
+    }
+
+    #[test]
+    fn ttm_squeeze_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = TtmSqueezeSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 60,
+            length: 20,
+            bb_upper: 102.0, bb_lower: 98.0,
+            kc_upper: 103.0, kc_lower: 97.0,
+            squeeze_on: true, momentum: 0.5, momentum_prev: 0.4,
+            last_close: 100.0, squeeze_label: "SQUEEZE_ON".into(),
+            note: String::new(),
+        };
+        upsert_ttm_squeeze(&conn, "TEST", &snap).unwrap();
+        let got = get_ttm_squeeze(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.squeeze_label, "SQUEEZE_ON");
+        assert!(got.squeeze_on);
+        assert_eq!(got.length, 20);
+    }
+
+    #[test]
+    fn ttm_squeeze_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ttm_squeeze_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.squeeze_label.as_str(),
+            "SQUEEZE_ON" | "FIRE_UP" | "FIRE_DOWN" | "NEUTRAL" | "INSUFFICIENT_DATA"));
+        if snap.squeeze_label != "INSUFFICIENT_DATA" {
+            assert!(snap.bb_upper >= snap.bb_lower);
+            assert!(snap.kc_upper >= snap.kc_lower);
+        }
+    }
+
+    #[test]
+    fn force_index_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ForceIndexSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 40,
+            length: 13, force_raw: 1200.0, force_ema: 1100.0,
+            force_ema_prev: 1050.0, last_close: 100.0, last_volume: 1000.0,
+            force_label: "BULL".into(), note: String::new(),
+        };
+        upsert_force_index(&conn, "TEST", &snap).unwrap();
+        let got = get_force_index(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.force_label, "BULL");
+        assert!((got.force_ema - 1100.0).abs() < 1e-6);
+        assert_eq!(got.length, 13);
+    }
+
+    #[test]
+    fn force_index_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_force_index_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.force_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+    }
+
+    #[test]
+    fn trange_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = TrangeSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 30,
+            trange_value: 1.5, trange_prev: 1.4, mean_trange_20: 1.3,
+            trange_ratio: 1.1538, last_high: 101.0, last_low: 99.5,
+            last_close: 100.0, prev_close: 99.8,
+            trange_label: "NORMAL".into(), note: String::new(),
+        };
+        upsert_trange(&conn, "TEST", &snap).unwrap();
+        let got = get_trange(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.trange_label, "NORMAL");
+        assert!((got.trange_value - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn trange_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_trange_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.trange_label.as_str(),
+            "EXPANSION" | "NORMAL" | "CONTRACTION" | "INSUFFICIENT_DATA"));
+        if snap.trange_label != "INSUFFICIENT_DATA" {
+            assert!(snap.trange_value >= 0.0);
+            assert!(snap.mean_trange_20 >= 0.0);
         }
     }
 }

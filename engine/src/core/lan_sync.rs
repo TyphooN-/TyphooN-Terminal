@@ -490,6 +490,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_pgo",
     "research_ht_trendline",
     "research_midpoint",
+    // ── ADR-174 Round 62 ────────────────────────────
+    "research_mass_index",
+    "research_natr",
+    "research_ttm_squeeze",
+    "research_force_index",
+    "research_trange",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2781,6 +2787,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-174 Round 62 ──
+        "research_mass_index" => Some(
+            "CREATE TABLE IF NOT EXISTS research_mass_index (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_natr" => Some(
+            "CREATE TABLE IF NOT EXISTS research_natr (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_ttm_squeeze" => Some(
+            "CREATE TABLE IF NOT EXISTS research_ttm_squeeze (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_force_index" => Some(
+            "CREATE TABLE IF NOT EXISTS research_force_index (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_trange" => Some(
+            "CREATE TABLE IF NOT EXISTS research_trange (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -3134,6 +3176,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_pgo" => Some("updated_at"),
         "research_ht_trendline" => Some("updated_at"),
         "research_midpoint" => Some("updated_at"),
+        // ── ADR-174 Round 62 ──
+        "research_mass_index" => Some("updated_at"),
+        "research_natr" => Some("updated_at"),
+        "research_ttm_squeeze" => Some("updated_at"),
+        "research_force_index" => Some("updated_at"),
+        "research_trange" => Some("updated_at"),
         _ => None,
     }
 }

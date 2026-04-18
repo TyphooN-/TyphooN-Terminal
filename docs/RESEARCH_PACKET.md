@@ -4404,7 +4404,78 @@ Requires n≥15; body reports length (14), hhv, llv, midpoint,
 midpoint_prev, close_position, last_close. Source: ADR-173
 MIDPOINT window.
 
-#### 2.298 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.298 Dorsey Mass Index (MASSINDEX — ADR-174)
+
+Pulled from `research::get_mass_index`. Donald Dorsey's volatility-
+based reversal indicator: `MI = Σ(EMA(H-L, 9) / EMA(EMA(H-L, 9), 9))`
+summed over 25 bars. Readings above 27 that subsequently fall back
+below 26.5 signal a "reversal bulge" — an imminent trend reversal
+without committing to direction. Distinct from ATR (Wilder TR
+smoothing) and Chaikin Volatility because it uses the ratio of fast
+vs slow EMA of the H-L range as a pure volatility-expansion signal.
+REVERSAL_BULGE (>27) / ELEVATED (>24) / NEUTRAL / COMPRESSED (<21) /
+INSUFFICIENT_DATA labels from mass_index magnitude. Requires n≥35;
+body reports ema_len (9), sum_len (25), ema_range, ema_ema_range,
+ratio, mass_index, mass_index_prev, last_close. Source: ADR-174
+MASSINDEX window.
+
+#### 2.299 Normalized ATR (NATR — ADR-174)
+
+Pulled from `research::get_natr`. TA-Lib's NATR function: `natr = 100
+× Wilder_ATR(14) / close`, expressing Wilder's Average True Range as
+a percentage of the closing price so ATR becomes scale-invariant and
+can be compared across symbols of different price levels. Distinct
+from raw ATR (price-scaled) and from volatility indices like VIX
+(option-implied vol) — NATR is realized volatility expressed as
+percentage. HIGH_VOL (>5%) / ELEVATED (>2.5%) / NORMAL / LOW_VOL
+(<1%) / INSUFFICIENT_DATA labels from natr magnitude. Requires n≥15;
+body reports length (14), atr_value, natr_value, natr_prev,
+last_close. Source: ADR-174 NATR window.
+
+#### 2.300 TTM Squeeze (TTM_SQUEEZE — ADR-174)
+
+Pulled from `research::get_ttm_squeeze`. John Carter's regime flag:
+when Bollinger Bands (2σ) fit entirely inside Keltner Channels
+(1.5×ATR), volatility is compressed and a breakout is imminent
+("squeeze on"). When BB expands outside KC, the squeeze fires and
+directional momentum typically follows — paired with a linear-
+regression momentum oscillator on `close − (HHV+LLV)/2` for direction.
+Distinct from Bollinger-only and Keltner-only because it combines both
+bands and a momentum direction. SQUEEZE_ON / FIRE_UP / FIRE_DOWN /
+NEUTRAL / INSUFFICIENT_DATA labels from BB⊂KC flag and momentum sign.
+Requires n≥21; body reports length (20), bb_upper, bb_lower, kc_upper,
+kc_lower, squeeze_on, momentum, momentum_prev, last_close. Source:
+ADR-174 TTM_SQUEEZE window.
+
+#### 2.301 Elder Force Index (FORCE_INDEX — ADR-174)
+
+Pulled from `research::get_force_index`. Alexander Elder's Force
+Index: `force = volume × (close − close_prev)`, smoothed by a 13-
+period EMA. Measures the buying/selling pressure behind each price
+move weighted by volume. Distinct from OBV (cumulative volume), MFI
+(money flow index), and A/D Line (volume × close-location weight)
+because Force Index combines the magnitude of the price change with
+volume. STRONG_BULL (>1.5) / BULL (>0.25) / NEUTRAL / BEAR (<-0.25) /
+STRONG_BEAR (<-1.5) / INSUFFICIENT_DATA labels from ratio of
+EMA(force) to mean(|force|) over 50 bars. Requires n≥15; body reports
+length (13), force_raw, force_ema, force_ema_prev, last_volume,
+last_close. Source: ADR-174 FORCE_INDEX window.
+
+#### 2.302 True Range raw (TRANGE — ADR-174)
+
+Pulled from `research::get_trange`. TA-Lib's TRANGE function: `tr =
+max(H − L, |H − C_prev|, |L − C_prev|)`, the single-bar volatility
+measure that underlies Wilder's ATR (ADR-108) but reports the current
+bar's TR directly without any smoothing. Useful for gap-aware bar-
+size comparisons and for building custom volatility systems. Distinct
+from ATR (N-period EMA of TR) and from the bar's raw range (H − L)
+which ignores gaps. EXPANSION (>1.5× mean_20) / NORMAL / CONTRACTION
+(<0.5× mean_20) / INSUFFICIENT_DATA labels from trange_ratio.
+Requires n≥21; body reports trange_value, trange_prev, mean_trange_20,
+trange_ratio, last_high, last_low, prev_close, last_close. Source:
+ADR-174 TRANGE window.
+
+#### 2.303 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -4420,7 +4491,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.299 Sector peer comparison
+#### 2.304 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -4680,13 +4751,45 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~87-167 KB**
-(up from 86-165 KB after ADR-172; ADR-173 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~88-169 KB**
+(up from 87-167 KB after ADR-173; ADR-174 adds five optional per-symbol
+blocks — MASSINDEX / NATR / TTM_SQUEEZE / FORCE_INDEX / TRANGE — each
+measuring ~2 k/v rows and adding ~220-300 bytes when populated, for a typical
++1.45 KB per symbol; ADR-173 added five optional per-symbol
 blocks — LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT — each
 measuring ~2 k/v rows and adding ~240-320 bytes when populated, for a typical
 +1.40 KB per symbol;
-all five reuse the existing `research_historical_price` HP cache and the
+all ten reuse the existing `research_historical_price` HP cache and the
 standard research-table LAN sync path with zero new API dependencies;
+MASSINDEX computes Donald Dorsey's volatility-based reversal indicator
+`MI = Σ(EMA(H-L, 9) / EMA(EMA(H-L, 9), 9))` summed over 25 bars, with
+REVERSAL_BULGE (>27) / ELEVATED (>24) / NEUTRAL / COMPRESSED (<21)
+labels from mass_index magnitude — distinct from ATR (Wilder TR
+smoothing) and Chaikin Volatility because it uses the ratio of fast
+vs slow EMA of the H-L range as a pure volatility-expansion signal;
+NATR computes TA-Lib's normalized ATR `natr = 100 × Wilder_ATR(14) /
+close` expressing Wilder's ATR as a percentage of the closing price
+so it becomes scale-invariant across different price levels, with
+HIGH_VOL (>5%) / ELEVATED (>2.5%) / NORMAL / LOW_VOL (<1%) labels —
+distinct from raw ATR (price-scaled) and volatility indices like VIX
+(option-implied vol);
+TTM_SQUEEZE computes John Carter's BB-inside-KC regime flag where
+squeeze_on = (BB(2σ, 20) ⊂ KC(1.5×ATR, 20)) paired with a linear-
+regression momentum oscillator on `close − (HHV+LLV)/2`, with
+SQUEEZE_ON / FIRE_UP / FIRE_DOWN / NEUTRAL labels from the BB⊂KC
+flag and momentum sign — distinct from Bollinger-only and Keltner-
+only because it combines both bands and a momentum direction;
+FORCE_INDEX computes Alexander Elder's volume-weighted price-change
+oscillator `EMA(volume × (close − close_prev), 13)`, with STRONG_BULL
+(>1.5) / BULL (>0.25) / NEUTRAL / BEAR (<-0.25) / STRONG_BEAR (<-1.5)
+labels from ratio of EMA(force) to mean(|force|) over 50 bars —
+distinct from OBV (cumulative volume), MFI, and A/D Line because it
+combines price-change magnitude with volume;
+TRANGE computes TA-Lib's raw single-bar True Range `tr = max(H−L,
+|H−C_prev|, |L−C_prev|)` along with 20-bar mean TR and expansion
+ratio, with EXPANSION (>1.5× mean) / NORMAL / CONTRACTION (<0.5×
+mean) labels — distinct from ATR (N-period EMA of TR) and from the
+bar's raw range (H−L) which ignores gaps;
 LAGUERRE_RSI computes Ehlers's 4-stage Laguerre filter (γ=0.5) with
 L0..L3 intermediate outputs and emits the bounded [0, 1] RSI from
 the count of upward differences across stages, with OVERBOUGHT
