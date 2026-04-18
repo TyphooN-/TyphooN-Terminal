@@ -171,9 +171,8 @@ trades**. Form-4 transaction codes `P` and `S` are treated as buy and sell.
 
 Source: daily OHLCV bars from the bar cache. Key probed in this order:
 
-1. `mt5:CC:{sym}:1Day` — MT5 corporate-action-adjusted
-2. `mt5:{sym}:1Day`    — MT5 raw
-3. `alpaca:{sym}:1Day` — Alpaca daily bars
+1. `mt5:{sym}:1Day`    — MT5 (BarCacheWriter sole producer, 3-part key)
+2. `alpaca:{sym}:1Day` — Alpaca daily bars
 
 The first key with **≥20 bars** wins. Emitted metrics: last close, 20d / 60d /
 252d returns, ATR(14) (Wilder-smoothed), VaR 95% (from

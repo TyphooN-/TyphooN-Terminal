@@ -771,21 +771,27 @@ pub async fn scrape_all_portfolio_symbols(db_path: PathBuf) -> Result<ScrapeStat
             }
         }
 
-        // From bar_cache mt5 keys (format: "mt5:CC:SLV:4Hour")
+        // From bar_cache mt5 keys. BarCacheWriter has always produced 3-part
+        // keys `mt5:{SYM}:{TF}`; metadata lives under `mt5:__NAME__[:…]` and
+        // gets filtered out by the `__` guard below. Fixed-shape parse, no
+        // legacy 4-part arm.
         if let Ok(mut stmt) = conn.prepare(
             "SELECT DISTINCT key FROM bar_cache WHERE key LIKE 'mt5:%'"
         ) {
             if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
                 for row in rows.flatten() {
-                    let parts: Vec<&str> = row.split(':').collect();
-                    let sym_opt = if parts.len() >= 4 {
-                        Some(parts[2].to_uppercase())
-                    } else if parts.len() >= 3 {
-                        Some(parts[1].to_uppercase())
-                    } else { None };
-                    if let Some(sym) = sym_opt {
-                        if is_equity_symbol(&sym) { sym_set.insert(sym); }
-                    }
+                    let rest = match row.strip_prefix("mt5:") {
+                        Some(r) => r,
+                        None => continue,
+                    };
+                    if rest.starts_with("__") { continue; }
+                    let mut it = rest.split(':');
+                    let sym = match it.next() { Some(s) if !s.is_empty() => s, _ => continue };
+                    let tf = match it.next() { Some(s) if !s.is_empty() => s, _ => continue };
+                    if it.next().is_some() { continue; }
+                    let _ = tf;
+                    let sym = sym.to_uppercase();
+                    if is_equity_symbol(&sym) { sym_set.insert(sym); }
                 }
             }
         }
@@ -1822,18 +1828,8 @@ mod tests {
     }
 
     #[test]
-    fn bar_cache_key_parsing_4_part() {
-        // Simulates mt5:CC:SYMBOL:TF format
-        let key = "mt5:CC:AAPL:4Hour";
-        let parts: Vec<&str> = key.split(':').collect();
-        assert_eq!(parts.len(), 4);
-        assert_eq!(parts[2], "AAPL");
-        assert!(is_equity_symbol(&parts[2].to_uppercase()));
-    }
-
-    #[test]
     fn bar_cache_key_parsing_3_part() {
-        // Simulates mt5:SYMBOL:TF format (legacy)
+        // Canonical BarCacheWriter key shape: `mt5:SYM:TF`.
         let key = "mt5:MSFT:1Day";
         let parts: Vec<&str> = key.split(':').collect();
         assert_eq!(parts.len(), 3);
@@ -1843,13 +1839,13 @@ mod tests {
 
     #[test]
     fn bar_cache_key_filters_timeframe_not_symbol() {
-        // Ensure we don't accidentally extract timeframe as symbol
-        let key = "mt5:CC:SLV:15Min";
+        // Ensure we don't accidentally extract timeframe as symbol.
+        let key = "mt5:SLV:15Min";
         let parts: Vec<&str> = key.split(':').collect();
-        let sym = if parts.len() >= 4 { parts[2] } else { parts[1] };
-        assert_eq!(sym, "SLV");
-        assert!(is_equity_symbol(&sym.to_uppercase()));
-        // "15Min" should NOT pass as equity
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[1], "SLV");
+        assert!(is_equity_symbol(&parts[1].to_uppercase()));
+        // "15Min" should NOT pass as equity.
         assert!(!is_equity_symbol("15MIN"));
     }
 

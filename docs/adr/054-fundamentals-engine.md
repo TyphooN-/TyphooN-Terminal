@@ -60,7 +60,7 @@ fundamentals::get_institutional_holders(conn, "SLV")    // Top holders
 
 ### Ticker Extraction from Cache
 
-MT5 cache keys are `"mt5:CC:SLV:4Hour"`. The module parses these and filters out:
+MT5 cache keys are `"mt5:SLV:4Hour"` (3-part: `mt5:{SYM}:{TF}`; BarCacheWriter is the sole producer and has always emitted this shape). The module parses these and filters out:
 - Forex pairs (6-char: EURUSD, GBPJPY, etc.)
 - Crypto (BTCUSD, ETHUSD, SOLUSD, etc.)
 - Indices (starting with # or .)
@@ -98,6 +98,6 @@ When Yahoo returns HTTP 429 (Too Many Requests), the scraper automatically pause
 Scrape Status Dashboard now has individual buttons: "MT5 Only", "Alpaca Only", "TastyTrade Only", "All Sources". Each sends `BrokerCmd::FundamentalsScrape` with the appropriate `use_mt5/use_alpaca/use_tastytrade` flags.
 
 ### Symbol Sources
-`FundamentalsScrape` carries three boolean flags: `use_mt5`, `use_alpaca`, `use_tastytrade`. MT5 symbols extracted from `bar_cache` keys (`mt5:CC:SYMBOL:TF`). Alpaca symbols from `broker.get_all_assets()`. TastyTrade symbols from `tt.get_positions()`.
+`FundamentalsScrape` carries three boolean flags: `use_mt5`, `use_alpaca`, `use_tastytrade`. MT5 symbols extracted from `bar_cache` keys (`mt5:SYMBOL:TF`, 3-part). Alpaca symbols from `broker.get_all_assets()`. TastyTrade symbols from `tt.get_positions()`.
 
 See also: ADR-075 (SwapHarvester), ADR-076 (DarwinexRadar), ADR-077 (Screener)
