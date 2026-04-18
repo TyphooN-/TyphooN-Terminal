@@ -5794,6 +5794,137 @@ pub struct VrocSnapshot {
     pub note: String,
 }
 
+/// KDJ — the Chinese-market Stochastic Oscillator variant built from
+/// `RSV_N = 100·(close−LLV_N)/(HHV_N−LLV_N)` over N=9 bars, then
+/// `K = EMA_{1/3}(RSV)`, `D = EMA_{1/3}(K)`, and the distinguishing
+/// `J = 3·K − 2·D`. J amplifies cross-overs earlier than plain %K/%D,
+/// and its extreme prints (J>100 or J<0) are interpreted as aggressive
+/// overbought/oversold flags. Distinct from STOCH (ADR-108, bare %K/%D
+/// only), STOCHRSI (ADR-137, stochastic-of-RSI rather than
+/// stochastic-of-price), KST (Pring's Know-Sure-Thing, multi-ROC
+/// rate-of-change composite), and WILLR (ADR-134, inverse %R). KDJ
+/// is the one momentum surface that explicitly exposes the amplified
+/// J line as a separate field rather than a derived calculation.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct KdjSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub stoch_length: usize,           // 9 — RSV window
+    pub k_smooth: usize,               // 3 — EMA smoothing constant for K and D (α = 1/3 ⇒ period = 5)
+    pub rsv: f64,                      // raw stochastic %
+    pub k_value: f64,                  // EMA_{1/3}(RSV)
+    pub d_value: f64,                  // EMA_{1/3}(K)
+    pub j_value: f64,                  // 3·K − 2·D
+    pub j_prev: f64,
+    pub last_close: f64,
+    pub kdj_label: String,             // OVERBOUGHT / BULL / NEUTRAL / BEAR / OVERSOLD / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// QQE — Quantitative Qualitative Estimation, a smoothed RSI-based
+/// trend system built by Igor Livshin. Applies 5-bar EMA smoothing to
+/// the RSI (default RSI₁₄) to produce `rsi_smoothed`, then computes an
+/// adaptive trailing band based on Wilder's MA of ΔRSI: `fast_atr_rsi =
+/// Wilder(|ΔRSI|, 14)`, `qqe_fast = rsi_smoothed − 4.236 · fast_atr_rsi_avg`
+/// for the lower band, symmetric upper. The trend line is the lagged
+/// crossover of these bands. Used as both an early-trend filter and an
+/// overbought/oversold gauge — crosses above 50 with trend line below
+/// RSI = bullish entry.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct QqeSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub rsi_length: usize,             // 14
+    pub smooth_length: usize,          // 5
+    pub qqe_factor: f64,               // 4.236
+    pub rsi_value: f64,                // raw RSI
+    pub rsi_smoothed: f64,             // EMA(RSI, 5)
+    pub fast_atr_rsi_avg: f64,         // smoothed Wilder MA of |ΔRSI_smoothed|
+    pub upper_band: f64,               // rsi_smoothed + qqe_factor · fast_atr_rsi_avg
+    pub lower_band: f64,               // rsi_smoothed − qqe_factor · fast_atr_rsi_avg
+    pub qqe_prev: f64,                 // prior bar rsi_smoothed
+    pub last_close: f64,
+    pub qqe_label: String,             // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Martin Pring's Price Momentum Oscillator — a smoothed ROC indicator:
+/// `PMO = EMA(EMA(ROC(close,1)·10, 35), 20)` followed by a 10-bar EMA
+/// signal line. The heavy triple-smoothing produces a highly reactive
+/// but noise-filtered momentum line. Distinct from MACD (EMA₁₂ − EMA₂₆
+/// of close), from TRIX (triple-smoothed EMA of close, ADR-141), and
+/// from PPO (percentage price oscillator); PMO is smoothed-ROC with a
+/// signal line, designed for multi-month swing trading.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PmoSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub smooth1_length: usize,         // 35
+    pub smooth2_length: usize,         // 20
+    pub signal_length: usize,          // 10
+    pub pmo_value: f64,
+    pub pmo_signal: f64,
+    pub pmo_prev: f64,
+    pub histogram: f64,                // pmo − pmo_signal
+    pub last_close: f64,
+    pub pmo_label: String,             // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Tushar Chande's Forecast Oscillator — compares the current close to
+/// the one-bar-ahead forecast from a linear regression fit over N bars:
+/// `CFO = 100 · (close − forecast) / close`. Positive means price is
+/// ahead of trend (bullish deviation), negative means behind (bearish
+/// deviation). Zero crossings are trend-reversal signals in Chande's
+/// systems. Distinct from LINREG (fitted value, ADR-145), TSF
+/// (projected future value, ADR-146), and from PPO / DPO
+/// (non-regression momentum). CFO is the one oscillator built as
+/// close-minus-regression-forecast as a percentage.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CfoSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub slope: f64,                    // OLS slope
+    pub intercept: f64,                // OLS intercept
+    pub forecast: f64,                 // slope·N + intercept (one-bar-ahead)
+    pub cfo_value: f64,                // 100·(close − forecast)/close
+    pub cfo_prev: f64,
+    pub last_close: f64,
+    pub cfo_label: String,             // STRONG_ABOVE_TREND / ABOVE_TREND / NEUTRAL / BELOW_TREND / STRONG_BELOW_TREND / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Colin Twiggs's Twiggs Money Flow — a smoothed, volume-weighted
+/// variant of Chaikin Money Flow (ADR-140). Replaces the bar's full
+/// high/low range with a *true range* (max(high, prev_close) −
+/// min(low, prev_close)) to correctly handle gap bars, then smooths
+/// with an exponential MA rather than a simple sum: TMF tracks
+/// cumulative net volume more smoothly than raw CMF and is less
+/// jittery on gap-heavy instruments. Twiggs's own default is 21-bar
+/// EMA smoothing on both numerator (money flow) and denominator
+/// (volume). Distinct from CMF (range-based, simple sum), ADL
+/// (cumulative total, not ratio), KLINGER (dual-EMA volume force),
+/// and PVT (ROC·volume).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct TmfSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 21
+    pub ema_money_flow: f64,           // EMA of money_flow_volume
+    pub ema_volume: f64,               // EMA of volume
+    pub tmf_value: f64,                // ema_money_flow / ema_volume
+    pub tmf_prev: f64,
+    pub last_close: f64,
+    pub tmf_label: String,             // STRONG_INFLOW / INFLOW / NEUTRAL / OUTFLOW / STRONG_OUTFLOW / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -26147,6 +26278,332 @@ pub fn compute_vroc_snapshot(
     }
 }
 
+/// Chaikin Oscillator — EMA(ADL,3) − EMA(ADL,10).
+pub fn compute_kdj_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> KdjSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let stoch_length = 9usize;
+    let k_smooth = 3usize;
+    let min_bars = stoch_length + k_smooth + 2;
+    if n < min_bars {
+        return KdjSnapshot {
+            symbol: sym, as_of: as_of.into(), stoch_length, k_smooth,
+            kdj_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let mut rsv_series = vec![0.0_f64; n];
+    for i in (stoch_length - 1)..n {
+        let mut hi = f64::NEG_INFINITY;
+        let mut lo = f64::INFINITY;
+        for j in (i + 1 - stoch_length)..=i {
+            if sorted[j].high > hi { hi = sorted[j].high; }
+            if sorted[j].low < lo { lo = sorted[j].low; }
+        }
+        let range = hi - lo;
+        rsv_series[i] = if range > 1e-12 {
+            100.0 * (sorted[i].close - lo) / range
+        } else { 50.0 };
+    }
+    let alpha = 1.0_f64 / k_smooth as f64;
+    let mut k_series = vec![50.0_f64; n];
+    let mut d_series = vec![50.0_f64; n];
+    let mut j_series = vec![50.0_f64; n];
+    let start = stoch_length - 1;
+    k_series[start] = 50.0;
+    d_series[start] = 50.0;
+    j_series[start] = 3.0 * k_series[start] - 2.0 * d_series[start];
+    for i in (start + 1)..n {
+        k_series[i] = alpha * rsv_series[i] + (1.0 - alpha) * k_series[i - 1];
+        d_series[i] = alpha * k_series[i] + (1.0 - alpha) * d_series[i - 1];
+        j_series[i] = 3.0 * k_series[i] - 2.0 * d_series[i];
+    }
+    let rsv = rsv_series[n - 1];
+    let k_value = k_series[n - 1];
+    let d_value = d_series[n - 1];
+    let j_value = j_series[n - 1];
+    let j_prev = j_series[n - 2];
+    let last_close = sorted[n - 1].close;
+    let label = if k_value > 80.0 && j_value > 90.0 { "OVERBOUGHT" }
+        else if k_value < 20.0 && j_value < 10.0 { "OVERSOLD" }
+        else if k_value > d_value && j_value > 50.0 { "BULL" }
+        else if k_value < d_value && j_value < 50.0 { "BEAR" }
+        else { "NEUTRAL" };
+    KdjSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        stoch_length, k_smooth,
+        rsv, k_value, d_value, j_value, j_prev,
+        last_close,
+        kdj_label: label.into(), note: String::new(),
+    }
+}
+
+/// QQE — smoothed RSI with adaptive bands.
+pub fn compute_qqe_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> QqeSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let rsi_length = 14usize;
+    let smooth_length = 5usize;
+    let qqe_factor = 4.236_f64;
+    let wilder_length = rsi_length * 2 + 1;
+    let min_bars = rsi_length + smooth_length + wilder_length + 2;
+    if n < min_bars {
+        return QqeSnapshot {
+            symbol: sym, as_of: as_of.into(), rsi_length, smooth_length, qqe_factor,
+            qqe_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|r| r.close).collect();
+    // Build RSI series
+    let mut gains = vec![0.0; n];
+    let mut losses = vec![0.0; n];
+    for i in 1..n {
+        let d = closes[i] - closes[i - 1];
+        if d > 0.0 { gains[i] = d; } else { losses[i] = -d; }
+    }
+    let mut avg_gain = gains[1..=rsi_length].iter().sum::<f64>() / rsi_length as f64;
+    let mut avg_loss = losses[1..=rsi_length].iter().sum::<f64>() / rsi_length as f64;
+    let mut rsi = vec![f64::NAN; n];
+    rsi[rsi_length] = if avg_loss > 1e-12 {
+        100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
+    } else { 100.0 };
+    for i in (rsi_length + 1)..n {
+        avg_gain = (avg_gain * (rsi_length as f64 - 1.0) + gains[i]) / rsi_length as f64;
+        avg_loss = (avg_loss * (rsi_length as f64 - 1.0) + losses[i]) / rsi_length as f64;
+        rsi[i] = if avg_loss > 1e-12 { 100.0 - 100.0 / (1.0 + avg_gain / avg_loss) } else { 100.0 };
+    }
+    // EMA smoothing on RSI
+    let alpha_s = 2.0 / (smooth_length as f64 + 1.0);
+    let mut rsi_s = vec![f64::NAN; n];
+    rsi_s[rsi_length] = rsi[rsi_length];
+    for i in (rsi_length + 1)..n {
+        rsi_s[i] = alpha_s * rsi[i] + (1.0 - alpha_s) * rsi_s[i - 1];
+    }
+    // |ΔRSI_smoothed| and Wilder smoothing (period = rsi_length*2+1)
+    let mut delta_abs = vec![0.0; n];
+    for i in (rsi_length + 2)..n { delta_abs[i] = (rsi_s[i] - rsi_s[i - 1]).abs(); }
+    let wl = wilder_length as f64;
+    let mut atr_rsi = vec![0.0; n];
+    let start = rsi_length + wilder_length + 2;
+    if n < start + 1 {
+        return QqeSnapshot {
+            symbol: sym, as_of: as_of.into(), rsi_length, smooth_length, qqe_factor,
+            qqe_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", start + 1, n),
+            ..Default::default()
+        };
+    }
+    let init: f64 = delta_abs[(rsi_length + 2)..(rsi_length + 2 + wilder_length)].iter().sum::<f64>() / wl;
+    atr_rsi[rsi_length + wilder_length + 1] = init;
+    for i in (rsi_length + wilder_length + 2)..n {
+        atr_rsi[i] = (atr_rsi[i - 1] * (wl - 1.0) + delta_abs[i]) / wl;
+    }
+    // Second smoothing (Wilder on atr_rsi)
+    let mut fast_avg = vec![0.0; n];
+    let s2_start = rsi_length + wilder_length * 2 + 1;
+    if n < s2_start + 1 {
+        return QqeSnapshot {
+            symbol: sym, as_of: as_of.into(), rsi_length, smooth_length, qqe_factor,
+            qqe_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", s2_start + 1, n),
+            ..Default::default()
+        };
+    }
+    let init2: f64 = atr_rsi[(rsi_length + wilder_length + 1)..(rsi_length + wilder_length + 1 + wilder_length)].iter().sum::<f64>() / wl;
+    fast_avg[rsi_length + wilder_length * 2] = init2;
+    for i in (rsi_length + wilder_length * 2 + 1)..n {
+        fast_avg[i] = (fast_avg[i - 1] * (wl - 1.0) + atr_rsi[i]) / wl;
+    }
+    let rsi_value = rsi[n - 1];
+    let rsi_smoothed = rsi_s[n - 1];
+    let fast_atr_rsi_avg = fast_avg[n - 1];
+    let upper_band = rsi_smoothed + qqe_factor * fast_atr_rsi_avg;
+    let lower_band = rsi_smoothed - qqe_factor * fast_atr_rsi_avg;
+    let qqe_prev = rsi_s[n - 2];
+    let label = if rsi_smoothed >= 70.0 { "STRONG_BULL" }
+        else if rsi_smoothed >= 55.0 { "BULL" }
+        else if rsi_smoothed <= 30.0 { "STRONG_BEAR" }
+        else if rsi_smoothed <= 45.0 { "BEAR" }
+        else { "NEUTRAL" };
+    QqeSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        rsi_length, smooth_length, qqe_factor,
+        rsi_value, rsi_smoothed, fast_atr_rsi_avg,
+        upper_band, lower_band, qqe_prev,
+        last_close: sorted[n - 1].close,
+        qqe_label: label.into(), note: String::new(),
+    }
+}
+
+/// Pring PMO — double-smoothed ROC with 10-bar signal.
+pub fn compute_pmo_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PmoSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let s1 = 35usize;
+    let s2 = 20usize;
+    let sig = 10usize;
+    let min_bars = s1 + s2 + sig + 4;
+    if n < min_bars {
+        return PmoSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            smooth1_length: s1, smooth2_length: s2, signal_length: sig,
+            pmo_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|r| r.close).collect();
+    let mut roc = vec![0.0; n];
+    for i in 1..n {
+        if closes[i - 1] > 1e-12 { roc[i] = (closes[i] / closes[i - 1] - 1.0) * 1000.0; }
+    }
+    let ema = |src: &[f64], period: usize| -> Vec<f64> {
+        let alpha = 2.0 / (period as f64 + 1.0);
+        let mut out = vec![0.0; src.len()];
+        out[0] = src[0];
+        for i in 1..src.len() { out[i] = alpha * src[i] + (1.0 - alpha) * out[i - 1]; }
+        out
+    };
+    let e1 = ema(&roc, s1);
+    let e2 = ema(&e1, s2);
+    let signal = ema(&e2, sig);
+    let pmo_value = e2[n - 1];
+    let pmo_prev = e2[n - 2];
+    let pmo_signal = signal[n - 1];
+    let histogram = pmo_value - pmo_signal;
+    let label = if pmo_value > pmo_signal && histogram > 0.5 { "STRONG_BULL" }
+        else if pmo_value > pmo_signal { "BULL" }
+        else if pmo_value < pmo_signal && histogram < -0.5 { "STRONG_BEAR" }
+        else if pmo_value < pmo_signal { "BEAR" }
+        else { "NEUTRAL" };
+    PmoSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        smooth1_length: s1, smooth2_length: s2, signal_length: sig,
+        pmo_value, pmo_signal, pmo_prev, histogram,
+        last_close: sorted[n - 1].close,
+        pmo_label: label.into(), note: String::new(),
+    }
+}
+
+/// Chande Forecast Oscillator — 100·(close − forecast)/close.
+pub fn compute_cfo_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CfoSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 14usize;
+    if n < length + 2 {
+        return CfoSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            cfo_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 2, n),
+            ..Default::default()
+        };
+    }
+    let cfo_at = |end: usize| -> (f64, f64, f64, f64) {
+        let start = end + 1 - length;
+        let xs: Vec<f64> = (0..length).map(|i| i as f64).collect();
+        let ys: Vec<f64> = sorted[start..=end].iter().map(|r| r.close).collect();
+        let nf = length as f64;
+        let mx: f64 = xs.iter().sum::<f64>() / nf;
+        let my: f64 = ys.iter().sum::<f64>() / nf;
+        let mut num = 0.0; let mut den = 0.0;
+        for i in 0..length { let dx = xs[i] - mx; num += dx * (ys[i] - my); den += dx * dx; }
+        let slope = if den > 1e-12 { num / den } else { 0.0 };
+        let intercept = my - slope * mx;
+        let forecast = slope * (length as f64) + intercept;
+        let close = ys[length - 1];
+        let v = if close > 1e-12 { 100.0 * (close - forecast) / close } else { 0.0 };
+        (slope, intercept, forecast, v)
+    };
+    let (slope, intercept, forecast, cfo_value) = cfo_at(n - 1);
+    let (_, _, _, cfo_prev) = cfo_at(n - 2);
+    let label = if cfo_value >= 2.0 { "STRONG_ABOVE_TREND" }
+        else if cfo_value >= 0.5 { "ABOVE_TREND" }
+        else if cfo_value <= -2.0 { "STRONG_BELOW_TREND" }
+        else if cfo_value <= -0.5 { "BELOW_TREND" }
+        else { "NEUTRAL" };
+    CfoSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        length, slope, intercept, forecast,
+        cfo_value, cfo_prev,
+        last_close: sorted[n - 1].close,
+        cfo_label: label.into(), note: String::new(),
+    }
+}
+
+/// Twiggs Money Flow — EMA-smoothed money-flow ratio with true-range MFM.
+pub fn compute_tmf_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> TmfSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 21usize;
+    if n < length + 2 {
+        return TmfSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            tmf_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 2, n),
+            ..Default::default()
+        };
+    }
+    let mut money_flow_volume = vec![0.0; n];
+    for i in 1..n {
+        let r = sorted[i];
+        let prev_close = sorted[i - 1].close;
+        let tr_high = r.high.max(prev_close);
+        let tr_low = r.low.min(prev_close);
+        let trange = tr_high - tr_low;
+        let mfm = if trange > 1e-12 {
+            ((r.close - tr_low) - (tr_high - r.close)) / trange
+        } else { 0.0 };
+        money_flow_volume[i] = mfm * r.volume;
+    }
+    let ema = |src: &[f64], period: usize| -> Vec<f64> {
+        let alpha = 2.0 / (period as f64 + 1.0);
+        let mut out = vec![0.0; src.len()];
+        out[0] = src[0];
+        for i in 1..src.len() { out[i] = alpha * src[i] + (1.0 - alpha) * out[i - 1]; }
+        out
+    };
+    let volumes: Vec<f64> = sorted.iter().map(|r| r.volume).collect();
+    let emf = ema(&money_flow_volume, length);
+    let ev = ema(&volumes, length);
+    let tmf_value = if ev[n - 1].abs() > 1e-12 { emf[n - 1] / ev[n - 1] } else { 0.0 };
+    let tmf_prev = if ev[n - 2].abs() > 1e-12 { emf[n - 2] / ev[n - 2] } else { 0.0 };
+    let label = if tmf_value >= 0.25 { "STRONG_INFLOW" }
+        else if tmf_value >= 0.05 { "INFLOW" }
+        else if tmf_value <= -0.25 { "STRONG_OUTFLOW" }
+        else if tmf_value <= -0.05 { "OUTFLOW" }
+        else { "NEUTRAL" };
+    TmfSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        length, ema_money_flow: emf[n - 1], ema_volume: ev[n - 1],
+        tmf_value, tmf_prev,
+        last_close: sorted[n - 1].close,
+        tmf_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -34971,6 +35428,157 @@ pub fn get_vroc(conn: &Connection, symbol: &str) -> Result<Option<VrocSnapshot>,
         .map_err(|e| format!("prepare get_vroc: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_vroc: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_vroc: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn create_research_tables_v59(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v58(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_kdj (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_kdj_updated ON research_kdj(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_qqe (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_qqe_updated ON research_qqe(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_pmo (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_pmo_updated ON research_pmo(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cfo (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cfo_updated ON research_cfo(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_tmf (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_tmf_updated ON research_tmf(updated_at);",
+    ).map_err(|e| format!("create v59 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_kdj(conn: &Connection, symbol: &str, snap: &KdjSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v59(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("kdj json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_kdj(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert kdj: {e}"))?;
+    Ok(())
+}
+
+pub fn get_kdj(conn: &Connection, symbol: &str) -> Result<Option<KdjSnapshot>, String> {
+    let _ = create_research_tables_v59(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_kdj WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_kdj: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_kdj: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_kdj: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_qqe(conn: &Connection, symbol: &str, snap: &QqeSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v59(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("qqe json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_qqe(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert qqe: {e}"))?;
+    Ok(())
+}
+
+pub fn get_qqe(conn: &Connection, symbol: &str) -> Result<Option<QqeSnapshot>, String> {
+    let _ = create_research_tables_v59(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_qqe WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_qqe: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_qqe: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_qqe: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_pmo(conn: &Connection, symbol: &str, snap: &PmoSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v59(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("pmo json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_pmo(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert pmo: {e}"))?;
+    Ok(())
+}
+
+pub fn get_pmo(conn: &Connection, symbol: &str) -> Result<Option<PmoSnapshot>, String> {
+    let _ = create_research_tables_v59(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_pmo WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_pmo: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_pmo: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_pmo: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cfo(conn: &Connection, symbol: &str, snap: &CfoSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v59(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cfo json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cfo(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cfo: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cfo(conn: &Connection, symbol: &str) -> Result<Option<CfoSnapshot>, String> {
+    let _ = create_research_tables_v59(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cfo WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_cfo: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_cfo: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_cfo: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_tmf(conn: &Connection, symbol: &str, snap: &TmfSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v59(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("tmf json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_tmf(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert tmf: {e}"))?;
+    Ok(())
+}
+
+pub fn get_tmf(conn: &Connection, symbol: &str) -> Result<Option<TmfSnapshot>, String> {
+    let _ = create_research_tables_v59(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_tmf WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_tmf: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_tmf: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_tmf: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -46098,6 +46706,147 @@ Trailing text.
             "SURGE" | "ELEVATED" | "NEUTRAL" | "QUIET" | "COLLAPSE" | "INSUFFICIENT_DATA"));
         if snap.vroc_label != "INSUFFICIENT_DATA" {
             assert!(snap.vroc_value.is_finite());
+        }
+    }
+
+    #[test]
+    fn kdj_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = KdjSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            stoch_length: 9, k_smooth: 3,
+            rsv: 70.0, k_value: 65.0, d_value: 60.0, j_value: 75.0, j_prev: 70.0,
+            last_close: 100.0,
+            kdj_label: "BULL".into(), note: String::new(),
+        };
+        upsert_kdj(&conn, "TEST", &snap).unwrap();
+        let got = get_kdj(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.kdj_label, "BULL");
+        assert!((got.j_value - 75.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn kdj_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_kdj_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.kdj_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.kdj_label != "INSUFFICIENT_DATA" {
+            assert!(snap.k_value.is_finite());
+            assert!(snap.k_value >= 0.0 && snap.k_value <= 100.0);
+            assert!(snap.d_value >= 0.0 && snap.d_value <= 100.0);
+            assert!(snap.j_value.is_finite());
+        }
+    }
+
+    #[test]
+    fn qqe_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = QqeSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            rsi_length: 14, smooth_length: 5, qqe_factor: 4.236,
+            rsi_value: 62.0, rsi_smoothed: 60.0, fast_atr_rsi_avg: 1.5,
+            upper_band: 66.354, lower_band: 53.646, qqe_prev: 58.0,
+            last_close: 100.0,
+            qqe_label: "BULL".into(), note: String::new(),
+        };
+        upsert_qqe(&conn, "TEST", &snap).unwrap();
+        let got = get_qqe(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.qqe_label, "BULL");
+        assert!((got.rsi_smoothed - 60.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn qqe_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_qqe_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.qqe_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.qqe_label != "INSUFFICIENT_DATA" {
+            assert!(snap.rsi_smoothed.is_finite());
+            assert!(snap.rsi_smoothed >= 0.0 && snap.rsi_smoothed <= 100.0);
+        }
+    }
+
+    #[test]
+    fn pmo_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = PmoSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            smooth1_length: 35, smooth2_length: 20, signal_length: 10,
+            pmo_value: 2.5, pmo_signal: 1.8, pmo_prev: 2.1, histogram: 0.7,
+            last_close: 100.0,
+            pmo_label: "BULL".into(), note: String::new(),
+        };
+        upsert_pmo(&conn, "TEST", &snap).unwrap();
+        let got = get_pmo(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.pmo_label, "BULL");
+        assert!((got.pmo_value - 2.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pmo_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_pmo_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.pmo_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.pmo_label != "INSUFFICIENT_DATA" {
+            assert!(snap.pmo_value.is_finite());
+        }
+    }
+
+    #[test]
+    fn cfo_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CfoSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            length: 14, slope: 0.25, intercept: 98.0, forecast: 101.5,
+            cfo_value: -1.5, cfo_prev: -0.8,
+            last_close: 100.0,
+            cfo_label: "BELOW_TREND".into(), note: String::new(),
+        };
+        upsert_cfo(&conn, "TEST", &snap).unwrap();
+        let got = get_cfo(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cfo_label, "BELOW_TREND");
+        assert!((got.cfo_value - (-1.5)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cfo_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_cfo_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.cfo_label.as_str(),
+            "STRONG_ABOVE_TREND" | "ABOVE_TREND" | "NEUTRAL" | "BELOW_TREND" | "STRONG_BELOW_TREND" | "INSUFFICIENT_DATA"));
+        if snap.cfo_label != "INSUFFICIENT_DATA" {
+            assert!(snap.cfo_value.is_finite());
+        }
+    }
+
+    #[test]
+    fn tmf_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = TmfSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            length: 21, ema_money_flow: 120_000.0, ema_volume: 1_000_000.0,
+            tmf_value: 0.12, tmf_prev: 0.08,
+            last_close: 100.0,
+            tmf_label: "INFLOW".into(), note: String::new(),
+        };
+        upsert_tmf(&conn, "TEST", &snap).unwrap();
+        let got = get_tmf(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.tmf_label, "INFLOW");
+        assert!((got.tmf_value - 0.12).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tmf_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_tmf_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.tmf_label.as_str(),
+            "STRONG_INFLOW" | "INFLOW" | "NEUTRAL" | "OUTFLOW" | "STRONG_OUTFLOW" | "INSUFFICIENT_DATA"));
+        if snap.tmf_label != "INSUFFICIENT_DATA" {
+            assert!(snap.tmf_value.is_finite());
+            assert!(snap.tmf_value >= -1.0 && snap.tmf_value <= 1.0);
         }
     }
 }

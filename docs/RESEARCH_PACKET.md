@@ -3937,8 +3937,8 @@ flow (accumulation); bars closing in the lower half contribute
 negative (distribution). Distinct from OBV (raw signed volume,
 range-agnostic), CMF (ranged ratio over N bars, ADR-140), KLINGER
 (dual-EMA transformation of volume force, ADR-152), PVT (ROC·volume
-rather than MFM·volume, ADR-164), and from the Chaikin Oscillator
-(ADOSC, difference of EMAs on ADL — not shipped). Reports ADL,
+rather than MFM·volume, ADR-164), and from the Chaikin A/D Oscillator
+(CHAIKOSC, difference of EMAs on ADL, ADR-156). Reports ADL,
 ADL_prev, ADL_SMA(20), OLS slope of last 20 ADL points,
 price_delta_pct over the same window, and a label derived from the
 normalised slope. STRONG_ACCUMULATION / ACCUMULATION / NEUTRAL /
@@ -3977,7 +3977,87 @@ NEUTRAL / QUIET (≤−20%) / COLLAPSE (≤−50%) labels. Requires n≥16;
 body reports length (14), volume_now, volume_then, vroc_value,
 vroc_prev, last_close. Source: ADR-168 VROC window.
 
-#### 2.273 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.273 KDJ Chinese Stochastic (KDJ — ADR-169)
+
+Pulled from `research::get_kdj`. KDJ is the default-bundled oscillator
+on nearly every Chinese-market terminal (Tonghuashun, Eastmoney,
+Futubull). Built on the same RSV = 100·(close − LLV_N)/(HHV_N − LLV_N)
+base as Stochastic (ADR-108) with canonical N=9, but with EMA₁/₃
+smoothing for both %K and %D: `K = EMA₁/₃(RSV)`, `D = EMA₁/₃(K)`,
+`J = 3·K − 2·D`. The J line's 3× leverage difference can exceed 100
+or drop below 0 — exactly the extreme J readings produce the early
+overbought/oversold signal the bounded %K/%D pair cannot. Distinct
+from STOCH (simple MA smoothing, ADR-108), STOCHF (no smoothing),
+and STOCHRSI (ADR-137). OVERBOUGHT / BULL / NEUTRAL / BEAR /
+OVERSOLD labels derived from K/D cross, J magnitude, and the
+80/50/20 threshold ladder. Requires n≥12; body reports
+stoch_length (9), k_smooth (3), rsv, k_value, d_value, j_value,
+j_prev, last_close. Source: ADR-169 KDJ window.
+
+#### 2.274 Quantitative Qualitative Estimation (QQE — ADR-169)
+
+Pulled from `research::get_qqe`. Igor Livshin's QQE applies 5-bar
+EMA smoothing to the RSI (default RSI₁₄) to produce `rsi_smoothed`,
+then a Wilder smoothed average of `|Δrsi_smoothed|` scaled by 4.236
+gives an adaptive trailing band. Used as both an early-trend
+filter and an overbought/oversold gauge. Distinct from raw RSI
+(ADR-108), STOCHRSI (ADR-137), CRSI (Connors composite, ADR-167),
+and RVI (ADR-114). STRONG_BULL / BULL / NEUTRAL / BEAR /
+STRONG_BEAR labels derived from smoothed RSI crossing the 50 line
+and direction vs prior bar. Requires n≥40; body reports
+rsi_length (14), smooth_length (5), qqe_factor (4.236), rsi_value,
+rsi_smoothed, fast_atr_rsi_avg, upper_band, lower_band, qqe_prev,
+last_close. Source: ADR-169 QQE window.
+
+#### 2.275 Price Momentum Oscillator (PMO — ADR-169)
+
+Pulled from `research::get_pmo`. Martin Pring's PMO is a
+double-smoothed ROC: `PMO = EMA(EMA(ROC(close,1)·10, 35), 20)` with
+a 10-bar EMA signal line. The heavy triple-smoothing produces a
+reactive-but-noise-filtered momentum line well suited to
+multi-month swing trading. Distinct from MACD (EMA₁₂ − EMA₂₆ of
+close, ADR-108), TRIX (triple-smoothed EMA of close, ADR-141), and
+PPO (ADR-132); PMO is the only canonical smoothed-ROC-plus-signal
+pair. STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR labels
+derived from PMO/signal relationship and histogram sign. Requires
+n≥70; body reports smooth1_length (35), smooth2_length (20),
+signal_length (10), pmo_value, pmo_signal, pmo_prev, histogram,
+last_close. Source: ADR-169 PMO window.
+
+#### 2.276 Chande Forecast Oscillator (CFO — ADR-169)
+
+Pulled from `research::get_cfo`. Tushar Chande's CFO compares the
+current close to the one-bar-ahead forecast from a linear
+regression fit over N=14 bars: `CFO = 100·(close − forecast)/close`.
+Positive means price is ahead of trend (bullish deviation);
+negative means behind (bearish deviation); zero-crossings are
+trend-reversal signals. Distinct from LINREG (fitted value,
+ADR-145), TSF (projected future value, ADR-146), DPO (ADR-131),
+and PPO (non-regression momentum, ADR-132). CFO is the one
+oscillator built as close-minus-regression-forecast as a
+percentage. STRONG_ABOVE_TREND / ABOVE_TREND / NEUTRAL /
+BELOW_TREND / STRONG_BELOW_TREND labels. Requires n≥15; body
+reports length (14), slope, intercept, forecast, cfo_value,
+cfo_prev, last_close. Source: ADR-169 CFO window.
+
+#### 2.277 Twiggs Money Flow (TMF — ADR-169)
+
+Pulled from `research::get_tmf`. Colin Twiggs's smoothed,
+volume-weighted variant of Chaikin Money Flow (ADR-140). Replaces
+the bar's full high/low range with a **true range** (max(high,
+prev_close) − min(low, prev_close)) to correctly handle gap bars,
+then smooths with an exponential MA rather than a simple N-bar
+sum: TMF tracks cumulative net volume more smoothly than raw CMF
+and is less jittery on gap-heavy instruments. Default is 21-bar
+EMA smoothing on both numerator (money flow volume) and
+denominator (volume). Distinct from CMF (ADR-140), ADL (ADR-168),
+KLINGER (ADR-152), PVT (ADR-164), and CHAIKOSC (ADR-156).
+STRONG_INFLOW / INFLOW / NEUTRAL / OUTFLOW / STRONG_OUTFLOW
+labels. Requires n≥22 with volume; body reports length (21),
+ema_money_flow, ema_volume, tmf_value, tmf_prev, last_close.
+Source: ADR-169 TMF window.
+
+#### 2.278 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -3993,7 +4073,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.274 Sector peer comparison
+#### 2.279 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -4253,8 +4333,46 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~82-157 KB**
-(up from 81-155 KB after ADR-167; ADR-168 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~83-159 KB**
+(up from 82-157 KB after ADR-168; ADR-169 adds five optional per-symbol
+blocks — KDJ / QQE / PMO / CFO / TMF — each measuring ~2 k/v rows and
+adding ~260-320 bytes when populated, for a typical +1.44 KB per symbol;
+all five reuse the existing `research_historical_price` HP cache and the
+standard research-table LAN sync path with zero new API dependencies;
+KDJ computes the Chinese-market Stochastic variant with RSV over a
+9-bar HHV/LLV base, EMA₁/₃ smoothing for K and D (`K = EMA₁/₃(RSV)`,
+`D = EMA₁/₃(K)`), and `J = 3·K − 2·D` — the J line's 3× leverage
+difference can exceed 100 or drop below 0, surfacing extreme readings
+the bounded %K/%D pair cannot, with OVERBOUGHT / BULL / NEUTRAL /
+BEAR / OVERSOLD labels driven by K/D crossover, J magnitude, and
+the 80/50/20 threshold ladder — distinct from STOCH (simple MA
+smoothing, ADR-108), STOCHF (no smoothing), and STOCHRSI (ADR-137);
+QQE computes Igor Livshin's Quantitative Qualitative Estimation
+as 5-bar EMA smoothing of RSI₁₄ followed by an adaptive ±4.236·σ
+trailing band where σ is the Wilder smoothed average of
+`|Δrsi_smoothed|`, with STRONG_BULL / BULL / NEUTRAL / BEAR /
+STRONG_BEAR labels derived from smoothed RSI crossing 50 and
+direction vs prior — distinct from raw RSI (ADR-108), STOCHRSI
+(ADR-137), CRSI (ADR-167), and RVI (ADR-114); PMO computes Martin
+Pring's Price Momentum Oscillator as a triple-smoothed ROC
+`EMA(EMA(ROC(close,1)·10, 35), 20)` with a 10-bar EMA signal line,
+reporting PMO value, signal, and histogram with STRONG_BULL / BULL
+/ NEUTRAL / BEAR / STRONG_BEAR labels — distinct from MACD, TRIX,
+and PPO on the momentum-with-signal axis; CFO computes Tushar
+Chande's Forecast Oscillator as `100·(close − linreg_forecast)/close`
+over N=14 bars with STRONG_ABOVE_TREND / ABOVE_TREND / NEUTRAL /
+BELOW_TREND / STRONG_BELOW_TREND labels — the one canonical
+close-minus-regression-forecast-as-pct oscillator, distinct from
+LINREG (ADR-145), TSF (ADR-146), DPO (ADR-131), and PPO; TMF
+computes Colin Twiggs's Money Flow as an EMA-smoothed
+volume-weighted money flow using a **true range**
+`max(high, prev_close) − min(low, prev_close)` that correctly
+handles gap bars, with 21-bar EMA on both numerator
+(`MFM · volume`) and denominator (`volume`), producing
+STRONG_INFLOW / INFLOW / NEUTRAL / OUTFLOW / STRONG_OUTFLOW labels
+— distinct from CMF (range-based simple sum, ADR-140), ADL
+(cumulative total, ADR-168), KLINGER (ADR-152), PVT (ADR-164),
+and CHAIKOSC (ADR-156); ADR-168 added five optional per-symbol
 blocks — GMMA / MAENV / ADL / VHF / VROC — each measuring ~2 k/v rows and
 adding ~240-320 bytes when populated, for a typical +1.39 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the

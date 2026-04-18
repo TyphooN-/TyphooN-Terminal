@@ -460,6 +460,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_adl",
     "research_vhf",
     "research_vroc",
+    // ── ADR-169 Round 57 ────────────────────────────
+    "research_kdj",
+    "research_qqe",
+    "research_pmo",
+    "research_cfo",
+    "research_tmf",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2576,6 +2582,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_kdj" => Some(
+            "CREATE TABLE IF NOT EXISTS research_kdj (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_qqe" => Some(
+            "CREATE TABLE IF NOT EXISTS research_qqe (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_pmo" => Some(
+            "CREATE TABLE IF NOT EXISTS research_pmo (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cfo" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cfo (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_tmf" => Some(
+            "CREATE TABLE IF NOT EXISTS research_tmf (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2899,6 +2940,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_adl" => Some("updated_at"),
         "research_vhf" => Some("updated_at"),
         "research_vroc" => Some("updated_at"),
+        // ── ADR-169 Round 57 ──
+        "research_kdj" => Some("updated_at"),
+        "research_qqe" => Some("updated_at"),
+        "research_pmo" => Some("updated_at"),
+        "research_cfo" => Some("updated_at"),
+        "research_tmf" => Some("updated_at"),
         _ => None,
     }
 }
