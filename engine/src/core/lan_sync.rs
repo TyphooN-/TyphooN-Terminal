@@ -478,6 +478,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_bw_mfi",
     "research_vwma",
     "research_stddev",
+    // ── ADR-172 Round 60 ────────────────────────────
+    "research_wma",
+    "research_rainbow",
+    "research_mesa_sine",
+    "research_frama",
+    "research_ibs",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2699,6 +2705,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_wma" => Some(
+            "CREATE TABLE IF NOT EXISTS research_wma (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_rainbow" => Some(
+            "CREATE TABLE IF NOT EXISTS research_rainbow (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_mesa_sine" => Some(
+            "CREATE TABLE IF NOT EXISTS research_mesa_sine (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_frama" => Some(
+            "CREATE TABLE IF NOT EXISTS research_frama (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_ibs" => Some(
+            "CREATE TABLE IF NOT EXISTS research_ibs (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -3040,6 +3081,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_bw_mfi" => Some("updated_at"),
         "research_vwma" => Some("updated_at"),
         "research_stddev" => Some("updated_at"),
+        // ── ADR-172 Round 60 ──
+        "research_wma" => Some("updated_at"),
+        "research_rainbow" => Some("updated_at"),
+        "research_mesa_sine" => Some("updated_at"),
+        "research_frama" => Some("updated_at"),
+        "research_ibs" => Some("updated_at"),
         _ => None,
     }
 }

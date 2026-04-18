@@ -6179,6 +6179,142 @@ pub struct StddevSnapshot {
     pub note: String,
 }
 
+// ── ADR-172 Round 60 — WMA / RAINBOW / MESA_SINE / FRAMA / IBS ─────────────
+
+/// Weighted Moving Average (WMA) — a linearly-weighted moving
+/// average where weights increase from 1 (oldest) to N (newest):
+/// `wma = Σ(price[i] · (i+1)) / Σ(i+1)` for i in 0..N-1 with N=20.
+/// WMA puts more emphasis on recent bars than SMA but less than
+/// EMA, producing a smoother line that still reacts to recent
+/// price changes. Distinct from SMA (equal weights), EMA
+/// (exponential decay), HMA (WMA of 2·WMA(n/2) − WMA(n)),
+/// DEMA/TEMA (EMA recursion), and ALMA (Gaussian kernel).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct WmaSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 20
+    pub wma_value: f64,
+    pub wma_prev: f64,
+    pub sma_value: f64,
+    pub spread: f64,                   // close − wma
+    pub spread_pct: f64,               // (close − wma) / wma
+    pub last_close: f64,
+    pub wma_label: String,             // BULL / WEAK_BULL / NEUTRAL / WEAK_BEAR / BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Rainbow MA Oscillator — a multi-level recursive SMA stack
+/// where `r_1 = SMA(close, 2)`, `r_2 = SMA(r_1, 2)`, ..., `r_10 =
+/// SMA(r_9, 2)`. The 10 levels create a "rainbow" fan around
+/// price, and the oscillator reports the highest-high minus
+/// lowest-low across the levels (the rainbow width) along with
+/// the fan's current center. A wide rainbow means strong trend
+/// (levels spread apart); a narrow rainbow means consolidation
+/// (levels bunched tightly). Distinct from GMMA (Guppy's
+/// 12-line EMA fan, ADR-168) which uses EMAs of varying lengths
+/// rather than recursive 2-bar SMAs.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct RainbowSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub levels: usize,                 // 10
+    pub highest_level: f64,            // max across r_1..r_10
+    pub lowest_level: f64,             // min across r_1..r_10
+    pub rainbow_width: f64,            // highest - lowest
+    pub rainbow_width_pct: f64,        // width / center
+    pub center_value: f64,             // mean of all levels
+    pub r1: f64,
+    pub r5: f64,
+    pub r10: f64,
+    pub last_close: f64,
+    pub rainbow_label: String,         // STRONG_TREND / TRENDING / CONSOLIDATING / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Ehlers MESA Sine Wave — uses a simplified Hilbert-transform
+/// phase estimator to detect the dominant cycle phase and emits
+/// `sine = sin(phase)` and `lead_sine = sin(phase + 45°)`. When
+/// the sine crosses above the lead_sine, a cycle-bottom buy is
+/// flagged; when it crosses below, a cycle-top sell is flagged.
+/// In trending markets the two lines separate and fail to cross,
+/// producing no signals — a useful regime filter in itself.
+/// Distinct from MAMA (phase-adaptive MA, ADR-170), FISHER
+/// (probability Gaussianization, ADR-129), and COG (weighted
+/// centroid, ADR-170); MESA_SINE focuses on cycle phase rather
+/// than value or momentum.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MesaSineSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: f64,                   // detected dominant cycle period in bars
+    pub phase_rad: f64,                // current phase angle
+    pub sine_value: f64,               // sin(phase)
+    pub lead_sine: f64,                // sin(phase + π/4)
+    pub sine_prev: f64,
+    pub lead_prev: f64,
+    pub last_close: f64,
+    pub mesa_label: String,            // CYCLE_BUY / CYCLE_SELL / TRENDING / NEUTRAL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Fractal Adaptive Moving Average (FRAMA) — Ehlers's adaptive MA
+/// where the smoothing α is driven by the fractal dimension D of
+/// the price series over the last N bars. Computed by dividing
+/// N=16 into two halves, measuring the H-L range of each half
+/// and the combined range, then solving for D from the Hurst-like
+/// ratio; α = exp(-4.6·(D − 1)). Strong trends (D near 1.0)
+/// yield α ≈ 1 (fast-following); choppy markets (D near 2.0)
+/// yield α near 0.01 (heavy smoothing). Distinct from KAMA
+/// (efficiency-ratio adaptive, ADR-117), VIDYA (volatility-index
+/// adaptive, ADR-148), MAMA (Hilbert-phase adaptive, ADR-170),
+/// and T3 (Tillson triple-DEMA, ADR-142).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct FramaSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 16
+    pub fractal_dim: f64,              // D ∈ [1, 2]
+    pub alpha: f64,                    // exp(-4.6·(D-1))
+    pub frama_value: f64,
+    pub frama_prev: f64,
+    pub spread: f64,                   // close - frama
+    pub last_close: f64,
+    pub frama_label: String,           // STRONG_TREND / TREND / CHOP / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Internal Bar Strength (IBS) — the position of close within the
+/// current bar's high/low range: `ibs = (close − low) / (high −
+/// low)`, bounded on `[0, 1]`. A 14-bar SMA smooths the raw
+/// reading. Values near 1 indicate close at the high (bullish
+/// conviction within the bar); values near 0 indicate close at
+/// the low (bearish conviction). IBS is a mean-reversion favorite
+/// — high IBS readings (>0.8) often precede short-term
+/// pullbacks, low IBS (<0.2) often precede bounces. Distinct from
+/// STOCH (%K over N-bar HHV/LLV, ADR-108) which spans multiple
+/// bars, and from every momentum oscillator; IBS is a single-bar
+/// position metric.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct IbsSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub ibs_raw: f64,                  // current bar's IBS
+    pub ibs_smoothed: f64,             // 14-bar SMA of IBS
+    pub ibs_prev: f64,
+    pub last_high: f64,
+    pub last_low: f64,
+    pub last_close: f64,
+    pub ibs_label: String,             // OVERBOUGHT / BULL / NEUTRAL / BEAR / OVERSOLD / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -27447,6 +27583,274 @@ pub fn compute_stddev_snapshot(
     }
 }
 
+// ── ADR-172 Round 60 compute fns ──────────────────────────────────────────
+
+pub fn compute_wma_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> WmaSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 20usize;
+    if n < length + 1 {
+        return WmaSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            wma_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 1, n),
+            ..Default::default()
+        };
+    }
+    let wma_at = |end_idx: usize| -> f64 {
+        let mut num = 0.0_f64;
+        let mut den = 0.0_f64;
+        for k in 0..length {
+            let w = (length - k) as f64;
+            num += sorted[end_idx - k].close * w;
+            den += w;
+        }
+        num / den
+    };
+    let wma = wma_at(n - 1);
+    let wma_prev = wma_at(n - 2);
+    let mut sma_sum = 0.0_f64;
+    for k in 0..length { sma_sum += sorted[n - 1 - k].close; }
+    let sma = sma_sum / length as f64;
+    let close = sorted[n - 1].close;
+    let spread = close - wma;
+    let spread_pct = if wma.abs() > 1e-12 { spread / wma } else { 0.0 };
+    let label = if spread_pct > 0.02 { "BULL" }
+        else if spread_pct > 0.005 { "WEAK_BULL" }
+        else if spread_pct < -0.02 { "BEAR" }
+        else if spread_pct < -0.005 { "WEAK_BEAR" }
+        else { "NEUTRAL" };
+    WmaSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        length, wma_value: wma, wma_prev, sma_value: sma,
+        spread, spread_pct, last_close: close,
+        wma_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_rainbow_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> RainbowSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let levels = 10usize;
+    let warmup = 2 * levels + 2;
+    if n < warmup {
+        return RainbowSnapshot {
+            symbol: sym, as_of: as_of.into(), levels,
+            rainbow_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", warmup, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let mut series: Vec<Vec<f64>> = vec![closes.clone()];
+    for _ in 0..levels {
+        let prev = series.last().unwrap();
+        let mut next = Vec::with_capacity(prev.len());
+        for i in 0..prev.len() {
+            if i == 0 { next.push(prev[i]); }
+            else { next.push((prev[i] + prev[i - 1]) / 2.0); }
+        }
+        series.push(next);
+    }
+    let last_levels: Vec<f64> = (1..=levels).map(|lvl| series[lvl][n - 1]).collect();
+    let highest = last_levels.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let lowest = last_levels.iter().cloned().fold(f64::INFINITY, f64::min);
+    let width = highest - lowest;
+    let center = last_levels.iter().sum::<f64>() / levels as f64;
+    let width_pct = if center.abs() > 1e-12 { width / center } else { 0.0 };
+    let label = if width_pct > 0.02 { "STRONG_TREND" }
+        else if width_pct > 0.005 { "TRENDING" }
+        else { "CONSOLIDATING" };
+    RainbowSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, levels,
+        highest_level: highest, lowest_level: lowest,
+        rainbow_width: width, rainbow_width_pct: width_pct,
+        center_value: center,
+        r1: last_levels[0], r5: last_levels[4], r10: last_levels[9],
+        last_close: closes[n - 1],
+        rainbow_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_mesa_sine_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MesaSineSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 32 {
+        return MesaSineSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            mesa_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥32 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let mut smooth = vec![0.0_f64; n];
+    for i in 3..n {
+        smooth[i] = (4.0 * closes[i] + 3.0 * closes[i - 1]
+            + 2.0 * closes[i - 2] + closes[i - 3]) / 10.0;
+    }
+    let detrender = |i: usize, src: &[f64]| -> f64 {
+        if i < 6 { return 0.0; }
+        (0.0962 * src[i] + 0.5769 * src[i - 2]
+            - 0.5769 * src[i - 4] - 0.0962 * src[i - 6]) * 0.85
+    };
+    let mut dt = vec![0.0_f64; n];
+    for i in 6..n { dt[i] = detrender(i, &smooth); }
+    let mut q1 = vec![0.0_f64; n];
+    let mut i1 = vec![0.0_f64; n];
+    for i in 6..n {
+        q1[i] = detrender(i, &dt);
+        i1[i] = if i >= 3 { dt[i - 3] } else { 0.0 };
+    }
+    let last = n - 1;
+    let prev = n - 2;
+    let phase_of = |i: usize| -> f64 {
+        if i1[i].abs() < 1e-12 { 0.0 }
+        else { (q1[i] / i1[i]).atan() }
+    };
+    let period = 20.0_f64;
+    let phase_now = phase_of(last);
+    let phase_prev = phase_of(prev);
+    let sine = phase_now.sin();
+    let lead = (phase_now + std::f64::consts::FRAC_PI_4).sin();
+    let sine_prev = phase_prev.sin();
+    let lead_prev = (phase_prev + std::f64::consts::FRAC_PI_4).sin();
+    let separation = (sine - lead).abs();
+    let crossed_up = sine_prev < lead_prev && sine > lead;
+    let crossed_dn = sine_prev > lead_prev && sine < lead;
+    let label = if crossed_up { "CYCLE_BUY" }
+        else if crossed_dn { "CYCLE_SELL" }
+        else if separation > 0.6 { "TRENDING" }
+        else { "NEUTRAL" };
+    MesaSineSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        period, phase_rad: phase_now,
+        sine_value: sine, lead_sine: lead,
+        sine_prev, lead_prev,
+        last_close: closes[n - 1],
+        mesa_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_frama_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> FramaSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 16usize;
+    if n < length * 2 {
+        return FramaSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            frama_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length * 2, n),
+            ..Default::default()
+        };
+    }
+    let dim_at = |end_idx: usize| -> f64 {
+        let half = length / 2;
+        let mut h1 = f64::NEG_INFINITY; let mut l1 = f64::INFINITY;
+        for k in 0..half {
+            let b = sorted[end_idx - k];
+            if b.high > h1 { h1 = b.high; }
+            if b.low < l1 { l1 = b.low; }
+        }
+        let mut h2 = f64::NEG_INFINITY; let mut l2 = f64::INFINITY;
+        for k in half..length {
+            let b = sorted[end_idx - k];
+            if b.high > h2 { h2 = b.high; }
+            if b.low < l2 { l2 = b.low; }
+        }
+        let mut h = f64::NEG_INFINITY; let mut l = f64::INFINITY;
+        for k in 0..length {
+            let b = sorted[end_idx - k];
+            if b.high > h { h = b.high; }
+            if b.low < l { l = b.low; }
+        }
+        let n1 = (h1 - l1) / half as f64;
+        let n2 = (h2 - l2) / half as f64;
+        let n3 = (h - l) / length as f64;
+        if n1 + n2 > 1e-12 && n3 > 1e-12 {
+            ((n1 + n2).ln() - n3.ln()) / 2f64.ln()
+        } else { 1.5 }
+    };
+    let mut frama_prev_val = sorted[length - 1].close;
+    for i in length..n - 1 {
+        let d = dim_at(i).clamp(1.0, 2.0);
+        let a = (-4.6 * (d - 1.0)).exp().clamp(0.01, 1.0);
+        frama_prev_val = a * sorted[i].close + (1.0 - a) * frama_prev_val;
+    }
+    let d_now = dim_at(n - 1).clamp(1.0, 2.0);
+    let a_now = (-4.6 * (d_now - 1.0)).exp().clamp(0.01, 1.0);
+    let frama_now = a_now * sorted[n - 1].close + (1.0 - a_now) * frama_prev_val;
+    let close = sorted[n - 1].close;
+    let spread = close - frama_now;
+    let label = if d_now < 1.35 { "STRONG_TREND" }
+        else if d_now < 1.65 { "TREND" }
+        else { "CHOP" };
+    FramaSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        fractal_dim: d_now, alpha: a_now,
+        frama_value: frama_now, frama_prev: frama_prev_val,
+        spread, last_close: close,
+        frama_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_ibs_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> IbsSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 14usize;
+    if n < length + 1 {
+        return IbsSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            ibs_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 1, n),
+            ..Default::default()
+        };
+    }
+    let ibs_of = |b: &HistoricalPriceRow| -> f64 {
+        let rng = b.high - b.low;
+        if rng.abs() < 1e-12 { 0.5 }
+        else { ((b.close - b.low) / rng).clamp(0.0, 1.0) }
+    };
+    let last = sorted[n - 1];
+    let prev = sorted[n - 2];
+    let ibs_raw = ibs_of(last);
+    let ibs_prev = ibs_of(prev);
+    let mut sum = 0.0_f64;
+    for k in 0..length { sum += ibs_of(sorted[n - 1 - k]); }
+    let ibs_smoothed = sum / length as f64;
+    let label = if ibs_smoothed > 0.8 { "OVERBOUGHT" }
+        else if ibs_smoothed > 0.6 { "BULL" }
+        else if ibs_smoothed < 0.2 { "OVERSOLD" }
+        else if ibs_smoothed < 0.4 { "BEAR" }
+        else { "NEUTRAL" };
+    IbsSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        ibs_raw, ibs_smoothed, ibs_prev,
+        last_high: last.high, last_low: last.low, last_close: last.close,
+        ibs_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -36617,6 +37021,167 @@ pub fn create_research_tables_v61(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_research_stddev_updated ON research_stddev(updated_at);",
     ).map_err(|e| format!("create v61 tables: {e}"))?;
     Ok(())
+}
+
+pub fn create_research_tables_v62(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v61(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_wma (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_wma_updated ON research_wma(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_rainbow (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_rainbow_updated ON research_rainbow(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_mesa_sine (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_mesa_sine_updated ON research_mesa_sine(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_frama (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_frama_updated ON research_frama(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_ibs (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ibs_updated ON research_ibs(updated_at);",
+    ).map_err(|e| format!("create v62 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_wma(conn: &Connection, symbol: &str, snap: &WmaSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v62(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("wma json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_wma(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert wma: {e}"))?;
+    Ok(())
+}
+
+pub fn get_wma(conn: &Connection, symbol: &str) -> Result<Option<WmaSnapshot>, String> {
+    let _ = create_research_tables_v62(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_wma WHERE symbol = ?1")
+        .map_err(|e| format!("prep wma: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query wma: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row wma: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get wma: {e}"))?;
+        let snap: WmaSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse wma: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_rainbow(conn: &Connection, symbol: &str, snap: &RainbowSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v62(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("rainbow json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_rainbow(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert rainbow: {e}"))?;
+    Ok(())
+}
+
+pub fn get_rainbow(conn: &Connection, symbol: &str) -> Result<Option<RainbowSnapshot>, String> {
+    let _ = create_research_tables_v62(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_rainbow WHERE symbol = ?1")
+        .map_err(|e| format!("prep rainbow: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query rainbow: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row rainbow: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get rainbow: {e}"))?;
+        let snap: RainbowSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse rainbow: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_mesa_sine(conn: &Connection, symbol: &str, snap: &MesaSineSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v62(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("mesa_sine json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_mesa_sine(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert mesa_sine: {e}"))?;
+    Ok(())
+}
+
+pub fn get_mesa_sine(conn: &Connection, symbol: &str) -> Result<Option<MesaSineSnapshot>, String> {
+    let _ = create_research_tables_v62(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_mesa_sine WHERE symbol = ?1")
+        .map_err(|e| format!("prep mesa_sine: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query mesa_sine: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row mesa_sine: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get mesa_sine: {e}"))?;
+        let snap: MesaSineSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse mesa_sine: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_frama(conn: &Connection, symbol: &str, snap: &FramaSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v62(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("frama json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_frama(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert frama: {e}"))?;
+    Ok(())
+}
+
+pub fn get_frama(conn: &Connection, symbol: &str) -> Result<Option<FramaSnapshot>, String> {
+    let _ = create_research_tables_v62(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_frama WHERE symbol = ?1")
+        .map_err(|e| format!("prep frama: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query frama: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row frama: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get frama: {e}"))?;
+        let snap: FramaSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse frama: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ibs(conn: &Connection, symbol: &str, snap: &IbsSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v62(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ibs json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ibs(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ibs: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ibs(conn: &Connection, symbol: &str) -> Result<Option<IbsSnapshot>, String> {
+    let _ = create_research_tables_v62(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ibs WHERE symbol = ?1")
+        .map_err(|e| format!("prep ibs: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query ibs: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row ibs: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get ibs: {e}"))?;
+        let snap: IbsSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse ibs: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
 }
 
 pub fn upsert_demarker(conn: &Connection, symbol: &str, snap: &DemarkerSnapshot) -> Result<(), String> {
@@ -48281,6 +48846,148 @@ Trailing text.
         if snap.regime_label != "INSUFFICIENT_DATA" {
             assert!(snap.stddev >= 0.0);
             assert!(snap.stddev_long >= 0.0);
+        }
+    }
+
+    // ── ADR-172 Round 60 tests ───────────────────────────────────────────
+
+    #[test]
+    fn wma_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = WmaSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            length: 20, wma_value: 101.2, wma_prev: 101.0, sma_value: 100.8,
+            spread: 0.4, spread_pct: 0.004, last_close: 101.6,
+            wma_label: "BULL".into(), note: String::new(),
+        };
+        upsert_wma(&conn, "TEST", &snap).unwrap();
+        let got = get_wma(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.wma_label, "BULL");
+        assert!((got.wma_value - 101.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn wma_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_wma_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.wma_label.as_str(),
+            "BULL" | "WEAK_BULL" | "NEUTRAL" | "WEAK_BEAR" | "BEAR" | "INSUFFICIENT_DATA"));
+        if snap.wma_label != "INSUFFICIENT_DATA" {
+            assert!(snap.wma_value.is_finite());
+            assert!(snap.sma_value.is_finite());
+        }
+    }
+
+    #[test]
+    fn rainbow_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = RainbowSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            levels: 10, highest_level: 105.0, lowest_level: 95.0,
+            rainbow_width: 10.0, rainbow_width_pct: 0.1,
+            center_value: 100.0, r1: 101.0, r5: 100.0, r10: 99.0,
+            last_close: 101.5,
+            rainbow_label: "STRONG_TREND".into(), note: String::new(),
+        };
+        upsert_rainbow(&conn, "TEST", &snap).unwrap();
+        let got = get_rainbow(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.rainbow_label, "STRONG_TREND");
+        assert!((got.rainbow_width - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rainbow_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_rainbow_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.rainbow_label.as_str(),
+            "STRONG_TREND" | "TRENDING" | "CONSOLIDATING" | "INSUFFICIENT_DATA"));
+        if snap.rainbow_label != "INSUFFICIENT_DATA" {
+            assert!(snap.rainbow_width >= 0.0);
+            assert!(snap.highest_level >= snap.lowest_level);
+        }
+    }
+
+    #[test]
+    fn mesa_sine_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MesaSineSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            period: 20.0, phase_rad: 0.5,
+            sine_value: 0.479, lead_sine: 0.894,
+            sine_prev: 0.412, lead_prev: 0.866,
+            last_close: 100.0,
+            mesa_label: "TRENDING".into(), note: String::new(),
+        };
+        upsert_mesa_sine(&conn, "TEST", &snap).unwrap();
+        let got = get_mesa_sine(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.mesa_label, "TRENDING");
+        assert!((got.sine_value - 0.479).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mesa_sine_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_mesa_sine_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.mesa_label.as_str(),
+            "CYCLE_BUY" | "CYCLE_SELL" | "TRENDING" | "NEUTRAL" | "INSUFFICIENT_DATA"));
+        if snap.mesa_label != "INSUFFICIENT_DATA" {
+            assert!(snap.sine_value.abs() <= 1.000001);
+            assert!(snap.lead_sine.abs() <= 1.000001);
+        }
+    }
+
+    #[test]
+    fn frama_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = FramaSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            length: 16, fractal_dim: 1.25, alpha: 0.31,
+            frama_value: 100.5, frama_prev: 100.3,
+            spread: 0.7, last_close: 101.2,
+            frama_label: "STRONG_TREND".into(), note: String::new(),
+        };
+        upsert_frama(&conn, "TEST", &snap).unwrap();
+        let got = get_frama(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.frama_label, "STRONG_TREND");
+        assert!((got.fractal_dim - 1.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn frama_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_frama_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.frama_label.as_str(),
+            "STRONG_TREND" | "TREND" | "CHOP" | "INSUFFICIENT_DATA"));
+        if snap.frama_label != "INSUFFICIENT_DATA" {
+            assert!(snap.fractal_dim >= 1.0 && snap.fractal_dim <= 2.0);
+            assert!(snap.alpha >= 0.01 && snap.alpha <= 1.0);
+        }
+    }
+
+    #[test]
+    fn ibs_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = IbsSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            length: 14, ibs_raw: 0.85, ibs_smoothed: 0.72, ibs_prev: 0.68,
+            last_high: 102.0, last_low: 100.0, last_close: 101.7,
+            ibs_label: "OVERBOUGHT".into(), note: String::new(),
+        };
+        upsert_ibs(&conn, "TEST", &snap).unwrap();
+        let got = get_ibs(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.ibs_label, "OVERBOUGHT");
+        assert!((got.ibs_raw - 0.85).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ibs_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ibs_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.ibs_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.ibs_label != "INSUFFICIENT_DATA" {
+            assert!(snap.ibs_raw >= 0.0 && snap.ibs_raw <= 1.0);
+            assert!(snap.ibs_smoothed >= 0.0 && snap.ibs_smoothed <= 1.0);
         }
     }
 }

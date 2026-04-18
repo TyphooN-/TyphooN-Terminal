@@ -4227,7 +4227,101 @@ MID_VOL / LOW_VOL labels. Requires n≥60; body reports length
 (20), long_length (60), mean, variance, stddev, stddev_long, cv,
 annualized, last_close. Source: ADR-171 STDDEV window.
 
-#### 2.288 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.288 Weighted Moving Average (WMA — ADR-172)
+
+Pulled from `research::get_wma`. Linearly-weighted N=20 moving
+average `wma = Σ(price[i] · (i+1)) / Σ(i+1)` for i=0..N-1 where
+weights grow from 1 (oldest bar) to N (newest). WMA puts more
+emphasis on recent bars than SMA (equal weights) but less than
+EMA (exponential decay), producing a smoother line that still
+reacts to recent price changes. Although WMA is a building block
+of HMA (ADR-122), the plain WMA itself was missing from the
+shipped list. Distinct from SMA, EMA, HMA, DEMA (ADR-117), TEMA
+(ADR-117), T3 (ADR-142), ALMA (ADR-148), KAMA (ADR-117), MAMA
+(ADR-170), and every adaptive MA. BULL / WEAK_BULL / NEUTRAL /
+WEAK_BEAR / BEAR labels from close/WMA spread thresholds (±0.5%
+weak, ±2.0% strong). Requires n≥21; body reports length (20),
+wma_value, wma_prev, sma_value, spread, spread_pct, last_close.
+Source: ADR-172 WMA window.
+
+#### 2.289 Rainbow MA Oscillator (RAINBOW — ADR-172)
+
+Pulled from `research::get_rainbow`. Mel Widner's 10-level
+recursive SMA stack where `r_1 = SMA(close, 2)`, `r_2 = SMA(r_1,
+2)`, ..., `r_10 = SMA(r_9, 2)`. Each level is a 2-bar SMA of the
+prior level, creating a "rainbow" fan around price. The
+oscillator reports the highest-high minus lowest-low across the
+10 levels (rainbow width) along with the fan's current center
+(mean of all levels). Wide rainbow means strong trend (levels
+spread apart as price runs); narrow rainbow means consolidation.
+Distinct from GMMA (Guppy's 12-line EMA fan with fixed lengths
+3/5/8/10/12/15 and 30/35/40/45/50/60, ADR-168) — the
+construction methods differ fundamentally. STRONG_TREND /
+TRENDING / CONSOLIDATING labels from width-to-center ratio
+(>2% strong, >0.5% trending, else consolidating). Requires
+n≥22; body reports levels (10), highest_level, lowest_level,
+rainbow_width, rainbow_width_pct, center_value, r1, r5, r10,
+last_close. Source: ADR-172 RAINBOW window.
+
+#### 2.290 MESA Sine Wave (MESA_SINE — ADR-172)
+
+Pulled from `research::get_mesa_sine`. Ehlers's cycle-phase
+oscillator using a simplified Hilbert-transform phase estimator
+(4-tap smoother + 7-tap quadrature detrender) to detect the
+dominant cycle phase angle from in-phase (I) and quadrature (Q)
+components, then emits `sine = sin(phase)` and `lead_sine =
+sin(phase + π/4)`. When the sine crosses above the lead_sine, a
+CYCLE_BUY signal fires (cycle-bottom); when it crosses below, a
+CYCLE_SELL fires (cycle-top). In trending markets the two lines
+separate (|sine − lead| > 0.6) and fail to cross, producing no
+signals — a useful regime filter in itself (TRENDING label).
+Distinct from MAMA (phase-adaptive MA, ADR-170) which uses the
+same Hilbert discriminator to drive α rather than emit a phase-
+based sine; from FISHER (probability Gaussianization, ADR-129);
+and from COG (weighted centroid, ADR-170). CYCLE_BUY /
+CYCLE_SELL / TRENDING / NEUTRAL labels. Requires n≥32; body
+reports period (detected cycle), phase_rad, sine_value,
+lead_sine, sine_prev, lead_prev, last_close.
+Source: ADR-172 MESA_SINE window.
+
+#### 2.291 Fractal Adaptive Moving Average (FRAMA — ADR-172)
+
+Pulled from `research::get_frama`. Ehlers's adaptive MA where the
+smoothing α is driven by the fractal dimension D of the price
+series over the last N=16 bars. N is split in two halves,
+measuring (H−L) range of each half (n1, n2) and the combined
+range (n3); `D = (log(n1 + n2) − log(n3)) / log(2)`; `α =
+exp(−4.6·(D − 1))` clamped to `[0.01, 1.0]`. Strong trends (D
+near 1.0) yield α ≈ 1 (fast-following); choppy markets (D near
+2.0, Brownian-like) yield α ≈ 0.01 (heavy smoothing). Distinct
+from KAMA (efficiency-ratio adaptive, ADR-117), VIDYA
+(volatility-index adaptive, ADR-148), MAMA (Hilbert-phase
+adaptive, ADR-170), and T3 (Tillson triple-DEMA, ADR-142).
+STRONG_TREND / TREND / CHOP labels from D magnitude (<1.35
+strong, <1.65 trending, else chop). Requires n≥32; body reports
+length (16), fractal_dim, alpha, frama_value, frama_prev,
+spread, last_close. Source: ADR-172 FRAMA window.
+
+#### 2.292 Internal Bar Strength (IBS — ADR-172)
+
+Pulled from `research::get_ibs`. Single-bar position metric
+`ibs = (close − low) / (high − low)`, bounded on `[0, 1]`, with
+a 14-bar SMA smoothing the raw reading. Values near 1 indicate
+close at the high (bullish conviction within the bar); values
+near 0 indicate close at the low (bearish conviction). IBS is a
+mean-reversion favorite — high IBS (>0.8) often precedes
+short-term pullbacks; low IBS (<0.2) often precedes bounces.
+Distinct from STOCH (%K over N-bar HHV/LLV, ADR-108) which
+spans multiple bars for the range, and from every momentum
+oscillator; IBS is a single-bar position metric that averages
+over a window rather than aggregating across bars. OVERBOUGHT /
+BULL / NEUTRAL / BEAR / OVERSOLD labels from the smoothed IBS
+magnitude (>0.8 overbought, >0.6 bull, <0.4 bear, <0.2 oversold).
+Requires n≥15; body reports length (14), ibs_raw, ibs_smoothed,
+ibs_prev, last_high, last_low, last_close.
+Source: ADR-172 IBS window.
+
+#### 2.293 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -4243,7 +4337,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.289 Sector peer comparison
+#### 2.294 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -4503,8 +4597,43 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~85-163 KB**
-(up from 84-161 KB after ADR-170; ADR-171 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~86-165 KB**
+(up from 85-163 KB after ADR-171; ADR-172 adds five optional per-symbol
+blocks — WMA / RAINBOW / MESA_SINE / FRAMA / IBS — each measuring ~2 k/v rows
+and adding ~260-340 bytes when populated, for a typical +1.46 KB per symbol;
+all five reuse the existing `research_historical_price` HP cache and the
+standard research-table LAN sync path with zero new API dependencies;
+WMA computes the plain N=20 linearly-weighted moving average
+`Σ(price[i]·(i+1))/Σ(i+1)` (oldest→newest weights 1..N) versus the
+plain SMA, with BULL / WEAK_BULL / NEUTRAL / WEAK_BEAR / BEAR labels
+from close/WMA spread thresholds — distinct from every existing MA
+on the shipped list (SMA, EMA, HMA, DEMA, TEMA, T3, ALMA, KAMA,
+MAMA, VIDYA) because although WMA feeds HMA's construction it
+was never exposed as its own surface;
+RAINBOW computes Mel Widner's 10-level recursive SMA stack where
+`r_k = SMA(r_{k-1}, 2)` creates a rainbow fan around price, and
+emits the rainbow width (highest-lowest across levels) plus
+center, with STRONG_TREND / TRENDING / CONSOLIDATING labels from
+the width-to-center ratio — distinct from GMMA (ADR-168) which
+uses 12 fixed-length EMAs rather than recursive 2-bar SMAs;
+MESA_SINE computes Ehlers's cycle-phase oscillator via a
+simplified Hilbert discriminator (I/Q components) yielding
+`sine = sin(phase)` and `lead_sine = sin(phase + π/4)`, with
+CYCLE_BUY / CYCLE_SELL / TRENDING / NEUTRAL labels from sine/lead
+crossovers plus separation magnitude — distinct from MAMA
+(ADR-170 phase-adaptive MA), FISHER (ADR-129), and COG (ADR-170);
+FRAMA computes Ehlers's fractal-adaptive MA where `α = exp(-4.6·
+(D-1))` is driven by the Hurst-like fractal dimension D of the
+last 16 bars, with STRONG_TREND / TREND / CHOP labels from D
+magnitude — distinct from KAMA (ADR-117 efficiency-ratio),
+VIDYA (ADR-148 volatility-index), MAMA (ADR-170 Hilbert-phase),
+and T3 (ADR-142 triple-DEMA);
+IBS computes Internal Bar Strength `(close-low)/(high-low)` as a
+single-bar position metric smoothed by a 14-bar SMA, with
+OVERBOUGHT / BULL / NEUTRAL / BEAR / OVERSOLD mean-reversion
+labels — distinct from STOCH (ADR-108) which spans N bars rather
+than a single bar for the range;
+ADR-171 added five optional per-symbol
 blocks — DEMARKER / GATOR / BW_MFI / VWMA / STDDEV — each measuring ~2 k/v rows
 and adding ~260-340 bytes when populated, for a typical +1.49 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the
