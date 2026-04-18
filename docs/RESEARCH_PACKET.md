@@ -4621,7 +4621,78 @@ INSUFFICIENT_DATA labels from magnitude vs 50-bar mean. Requires
 n≥64; body reports i_comp, q_comp, i_prev, q_prev, magnitude,
 phase_deg, last_close. Source: ADR-176 HT_PHASOR window.
 
-#### 2.313 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.313 Range Midpoint (MIDPRICE — ADR-177)
+
+Pulled from `research::get_midprice`. TA-Lib's MIDPRICE function:
+midpoint between the highest high and the lowest low over an N-bar
+window (default 14): `midprice = (HHV(H, 14) + LLV(L, 14)) / 2`.
+Distinct from MIDPOINT (ADR-173 close-based midpoint) and from
+Donchian (which exposes both bands separately) because MIDPRICE
+reports the HH/LL midpoint as a single line anchored to the bar
+range rather than close. NEAR_HIGH (position>0.85) / ABOVE_MID
+(>0.55) / AT_MID / BELOW_MID (<0.45) / NEAR_LOW (<0.15) /
+INSUFFICIENT_DATA labels from close position within (LLV, HHV).
+Requires n≥15; body reports length (14), midprice, midprice_prev,
+hhv, llv, position, last_close. Source: ADR-177 MIDPRICE window.
+
+#### 2.314 Absolute Price Oscillator (APO — ADR-177)
+
+Pulled from `research::get_apo`. TA-Lib's APO function: `EMA_fast(close)
+− EMA_slow(close)` with defaults fast=12, slow=26. Distinct from PPO
+(ADR-115 percentage variant: `(fast − slow) / slow × 100`) and from
+MACD (APO + signal line + histogram) because APO reports the raw
+difference in price units, preserving absolute magnitude — directly
+comparable across same-priced instruments. STRONG_BULL (apo% > +1.5%)
+/ BULL (>+0.3%) / NEUTRAL / BEAR (<-0.3%) / STRONG_BEAR (<-1.5%) /
+INSUFFICIENT_DATA labels from apo as % of close. Requires n≥27; body
+reports fast_period (12), slow_period (26), apo, apo_prev, fast_ema,
+slow_ema, last_close. Source: ADR-177 APO window.
+
+#### 2.315 Raw Momentum (MOM — ADR-177)
+
+Pulled from `research::get_mom`. TA-Lib's MOM function: `close −
+close[n − period]` raw price delta over a 10-bar default lookback.
+Distinct from ROC (percentage variant: `mom / close[n − period] ×
+100`) and from MOMENTUM_12_1 (composite 12m−1m factor score) because
+MOM reports the raw price delta in currency units — useful as a
+pre-scaled input for custom oscillator smoothing or absolute-distance
+filters. STRONG_UP (mom% > +5%) / UP (>+1%) / FLAT / DOWN (<-1%) /
+STRONG_DOWN (<-5%) / INSUFFICIENT_DATA labels from mom_pct (mom / close
+× 100). Requires n≥12; body reports period (10), mom, mom_prev,
+mom_pct, last_close. Source: ADR-177 MOM window.
+
+#### 2.316 Extended Parabolic SAR (SAREXT — ADR-177)
+
+Pulled from `research::get_sarext`. TA-Lib's SAREXT function:
+configurable Parabolic SAR with asymmetric long/short acceleration
+factors (af_init_long / af_step_long / af_max_long vs the equivalent
+short parameters) plus an optional forced start trend (positive
+start_value → start long; negative → start short; zero → auto from
+first two closes). Distinct from PSAR (ADR-108 fixed
+0.02/0.02/0.20, symmetric) in that SAREXT exposes separate AF
+schedules per side — enabling traders to tune the trailing stop's
+aggressiveness differently on each direction (typical for
+instruments with asymmetric volatility). STRONG_UP (trend up + close
+>3% above SAR) / UP / STRONG_DOWN (trend down + close <-3% below
+SAR) / DOWN / INSUFFICIENT_DATA labels. Requires n≥4; body reports
+start_value, all six AF parameters, sar_value, extreme_point,
+acceleration_factor, trend_is_up, bars_in_trend, distance_pct,
+last_close. Source: ADR-177 SAREXT window.
+
+#### 2.317 ADX Rating (ADXR — ADR-177)
+
+Pulled from `research::get_adxr`. TA-Lib's ADXR function: `(ADX_now
++ ADX[n − period]) / 2` over a 14-bar default lookback. Distinct from
+ADX (ADR-108 point-in-time directional movement strength) because
+ADXR smooths ADX with its lagged value to emphasise trend persistence
+— a rising ADXR while ADX is flat signals a maturing trend, while
+falling ADXR confirms trend exhaustion. STRONG_TREND (ADXR≥40) /
+TREND (≥25) / WEAK_TREND (≥15) / NO_TREND / INSUFFICIENT_DATA labels.
+Requires n≥43 (2·period ADX seed + period ADXR lookback + 1); body
+reports period (14), adx_now, adx_prior, adxr, adxr_prev, last_close.
+Source: ADR-177 ADXR window.
+
+#### 2.318 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -4637,7 +4708,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.314 Sector peer comparison
+#### 2.319 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -4897,8 +4968,11 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~90-173 KB**
-(up from 89-171 KB after ADR-175; ADR-176 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~91-175 KB**
+(up from 90-173 KB after ADR-176; ADR-177 adds five optional per-symbol
+blocks — MIDPRICE / APO / MOM / SAREXT / ADXR — each measuring ~2 k/v rows
+and adding ~240-320 bytes when populated, for a typical +1.45 KB per symbol;
+ADR-176 added five optional per-symbol
 blocks — LINEARREG / LINEARREG_ANGLE / HT_DCPHASE / HT_SINE / HT_PHASOR —
 each measuring ~2 k/v rows and adding ~240-320 bytes when populated, for a
 typical +1.45 KB per symbol; ADR-175 added five optional per-symbol
@@ -4911,8 +4985,34 @@ measuring ~2 k/v rows and adding ~220-300 bytes when populated, for a typical
 blocks — LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT — each
 measuring ~2 k/v rows and adding ~240-320 bytes when populated, for a typical
 +1.40 KB per symbol;
-all twenty reuse the existing `research_historical_price` HP cache and the
+all twenty-five reuse the existing `research_historical_price` HP cache and the
 standard research-table LAN sync path with zero new API dependencies;
+MIDPRICE computes TA-Lib's 14-bar highest-high/lowest-low midpoint
+`midprice = (HHV(H, 14) + LLV(L, 14)) / 2` with ABOVE_BAND / UPPER_HALF /
+NEAR_MID / LOWER_HALF / BELOW_BAND labels from close position within the
+band — distinct from MIDPOINT (which uses close HHV/LLV) because it uses
+raw high/low extremes for a symmetric range-midpoint line;
+APO computes TA-Lib's Absolute Price Oscillator `EMA(close, 12) −
+EMA(close, 26)` with BULL_STRONG / BULL / NEUTRAL / BEAR / BEAR_STRONG
+labels from apo magnitude — distinct from MACD (same math plus signal
+line and histogram) and PPO (percent-based version) because it reports
+the raw price-unit oscillator without smoothing;
+MOM computes TA-Lib's raw momentum `close − close[n−10]` with
+BULL_STRONG / BULL / NEUTRAL / BEAR / BEAR_STRONG labels from 10-bar
+change percentage — distinct from ROC (which normalises by the older
+value) because it reports the raw price-unit difference without ratio
+conversion;
+SAREXT computes TA-Lib's extended parabolic SAR with independent
+long/short initial/step/max acceleration factors (default 0.02/0.02/0.20
+for both directions matching standard PSAR) with BULL_STRONG / BULL /
+BEAR / BEAR_STRONG labels from trend direction and distance-to-price —
+distinct from SAR because it exposes asymmetric AF controls for
+tuning long vs short trailing behaviour;
+ADXR computes TA-Lib's ADX Rating `(ADX[n] + ADX[n−14]) / 2` with
+STRONG_TREND (>30) / TREND (>20) / WEAK_TREND / NO_TREND labels from
+adxr magnitude — distinct from raw ADX because the 14-bar lag provides
+momentum-smoothed trend strength that reduces whipsaws around the 20-25
+transition zone;
 LINEARREG computes TA-Lib's least-squares fitted close value at the
 endpoint of a 14-bar regression with ABOVE_TREND / NEAR_TREND /
 BELOW_TREND labels from the residual-as-%-of-close — distinct from

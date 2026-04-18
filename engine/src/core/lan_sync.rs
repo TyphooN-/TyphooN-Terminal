@@ -508,6 +508,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_ht_dcphase",
     "research_ht_sine",
     "research_ht_phasor",
+    // ── ADR-177 Round 65 ────────────────────────────
+    "research_midprice",
+    "research_apo",
+    "research_mom",
+    "research_sarext",
+    "research_adxr",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2907,6 +2913,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-177 Round 65 ──
+        "research_midprice" => Some(
+            "CREATE TABLE IF NOT EXISTS research_midprice (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_apo" => Some(
+            "CREATE TABLE IF NOT EXISTS research_apo (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_mom" => Some(
+            "CREATE TABLE IF NOT EXISTS research_mom (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_sarext" => Some(
+            "CREATE TABLE IF NOT EXISTS research_sarext (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_adxr" => Some(
+            "CREATE TABLE IF NOT EXISTS research_adxr (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -3278,6 +3320,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_ht_dcphase" => Some("updated_at"),
         "research_ht_sine" => Some("updated_at"),
         "research_ht_phasor" => Some("updated_at"),
+        // ── ADR-177 Round 65 ──
+        "research_midprice" => Some("updated_at"),
+        "research_apo" => Some("updated_at"),
+        "research_mom" => Some("updated_at"),
+        "research_sarext" => Some("updated_at"),
+        "research_adxr" => Some("updated_at"),
         _ => None,
     }
 }

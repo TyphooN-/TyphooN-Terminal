@@ -6794,6 +6794,120 @@ pub struct HtPhasorSnapshot {
     pub note: String,
 }
 
+/// MIDPRICE (ADR-177) — TA-Lib MIDPRICE function: midpoint between the
+/// highest high and the lowest low over an N-bar window (default 14).
+/// Distinct from MIDPOINT (close-based midpoint, ADR-173) and from
+/// Donchian (which exposes both bands separately) because MIDPRICE
+/// reports the HH/LL midpoint as a single line anchored to the bar
+/// range rather than close.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MidpriceSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub midprice: f64,                 // (HHV(H, 14) + LLV(L, 14)) / 2
+    pub midprice_prev: f64,
+    pub hhv: f64,
+    pub llv: f64,
+    pub last_close: f64,
+    pub position: f64,                 // (close - llv) / (hhv - llv), 0..1
+    pub midprice_label: String,        // NEAR_HIGH / ABOVE_MID / AT_MID / BELOW_MID / NEAR_LOW / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// APO (ADR-177) — TA-Lib Absolute Price Oscillator: `EMA_fast(close)
+/// − EMA_slow(close)` with defaults fast=12, slow=26. Distinct from
+/// PPO (percentage APO: `(fast − slow) / slow × 100`) and from MACD
+/// (APO + signal line + histogram) because APO reports the raw
+/// difference in price units, preserving absolute magnitude.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ApoSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub fast_period: usize,            // 12
+    pub slow_period: usize,            // 26
+    pub apo: f64,                      // fast_ema - slow_ema
+    pub apo_prev: f64,
+    pub fast_ema: f64,
+    pub slow_ema: f64,
+    pub last_close: f64,
+    pub apo_label: String,             // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// MOM (ADR-177) — TA-Lib raw momentum: `close − close[n−period]`
+/// over a 10-bar default lookback. Distinct from ROC (percentage: mom
+/// / close[n−period] × 100) and from MOMENTUM_12_1 (composite 12m−1m
+/// factor score) because MOM reports the raw price delta in currency
+/// units — useful as a pre-scaled input for custom oscillator
+/// smoothing or absolute-distance filters.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MomSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 10
+    pub mom: f64,                      // close - close[n - period]
+    pub mom_prev: f64,
+    pub mom_pct: f64,                  // mom / close × 100
+    pub last_close: f64,
+    pub mom_label: String,             // STRONG_UP / UP / FLAT / DOWN / STRONG_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// SAREXT (ADR-177) — TA-Lib Extended Parabolic SAR with configurable
+/// asymmetric long/short acceleration factors and an optional forced
+/// start trend. Distinct from PSAR (ADR-108 fixed 0.02/0.02/0.20) in
+/// that SAREXT exposes separate af_init/af_step/af_max for long vs
+/// short regimes, enabling traders to tune the trailing stop's
+/// aggressiveness differently on each side of the trade (typical for
+/// instruments with asymmetric volatility).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SarextSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub start_value: f64,              // 0 = auto; positive forces start long; negative forces start short
+    pub af_init_long: f64,             // 0.02
+    pub af_step_long: f64,             // 0.02
+    pub af_max_long: f64,              // 0.20
+    pub af_init_short: f64,            // 0.02
+    pub af_step_short: f64,            // 0.02
+    pub af_max_short: f64,             // 0.20
+    pub sar_value: f64,
+    pub extreme_point: f64,
+    pub acceleration_factor: f64,
+    pub trend_is_up: bool,
+    pub bars_in_trend: usize,
+    pub distance_pct: f64,
+    pub last_close: f64,
+    pub sarext_label: String,          // STRONG_UP / UP / STRONG_DOWN / DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// ADXR (ADR-177) — TA-Lib Average Directional Movement Rating:
+/// `(ADX_now + ADX[n − period]) / 2` over a 14-bar default lookback.
+/// Distinct from ADX (point-in-time directional movement strength)
+/// because ADXR smooths ADX with its lagged value to emphasise trend
+/// persistence — a rising ADXR while ADX is flat signals a maturing
+/// trend, while falling ADXR confirms trend exhaustion.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AdxrSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub adx_now: f64,
+    pub adx_prior: f64,                // adx[n - period]
+    pub adxr: f64,                     // (adx_now + adx_prior) / 2
+    pub adxr_prev: f64,
+    pub last_close: f64,
+    pub adxr_label: String,            // STRONG_TREND / TREND / WEAK_TREND / NO_TREND / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -29423,6 +29537,301 @@ pub fn compute_ht_phasor_snapshot(
     }
 }
 
+/// Compute TA-Lib MIDPRICE over a 14-bar default window.
+pub fn compute_midprice_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MidpriceSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 14usize;
+    if n < length + 1 {
+        return MidpriceSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            midprice_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 1, n),
+            ..Default::default()
+        };
+    }
+    let window = |end_idx: usize| -> (f64, f64, f64) {
+        let start = end_idx + 1 - length;
+        let mut hhv = f64::NEG_INFINITY;
+        let mut llv = f64::INFINITY;
+        for r in &sorted[start..=end_idx] {
+            if r.high > hhv { hhv = r.high; }
+            if r.low < llv { llv = r.low; }
+        }
+        (hhv, llv, 0.5 * (hhv + llv))
+    };
+    let (hhv_now, llv_now, mid_now) = window(n - 1);
+    let (_, _, mid_prev) = window(n - 2);
+    let last_close = sorted[n - 1].close;
+    let range = hhv_now - llv_now;
+    let position = if range.abs() > 1e-12 { (last_close - llv_now) / range } else { 0.5 };
+    let label = if position > 0.85 { "NEAR_HIGH" }
+        else if position > 0.55 { "ABOVE_MID" }
+        else if position < 0.15 { "NEAR_LOW" }
+        else if position < 0.45 { "BELOW_MID" }
+        else { "AT_MID" };
+    MidpriceSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        midprice: mid_now, midprice_prev: mid_prev,
+        hhv: hhv_now, llv: llv_now,
+        last_close, position,
+        midprice_label: label.into(), note: String::new(),
+    }
+}
+
+/// Compute TA-Lib APO (Absolute Price Oscillator) with fast=12, slow=26.
+pub fn compute_apo_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ApoSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let fast_period = 12usize;
+    let slow_period = 26usize;
+    if n < slow_period + 1 {
+        return ApoSnapshot {
+            symbol: sym, as_of: as_of.into(), fast_period, slow_period,
+            apo_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", slow_period + 1, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|r| r.close).collect();
+    let ema = |period: usize| -> Vec<f64> {
+        let alpha = 2.0 / (period as f64 + 1.0);
+        let mut out = vec![0.0_f64; n];
+        let seed: f64 = closes[0..period].iter().sum::<f64>() / period as f64;
+        out[period - 1] = seed;
+        for i in period..n {
+            out[i] = closes[i] * alpha + out[i - 1] * (1.0 - alpha);
+        }
+        out
+    };
+    let fast = ema(fast_period);
+    let slow = ema(slow_period);
+    let apo_now = fast[n - 1] - slow[n - 1];
+    let apo_prev = fast[n - 2] - slow[n - 2];
+    let last_close = sorted[n - 1].close;
+    let apo_pct = if last_close.abs() > 1e-12 { apo_now / last_close * 100.0 } else { 0.0 };
+    let label = if apo_pct > 1.5 { "STRONG_BULL" }
+        else if apo_pct > 0.3 { "BULL" }
+        else if apo_pct < -1.5 { "STRONG_BEAR" }
+        else if apo_pct < -0.3 { "BEAR" }
+        else { "NEUTRAL" };
+    ApoSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        fast_period, slow_period,
+        apo: apo_now, apo_prev,
+        fast_ema: fast[n - 1], slow_ema: slow[n - 1],
+        last_close,
+        apo_label: label.into(), note: String::new(),
+    }
+}
+
+/// Compute TA-Lib MOM (raw momentum) with default period=10.
+pub fn compute_mom_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MomSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 10usize;
+    if n < period + 2 {
+        return MomSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            mom_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", period + 2, n),
+            ..Default::default()
+        };
+    }
+    let last_close = sorted[n - 1].close;
+    let prev_close = sorted[n - 2].close;
+    let ref_close = sorted[n - 1 - period].close;
+    let ref_prev = sorted[n - 2 - period].close;
+    let mom_now = last_close - ref_close;
+    let mom_prev = prev_close - ref_prev;
+    let mom_pct = if last_close.abs() > 1e-12 { mom_now / last_close * 100.0 } else { 0.0 };
+    let label = if mom_pct > 5.0 { "STRONG_UP" }
+        else if mom_pct > 1.0 { "UP" }
+        else if mom_pct < -5.0 { "STRONG_DOWN" }
+        else if mom_pct < -1.0 { "DOWN" }
+        else { "FLAT" };
+    MomSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        mom: mom_now, mom_prev, mom_pct,
+        last_close,
+        mom_label: label.into(), note: String::new(),
+    }
+}
+
+/// Compute TA-Lib SAREXT (Extended Parabolic SAR) with asymmetric
+/// long/short acceleration factors.
+#[allow(clippy::too_many_arguments)]
+pub fn compute_sarext_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+    start_value: f64,
+    af_init_long: f64, af_step_long: f64, af_max_long: f64,
+    af_init_short: f64, af_step_short: f64, af_max_short: f64,
+) -> SarextSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 4 {
+        return SarextSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            start_value, af_init_long, af_step_long, af_max_long,
+            af_init_short, af_step_short, af_max_short,
+            sarext_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥4 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let forced_up = start_value > 0.0;
+    let forced_down = start_value < 0.0;
+    let mut trend_up = if forced_up { true }
+        else if forced_down { false }
+        else { sorted[1].close >= sorted[0].close };
+    let mut sar = if trend_up { sorted[0].low } else { sorted[0].high };
+    let mut ep = if trend_up { sorted[0].high } else { sorted[0].low };
+    let mut af = if trend_up { af_init_long } else { af_init_short };
+    let mut bars_in_trend = 1usize;
+    for i in 1..n {
+        let hi = sorted[i].high;
+        let lo = sorted[i].low;
+        sar = sar + af * (ep - sar);
+        if trend_up {
+            let prev_lo = sorted[i - 1].low;
+            let prev2_lo = if i >= 2 { sorted[i - 2].low } else { prev_lo };
+            sar = sar.min(prev_lo).min(prev2_lo);
+            if lo < sar {
+                trend_up = false;
+                sar = ep;
+                ep = lo;
+                af = af_init_short;
+                bars_in_trend = 1;
+            } else {
+                if hi > ep { ep = hi; af = (af + af_step_long).min(af_max_long); }
+                bars_in_trend += 1;
+            }
+        } else {
+            let prev_hi = sorted[i - 1].high;
+            let prev2_hi = if i >= 2 { sorted[i - 2].high } else { prev_hi };
+            sar = sar.max(prev_hi).max(prev2_hi);
+            if hi > sar {
+                trend_up = true;
+                sar = ep;
+                ep = hi;
+                af = af_init_long;
+                bars_in_trend = 1;
+            } else {
+                if lo < ep { ep = lo; af = (af + af_step_short).min(af_max_short); }
+                bars_in_trend += 1;
+            }
+        }
+    }
+    let last_close = sorted[n - 1].close;
+    let dist_pct = if sar.abs() > f64::EPSILON { (last_close - sar) / sar * 100.0 } else { 0.0 };
+    let label = if trend_up && dist_pct > 3.0 { "STRONG_UP" }
+        else if trend_up { "UP" }
+        else if !trend_up && dist_pct < -3.0 { "STRONG_DOWN" }
+        else { "DOWN" };
+    SarextSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        start_value, af_init_long, af_step_long, af_max_long,
+        af_init_short, af_step_short, af_max_short,
+        sar_value: sar, extreme_point: ep, acceleration_factor: af,
+        trend_is_up: trend_up, bars_in_trend,
+        distance_pct: dist_pct, last_close,
+        sarext_label: label.into(), note: String::new(),
+    }
+}
+
+/// Compute TA-Lib ADXR (ADX Rating) over a 14-bar default period.
+pub fn compute_adxr_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AdxrSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    // ADXR needs 2·period (ADX seed) + period (lookback) + 1 bars.
+    let min_bars = 3 * period + 1;
+    if n < min_bars {
+        return AdxrSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            adxr_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let mut tr = vec![0.0_f64; n];
+    let mut plus_dm = vec![0.0_f64; n];
+    let mut minus_dm = vec![0.0_f64; n];
+    for i in 1..n {
+        let hi = sorted[i].high;
+        let lo = sorted[i].low;
+        let pc = sorted[i - 1].close;
+        tr[i] = (hi - lo).max((hi - pc).abs()).max((lo - pc).abs());
+        let up_move = hi - sorted[i - 1].high;
+        let dn_move = sorted[i - 1].low - lo;
+        plus_dm[i] = if up_move > dn_move && up_move > 0.0 { up_move } else { 0.0 };
+        minus_dm[i] = if dn_move > up_move && dn_move > 0.0 { dn_move } else { 0.0 };
+    }
+    let p_f = period as f64;
+    let mut tr_smooth: f64 = tr[1..=period].iter().sum();
+    let mut plus_smooth: f64 = plus_dm[1..=period].iter().sum();
+    let mut minus_smooth: f64 = minus_dm[1..=period].iter().sum();
+    let mut dx = vec![0.0_f64; n];
+    {
+        let (pdi, mdi) = if tr_smooth > 0.0 {
+            (100.0 * plus_smooth / tr_smooth, 100.0 * minus_smooth / tr_smooth)
+        } else { (0.0, 0.0) };
+        let s = pdi + mdi;
+        if s > 0.0 { dx[period] = 100.0 * (pdi - mdi).abs() / s; }
+    }
+    for i in (period + 1)..n {
+        tr_smooth = tr_smooth - tr_smooth / p_f + tr[i];
+        plus_smooth = plus_smooth - plus_smooth / p_f + plus_dm[i];
+        minus_smooth = minus_smooth - minus_smooth / p_f + minus_dm[i];
+        let (pdi, mdi) = if tr_smooth > 0.0 {
+            (100.0 * plus_smooth / tr_smooth, 100.0 * minus_smooth / tr_smooth)
+        } else { (0.0, 0.0) };
+        let s = pdi + mdi;
+        if s > 0.0 { dx[i] = 100.0 * (pdi - mdi).abs() / s; }
+    }
+    // Build ADX series from DX via Wilder smoothing, seeded at 2·period.
+    let mut adx = vec![0.0_f64; n];
+    let seed_idx = 2 * period;
+    adx[seed_idx] = dx[(period + 1)..=seed_idx].iter().sum::<f64>() / p_f;
+    for i in (seed_idx + 1)..n {
+        adx[i] = (adx[i - 1] * (p_f - 1.0) + dx[i]) / p_f;
+    }
+    let adx_now = adx[n - 1];
+    let adx_prior = adx[n - 1 - period];
+    let adxr_now = 0.5 * (adx_now + adx_prior);
+    let adx_prev_now = adx[n - 2];
+    let adx_prev_prior = adx[n - 2 - period];
+    let adxr_prev = 0.5 * (adx_prev_now + adx_prev_prior);
+    let label = if adxr_now >= 40.0 { "STRONG_TREND" }
+        else if adxr_now >= 25.0 { "TREND" }
+        else if adxr_now >= 15.0 { "WEAK_TREND" }
+        else { "NO_TREND" };
+    AdxrSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        adx_now, adx_prior, adxr: adxr_now, adxr_prev,
+        last_close: sorted[n - 1].close,
+        adxr_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -39038,6 +39447,168 @@ pub fn get_ht_phasor(conn: &Connection, symbol: &str) -> Result<Option<HtPhasorS
     if let Some(r) = rows.next().map_err(|e| format!("row ht_phasor: {e}"))? {
         let j: String = r.get(0).map_err(|e| format!("get ht_phasor: {e}"))?;
         let snap: HtPhasorSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse ht_phasor: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── ADR-177 Round 65 schema (v67) ──────────────────────────────────────────
+pub fn create_research_tables_v67(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v66(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_midprice (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_midprice_updated ON research_midprice(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_apo (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_apo_updated ON research_apo(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_mom (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_mom_updated ON research_mom(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_sarext (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_sarext_updated ON research_sarext(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_adxr (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_adxr_updated ON research_adxr(updated_at);",
+    ).map_err(|e| format!("create v67 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_midprice(conn: &Connection, symbol: &str, snap: &MidpriceSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v67(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("midprice json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_midprice (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert midprice: {e}"))?;
+    Ok(())
+}
+
+pub fn get_midprice(conn: &Connection, symbol: &str) -> Result<Option<MidpriceSnapshot>, String> {
+    let _ = create_research_tables_v67(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_midprice WHERE symbol = ?1")
+        .map_err(|e| format!("prep midprice: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query midprice: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row midprice: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get midprice: {e}"))?;
+        let snap: MidpriceSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse midprice: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_apo(conn: &Connection, symbol: &str, snap: &ApoSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v67(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("apo json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_apo (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert apo: {e}"))?;
+    Ok(())
+}
+
+pub fn get_apo(conn: &Connection, symbol: &str) -> Result<Option<ApoSnapshot>, String> {
+    let _ = create_research_tables_v67(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_apo WHERE symbol = ?1")
+        .map_err(|e| format!("prep apo: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query apo: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row apo: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get apo: {e}"))?;
+        let snap: ApoSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse apo: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_mom(conn: &Connection, symbol: &str, snap: &MomSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v67(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("mom json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_mom (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert mom: {e}"))?;
+    Ok(())
+}
+
+pub fn get_mom(conn: &Connection, symbol: &str) -> Result<Option<MomSnapshot>, String> {
+    let _ = create_research_tables_v67(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_mom WHERE symbol = ?1")
+        .map_err(|e| format!("prep mom: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query mom: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row mom: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get mom: {e}"))?;
+        let snap: MomSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse mom: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_sarext(conn: &Connection, symbol: &str, snap: &SarextSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v67(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("sarext json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_sarext (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert sarext: {e}"))?;
+    Ok(())
+}
+
+pub fn get_sarext(conn: &Connection, symbol: &str) -> Result<Option<SarextSnapshot>, String> {
+    let _ = create_research_tables_v67(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_sarext WHERE symbol = ?1")
+        .map_err(|e| format!("prep sarext: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query sarext: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row sarext: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get sarext: {e}"))?;
+        let snap: SarextSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse sarext: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_adxr(conn: &Connection, symbol: &str, snap: &AdxrSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v67(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("adxr json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_adxr (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert adxr: {e}"))?;
+    Ok(())
+}
+
+pub fn get_adxr(conn: &Connection, symbol: &str) -> Result<Option<AdxrSnapshot>, String> {
+    let _ = create_research_tables_v67(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_adxr WHERE symbol = ?1")
+        .map_err(|e| format!("prep adxr: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query adxr: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row adxr: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get adxr: {e}"))?;
+        let snap: AdxrSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse adxr: {e}"))?;
         Ok(Some(snap))
     } else { Ok(None) }
 }
@@ -51755,6 +52326,146 @@ Trailing text.
         if snap.phasor_label != "INSUFFICIENT_DATA" {
             assert!(snap.magnitude >= 0.0);
             assert!(snap.phase_deg >= -180.0 && snap.phase_deg <= 180.0);
+        }
+    }
+
+    #[test]
+    fn midprice_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MidpriceSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 30,
+            length: 14, midprice: 101.5, midprice_prev: 101.2,
+            hhv: 103.0, llv: 100.0, last_close: 101.8,
+            position: 0.6, midprice_label: "ABOVE_MID".into(), note: String::new(),
+        };
+        upsert_midprice(&conn, "TEST", &snap).unwrap();
+        let got = get_midprice(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.midprice_label, "ABOVE_MID");
+        assert!((got.midprice - 101.5).abs() < 1e-6);
+        assert_eq!(got.length, 14);
+    }
+
+    #[test]
+    fn midprice_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_midprice_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.midprice_label.as_str(),
+            "NEAR_HIGH" | "ABOVE_MID" | "AT_MID" | "BELOW_MID" | "NEAR_LOW" | "INSUFFICIENT_DATA"));
+        if snap.midprice_label != "INSUFFICIENT_DATA" {
+            assert!(snap.hhv >= snap.llv);
+            assert!(snap.position >= 0.0 && snap.position <= 1.0);
+            assert!((snap.midprice - 0.5 * (snap.hhv + snap.llv)).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn apo_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ApoSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 50,
+            fast_period: 12, slow_period: 26,
+            apo: 0.75, apo_prev: 0.70,
+            fast_ema: 100.5, slow_ema: 99.75, last_close: 101.0,
+            apo_label: "BULL".into(), note: String::new(),
+        };
+        upsert_apo(&conn, "TEST", &snap).unwrap();
+        let got = get_apo(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.apo_label, "BULL");
+        assert!((got.apo - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn apo_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_apo_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.apo_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.apo_label != "INSUFFICIENT_DATA" {
+            assert!((snap.apo - (snap.fast_ema - snap.slow_ema)).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn mom_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MomSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 20,
+            period: 10, mom: 2.5, mom_prev: 2.2, mom_pct: 2.47,
+            last_close: 101.25, mom_label: "UP".into(), note: String::new(),
+        };
+        upsert_mom(&conn, "TEST", &snap).unwrap();
+        let got = get_mom(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.mom_label, "UP");
+        assert!((got.mom - 2.5).abs() < 1e-6);
+        assert_eq!(got.period, 10);
+    }
+
+    #[test]
+    fn mom_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_mom_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.mom_label.as_str(),
+            "STRONG_UP" | "UP" | "FLAT" | "DOWN" | "STRONG_DOWN" | "INSUFFICIENT_DATA"));
+    }
+
+    #[test]
+    fn sarext_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = SarextSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 50,
+            start_value: 0.0,
+            af_init_long: 0.02, af_step_long: 0.02, af_max_long: 0.20,
+            af_init_short: 0.02, af_step_short: 0.02, af_max_short: 0.20,
+            sar_value: 99.5, extreme_point: 102.0, acceleration_factor: 0.08,
+            trend_is_up: true, bars_in_trend: 5,
+            distance_pct: 1.5, last_close: 101.0,
+            sarext_label: "UP".into(), note: String::new(),
+        };
+        upsert_sarext(&conn, "TEST", &snap).unwrap();
+        let got = get_sarext(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.sarext_label, "UP");
+        assert!(got.trend_is_up);
+        assert!((got.sar_value - 99.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sarext_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_sarext_snapshot(
+            "T", "2026-04-18", &bars,
+            0.0, 0.02, 0.02, 0.20, 0.03, 0.03, 0.30,
+        );
+        assert!(matches!(snap.sarext_label.as_str(),
+            "STRONG_UP" | "UP" | "STRONG_DOWN" | "DOWN" | "INSUFFICIENT_DATA"));
+        if snap.sarext_label != "INSUFFICIENT_DATA" {
+            assert!(snap.bars_in_trend >= 1);
+            assert!((snap.af_max_short - 0.30).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn adxr_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = AdxrSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 14, adx_now: 28.0, adx_prior: 22.0,
+            adxr: 25.0, adxr_prev: 24.5, last_close: 101.0,
+            adxr_label: "TREND".into(), note: String::new(),
+        };
+        upsert_adxr(&conn, "TEST", &snap).unwrap();
+        let got = get_adxr(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.adxr_label, "TREND");
+        assert!((got.adxr - 25.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn adxr_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_adxr_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.adxr_label.as_str(),
+            "STRONG_TREND" | "TREND" | "WEAK_TREND" | "NO_TREND" | "INSUFFICIENT_DATA"));
+        if snap.adxr_label != "INSUFFICIENT_DATA" {
+            assert!((snap.adxr - 0.5 * (snap.adx_now + snap.adx_prior)).abs() < 1e-6);
         }
     }
 }
