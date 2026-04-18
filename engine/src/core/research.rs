@@ -6908,6 +6908,94 @@ pub struct AdxrSnapshot {
     pub note: String,
 }
 
+// ── ADR-178 Round 66 ──────────────────────────────────────────────────────
+/// TA-Lib AVGPRICE — `(open + high + low + close) / 4`.
+/// Simplest price-transform primitive: the four-component OHLC average.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AvgpriceSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub avgprice: f64,                 // (O+H+L+C) / 4
+    pub avgprice_prev: f64,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub delta_pct: f64,                // (avgprice - close) / close * 100
+    pub avgprice_label: String,        // ABOVE_CLOSE / NEAR_CLOSE / BELOW_CLOSE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib MEDPRICE — `(high + low) / 2`.
+/// Range-midpoint primitive — the simple median of the bar's range.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MedpriceSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub medprice: f64,                 // (H+L) / 2
+    pub medprice_prev: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub delta_pct: f64,                // (medprice - close) / close * 100
+    pub medprice_label: String,        // ABOVE_MID / AT_MID / BELOW_MID / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib TYPPRICE — `(high + low + close) / 3`.
+/// Typical price — used as the input for CCI and several VWAP variants.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TypPriceSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub typprice: f64,                 // (H+L+C) / 3
+    pub typprice_prev: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub delta_pct: f64,                // (typprice - close) / close * 100
+    pub typprice_label: String,        // ABOVE_CLOSE / NEAR_CLOSE / BELOW_CLOSE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib WCLPRICE — `(high + low + 2 × close) / 4`.
+/// Weighted close — double-weights the close price for close-biased transforms.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WclPriceSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub wclprice: f64,                 // (H+L+2C) / 4
+    pub wclprice_prev: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub delta_pct: f64,                // (wclprice - close) / close * 100
+    pub wclprice_label: String,        // ABOVE_CLOSE / NEAR_CLOSE / BELOW_CLOSE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib VARIANCE — sample variance of close over N bars.
+/// Statistical variance primitive: `σ² = Σ(x − μ)² / N` (population form, matching TA-Lib default).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VarianceSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 5 (TA-Lib default)
+    pub mean: f64,
+    pub variance: f64,                 // population variance Σ(x-μ)²/N
+    pub variance_prev: f64,
+    pub stddev: f64,                   // sqrt(variance)
+    pub cv: f64,                       // stddev / |mean| × 100 (coefficient of variation %)
+    pub last_close: f64,
+    pub variance_label: String,        // HIGH_VOL / ELEVATED / NORMAL / LOW_VOL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -29832,6 +29920,189 @@ pub fn compute_adxr_snapshot(
     }
 }
 
+// ── ADR-178 Round 66 compute fns ────────────────────────────────────────────
+
+/// Compute TA-Lib AVGPRICE — `(open + high + low + close) / 4`.
+pub fn compute_avgprice_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AvgpriceSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 1 {
+        return AvgpriceSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            avgprice_label: "INSUFFICIENT_DATA".into(),
+            note: "need ≥1 bar, got 0".into(),
+            ..Default::default()
+        };
+    }
+    let b = sorted[n - 1];
+    let avg_now = (b.open + b.high + b.low + b.close) / 4.0;
+    let avg_prev = if n >= 2 {
+        let p = sorted[n - 2];
+        (p.open + p.high + p.low + p.close) / 4.0
+    } else { avg_now };
+    let delta_pct = if b.close.abs() > 1e-12 { (avg_now - b.close) / b.close * 100.0 } else { 0.0 };
+    let label = if delta_pct > 0.3 { "ABOVE_CLOSE" }
+        else if delta_pct < -0.3 { "BELOW_CLOSE" }
+        else { "NEAR_CLOSE" };
+    AvgpriceSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        avgprice: avg_now, avgprice_prev: avg_prev,
+        open: b.open, high: b.high, low: b.low, close: b.close,
+        delta_pct,
+        avgprice_label: label.into(), note: String::new(),
+    }
+}
+
+/// Compute TA-Lib MEDPRICE — `(high + low) / 2`.
+pub fn compute_medprice_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MedpriceSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 1 {
+        return MedpriceSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            medprice_label: "INSUFFICIENT_DATA".into(),
+            note: "need ≥1 bar, got 0".into(),
+            ..Default::default()
+        };
+    }
+    let b = sorted[n - 1];
+    let med_now = 0.5 * (b.high + b.low);
+    let med_prev = if n >= 2 {
+        let p = sorted[n - 2];
+        0.5 * (p.high + p.low)
+    } else { med_now };
+    let delta_pct = if b.close.abs() > 1e-12 { (med_now - b.close) / b.close * 100.0 } else { 0.0 };
+    let label = if delta_pct > 0.2 { "ABOVE_MID" }
+        else if delta_pct < -0.2 { "BELOW_MID" }
+        else { "AT_MID" };
+    MedpriceSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        medprice: med_now, medprice_prev: med_prev,
+        high: b.high, low: b.low, close: b.close,
+        delta_pct,
+        medprice_label: label.into(), note: String::new(),
+    }
+}
+
+/// Compute TA-Lib TYPPRICE — `(high + low + close) / 3`.
+pub fn compute_typprice_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> TypPriceSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 1 {
+        return TypPriceSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            typprice_label: "INSUFFICIENT_DATA".into(),
+            note: "need ≥1 bar, got 0".into(),
+            ..Default::default()
+        };
+    }
+    let b = sorted[n - 1];
+    let typ_now = (b.high + b.low + b.close) / 3.0;
+    let typ_prev = if n >= 2 {
+        let p = sorted[n - 2];
+        (p.high + p.low + p.close) / 3.0
+    } else { typ_now };
+    let delta_pct = if b.close.abs() > 1e-12 { (typ_now - b.close) / b.close * 100.0 } else { 0.0 };
+    let label = if delta_pct > 0.2 { "ABOVE_CLOSE" }
+        else if delta_pct < -0.2 { "BELOW_CLOSE" }
+        else { "NEAR_CLOSE" };
+    TypPriceSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        typprice: typ_now, typprice_prev: typ_prev,
+        high: b.high, low: b.low, close: b.close,
+        delta_pct,
+        typprice_label: label.into(), note: String::new(),
+    }
+}
+
+/// Compute TA-Lib WCLPRICE — `(high + low + 2 × close) / 4`.
+pub fn compute_wclprice_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> WclPriceSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 1 {
+        return WclPriceSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            wclprice_label: "INSUFFICIENT_DATA".into(),
+            note: "need ≥1 bar, got 0".into(),
+            ..Default::default()
+        };
+    }
+    let b = sorted[n - 1];
+    let wcl_now = (b.high + b.low + 2.0 * b.close) / 4.0;
+    let wcl_prev = if n >= 2 {
+        let p = sorted[n - 2];
+        (p.high + p.low + 2.0 * p.close) / 4.0
+    } else { wcl_now };
+    let delta_pct = if b.close.abs() > 1e-12 { (wcl_now - b.close) / b.close * 100.0 } else { 0.0 };
+    let label = if delta_pct > 0.15 { "ABOVE_CLOSE" }
+        else if delta_pct < -0.15 { "BELOW_CLOSE" }
+        else { "NEAR_CLOSE" };
+    WclPriceSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        wclprice: wcl_now, wclprice_prev: wcl_prev,
+        high: b.high, low: b.low, close: b.close,
+        delta_pct,
+        wclprice_label: label.into(), note: String::new(),
+    }
+}
+
+/// Compute TA-Lib VARIANCE — population variance of close over `period` bars (default 5).
+pub fn compute_variance_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> VarianceSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 5usize;
+    if n < period + 1 {
+        return VarianceSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            variance_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", period + 1, n),
+            ..Default::default()
+        };
+    }
+    let var_at = |end_idx: usize| -> (f64, f64) {
+        let start = end_idx + 1 - period;
+        let slice: Vec<f64> = sorted[start..=end_idx].iter().map(|r| r.close).collect();
+        let mu: f64 = slice.iter().sum::<f64>() / period as f64;
+        let v: f64 = slice.iter().map(|x| (x - mu).powi(2)).sum::<f64>() / period as f64;
+        (mu, v)
+    };
+    let (mean_now, var_now) = var_at(n - 1);
+    let (_, var_prev) = var_at(n - 2);
+    let stddev = var_now.sqrt();
+    let last_close = sorted[n - 1].close;
+    let cv = if mean_now.abs() > 1e-12 { stddev / mean_now.abs() * 100.0 } else { 0.0 };
+    let label = if cv > 5.0 { "HIGH_VOL" }
+        else if cv > 2.0 { "ELEVATED" }
+        else if cv < 0.5 { "LOW_VOL" }
+        else { "NORMAL" };
+    VarianceSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        mean: mean_now, variance: var_now, variance_prev: var_prev,
+        stddev, cv, last_close,
+        variance_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -39609,6 +39880,168 @@ pub fn get_adxr(conn: &Connection, symbol: &str) -> Result<Option<AdxrSnapshot>,
     if let Some(r) = rows.next().map_err(|e| format!("row adxr: {e}"))? {
         let j: String = r.get(0).map_err(|e| format!("get adxr: {e}"))?;
         let snap: AdxrSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse adxr: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── ADR-178 Round 66 schema (v68) ──────────────────────────────────────────
+pub fn create_research_tables_v68(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v67(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_avgprice (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_avgprice_updated ON research_avgprice(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_medprice (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_medprice_updated ON research_medprice(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_typprice (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_typprice_updated ON research_typprice(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_wclprice (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_wclprice_updated ON research_wclprice(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_variance (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_variance_updated ON research_variance(updated_at);",
+    ).map_err(|e| format!("create v68 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_avgprice(conn: &Connection, symbol: &str, snap: &AvgpriceSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v68(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("avgprice json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_avgprice (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert avgprice: {e}"))?;
+    Ok(())
+}
+
+pub fn get_avgprice(conn: &Connection, symbol: &str) -> Result<Option<AvgpriceSnapshot>, String> {
+    let _ = create_research_tables_v68(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_avgprice WHERE symbol = ?1")
+        .map_err(|e| format!("prep avgprice: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query avgprice: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row avgprice: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get avgprice: {e}"))?;
+        let snap: AvgpriceSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse avgprice: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_medprice(conn: &Connection, symbol: &str, snap: &MedpriceSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v68(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("medprice json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_medprice (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert medprice: {e}"))?;
+    Ok(())
+}
+
+pub fn get_medprice(conn: &Connection, symbol: &str) -> Result<Option<MedpriceSnapshot>, String> {
+    let _ = create_research_tables_v68(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_medprice WHERE symbol = ?1")
+        .map_err(|e| format!("prep medprice: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query medprice: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row medprice: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get medprice: {e}"))?;
+        let snap: MedpriceSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse medprice: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_typprice(conn: &Connection, symbol: &str, snap: &TypPriceSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v68(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("typprice json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_typprice (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert typprice: {e}"))?;
+    Ok(())
+}
+
+pub fn get_typprice(conn: &Connection, symbol: &str) -> Result<Option<TypPriceSnapshot>, String> {
+    let _ = create_research_tables_v68(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_typprice WHERE symbol = ?1")
+        .map_err(|e| format!("prep typprice: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query typprice: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row typprice: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get typprice: {e}"))?;
+        let snap: TypPriceSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse typprice: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_wclprice(conn: &Connection, symbol: &str, snap: &WclPriceSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v68(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("wclprice json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_wclprice (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert wclprice: {e}"))?;
+    Ok(())
+}
+
+pub fn get_wclprice(conn: &Connection, symbol: &str) -> Result<Option<WclPriceSnapshot>, String> {
+    let _ = create_research_tables_v68(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_wclprice WHERE symbol = ?1")
+        .map_err(|e| format!("prep wclprice: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query wclprice: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row wclprice: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get wclprice: {e}"))?;
+        let snap: WclPriceSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse wclprice: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_variance(conn: &Connection, symbol: &str, snap: &VarianceSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v68(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("variance json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_variance (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert variance: {e}"))?;
+    Ok(())
+}
+
+pub fn get_variance(conn: &Connection, symbol: &str) -> Result<Option<VarianceSnapshot>, String> {
+    let _ = create_research_tables_v68(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_variance WHERE symbol = ?1")
+        .map_err(|e| format!("prep variance: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query variance: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row variance: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get variance: {e}"))?;
+        let snap: VarianceSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse variance: {e}"))?;
         Ok(Some(snap))
     } else { Ok(None) }
 }
@@ -52466,6 +52899,145 @@ Trailing text.
             "STRONG_TREND" | "TREND" | "WEAK_TREND" | "NO_TREND" | "INSUFFICIENT_DATA"));
         if snap.adxr_label != "INSUFFICIENT_DATA" {
             assert!((snap.adxr - 0.5 * (snap.adx_now + snap.adx_prior)).abs() < 1e-6);
+        }
+    }
+
+    // ── ADR-178 Round 66 ──
+    #[test]
+    fn avgprice_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = AvgpriceSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 3,
+            avgprice: 101.5, avgprice_prev: 100.75,
+            open: 100.0, high: 103.0, low: 100.0, close: 103.0,
+            delta_pct: -1.46,
+            avgprice_label: "BELOW_CLOSE".into(), note: String::new(),
+        };
+        upsert_avgprice(&conn, "TEST", &snap).unwrap();
+        let got = get_avgprice(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.avgprice_label, "BELOW_CLOSE");
+        assert!((got.avgprice - 101.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn avgprice_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_avgprice_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.avgprice_label.as_str(),
+            "ABOVE_CLOSE" | "NEAR_CLOSE" | "BELOW_CLOSE" | "INSUFFICIENT_DATA"));
+        if snap.avgprice_label != "INSUFFICIENT_DATA" {
+            let expected = (snap.open + snap.high + snap.low + snap.close) / 4.0;
+            assert!((snap.avgprice - expected).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn medprice_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MedpriceSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 2,
+            medprice: 101.5, medprice_prev: 100.5,
+            high: 103.0, low: 100.0, close: 102.0,
+            delta_pct: -0.49,
+            medprice_label: "AT_MID".into(), note: String::new(),
+        };
+        upsert_medprice(&conn, "TEST", &snap).unwrap();
+        let got = get_medprice(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.medprice_label, "AT_MID");
+        assert!((got.medprice - 101.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn medprice_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_medprice_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.medprice_label.as_str(),
+            "ABOVE_MID" | "AT_MID" | "BELOW_MID" | "INSUFFICIENT_DATA"));
+        if snap.medprice_label != "INSUFFICIENT_DATA" {
+            assert!((snap.medprice - 0.5 * (snap.high + snap.low)).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn typprice_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = TypPriceSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 5,
+            typprice: 101.67, typprice_prev: 100.33,
+            high: 103.0, low: 100.0, close: 102.0,
+            delta_pct: -0.32,
+            typprice_label: "NEAR_CLOSE".into(), note: String::new(),
+        };
+        upsert_typprice(&conn, "TEST", &snap).unwrap();
+        let got = get_typprice(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.typprice_label, "NEAR_CLOSE");
+        assert!((got.typprice - 101.67).abs() < 1e-6);
+    }
+
+    #[test]
+    fn typprice_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_typprice_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.typprice_label.as_str(),
+            "ABOVE_CLOSE" | "NEAR_CLOSE" | "BELOW_CLOSE" | "INSUFFICIENT_DATA"));
+        if snap.typprice_label != "INSUFFICIENT_DATA" {
+            let expected = (snap.high + snap.low + snap.close) / 3.0;
+            assert!((snap.typprice - expected).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn wclprice_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = WclPriceSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 7,
+            wclprice: 101.75, wclprice_prev: 100.25,
+            high: 103.0, low: 100.0, close: 102.0,
+            delta_pct: -0.25,
+            wclprice_label: "NEAR_CLOSE".into(), note: String::new(),
+        };
+        upsert_wclprice(&conn, "TEST", &snap).unwrap();
+        let got = get_wclprice(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.wclprice_label, "NEAR_CLOSE");
+        assert!((got.wclprice - 101.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn wclprice_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_wclprice_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.wclprice_label.as_str(),
+            "ABOVE_CLOSE" | "NEAR_CLOSE" | "BELOW_CLOSE" | "INSUFFICIENT_DATA"));
+        if snap.wclprice_label != "INSUFFICIENT_DATA" {
+            let expected = (snap.high + snap.low + 2.0 * snap.close) / 4.0;
+            assert!((snap.wclprice - expected).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn variance_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = VarianceSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 50,
+            period: 5, mean: 100.5, variance: 2.5, variance_prev: 2.2,
+            stddev: 1.5811, cv: 1.57, last_close: 101.0,
+            variance_label: "NORMAL".into(), note: String::new(),
+        };
+        upsert_variance(&conn, "TEST", &snap).unwrap();
+        let got = get_variance(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.variance_label, "NORMAL");
+        assert!((got.variance - 2.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn variance_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_variance_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.variance_label.as_str(),
+            "HIGH_VOL" | "ELEVATED" | "NORMAL" | "LOW_VOL" | "INSUFFICIENT_DATA"));
+        if snap.variance_label != "INSUFFICIENT_DATA" {
+            assert!(snap.variance >= 0.0);
+            assert!((snap.stddev - snap.variance.sqrt()).abs() < 1e-9);
         }
     }
 }
