@@ -4057,7 +4057,88 @@ labels. Requires n≥22 with volume; body reports length (21),
 ema_money_flow, ema_volume, tmf_value, tmf_prev, last_close.
 Source: ADR-169 TMF window.
 
-#### 2.278 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.278 Bill Williams Fractals (FRACTALS — ADR-170)
+
+Pulled from `research::get_fractals`. A 5-bar peak/trough
+structural-pivot marker: a bullish (up) fractal forms when a bar's
+high is strictly greater than both the two preceding bars' highs
+AND the two following bars' highs; a bearish (down) fractal is the
+symmetric construction on lows. Used as S/R pivots and as the
+building block for Bill Williams's Alligator-system entry rule
+(ADR-167). Distinct from ZigZag (percent-move threshold) and Pivot
+Points (floor-trader formula over prior OHLC). UP_RECENT /
+DOWN_RECENT / BOTH_RECENT / NONE_RECENT labels (RECENT = within
+last 10 bars). Requires n≥5; body reports window (5),
+last_up_high, last_up_bars_ago, last_down_low,
+last_down_bars_ago, up_fractal_count, down_fractal_count,
+last_close. Source: ADR-170 FRACTALS window.
+
+#### 2.279 Ehlers Inverse Fisher Transform of RSI (IFT_RSI — ADR-170)
+
+Pulled from `research::get_ift_rsi`. Rescales RSI (ADR-108) to
+[-5, 5] via `v = 0.1·(RSI − 50)`, smooths with a 9-bar WMA, then
+applies the inverse Fisher transform `ift = (e^{2v} − 1) /
+(e^{2v} + 1)` to produce a bounded [-1, 1] oscillator. The
+inverse Fisher transform compresses mid-range values toward zero
+and expands extremes toward ±1, sharpening reversal signals
+relative to raw RSI. Crossings of ±0.5 are strong trend-change
+alerts. Distinct from raw RSI (ADR-108), STOCHRSI (ADR-137), QQE
+(ADR-169), and CRSI (ADR-167). STRONG_BULL / BULL / NEUTRAL /
+BEAR / STRONG_BEAR labels. Requires n≥25; body reports
+rsi_length (14), wma_length (9), rsi_value, v_value, ift_value,
+ift_prev, last_close. Source: ADR-170 IFT_RSI window.
+
+#### 2.280 MESA Adaptive Moving Average (MAMA — ADR-170)
+
+Pulled from `research::get_mama`. Ehlers's phase-adaptive MA that
+estimates the dominant cycle period via a simplified Hilbert
+transform (in-phase and quadrature discriminator) and then sets α
+adaptively: `α = fast_limit / (period / 2)`, clamped to
+`[slow_limit, fast_limit]`. The companion FAMA (Following Adaptive
+MA) is MAMA smoothed with half its α. Defaults: fast_limit=0.5,
+slow_limit=0.05. Distinct from KAMA (efficiency-ratio-based
+adaptive, ADR-117), T3 (Tillson triple-DEMA, ADR-142), VIDYA
+(Chande volatility-index DMA, ADR-148), and every fixed-α EMA.
+STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR labels derived
+from MAMA vs FAMA relationship + divergence. Requires n≥32; body
+reports fast_limit (0.5), slow_limit (0.05), mama_value,
+fama_value, mama_prev, fama_prev, alpha, period, last_close.
+Source: ADR-170 MAMA window.
+
+#### 2.281 Ehlers Center of Gravity (COG — ADR-170)
+
+Pulled from `research::get_cog`. A zero-lag oscillator built as the
+negative weighted centroid of the last N closes:
+`COG = -Σ_{i=0..N-1}((i+1)·close_{N-1-i}) / Σ_{i=0..N-1}(close_{N-1-i})`
+with canonical N=10. Signal line is a 3-bar lagged copy. Ehlers
+argued the sign flip plus weighting by recency produces an
+oscillator that leads traditional momentum by roughly one bar on
+average. Distinct from every EMA-based oscillator (MACD, TRIX,
+PMO, ADR-169), LINREG-based (LINREG/CFO), and simple ROC.
+STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR labels derived
+from COG minus signal. Requires n≥14; body reports length (10),
+cog_value, cog_signal (3-bar lag), cog_prev, last_close.
+Source: ADR-170 COG window.
+
+#### 2.282 Didi Aguiar Didi Index (DIDI — ADR-170)
+
+Pulled from `research::get_didi`. Brazilian-market 3-SMA crossover
+system where three SMAs (short 3, medium 8, long 20) are
+normalized by dividing by the medium: `short_ratio =
+short_sma/medium_sma − 1`, `long_ratio = long_sma/medium_sma − 1`.
+The characteristic "didi needles" pattern fires when short and long
+cross the zero line from opposite sides — BULL_NEEDLES when short
+crosses up through zero while long crosses down through zero, and
+symmetric BEAR_NEEDLES. Between needle events, the ordering of
+short, medium, and long drives the trend classification. Distinct
+from every 2-line MA crossover (golden/death cross), GMMA
+(12-line fan, ADR-168), and ALLIGATOR (3-line SMMA, ADR-167).
+BULL_NEEDLES / BULL / NEUTRAL / BEAR / BEAR_NEEDLES labels.
+Requires n≥22; body reports short_length (3), medium_length (8),
+long_length (20), short_ratio, long_ratio, short_prev, long_prev,
+last_close. Source: ADR-170 DIDI window.
+
+#### 2.283 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -4073,7 +4154,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.279 Sector peer comparison
+#### 2.284 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -4333,8 +4414,41 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~83-159 KB**
-(up from 82-157 KB after ADR-168; ADR-169 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~84-161 KB**
+(up from 83-159 KB after ADR-169; ADR-170 adds five optional per-symbol
+blocks — FRACTALS / IFT_RSI / MAMA / COG / DIDI — each measuring ~2 k/v rows and
+adding ~240-340 bytes when populated, for a typical +1.47 KB per symbol;
+all five reuse the existing `research_historical_price` HP cache and the
+standard research-table LAN sync path with zero new API dependencies;
+FRACTALS computes Bill Williams's 5-bar peak/trough structural pivots
+(strict local maxima on highs and minima on lows with 2 left and 2 right
+comparators) and reports the most-recent up/down fractal values plus
+their bars_ago displacements and full-window counts, with UP_RECENT /
+DOWN_RECENT / BOTH_RECENT / NONE_RECENT labels — complements ALLIGATOR
+(ADR-167) as the Alligator-system entry trigger;
+IFT_RSI computes Ehlers's Inverse Fisher Transform of RSI by rescaling
+RSI₁₄ to [-5, 5] via `v = 0.1·(RSI − 50)`, smoothing with a 9-bar WMA,
+then applying `(e^{2v} − 1)/(e^{2v} + 1)` to produce a bounded [-1, 1]
+oscillator that compresses mid-range values and expands extremes, with
+STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR labels — distinct from
+raw RSI, STOCHRSI (ADR-137), QQE (ADR-169), and CRSI (ADR-167);
+MAMA computes Ehlers's MESA Adaptive Moving Average via simplified
+Hilbert-transform discriminator yielding a dominant-cycle-adaptive α
+clamped to `[slow_limit=0.05, fast_limit=0.5]`, with companion FAMA
+(Following Adaptive MA) at half α, and reports the detected period
+plus the current α — distinct from KAMA (efficiency-ratio adaptive,
+ADR-117), VIDYA (volatility-index adaptive, ADR-148), and T3 (ADR-142);
+COG computes Ehlers's Center of Gravity as the negative
+recency-weighted centroid of the last 10 closes with a 3-bar lagged
+signal, a zero-lag construction Ehlers argued leads traditional
+momentum by ~1 bar — distinct from every EMA- and LINREG-based
+oscillator on the shipped list;
+DIDI computes Didi Aguiar's Brazilian 3-SMA crossover system with
+SMAs 3/8/20 normalized by dividing by the medium, and detects the
+characteristic "needles" pattern when short and long cross the zero
+line from opposite directions, with BULL_NEEDLES / BULL / NEUTRAL /
+BEAR / BEAR_NEEDLES labels — complements GMMA (ADR-168) and
+ALLIGATOR (ADR-167) on the multi-MA axis; ADR-169 added five optional per-symbol
 blocks — KDJ / QQE / PMO / CFO / TMF — each measuring ~2 k/v rows and
 adding ~260-320 bytes when populated, for a typical +1.44 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the

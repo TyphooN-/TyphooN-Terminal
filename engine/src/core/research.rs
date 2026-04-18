@@ -5925,6 +5925,133 @@ pub struct TmfSnapshot {
     pub note: String,
 }
 
+/// Bill Williams Fractals — 5-bar local-extremum markers. A bullish
+/// (up) fractal forms when a bar's high is strictly greater than both
+/// the two preceding bars' highs AND the two following bars' highs; a
+/// bearish (down) fractal is the symmetric construction on lows. Used
+/// as structural S/R pivots and as the building block for Williams's
+/// Alligator-based entry/exit rules. Distinct from ZigZag (pct-move
+/// threshold) and Pivot Points (floor-trader formula over prior OHLC).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct FractalsSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub window: usize,                 // 5 — 2 left, pivot, 2 right
+    pub last_up_high: f64,             // most recent bullish fractal high
+    pub last_up_bars_ago: usize,       // bars since last up fractal confirmed
+    pub last_down_low: f64,            // most recent bearish fractal low
+    pub last_down_bars_ago: usize,     // bars since last down fractal confirmed
+    pub up_fractal_count: usize,       // total up fractals in scanned window
+    pub down_fractal_count: usize,     // total down fractals in scanned window
+    pub last_close: f64,
+    pub fractals_label: String,        // UP_RECENT / DOWN_RECENT / BOTH_RECENT / NONE_RECENT / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Ehlers Inverse Fisher Transform of RSI — rescales RSI (ADR-108) to
+/// [-5, 5] via `v = 0.1·(RSI − 50)`, smooths with a 9-bar WMA, then
+/// applies `ift = (e^{2v} − 1) / (e^{2v} + 1)` to produce a bounded
+/// [-1, 1] oscillator. The inverse Fisher transform compresses
+/// mid-range values toward zero and expands extremes toward ±1,
+/// sharpening reversal signals relative to raw RSI. Crossings of
+/// ±0.5 are strong trend-change alerts. Distinct from raw RSI, from
+/// STOCHRSI (stochastic of RSI), from QQE (smoothed RSI with
+/// adaptive bands, ADR-169), and from CRSI (Connors composite,
+/// ADR-167).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct IftRsiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub rsi_length: usize,             // 14
+    pub wma_length: usize,             // 9
+    pub rsi_value: f64,                // raw RSI₁₄
+    pub v_value: f64,                  // WMA₉ of 0.1·(RSI − 50)
+    pub ift_value: f64,                // (e^{2v} − 1)/(e^{2v} + 1) ∈ [-1, 1]
+    pub ift_prev: f64,
+    pub last_close: f64,
+    pub ift_rsi_label: String,         // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// MESA Adaptive Moving Average (Ehlers) — a phase-adaptive MA that
+/// estimates the dominant cycle period via a simplified Hilbert
+/// transform (in-phase and quadrature components) and then sets α
+/// adaptively: `α = fast_limit / (period / 2)`, clamped to
+/// `[slow_limit, fast_limit]`. The companion FAMA (Following
+/// Adaptive MA) is MAMA smoothed with half its α. The fastlimit /
+/// slowlimit defaults are 0.5 / 0.05. Distinct from KAMA (Kaufman,
+/// efficiency-ratio-based adaptive), from T3 (Tillson triple-DEMA),
+/// and from every fixed-α EMA on the shipped MA list.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MamaSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub fast_limit: f64,               // 0.5
+    pub slow_limit: f64,               // 0.05
+    pub mama_value: f64,
+    pub fama_value: f64,
+    pub mama_prev: f64,
+    pub fama_prev: f64,
+    pub alpha: f64,                    // current adaptive α
+    pub period: f64,                   // detected dominant cycle period
+    pub last_close: f64,
+    pub mama_label: String,            // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Ehlers Center of Gravity oscillator — a zero-lag oscillator built
+/// as the negative weighted centroid of the last N closes:
+/// `COG = -Σ_{i=0..N-1}((i+1)·close_{N-1-i}) / Σ_{i=0..N-1}(close_{N-1-i})`
+/// with canonical N=10. Signal line is a 3-bar lagged copy. Ehlers
+/// argued that the sign flip and the weighting by recency produce an
+/// oscillator that leads traditional momentum by one bar on average.
+/// Distinct from every EMA-based oscillator (MACD, TRIX, PMO), from
+/// LINREG-based (LINREG/CFO), and from simple ROC.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CogSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 10
+    pub cog_value: f64,
+    pub cog_signal: f64,               // 3-bar lag
+    pub cog_prev: f64,
+    pub last_close: f64,
+    pub cog_label: String,             // STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Didi Aguiar's Didi Index — a Brazilian 3-SMA crossover system
+/// where three SMAs (short 3, medium 8, long 20) are normalized by
+/// dividing by the medium: `short_ratio = short_sma/medium_sma − 1`,
+/// `long_ratio = long_sma/medium_sma − 1`. The characteristic "didi
+/// needles" pattern fires when short and long cross the zero line
+/// from opposite sides — BULL_NEEDLES when short crosses up through
+/// zero while long crosses down through zero, and symmetric
+/// BEAR_NEEDLES. Between needle events, the ordering of short,
+/// medium, and long drives the trend classification. Distinct from
+/// every 2-line MA crossover (golden/death cross), from Guppy
+/// (GMMA, 12-line fan, ADR-168), and from ALLIGATOR (3-line SMMA).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DidiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub short_length: usize,           // 3
+    pub medium_length: usize,          // 8
+    pub long_length: usize,             // 20
+    pub short_ratio: f64,              // short/medium − 1
+    pub long_ratio: f64,               // long/medium − 1
+    pub short_prev: f64,
+    pub long_prev: f64,
+    pub last_close: f64,
+    pub didi_label: String,            // BULL_NEEDLES / BULL / NEUTRAL / BEAR / BEAR_NEEDLES / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -26604,6 +26731,331 @@ pub fn compute_tmf_snapshot(
     }
 }
 
+pub fn compute_fractals_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> FractalsSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let window = 5usize;
+    if n < window {
+        return FractalsSnapshot {
+            symbol: sym, as_of: as_of.into(), window,
+            fractals_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", window, n),
+            ..Default::default()
+        };
+    }
+    let mut last_up_idx: Option<usize> = None;
+    let mut last_down_idx: Option<usize> = None;
+    let mut up_count = 0usize;
+    let mut down_count = 0usize;
+    for i in 2..n.saturating_sub(2) {
+        let h = sorted[i].high;
+        let l = sorted[i].low;
+        if h > sorted[i - 2].high && h > sorted[i - 1].high
+            && h > sorted[i + 1].high && h > sorted[i + 2].high {
+            up_count += 1;
+            last_up_idx = Some(i);
+        }
+        if l < sorted[i - 2].low && l < sorted[i - 1].low
+            && l < sorted[i + 1].low && l < sorted[i + 2].low {
+            down_count += 1;
+            last_down_idx = Some(i);
+        }
+    }
+    let last_idx = n - 1;
+    let (last_up_high, last_up_bars_ago) = match last_up_idx {
+        Some(i) => (sorted[i].high, last_idx - i),
+        None => (0.0, 0),
+    };
+    let (last_down_low, last_down_bars_ago) = match last_down_idx {
+        Some(i) => (sorted[i].low, last_idx - i),
+        None => (0.0, 0),
+    };
+    let up_recent = last_up_idx.is_some() && last_up_bars_ago <= 10;
+    let down_recent = last_down_idx.is_some() && last_down_bars_ago <= 10;
+    let label = match (up_recent, down_recent) {
+        (true, true) => "BOTH_RECENT",
+        (true, false) => "UP_RECENT",
+        (false, true) => "DOWN_RECENT",
+        (false, false) => "NONE_RECENT",
+    };
+    FractalsSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, window,
+        last_up_high, last_up_bars_ago,
+        last_down_low, last_down_bars_ago,
+        up_fractal_count: up_count, down_fractal_count: down_count,
+        last_close: sorted[last_idx].close,
+        fractals_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_ift_rsi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> IftRsiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let rsi_length = 14usize;
+    let wma_length = 9usize;
+    let need = rsi_length + wma_length + 2;
+    if n < need {
+        return IftRsiSnapshot {
+            symbol: sym, as_of: as_of.into(), rsi_length, wma_length,
+            ift_rsi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{need} bars, got {n}"),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|r| r.close).collect();
+    let mut gains = vec![0.0; n];
+    let mut losses = vec![0.0; n];
+    for i in 1..n {
+        let d = closes[i] - closes[i - 1];
+        if d > 0.0 { gains[i] = d; } else { losses[i] = -d; }
+    }
+    let mut avg_gain = 0.0;
+    let mut avg_loss = 0.0;
+    for i in 1..=rsi_length { avg_gain += gains[i]; avg_loss += losses[i]; }
+    avg_gain /= rsi_length as f64;
+    avg_loss /= rsi_length as f64;
+    let mut rsi_series = vec![0.0; n];
+    for i in rsi_length..n {
+        if i > rsi_length {
+            avg_gain = (avg_gain * (rsi_length as f64 - 1.0) + gains[i]) / rsi_length as f64;
+            avg_loss = (avg_loss * (rsi_length as f64 - 1.0) + losses[i]) / rsi_length as f64;
+        }
+        let rs = if avg_loss > 1e-12 { avg_gain / avg_loss } else { 100.0 };
+        rsi_series[i] = 100.0 - 100.0 / (1.0 + rs);
+    }
+    let v_raw: Vec<f64> = rsi_series.iter().map(|r| 0.1 * (r - 50.0)).collect();
+    let wma = |src: &[f64], period: usize, i: usize| -> f64 {
+        let mut num = 0.0; let mut den = 0.0;
+        for k in 0..period {
+            let w = (period - k) as f64;
+            num += w * src[i - k];
+            den += w;
+        }
+        num / den
+    };
+    let idx = n - 1;
+    let v_value = wma(&v_raw, wma_length, idx);
+    let v_prev = wma(&v_raw, wma_length, idx - 1);
+    let ift_value = ((2.0 * v_value).exp() - 1.0) / ((2.0 * v_value).exp() + 1.0);
+    let ift_prev = ((2.0 * v_prev).exp() - 1.0) / ((2.0 * v_prev).exp() + 1.0);
+    let label = if ift_value >= 0.5 { "STRONG_BULL" }
+        else if ift_value >= 0.1 { "BULL" }
+        else if ift_value <= -0.5 { "STRONG_BEAR" }
+        else if ift_value <= -0.1 { "BEAR" }
+        else { "NEUTRAL" };
+    IftRsiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        rsi_length, wma_length,
+        rsi_value: rsi_series[idx], v_value, ift_value, ift_prev,
+        last_close: sorted[idx].close,
+        ift_rsi_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_mama_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MamaSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let fast_limit = 0.5;
+    let slow_limit = 0.05;
+    if n < 32 {
+        return MamaSnapshot {
+            symbol: sym, as_of: as_of.into(), fast_limit, slow_limit,
+            mama_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥32 bars, got {n}"),
+            ..Default::default()
+        };
+    }
+    // Ehlers MAMA implementation — simplified Hilbert transform discriminator.
+    let price: Vec<f64> = sorted.iter().map(|r| (r.high + r.low) / 2.0).collect();
+    let mut smooth = vec![0.0; n];
+    let mut detrender = vec![0.0; n];
+    let mut q1 = vec![0.0; n];
+    let mut i1 = vec![0.0; n];
+    let mut j_i = vec![0.0; n];
+    let mut j_q = vec![0.0; n];
+    let mut i2 = vec![0.0; n];
+    let mut q2 = vec![0.0; n];
+    let mut re = vec![0.0; n];
+    let mut im = vec![0.0; n];
+    let mut period = vec![0.0; n];
+    let mut smooth_period = vec![0.0; n];
+    let mut phase = vec![0.0; n];
+    let mut mama = vec![0.0; n];
+    let mut fama = vec![0.0; n];
+    for i in 6..n {
+        smooth[i] = (4.0 * price[i] + 3.0 * price[i - 1] + 2.0 * price[i - 2] + price[i - 3]) / 10.0;
+        let pf = 0.075 * period[i - 1] + 0.54;
+        detrender[i] = (0.0962 * smooth[i] + 0.5769 * smooth[i - 2]
+            - 0.5769 * smooth[i - 4] - 0.0962 * smooth[i - 6]) * pf;
+        q1[i] = (0.0962 * detrender[i] + 0.5769 * detrender[i - 2]
+            - 0.5769 * detrender[i - 4] - 0.0962 * detrender[i - 6]) * pf;
+        i1[i] = detrender[i - 3];
+        j_i[i] = (0.0962 * i1[i] + 0.5769 * i1[i - 2]
+            - 0.5769 * i1[i - 4] - 0.0962 * i1[i - 6]) * pf;
+        j_q[i] = (0.0962 * q1[i] + 0.5769 * q1[i - 2]
+            - 0.5769 * q1[i - 4] - 0.0962 * q1[i - 6]) * pf;
+        let i2_raw = i1[i] - j_q[i];
+        let q2_raw = q1[i] + j_i[i];
+        i2[i] = 0.2 * i2_raw + 0.8 * i2[i - 1];
+        q2[i] = 0.2 * q2_raw + 0.8 * q2[i - 1];
+        let re_raw = i2[i] * i2[i - 1] + q2[i] * q2[i - 1];
+        let im_raw = i2[i] * q2[i - 1] - q2[i] * i2[i - 1];
+        re[i] = 0.2 * re_raw + 0.8 * re[i - 1];
+        im[i] = 0.2 * im_raw + 0.8 * im[i - 1];
+        let mut per = if im[i].abs() > 1e-12 && re[i].abs() > 1e-12 {
+            std::f64::consts::TAU / (im[i] / re[i]).atan()
+        } else { period[i - 1] };
+        if per > 1.5 * period[i - 1] && period[i - 1] > 0.0 { per = 1.5 * period[i - 1]; }
+        if per < 0.67 * period[i - 1] && period[i - 1] > 0.0 { per = 0.67 * period[i - 1]; }
+        per = per.clamp(6.0, 50.0);
+        period[i] = 0.2 * per + 0.8 * period[i - 1];
+        smooth_period[i] = 0.33 * period[i] + 0.67 * smooth_period[i - 1];
+        let phase_new = if i1[i].abs() > 1e-12 {
+            (q1[i] / i1[i]).atan().to_degrees()
+        } else { phase[i - 1] };
+        let delta_phase = (phase[i - 1] - phase_new).max(1.0);
+        phase[i] = phase_new;
+        let alpha = (fast_limit / delta_phase).max(slow_limit).min(fast_limit);
+        mama[i] = alpha * price[i] + (1.0 - alpha) * mama[i - 1];
+        fama[i] = 0.5 * alpha * mama[i] + (1.0 - 0.5 * alpha) * fama[i - 1];
+    }
+    let idx = n - 1;
+    let mama_value = mama[idx];
+    let fama_value = fama[idx];
+    let mama_prev = mama[idx - 1];
+    let fama_prev = fama[idx - 1];
+    let last_close = sorted[idx].close;
+    let diff_pct = if fama_value.abs() > 1e-12 {
+        100.0 * (mama_value - fama_value) / fama_value
+    } else { 0.0 };
+    let label = if mama_value > fama_value && diff_pct > 2.0 { "STRONG_BULL" }
+        else if mama_value > fama_value { "BULL" }
+        else if mama_value < fama_value && diff_pct < -2.0 { "STRONG_BEAR" }
+        else if mama_value < fama_value { "BEAR" }
+        else { "NEUTRAL" };
+    let alpha_final = {
+        let phase_diff = (phase[idx - 1] - phase[idx]).max(1.0);
+        (fast_limit / phase_diff).max(slow_limit).min(fast_limit)
+    };
+    MamaSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        fast_limit, slow_limit,
+        mama_value, fama_value, mama_prev, fama_prev,
+        alpha: alpha_final, period: period[idx],
+        last_close,
+        mama_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cog_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CogSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 10usize;
+    if n < length + 4 {
+        return CogSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            cog_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 4, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|r| r.close).collect();
+    let cog_at = |end: usize| -> f64 {
+        let mut num = 0.0; let mut den = 0.0;
+        for k in 0..length {
+            let c = closes[end - k];
+            let w = (k + 1) as f64;
+            num += w * c;
+            den += c;
+        }
+        if den.abs() > 1e-12 { -num / den } else { 0.0 }
+    };
+    let idx = n - 1;
+    let cog_value = cog_at(idx);
+    let cog_prev = cog_at(idx - 1);
+    let cog_signal = cog_at(idx - 3);
+    let diff = cog_value - cog_signal;
+    let label = if diff >= 0.5 { "STRONG_BULL" }
+        else if diff >= 0.1 { "BULL" }
+        else if diff <= -0.5 { "STRONG_BEAR" }
+        else if diff <= -0.1 { "BEAR" }
+        else { "NEUTRAL" };
+    CogSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        length, cog_value, cog_signal, cog_prev,
+        last_close: sorted[idx].close,
+        cog_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_didi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> DidiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let short_length = 3usize;
+    let medium_length = 8usize;
+    let long_length = 20usize;
+    if n < long_length + 2 {
+        return DidiSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            short_length, medium_length, long_length,
+            didi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", long_length + 2, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|r| r.close).collect();
+    let sma_at = |end: usize, period: usize| -> f64 {
+        let mut s = 0.0;
+        for k in 0..period { s += closes[end - k]; }
+        s / period as f64
+    };
+    let idx = n - 1;
+    let compute_ratios = |end: usize| -> (f64, f64) {
+        let s = sma_at(end, short_length);
+        let m = sma_at(end, medium_length);
+        let l = sma_at(end, long_length);
+        let short_r = if m.abs() > 1e-12 { s / m - 1.0 } else { 0.0 };
+        let long_r = if m.abs() > 1e-12 { l / m - 1.0 } else { 0.0 };
+        (short_r, long_r)
+    };
+    let (short_ratio, long_ratio) = compute_ratios(idx);
+    let (short_prev, long_prev) = compute_ratios(idx - 1);
+    let needles_bull = short_prev <= 0.0 && short_ratio > 0.0 && long_prev >= 0.0 && long_ratio < 0.0;
+    let needles_bear = short_prev >= 0.0 && short_ratio < 0.0 && long_prev <= 0.0 && long_ratio > 0.0;
+    let label = if needles_bull { "BULL_NEEDLES" }
+        else if needles_bear { "BEAR_NEEDLES" }
+        else if short_ratio > 0.0 && long_ratio < 0.0 { "BULL" }
+        else if short_ratio < 0.0 && long_ratio > 0.0 { "BEAR" }
+        else { "NEUTRAL" };
+    DidiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        short_length, medium_length, long_length,
+        short_ratio, long_ratio, short_prev, long_prev,
+        last_close: sorted[idx].close,
+        didi_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -35579,6 +36031,157 @@ pub fn get_tmf(conn: &Connection, symbol: &str) -> Result<Option<TmfSnapshot>, S
         .map_err(|e| format!("prepare get_tmf: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_tmf: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_tmf: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn create_research_tables_v60(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v59(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_fractals (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_fractals_updated ON research_fractals(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_ift_rsi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ift_rsi_updated ON research_ift_rsi(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_mama (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_mama_updated ON research_mama(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cog (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cog_updated ON research_cog(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_didi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_didi_updated ON research_didi(updated_at);",
+    ).map_err(|e| format!("create v60 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_fractals(conn: &Connection, symbol: &str, snap: &FractalsSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v60(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("fractals json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_fractals(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert fractals: {e}"))?;
+    Ok(())
+}
+
+pub fn get_fractals(conn: &Connection, symbol: &str) -> Result<Option<FractalsSnapshot>, String> {
+    let _ = create_research_tables_v60(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_fractals WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_fractals: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_fractals: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_fractals: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ift_rsi(conn: &Connection, symbol: &str, snap: &IftRsiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v60(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ift_rsi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ift_rsi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ift_rsi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ift_rsi(conn: &Connection, symbol: &str) -> Result<Option<IftRsiSnapshot>, String> {
+    let _ = create_research_tables_v60(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ift_rsi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_ift_rsi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_ift_rsi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_ift_rsi: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_mama(conn: &Connection, symbol: &str, snap: &MamaSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v60(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("mama json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_mama(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert mama: {e}"))?;
+    Ok(())
+}
+
+pub fn get_mama(conn: &Connection, symbol: &str) -> Result<Option<MamaSnapshot>, String> {
+    let _ = create_research_tables_v60(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_mama WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_mama: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_mama: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_mama: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cog(conn: &Connection, symbol: &str, snap: &CogSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v60(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cog json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cog(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cog: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cog(conn: &Connection, symbol: &str) -> Result<Option<CogSnapshot>, String> {
+    let _ = create_research_tables_v60(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cog WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_cog: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_cog: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_cog: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_didi(conn: &Connection, symbol: &str, snap: &DidiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v60(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("didi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_didi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert didi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_didi(conn: &Connection, symbol: &str) -> Result<Option<DidiSnapshot>, String> {
+    let _ = create_research_tables_v60(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_didi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_didi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_didi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_didi: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -46847,6 +47450,152 @@ Trailing text.
         if snap.tmf_label != "INSUFFICIENT_DATA" {
             assert!(snap.tmf_value.is_finite());
             assert!(snap.tmf_value >= -1.0 && snap.tmf_value <= 1.0);
+        }
+    }
+
+    #[test]
+    fn fractals_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = FractalsSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            window: 5,
+            last_up_high: 125.5, last_up_bars_ago: 7,
+            last_down_low: 98.25, last_down_bars_ago: 12,
+            up_fractal_count: 14, down_fractal_count: 11,
+            last_close: 120.0,
+            fractals_label: "UP_RECENT".into(), note: String::new(),
+        };
+        upsert_fractals(&conn, "TEST", &snap).unwrap();
+        let got = get_fractals(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.fractals_label, "UP_RECENT");
+        assert_eq!(got.up_fractal_count, 14);
+        assert_eq!(got.last_up_bars_ago, 7);
+    }
+
+    #[test]
+    fn fractals_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_fractals_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.fractals_label.as_str(),
+            "UP_RECENT" | "DOWN_RECENT" | "BOTH_RECENT" | "NONE_RECENT" | "INSUFFICIENT_DATA"));
+        if snap.fractals_label != "INSUFFICIENT_DATA" {
+            assert!(snap.last_close.is_finite());
+            assert_eq!(snap.window, 5);
+        }
+    }
+
+    #[test]
+    fn ift_rsi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = IftRsiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            rsi_length: 14, wma_length: 9,
+            rsi_value: 62.5, v_value: 1.25,
+            ift_value: 0.75, ift_prev: 0.55,
+            last_close: 123.0,
+            ift_rsi_label: "STRONG_BULL".into(), note: String::new(),
+        };
+        upsert_ift_rsi(&conn, "TEST", &snap).unwrap();
+        let got = get_ift_rsi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.ift_rsi_label, "STRONG_BULL");
+        assert!((got.ift_value - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ift_rsi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ift_rsi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.ift_rsi_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.ift_rsi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.ift_value.is_finite());
+            assert!(snap.ift_value >= -1.0 && snap.ift_value <= 1.0);
+        }
+    }
+
+    #[test]
+    fn mama_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MamaSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            fast_limit: 0.5, slow_limit: 0.05,
+            mama_value: 110.25, fama_value: 108.5,
+            mama_prev: 110.0, fama_prev: 108.25,
+            alpha: 0.37, period: 18.5,
+            last_close: 111.0,
+            mama_label: "BULL".into(), note: String::new(),
+        };
+        upsert_mama(&conn, "TEST", &snap).unwrap();
+        let got = get_mama(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.mama_label, "BULL");
+        assert!((got.mama_value - 110.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mama_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_mama_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.mama_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.mama_label != "INSUFFICIENT_DATA" {
+            assert!(snap.mama_value.is_finite());
+            assert!(snap.fama_value.is_finite());
+        }
+    }
+
+    #[test]
+    fn cog_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CogSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            length: 10,
+            cog_value: -5.42, cog_signal: -5.31, cog_prev: -5.45,
+            last_close: 120.0,
+            cog_label: "BEAR".into(), note: String::new(),
+        };
+        upsert_cog(&conn, "TEST", &snap).unwrap();
+        let got = get_cog(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cog_label, "BEAR");
+        assert!((got.cog_value - -5.42).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cog_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_cog_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.cog_label.as_str(),
+            "STRONG_BULL" | "BULL" | "NEUTRAL" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.cog_label != "INSUFFICIENT_DATA" {
+            assert!(snap.cog_value.is_finite());
+        }
+    }
+
+    #[test]
+    fn didi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = DidiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            short_length: 3, medium_length: 8, long_length: 20,
+            short_ratio: 0.015, long_ratio: -0.012,
+            short_prev: -0.005, long_prev: 0.003,
+            last_close: 120.0,
+            didi_label: "BULL_NEEDLES".into(), note: String::new(),
+        };
+        upsert_didi(&conn, "TEST", &snap).unwrap();
+        let got = get_didi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.didi_label, "BULL_NEEDLES");
+        assert!((got.short_ratio - 0.015).abs() < 1e-6);
+    }
+
+    #[test]
+    fn didi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_didi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.didi_label.as_str(),
+            "BULL_NEEDLES" | "BULL" | "NEUTRAL" | "BEAR" | "BEAR_NEEDLES" | "INSUFFICIENT_DATA"));
+        if snap.didi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.short_ratio.is_finite());
+            assert!(snap.long_ratio.is_finite());
         }
     }
 }

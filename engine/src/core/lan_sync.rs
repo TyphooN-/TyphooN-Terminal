@@ -466,6 +466,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_pmo",
     "research_cfo",
     "research_tmf",
+    // ── ADR-170 Round 58 ────────────────────────────
+    "research_fractals",
+    "research_ift_rsi",
+    "research_mama",
+    "research_cog",
+    "research_didi",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2617,6 +2623,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_fractals" => Some(
+            "CREATE TABLE IF NOT EXISTS research_fractals (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_ift_rsi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_ift_rsi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_mama" => Some(
+            "CREATE TABLE IF NOT EXISTS research_mama (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cog" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cog (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_didi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_didi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2946,6 +2987,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_pmo" => Some("updated_at"),
         "research_cfo" => Some("updated_at"),
         "research_tmf" => Some("updated_at"),
+        // ── ADR-170 Round 58 ──
+        "research_fractals" => Some("updated_at"),
+        "research_ift_rsi" => Some("updated_at"),
+        "research_mama" => Some("updated_at"),
+        "research_cog" => Some("updated_at"),
+        "research_didi" => Some("updated_at"),
         _ => None,
     }
 }
