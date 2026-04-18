@@ -1716,16 +1716,18 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE bar_cache (key TEXT PRIMARY KEY, value BLOB)").unwrap();
 
-        // Insert test cache keys
+        // Insert test cache keys — `mt5:{SYM}:{TF}` shape (BarCacheWriter's
+        // only bar-key format; the legacy 4-part `mt5:{broker}:…` was never
+        // actually emitted and is no longer supported by the extractor).
         let keys = [
-            "mt5:CC:AAPL:4Hour",    // stock — should be kept
-            "mt5:CC:MSFT:Daily",     // stock — should be kept
-            "mt5:CC:EURUSD:1Hour",   // forex — should be skipped
-            "mt5:CC:BTCUSD:4Hour",   // crypto — should be skipped
-            "mt5:CC:GC:Daily",       // futures — should be skipped
-            "mt5:CC:XAUUSD:4Hour",   // gold CFD — should be skipped
-            "mt5:CC:SOLUSD:1Hour",   // crypto — should be skipped
-            "mt5:CC:NVDA:Daily",     // stock — should be kept
+            "mt5:AAPL:4Hour",    // stock — should be kept
+            "mt5:MSFT:Daily",    // stock — should be kept
+            "mt5:EURUSD:1Hour",  // forex — should be skipped
+            "mt5:BTCUSD:4Hour",  // crypto — should be skipped
+            "mt5:GC:Daily",      // futures — should be skipped
+            "mt5:XAUUSD:4Hour",  // gold CFD — should be skipped
+            "mt5:SOLUSD:1Hour",  // crypto — should be skipped
+            "mt5:NVDA:Daily",    // stock — should be kept
         ];
         for key in keys {
             conn.execute("INSERT INTO bar_cache (key, value) VALUES (?1, x'00')", params![key]).unwrap();
@@ -1747,9 +1749,9 @@ mod tests {
         conn.execute_batch("CREATE TABLE bar_cache (key TEXT PRIMARY KEY, value BLOB)").unwrap();
 
         let keys = [
-            "mt5:CC:ES_M:Daily",     // futures — skip
-            "mt5:CC:CL_H:4Hour",     // futures — skip
-            "mt5:CC:GOOG:Daily",     // stock — keep
+            "mt5:ES_M:Daily",  // futures — skip
+            "mt5:CL_H:4Hour",  // futures — skip
+            "mt5:GOOG:Daily",  // stock — keep
         ];
         for key in keys {
             conn.execute("INSERT INTO bar_cache (key, value) VALUES (?1, x'00')", params![key]).unwrap();
@@ -1767,9 +1769,9 @@ mod tests {
         conn.execute_batch("CREATE TABLE bar_cache (key TEXT PRIMARY KEY, value BLOB)").unwrap();
 
         let keys = [
-            "mt5:CC:AAPL:4Hour",
-            "mt5:CC:AAPL:Daily",
-            "mt5:CC:AAPL:1Hour",
+            "mt5:AAPL:4Hour",
+            "mt5:AAPL:Daily",
+            "mt5:AAPL:1Hour",
         ];
         for key in keys {
             conn.execute("INSERT INTO bar_cache (key, value) VALUES (?1, x'00')", params![key]).unwrap();

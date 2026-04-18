@@ -362,6 +362,35 @@ impl SqliteCache {
         Ok(Self { conn: Mutex::new(conn), read_conn: Mutex::new(read_conn), db_path: path.clone() })
     }
 
+    /// Open an existing MT5 source DB in read-write mode — exclusively for
+    /// terminal-side cleanup (stale-row DELETE + VACUUM on /dev/shm files).
+    ///
+    /// Unlike `open()`, this does NOT touch journal_mode, does NOT create or
+    /// migrate tables, and does NOT set auto_vacuum. BarCacheWriter owns the
+    /// schema and the `PRAGMA journal_mode=DELETE` setting; altering either
+    /// from the terminal side would clobber the EA's assumptions. The 10 s
+    /// busy_timeout lets us wait out BCW's exclusive write windows (a full
+    /// export cycle is ~30 s but each per-symbol transaction is sub-second).
+    pub fn open_source_rw(path: &PathBuf) -> Result<Self, String> {
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ).map_err(|e| format!("SQLite RW open failed: {e}"))?;
+        conn.busy_timeout(std::time::Duration::from_secs(10))
+            .map_err(|e| format!("SQLite busy_timeout failed: {e}"))?;
+        let _ = conn.execute_batch("
+            PRAGMA cache_size=-16000;
+            PRAGMA temp_store=MEMORY;
+        ");
+        let read_conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ).map_err(|e| format!("SQLite RW-read conn failed: {e}"))?;
+        read_conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| format!("SQLite RW-read busy_timeout failed: {e}"))?;
+        Ok(Self { conn: Mutex::new(conn), read_conn: Mutex::new(read_conn), db_path: path.clone() })
+    }
+
     /// Store bar data in packed binary format + zstd compression.
     /// Binary format is ~3-5x smaller than JSON before compression.
     /// Uses zstd level 3 — same as put_bars_fast. Level 9 was wasteful since
@@ -1405,6 +1434,40 @@ impl SqliteCache {
         conn.execute(&format!("PRAGMA incremental_vacuum({})", pages), [])
             .map_err(|e| format!("incremental_vacuum failed: {e}"))?;
         Ok(())
+    }
+
+    /// Run full `VACUUM` to rebuild the DB file and reclaim freed pages.
+    ///
+    /// Heavier than `incremental_vacuum` — it copies live pages into a new
+    /// file — so the caller should throttle this (we gate on per-source
+    /// 24 h cooldown in the Mt5Sync handler). VACUUM requires an exclusive
+    /// lock; with `busy_timeout` set it will wait rather than fail.
+    pub fn vacuum(&self) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        conn.execute_batch("VACUUM")
+            .map_err(|e| format!("VACUUM failed: {e}"))?;
+        Ok(())
+    }
+
+    /// Delete bar_cache rows whose row-level `timestamp` is older than
+    /// `max_age_days` days. Preserves metadata rows under `mt5:__%` (SYMBOLS,
+    /// SPECS, SERVER, HEARTBEAT, …) regardless of age — those are small and
+    /// always-fresh; deleting them would break the UI staleness banner and
+    /// symbol index.
+    ///
+    /// Used on MT5 source DBs opened via `open_source_rw`. BarCacheWriter
+    /// refreshes a rotated (symbol, timeframe) row's `timestamp` on every
+    /// export, so a row that hasn't been touched in N days means the symbol
+    /// has fallen out of the terminal's demand set — safe to reclaim.
+    /// Returns the number of rows deleted.
+    pub fn delete_stale_bar_rows(&self, max_age_days: i64) -> Result<u64, String> {
+        let cutoff = chrono::Utc::now().timestamp() - max_age_days.saturating_mul(86400);
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let n = conn.execute(
+            "DELETE FROM bar_cache WHERE timestamp < ?1 AND key NOT LIKE 'mt5:\\_\\_%' ESCAPE '\\'",
+            params![cutoff],
+        ).map_err(|e| format!("Stale-row DELETE failed: {e}"))?;
+        Ok(n as u64)
     }
 
     /// Scan bar_cache for entries with bar_count=0 and repair from TTBR header.
