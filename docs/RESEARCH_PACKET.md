@@ -4138,7 +4138,96 @@ Requires n≥22; body reports short_length (3), medium_length (8),
 long_length (20), short_ratio, long_ratio, short_prev, long_prev,
 last_close. Source: ADR-170 DIDI window.
 
-#### 2.283 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.283 Tom DeMark Indicator (DEMARKER — ADR-171)
+
+Pulled from `research::get_demarker`. An N=14 oscillator that
+compares each bar's high-vs-prior-high pressure (DeMax) to its
+low-vs-prior-low pressure (DeMin): `DeMax[i] = max(high[i] −
+high[i−1], 0)`, `DeMin[i] = max(low[i−1] − low[i], 0)`, then
+`DeM = ΣDeMax / (ΣDeMax + ΣDeMin)` on a bounded `[0, 1]` scale.
+Tom DeMark designed DEMARKER to identify price exhaustion zones
+without the overshoot artifacts that plague RSI near trend
+extremes — readings >0.7 signal overbought exhaustion, <0.3
+oversold, with 0.5 the neutral midline. Distinct from RSI (uses
+close-to-close gains, ADR-108), STOCH (ADR-108), CCI (ADR-120),
+WILLR (ADR-129), and every oscillator that compares closes rather
+than highs/lows. OVERBOUGHT / BULL / NEUTRAL / BEAR / OVERSOLD
+labels. Requires n≥15; body reports length (14), demax_sum,
+demin_sum, demarker_value, demarker_prev, last_close.
+Source: ADR-171 DEMARKER window.
+
+#### 2.284 Bill Williams Gator Oscillator (GATOR — ADR-171)
+
+Pulled from `research::get_gator`. A companion to the ALLIGATOR
+(ADR-167) that visualizes how the three shifted SMMAs diverge or
+converge around zero: `upper_bar = |jaws − teeth|` plotted above
+zero and `lower_bar = −|teeth − lips|` plotted below zero, where
+jaws = SMMA₁₃ shifted 8 bars, teeth = SMMA₈ shifted 5, lips =
+SMMA₅ shifted 3 (the canonical Bill Williams shift triplet). The
+Gator has four life phases: SLEEPING (both bars small — alligator
+asleep, no trend), AWAKENING (bars changing direction — trend
+forming), EATING (both bars growing — trend feeding), SATED (both
+bars shrinking — trend exhausting). Distinct from ALLIGATOR itself
+(which plots the raw MA triplet) and from every MA-spread
+oscillator. SLEEPING / AWAKENING / EATING / SATED labels.
+Requires n≥32; body reports jaw_length (13), teeth_length (8),
+lips_length (5), upper_bar, lower_bar, upper_prev, lower_prev,
+last_close. Source: ADR-171 GATOR window.
+
+#### 2.285 Bill Williams Market Facilitation Index (BW_MFI — ADR-171)
+
+Pulled from `research::get_bw_mfi`. Measures how much price moved
+per unit of volume on the current bar: `mfi = (high − low) /
+volume × 1e6` (tick-scaled). Williams then classifies the bar by
+comparing current MFI and volume to the prior bar, producing
+four colored dots: GREEN (MFI up, volume up — genuine strong
+move), FADE (MFI down, volume down — interest fading from the
+security), FAKE (MFI up, volume down — false breakout on low
+participation), and SQUAT (MFI down, volume up — indecision
+battle between buyers and sellers, often precedes reversal).
+Distinct from Chaikin's Money Flow Index (ADR-148, based on
+money-flow volume and 0..100 scale rather than bar-color
+classification). GREEN / FADE / FAKE / SQUAT / INSUFFICIENT_DATA
+labels. Requires n≥2; body reports mfi_value, mfi_prev, volume,
+volume_prev, last_close, bwmfi_color. Source: ADR-171 BW_MFI
+window.
+
+#### 2.286 Volume Weighted Moving Average (VWMA — ADR-171)
+
+Pulled from `research::get_vwma`. A simple moving average of close
+weighted by volume: `vwma = Σ(close·vol) / Σ(vol)` over N=20.
+High-volume closes dominate the average, so VWMA diverges from
+the plain SMA when recent volume spikes align with specific price
+levels — providing an institutional-footprint smoother that SMA
+cannot see. The VWMA−SMA spread is the core signal: positive when
+big volume aligns with higher prices (institutional accumulation),
+negative when big volume aligns with lower prices (institutional
+distribution). Distinct from VWAP (session-anchored, resets
+intraday, ADR-155), and from every other fixed-length MA (SMA,
+EMA, HMA, DEMA, ALMA, KAMA, MAMA). BULL / WEAK_BULL / NEUTRAL /
+WEAK_BEAR / BEAR labels derived from close/vwma/sma ordering.
+Requires n≥20; body reports length (20), vwma_value, sma_value,
+vwma_prev, spread, spread_ratio, last_close.
+Source: ADR-171 VWMA window.
+
+#### 2.287 Rolling Standard Deviation (STDDEV — ADR-171)
+
+Pulled from `research::get_stddev`. Classic price-level sample
+standard deviation of close over N=20 with a trailing 60-bar
+baseline, reporting the short-window mean/variance/stddev plus
+the coefficient of variation (σ/μ) and the 252-day annualized
+stddev (`stddev · √252`). The `regime_label` compares current
+N=20 σ against the long 60-bar σ: HIGH_VOL when ratio >1.5×,
+LOW_VOL when <0.67×, MID_VOL otherwise — giving a quick
+volatility-regime tag that complements the more sophisticated
+volatility estimators. Distinct from EWMAVOL (exponentially-
+weighted, ADR-158), REALIZED_VOL (log-return based), and
+Parkinson/Garman-Klass/Rogers-Satchell (range-based). HIGH_VOL /
+MID_VOL / LOW_VOL labels. Requires n≥60; body reports length
+(20), long_length (60), mean, variance, stddev, stddev_long, cv,
+annualized, last_close. Source: ADR-171 STDDEV window.
+
+#### 2.288 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -4154,7 +4243,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.284 Sector peer comparison
+#### 2.289 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -4414,8 +4503,42 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~84-161 KB**
-(up from 83-159 KB after ADR-169; ADR-170 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~85-163 KB**
+(up from 84-161 KB after ADR-170; ADR-171 adds five optional per-symbol
+blocks — DEMARKER / GATOR / BW_MFI / VWMA / STDDEV — each measuring ~2 k/v rows
+and adding ~260-340 bytes when populated, for a typical +1.49 KB per symbol;
+all five reuse the existing `research_historical_price` HP cache and the
+standard research-table LAN sync path with zero new API dependencies;
+DEMARKER computes Tom DeMark's N=14 exhaustion oscillator as
+`ΣDeMax / (ΣDeMax + ΣDeMin)` where DeMax/DeMin track bar-over-bar
+high/low pressure on a bounded [0, 1] scale — distinct from every
+close-based oscillator (RSI, STOCH, CCI, WILLR) because DEMARKER
+reads the high/low footprint rather than closes, with OVERBOUGHT /
+BULL / NEUTRAL / BEAR / OVERSOLD labels at the 0.7/0.5/0.3 ladder;
+GATOR computes Bill Williams's companion to the ALLIGATOR (ADR-167)
+by plotting `upper = |jaws − teeth|` above zero and `lower =
+−|teeth − lips|` below zero from the same SMMA-13/8/5 shift-8/5/3
+triplet, classifying the four life phases SLEEPING / AWAKENING /
+EATING / SATED from the growth-pair directions;
+BW_MFI computes Bill Williams's Market Facilitation Index as
+`(high − low) / volume × 1e6` (tick-scaled) and classifies each bar
+from the (mfi_up, volume_up) pair into GREEN (genuine) / FADE
+(interest fading) / FAKE (false breakout) / SQUAT (indecision)
+four-color dots — distinct from Chaikin MFI (ADR-148) which is
+a 0..100 money-flow-volume oscillator;
+VWMA computes the N=20 volume-weighted moving average
+`Σ(close·vol) / Σ(vol)` against the plain SMA, surfacing
+institutional footprints via the VWMA−SMA spread — distinct from
+VWAP (session-anchored, ADR-155) and every other fixed-length MA
+(SMA, EMA, HMA, DEMA, ALMA, KAMA, MAMA), with BULL / WEAK_BULL /
+NEUTRAL / WEAK_BEAR / BEAR labels from close/vwma/sma ordering;
+STDDEV computes the classic price-level sample σ over N=20 with a
+60-bar baseline for a HIGH_VOL / MID_VOL / LOW_VOL regime tag at
+1.5×/0.67× thresholds, plus the coefficient of variation and 252-
+day annualized σ — distinct from EWMAVOL (exponentially-weighted,
+ADR-158), REALIZED_VOL (log-return based), and Parkinson/Garman-
+Klass/Rogers-Satchell (range-based);
+ADR-170 added five optional per-symbol
 blocks — FRACTALS / IFT_RSI / MAMA / COG / DIDI — each measuring ~2 k/v rows and
 adding ~240-340 bytes when populated, for a typical +1.47 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the

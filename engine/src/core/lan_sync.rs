@@ -472,6 +472,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_mama",
     "research_cog",
     "research_didi",
+    // ── ADR-171 Round 59 ────────────────────────────
+    "research_demarker",
+    "research_gator",
+    "research_bw_mfi",
+    "research_vwma",
+    "research_stddev",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2658,6 +2664,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_demarker" => Some(
+            "CREATE TABLE IF NOT EXISTS research_demarker (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_gator" => Some(
+            "CREATE TABLE IF NOT EXISTS research_gator (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_bw_mfi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_bw_mfi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_vwma" => Some(
+            "CREATE TABLE IF NOT EXISTS research_vwma (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_stddev" => Some(
+            "CREATE TABLE IF NOT EXISTS research_stddev (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -2993,6 +3034,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_mama" => Some("updated_at"),
         "research_cog" => Some("updated_at"),
         "research_didi" => Some("updated_at"),
+        // ── ADR-171 Round 59 ──
+        "research_demarker" => Some("updated_at"),
+        "research_gator" => Some("updated_at"),
+        "research_bw_mfi" => Some("updated_at"),
+        "research_vwma" => Some("updated_at"),
+        "research_stddev" => Some("updated_at"),
         _ => None,
     }
 }

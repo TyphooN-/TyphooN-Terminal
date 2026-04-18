@@ -6052,6 +6052,133 @@ pub struct DidiSnapshot {
     pub note: String,
 }
 
+/// Tom DeMark's DeMarker (DeM) — a bounded [0,1] momentum oscillator.
+/// Over an N=14 lookback, DeMax[i] = max(high[i]−high[i−1], 0) and
+/// DeMin[i] = max(low[i−1]−low[i], 0); summing these and taking
+/// `DeM = ΣDeMax / (ΣDeMax + ΣDeMin)` produces an oscillator that
+/// weights recent highs vs recent lows, so sustained up-legs push
+/// DeM toward 1 and sustained down-legs push it toward 0. Readings
+/// above 0.7 flag overbought conditions, below 0.3 oversold.
+/// Distinct from RSI (Wilder smoothing of gains/losses on close),
+/// from Williams %R (range-position of close), and from STOCHRSI.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DemarkerSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub demax_sum: f64,
+    pub demin_sum: f64,
+    pub demarker_value: f64,           // [0, 1]
+    pub demarker_prev: f64,
+    pub last_close: f64,
+    pub demarker_label: String,        // OVERBOUGHT / BULL / NEUTRAL / BEAR / OVERSOLD / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Bill Williams Gator Oscillator — a companion to the Alligator
+/// (ADR-165) that visualizes how the three shifted SMMAs diverge or
+/// converge. `upper = |jaws − teeth|` plotted above zero and
+/// `lower = −|teeth − lips|` plotted below zero, where jaws =
+/// SMMA₁₃ shifted 8 bars, teeth = SMMA₈ shifted 5, lips = SMMA₅
+/// shifted 3. The Gator has four life phases: SLEEPING (both bars
+/// small), AWAKENING (bars change color — one growing, one
+/// shrinking), EATING (both bars growing — trend feeding), and
+/// SATED (both bars shrinking — trend exhausting). Distinct from
+/// ALLIGATOR (the raw MA triplet) and from every MA-spread oscillator.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct GatorSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub jaw_length: usize,             // 13
+    pub teeth_length: usize,           // 8
+    pub lips_length: usize,            // 5
+    pub upper_bar: f64,                // |jaws − teeth|
+    pub lower_bar: f64,                // −|teeth − lips|
+    pub upper_prev: f64,
+    pub lower_prev: f64,
+    pub last_close: f64,
+    pub gator_label: String,           // SLEEPING / AWAKENING / EATING / SATED / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Bill Williams Market Facilitation Index (BW MFI) — measures how
+/// much price moved per unit of volume: `mfi = (high − low) / volume`
+/// (tick-scaled). Williams then classifies each bar by comparing
+/// current MFI and volume to the prior bar's values, producing four
+/// colored dots: GREEN (MFI up, volume up — genuine strong move),
+/// FADE (MFI down, volume down — interest fading), FAKE (MFI up,
+/// volume down — false breakout) and SQUAT (MFI down, volume up —
+/// indecision battle, often precedes reversal). Distinct from
+/// Chaikin's MFI (ADR-148, based on money-flow volume).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct BwMfiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub mfi_value: f64,                // (high − low) / volume (tick-scaled)
+    pub mfi_prev: f64,
+    pub volume: f64,
+    pub volume_prev: f64,
+    pub last_close: f64,
+    pub bwmfi_color: String,           // GREEN / FADE / FAKE / SQUAT
+    pub bwmfi_label: String,           // GREEN / FADE / FAKE / SQUAT / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Volume Weighted Moving Average (VWMA) — a simple moving average
+/// of close weighted by volume: `vwma = Σ(close·vol) / Σ(vol)` over
+/// N=20. High-volume closes dominate the average, so VWMA diverges
+/// from the plain SMA when recent volume spikes above the baseline,
+/// providing an institutional-footprint smoother. The VWMA−SMA
+/// spread is the core signal: positive when big volume aligns with
+/// higher prices, negative when big volume aligns with lower prices.
+/// Distinct from VWAP (session-anchored, ADR-155) and from every
+/// other fixed-length MA (SMA, EMA, HMA, DEMA, ALMA, KAMA, MAMA).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct VwmaSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 20
+    pub vwma_value: f64,
+    pub sma_value: f64,
+    pub vwma_prev: f64,
+    pub spread: f64,                   // vwma − sma
+    pub spread_ratio: f64,             // (vwma − sma) / sma
+    pub last_close: f64,
+    pub vwma_label: String,            // BULL / WEAK_BULL / NEUTRAL / WEAK_BEAR / BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Rolling sample standard deviation of close over N=20 with a
+/// long-baseline regime classifier. Returns the mean, variance, and
+/// sample stddev, plus the 252-day annualized stddev (using daily
+/// log-return would change the definition — this snapshot uses
+/// price-level stddev). The `regime_label` compares current N=20
+/// stddev against a trailing 60-bar stddev: HIGH_VOL when current
+/// >1.5× long, LOW_VOL when <0.67×, MID_VOL otherwise. Distinct
+/// from EWMAVOL (exponentially-weighted, ADR-158), from REALIZED_VOL
+/// (return-based), and from Parkinson/Garman-Klass/RS (range-based).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct StddevSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 20
+    pub long_length: usize,            // 60 — baseline
+    pub mean: f64,
+    pub variance: f64,
+    pub stddev: f64,                   // sample stddev of close over N
+    pub stddev_long: f64,              // sample stddev of close over long_length
+    pub cv: f64,                       // coefficient of variation = stddev / mean
+    pub annualized: f64,               // stddev · sqrt(252)
+    pub last_close: f64,
+    pub regime_label: String,          // HIGH_VOL / MID_VOL / LOW_VOL / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -27056,6 +27183,270 @@ pub fn compute_didi_snapshot(
     }
 }
 
+/// Tom DeMark's DeMarker over N=14. See DemarkerSnapshot.
+pub fn compute_demarker_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> DemarkerSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 14usize;
+    if n < length + 2 {
+        return DemarkerSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            demarker_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 2, n),
+            ..Default::default()
+        };
+    }
+    let demax_demin_at = |end: usize| -> (f64, f64) {
+        let mut dmx = 0.0_f64;
+        let mut dmn = 0.0_f64;
+        for k in 0..length {
+            let i = end - k;
+            if i == 0 { continue; }
+            let h = sorted[i].high;
+            let hp = sorted[i - 1].high;
+            let l = sorted[i].low;
+            let lp = sorted[i - 1].low;
+            dmx += (h - hp).max(0.0);
+            dmn += (lp - l).max(0.0);
+        }
+        (dmx, dmn)
+    };
+    let idx = n - 1;
+    let (demax_sum, demin_sum) = demax_demin_at(idx);
+    let (dmx_prev, dmn_prev) = demax_demin_at(idx - 1);
+    let denom = demax_sum + demin_sum;
+    let dem = if denom > 1e-12 { demax_sum / denom } else { 0.5 };
+    let denom_prev = dmx_prev + dmn_prev;
+    let dem_prev = if denom_prev > 1e-12 { dmx_prev / denom_prev } else { 0.5 };
+    let label = if dem >= 0.7 { "OVERBOUGHT" }
+        else if dem <= 0.3 { "OVERSOLD" }
+        else if dem > 0.5 && dem > dem_prev { "BULL" }
+        else if dem < 0.5 && dem < dem_prev { "BEAR" }
+        else { "NEUTRAL" };
+    DemarkerSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        demax_sum, demin_sum,
+        demarker_value: dem, demarker_prev: dem_prev,
+        last_close: sorted[idx].close,
+        demarker_label: label.into(), note: String::new(),
+    }
+}
+
+/// Bill Williams Gator Oscillator. See GatorSnapshot.
+pub fn compute_gator_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> GatorSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let jaw_length = 13usize;
+    let teeth_length = 8usize;
+    let lips_length = 5usize;
+    let min_bars = jaw_length + 8 + 2; // jaw shift 8 + prior-bar
+    if n < min_bars {
+        return GatorSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            jaw_length, teeth_length, lips_length,
+            gator_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let med: Vec<f64> = sorted.iter().map(|b| (b.high + b.low) / 2.0).collect();
+    let smma_of = |len: usize| -> Vec<f64> {
+        let mut out = vec![0.0; n];
+        if n < len { return out; }
+        let seed: f64 = med[0..len].iter().sum::<f64>() / len as f64;
+        out[len - 1] = seed;
+        for i in len..n {
+            out[i] = (out[i - 1] * (len as f64 - 1.0) + med[i]) / len as f64;
+        }
+        out
+    };
+    let smma13 = smma_of(jaw_length);
+    let smma8  = smma_of(teeth_length);
+    let smma5  = smma_of(lips_length);
+    let jaw_t   = n - 1 - 8;
+    let teeth_t = n - 1 - 5;
+    let lips_t  = n - 1 - 3;
+    let jaw        = smma13[jaw_t];
+    let jaw_prev   = smma13[jaw_t - 1];
+    let teeth      = smma8[teeth_t];
+    let teeth_prev = smma8[teeth_t - 1];
+    let lips       = smma5[lips_t];
+    let lips_prev  = smma5[lips_t - 1];
+    let upper_bar = (jaw - teeth).abs();
+    let lower_bar = -(teeth - lips).abs();
+    let upper_prev = (jaw_prev - teeth_prev).abs();
+    let lower_prev = -(teeth_prev - lips_prev).abs();
+    let last_close = sorted[n - 1].close;
+    let upper_growing = upper_bar > upper_prev;
+    let lower_growing = lower_bar.abs() > lower_prev.abs();
+    let tiny = last_close.abs() * 0.0005; // 0.05% of price
+    let label = if upper_bar < tiny && lower_bar.abs() < tiny { "SLEEPING" }
+        else if upper_growing && lower_growing { "EATING" }
+        else if !upper_growing && !lower_growing { "SATED" }
+        else { "AWAKENING" };
+    GatorSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        jaw_length, teeth_length, lips_length,
+        upper_bar, lower_bar, upper_prev, lower_prev,
+        last_close,
+        gator_label: label.into(), note: String::new(),
+    }
+}
+
+/// Bill Williams Market Facilitation Index. See BwMfiSnapshot.
+pub fn compute_bw_mfi_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> BwMfiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 2 {
+        return BwMfiSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            bwmfi_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥2 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let mfi_of = |r: &HistoricalPriceRow| -> f64 {
+        if r.volume > 1e-9 { (r.high - r.low) / r.volume * 1_000_000.0 } else { 0.0 }
+    };
+    let idx = n - 1;
+    let cur = sorted[idx];
+    let prv = sorted[idx - 1];
+    let mfi = mfi_of(cur);
+    let mfi_prev = mfi_of(prv);
+    let vol = cur.volume;
+    let vol_prev = prv.volume;
+    let mfi_up = mfi > mfi_prev;
+    let vol_up = vol > vol_prev;
+    let color = match (mfi_up, vol_up) {
+        (true,  true)  => "GREEN",
+        (false, false) => "FADE",
+        (true,  false) => "FAKE",
+        (false, true)  => "SQUAT",
+    };
+    BwMfiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        mfi_value: mfi, mfi_prev,
+        volume: vol, volume_prev: vol_prev,
+        last_close: cur.close,
+        bwmfi_color: color.into(), bwmfi_label: color.into(),
+        note: String::new(),
+    }
+}
+
+/// Volume Weighted Moving Average over N=20. See VwmaSnapshot.
+pub fn compute_vwma_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> VwmaSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 20usize;
+    if n < length + 1 {
+        return VwmaSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            vwma_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 1, n),
+            ..Default::default()
+        };
+    }
+    let vwma_at = |end: usize| -> (f64, f64) {
+        let mut pv = 0.0_f64;
+        let mut vs = 0.0_f64;
+        let mut ps = 0.0_f64;
+        for k in 0..length {
+            let i = end - k;
+            let c = sorted[i].close;
+            let v = sorted[i].volume.max(0.0);
+            pv += c * v;
+            vs += v;
+            ps += c;
+        }
+        let vw = if vs > 1e-9 { pv / vs } else { ps / length as f64 };
+        let sm = ps / length as f64;
+        (vw, sm)
+    };
+    let idx = n - 1;
+    let (vwma, sma) = vwma_at(idx);
+    let (vwma_prev, _) = vwma_at(idx - 1);
+    let spread = vwma - sma;
+    let spread_ratio = if sma.abs() > 1e-12 { spread / sma } else { 0.0 };
+    let last_close = sorted[idx].close;
+    let label = if last_close > vwma && vwma > sma { "BULL" }
+        else if last_close < vwma && vwma < sma { "BEAR" }
+        else if last_close > vwma { "WEAK_BULL" }
+        else if last_close < vwma { "WEAK_BEAR" }
+        else { "NEUTRAL" };
+    VwmaSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        vwma_value: vwma, sma_value: sma, vwma_prev,
+        spread, spread_ratio, last_close,
+        vwma_label: label.into(), note: String::new(),
+    }
+}
+
+/// Rolling sample standard deviation over N=20 with 60-bar regime
+/// classifier. See StddevSnapshot.
+pub fn compute_stddev_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> StddevSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length = 20usize;
+    let long_length = 60usize;
+    if n < long_length {
+        return StddevSnapshot {
+            symbol: sym, as_of: as_of.into(), length, long_length,
+            regime_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", long_length, n),
+            ..Default::default()
+        };
+    }
+    let stddev_of = |window: usize| -> (f64, f64, f64) {
+        let mut s = 0.0_f64;
+        let end = n - 1;
+        for k in 0..window { s += sorted[end - k].close; }
+        let mean = s / window as f64;
+        let mut ss = 0.0_f64;
+        for k in 0..window {
+            let d = sorted[end - k].close - mean;
+            ss += d * d;
+        }
+        let denom = (window - 1).max(1) as f64;
+        let var = ss / denom;
+        (mean, var, var.max(0.0).sqrt())
+    };
+    let (mean, variance, stddev) = stddev_of(length);
+    let (_, _, stddev_long) = stddev_of(long_length);
+    let cv = if mean.abs() > 1e-12 { stddev / mean } else { 0.0 };
+    let annualized = stddev * (252.0_f64).sqrt();
+    let ratio = if stddev_long > 1e-12 { stddev / stddev_long } else { 1.0 };
+    let label = if ratio > 1.5 { "HIGH_VOL" }
+        else if ratio < 0.67 { "LOW_VOL" }
+        else { "MID_VOL" };
+    StddevSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        length, long_length,
+        mean, variance, stddev, stddev_long, cv, annualized,
+        last_close: sorted[n - 1].close,
+        regime_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -36182,6 +36573,157 @@ pub fn get_didi(conn: &Connection, symbol: &str) -> Result<Option<DidiSnapshot>,
         .map_err(|e| format!("prepare get_didi: {e}"))?;
     let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_didi: {e}"))?;
     if let Some(row) = r.next().map_err(|e| format!("row get_didi: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn create_research_tables_v61(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v60(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_demarker (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_demarker_updated ON research_demarker(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_gator (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_gator_updated ON research_gator(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_bw_mfi (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_bw_mfi_updated ON research_bw_mfi(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_vwma (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_vwma_updated ON research_vwma(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_stddev (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_stddev_updated ON research_stddev(updated_at);",
+    ).map_err(|e| format!("create v61 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_demarker(conn: &Connection, symbol: &str, snap: &DemarkerSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v61(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("demarker json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_demarker(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert demarker: {e}"))?;
+    Ok(())
+}
+
+pub fn get_demarker(conn: &Connection, symbol: &str) -> Result<Option<DemarkerSnapshot>, String> {
+    let _ = create_research_tables_v61(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_demarker WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_demarker: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_demarker: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_demarker: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_gator(conn: &Connection, symbol: &str, snap: &GatorSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v61(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("gator json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_gator(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert gator: {e}"))?;
+    Ok(())
+}
+
+pub fn get_gator(conn: &Connection, symbol: &str) -> Result<Option<GatorSnapshot>, String> {
+    let _ = create_research_tables_v61(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_gator WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_gator: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_gator: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_gator: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_bw_mfi(conn: &Connection, symbol: &str, snap: &BwMfiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v61(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("bw_mfi json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_bw_mfi(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert bw_mfi: {e}"))?;
+    Ok(())
+}
+
+pub fn get_bw_mfi(conn: &Connection, symbol: &str) -> Result<Option<BwMfiSnapshot>, String> {
+    let _ = create_research_tables_v61(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_bw_mfi WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_bw_mfi: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_bw_mfi: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_bw_mfi: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_vwma(conn: &Connection, symbol: &str, snap: &VwmaSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v61(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("vwma json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_vwma(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert vwma: {e}"))?;
+    Ok(())
+}
+
+pub fn get_vwma(conn: &Connection, symbol: &str) -> Result<Option<VwmaSnapshot>, String> {
+    let _ = create_research_tables_v61(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_vwma WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_vwma: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_vwma: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_vwma: {e}"))? {
+        let json: String = row.get(0).unwrap_or_default();
+        Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
+    } else { Ok(None) }
+}
+
+pub fn upsert_stddev(conn: &Connection, symbol: &str, snap: &StddevSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v61(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("stddev json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_stddev(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert stddev: {e}"))?;
+    Ok(())
+}
+
+pub fn get_stddev(conn: &Connection, symbol: &str) -> Result<Option<StddevSnapshot>, String> {
+    let _ = create_research_tables_v61(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_stddev WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_stddev: {e}"))?;
+    let mut r = stmt.query(params![symbol.to_uppercase()]).map_err(|e| format!("query get_stddev: {e}"))?;
+    if let Some(row) = r.next().map_err(|e| format!("row get_stddev: {e}"))? {
         let json: String = row.get(0).unwrap_or_default();
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else { Ok(None) }
@@ -47596,6 +48138,149 @@ Trailing text.
         if snap.didi_label != "INSUFFICIENT_DATA" {
             assert!(snap.short_ratio.is_finite());
             assert!(snap.long_ratio.is_finite());
+        }
+    }
+
+    #[test]
+    fn demarker_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = DemarkerSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            length: 14,
+            demax_sum: 12.5, demin_sum: 5.0,
+            demarker_value: 0.714, demarker_prev: 0.65,
+            last_close: 100.0,
+            demarker_label: "OVERBOUGHT".into(), note: String::new(),
+        };
+        upsert_demarker(&conn, "TEST", &snap).unwrap();
+        let got = get_demarker(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.demarker_label, "OVERBOUGHT");
+        assert!((got.demarker_value - 0.714).abs() < 1e-6);
+    }
+
+    #[test]
+    fn demarker_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_demarker_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.demarker_label.as_str(),
+            "OVERBOUGHT" | "BULL" | "NEUTRAL" | "BEAR" | "OVERSOLD" | "INSUFFICIENT_DATA"));
+        if snap.demarker_label != "INSUFFICIENT_DATA" {
+            assert!(snap.demarker_value >= 0.0 && snap.demarker_value <= 1.0);
+        }
+    }
+
+    #[test]
+    fn gator_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = GatorSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            jaw_length: 13, teeth_length: 8, lips_length: 5,
+            upper_bar: 0.8, lower_bar: -0.5,
+            upper_prev: 0.6, lower_prev: -0.4,
+            last_close: 100.0,
+            gator_label: "EATING".into(), note: String::new(),
+        };
+        upsert_gator(&conn, "TEST", &snap).unwrap();
+        let got = get_gator(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.gator_label, "EATING");
+        assert!((got.upper_bar - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gator_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_gator_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.gator_label.as_str(),
+            "SLEEPING" | "AWAKENING" | "EATING" | "SATED" | "INSUFFICIENT_DATA"));
+        if snap.gator_label != "INSUFFICIENT_DATA" {
+            assert!(snap.upper_bar >= 0.0);
+            assert!(snap.lower_bar <= 0.0);
+        }
+    }
+
+    #[test]
+    fn bw_mfi_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = BwMfiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            mfi_value: 5.0, mfi_prev: 3.0,
+            volume: 2_000_000.0, volume_prev: 1_000_000.0,
+            last_close: 100.0,
+            bwmfi_color: "GREEN".into(), bwmfi_label: "GREEN".into(),
+            note: String::new(),
+        };
+        upsert_bw_mfi(&conn, "TEST", &snap).unwrap();
+        let got = get_bw_mfi(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.bwmfi_color, "GREEN");
+        assert!((got.mfi_value - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bw_mfi_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_bw_mfi_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.bwmfi_label.as_str(),
+            "GREEN" | "FADE" | "FAKE" | "SQUAT" | "INSUFFICIENT_DATA"));
+        if snap.bwmfi_label != "INSUFFICIENT_DATA" {
+            assert!(snap.mfi_value.is_finite());
+        }
+    }
+
+    #[test]
+    fn vwma_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = VwmaSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            length: 20,
+            vwma_value: 101.5, sma_value: 100.8, vwma_prev: 101.0,
+            spread: 0.7, spread_ratio: 0.00695,
+            last_close: 102.0,
+            vwma_label: "BULL".into(), note: String::new(),
+        };
+        upsert_vwma(&conn, "TEST", &snap).unwrap();
+        let got = get_vwma(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.vwma_label, "BULL");
+        assert!((got.vwma_value - 101.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn vwma_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_vwma_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.vwma_label.as_str(),
+            "BULL" | "WEAK_BULL" | "NEUTRAL" | "WEAK_BEAR" | "BEAR" | "INSUFFICIENT_DATA"));
+        if snap.vwma_label != "INSUFFICIENT_DATA" {
+            assert!(snap.vwma_value.is_finite());
+            assert!(snap.sma_value.is_finite());
+        }
+    }
+
+    #[test]
+    fn stddev_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = StddevSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            length: 20, long_length: 60,
+            mean: 100.0, variance: 4.0, stddev: 2.0, stddev_long: 1.5,
+            cv: 0.02, annualized: 31.75,
+            last_close: 100.0,
+            regime_label: "HIGH_VOL".into(), note: String::new(),
+        };
+        upsert_stddev(&conn, "TEST", &snap).unwrap();
+        let got = get_stddev(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.regime_label, "HIGH_VOL");
+        assert!((got.stddev - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stddev_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_stddev_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.regime_label.as_str(),
+            "HIGH_VOL" | "MID_VOL" | "LOW_VOL" | "INSUFFICIENT_DATA"));
+        if snap.regime_label != "INSUFFICIENT_DATA" {
+            assert!(snap.stddev >= 0.0);
+            assert!(snap.stddev_long >= 0.0);
         }
     }
 }
