@@ -1288,6 +1288,36 @@ impl SqliteCache {
         Ok(())
     }
 
+    /// Batch form of `put_raw_blob` — writes all supplied rows inside a
+    /// single SQLite transaction so the WAL fsync cost is amortised across
+    /// the batch instead of paid per row. The same idempotent ON CONFLICT
+    /// guard is applied, so older blobs never clobber newer ones even if
+    /// the caller's metadata was stale. Returns the count of `execute()`
+    /// calls that succeeded (a row whose timestamp wasn't newer still
+    /// counts as a success — the SQL just updates zero rows).
+    pub fn put_raw_blobs(&self, items: &[(String, Vec<u8>, i64, i64)]) -> Result<usize, String> {
+        if items.is_empty() { return Ok(0); }
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let tx = conn.unchecked_transaction()
+            .map_err(|e| format!("Batch begin failed: {e}"))?;
+        let mut ok = 0usize;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO bar_cache (key, data, timestamp, bar_count)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(key) DO UPDATE SET data=excluded.data, timestamp=excluded.timestamp, bar_count=excluded.bar_count
+                 WHERE excluded.timestamp > bar_cache.timestamp",
+            ).map_err(|e| format!("Batch prepare failed: {e}"))?;
+            for (key, blob, ts, bar_count) in items {
+                if stmt.execute(params![key, blob, ts, bar_count]).is_ok() {
+                    ok += 1;
+                }
+            }
+        }
+        tx.commit().map_err(|e| format!("Batch commit failed: {e}"))?;
+        Ok(ok)
+    }
+
     /// Read BarCacheWriter's heartbeat row (if present). Returns the JSON
     /// payload string for the given account tag, and the row's timestamp
     /// column (seconds since epoch, set by the EA via TimeCurrent()).
