@@ -4548,7 +4548,80 @@ Requires n≥17; body reports length (14), d_period (3), fastk,
 fastk_prev, fastd, fastd_prev, last_close. Source: ADR-175 STOCHF
 window.
 
-#### 2.308 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.308 Linear Regression Endpoint (LINEARREG — ADR-176)
+
+Pulled from `research::get_linearreg`. TA-Lib's LINEARREG function:
+least-squares fit of close over 14 bars, reporting the fitted value at
+the current bar (y_hat at the endpoint of the regression line). Distinct
+from LINEARREG_SLOPE (ADR-175 raw slope coefficient) and
+LINEARREG_ANGLE (slope-to-angle conversion) because LINEARREG reports
+the fitted price level — a directly-comparable smoothed-price line.
+ABOVE_TREND (close>fitted by >0.5%) / NEAR_TREND / BELOW_TREND
+(close<fitted by >-0.5%) / INSUFFICIENT_DATA labels from residual_pct
+(residual as % of close). Requires n≥15; body reports length (14),
+fitted, fitted_prev, residual, residual_pct, last_close. Source:
+ADR-176 LINEARREG window.
+
+#### 2.309 Linear Regression Angle (LINEARREG_ANGLE — ADR-176)
+
+Pulled from `research::get_linearreg_angle`. TA-Lib's LINEARREG_ANGLE
+function: `atan(slope) × 180/π`, converting the least-squares slope of
+close over 14 bars from price-units-per-bar into degrees from
+horizontal. Distinct from LINEARREG_SLOPE (ADR-175 raw slope) and
+LINEARREG (ADR-176 fitted value) because LINEARREG_ANGLE reports a
+scale-invariant angle bounded to (-90°, 90°) — comparable across
+symbols with different price scales. STRONG_UP (>30°) / UP (>5°) /
+FLAT / DOWN (<-5°) / STRONG_DOWN (<-30°) / INSUFFICIENT_DATA labels
+from angle_deg. Requires n≥15; body reports length (14), slope,
+angle_deg, angle_deg_prev, last_close. Source: ADR-176 LINEARREG_ANGLE
+window.
+
+#### 2.310 Hilbert Dominant Cycle Phase (HT_DCPHASE — ADR-176)
+
+Pulled from `research::get_ht_dcphase`. TA-Lib's HT_DCPHASE reuses the
+Ehlers homodyne discriminator pipeline (same as HT_DCPERIOD, ADR-175)
+and reports the phase of the dominant cycle at the current bar in
+degrees (0°..360°) — where 0°/360° is a cycle bottom, 180° is a cycle
+top, 0-180° is the rising half, and 180-360° is the falling half.
+Distinct from HT_DCPERIOD (cycle length in bars) and HT_SINE
+(ADR-176 sine/leadsine waveforms) because HT_DCPHASE reports the raw
+phase angle — useful for custom phase-based entry/exit rules.
+CYCLE_BOTTOM (phase<45° or >315°) / RISING (45°-135°) / CYCLE_TOP
+(135°-225°) / FALLING (225°-315°) / INSUFFICIENT_DATA labels from
+phase_deg. Requires n≥64; body reports phase_deg, phase_deg_prev,
+phase_delta, period, last_close. Source: ADR-176 HT_DCPHASE window.
+
+#### 2.311 Hilbert Sine Wave (HT_SINE — ADR-176)
+
+Pulled from `research::get_ht_sine`. TA-Lib's HT_SINE emits two lines:
+`sine = sin(phase)` and `leadsine = sin(phase + 45°)`. Crossovers of
+sine/leadsine identify cycle turns in advance — leadsine crossing
+above sine signals a cycle bottom (turn up), leadsine crossing below
+signals a cycle top (turn down). Distinct from HT_DCPHASE (raw phase
+angle) and HT_DCPERIOD (cycle length) because HT_SINE produces
+sinusoidal waveforms directly suitable for crossover signals.
+CYCLE_TURN_UP (leadsine just crossed above sine) / BULL (leadsine>sine)
+/ NEUTRAL / BEAR (leadsine<sine) / CYCLE_TURN_DOWN (leadsine just
+crossed below) / INSUFFICIENT_DATA labels from crossover bit + sine-
+leadsine relationship. Requires n≥64; body reports sine, sine_prev,
+leadsine, leadsine_prev, crossover, period, last_close. Source:
+ADR-176 HT_SINE window.
+
+#### 2.312 Hilbert Phasor Components (HT_PHASOR — ADR-176)
+
+Pulled from `research::get_ht_phasor`. TA-Lib's HT_PHASOR emits the raw
+in-phase (I) and quadrature (Q) components of the Hilbert transform
+directly, along with derived magnitude `sqrt(I² + Q²)` and phase
+`atan2(Q, I) × 180/π`. Distinct from HT_DCPHASE (phase after homodyne
+discrimination) and HT_SINE (sinusoidal projection) because HT_PHASOR
+exposes the raw analytic signal — useful for custom cycle diagnostics
+and phase-amplitude hybrid strategies. STRONG_CYCLE (magnitude>1.5×
+recent mean) / CYCLE / WEAK_CYCLE (magnitude<0.5× mean) /
+INSUFFICIENT_DATA labels from magnitude vs 50-bar mean. Requires
+n≥64; body reports i_comp, q_comp, i_prev, q_prev, magnitude,
+phase_deg, last_close. Source: ADR-176 HT_PHASOR window.
+
+#### 2.313 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -4564,7 +4637,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.309 Sector peer comparison
+#### 2.314 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -4824,8 +4897,11 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~89-171 KB**
-(up from 88-169 KB after ADR-174; ADR-175 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~90-173 KB**
+(up from 89-171 KB after ADR-175; ADR-176 adds five optional per-symbol
+blocks — LINEARREG / LINEARREG_ANGLE / HT_DCPHASE / HT_SINE / HT_PHASOR —
+each measuring ~2 k/v rows and adding ~240-320 bytes when populated, for a
+typical +1.45 KB per symbol; ADR-175 added five optional per-symbol
 blocks — LINEARREG_SLOPE / HT_DCPERIOD / HT_TRENDMODE / ACCBANDS / STOCHF —
 each measuring ~2 k/v rows and adding ~240-310 bytes when populated, for a
 typical +1.45 KB per symbol; ADR-174 added five optional per-symbol
@@ -4835,8 +4911,34 @@ measuring ~2 k/v rows and adding ~220-300 bytes when populated, for a typical
 blocks — LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT — each
 measuring ~2 k/v rows and adding ~240-320 bytes when populated, for a typical
 +1.40 KB per symbol;
-all fifteen reuse the existing `research_historical_price` HP cache and the
+all twenty reuse the existing `research_historical_price` HP cache and the
 standard research-table LAN sync path with zero new API dependencies;
+LINEARREG computes TA-Lib's least-squares fitted close value at the
+endpoint of a 14-bar regression with ABOVE_TREND / NEAR_TREND /
+BELOW_TREND labels from the residual-as-%-of-close — distinct from
+LINEARREG_SLOPE (raw slope) and LINEARREG_ANGLE (slope→angle) because
+it reports the fitted price level directly;
+LINEARREG_ANGLE computes TA-Lib's `atan(slope) × 180/π` converting the
+14-bar least-squares slope into degrees from horizontal with STRONG_UP
+(>30°) / UP / FLAT / DOWN / STRONG_DOWN (<-30°) labels — distinct from
+LINEARREG_SLOPE (price-units per bar) because it yields a scale-
+invariant angle comparable across symbols with different price scales;
+HT_DCPHASE reuses Ehlers's Hilbert homodyne pipeline to report the
+dominant cycle phase in degrees (0°..360°) with CYCLE_BOTTOM / RISING
+/ CYCLE_TOP / FALLING labels from phase_deg — distinct from
+HT_DCPERIOD (cycle length) and HT_SINE (sinusoidal projection)
+because it exposes the raw phase angle for custom entry/exit rules;
+HT_SINE emits `sine = sin(phase)` and `leadsine = sin(phase + 45°)`
+sinusoidal waveforms with CYCLE_TURN_UP / BULL / NEUTRAL / BEAR /
+CYCLE_TURN_DOWN labels from crossover direction — distinct from
+HT_DCPHASE because the 45°-lead of the leadsine line produces
+crossover signals that anticipate cycle turns;
+HT_PHASOR exposes the raw analytic-signal components (in-phase I,
+quadrature Q) of the Hilbert transform along with derived magnitude
+and phase with STRONG_CYCLE / CYCLE / WEAK_CYCLE labels from magnitude
+vs 50-bar mean — distinct from HT_DCPHASE (phase after homodyne
+discrimination) and HT_SINE (sinusoidal projection) because it
+exposes the raw I/Q components for custom cycle diagnostics;
 LINEARREG_SLOPE computes TA-Lib's least-squares slope of close over 14 bars
 with STRONG_UP (>0.5%/bar) / UP / FLAT / DOWN / STRONG_DOWN labels from the
 slope-as-%-of-close — distinct from LINEARREG (fitted value) and

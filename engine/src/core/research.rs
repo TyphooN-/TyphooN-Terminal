@@ -6680,6 +6680,120 @@ pub struct StochfSnapshot {
     pub note: String,
 }
 
+/// Linear Regression (LINEARREG) — TA-Lib's LINEARREG: the fitted value
+/// `y_hat(t) = slope·(N-1) + intercept` of the least-squares regression
+/// of close over the last N=14 bars, reporting the endpoint of the
+/// fitted line. Distinct from LINEARREG_SLOPE (ADR-175 raw slope),
+/// LINEARREG_ANGLE (slope→angle), and LINEARREG_INTERCEPT (y at t=0)
+/// because LINEARREG reports the projected endpoint of the line — the
+/// most recent fitted value, which is the closest fitted approximation
+/// of the current close and a common baseline for mean-reversion
+/// signals (close − fitted).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct LinearregSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub fitted: f64,                   // y_hat at current bar
+    pub fitted_prev: f64,
+    pub residual: f64,                 // close - fitted
+    pub residual_pct: f64,             // residual / close × 100
+    pub last_close: f64,
+    pub linearreg_label: String,       // ABOVE_TREND / NEAR_TREND / BELOW_TREND / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Linear Regression Angle (LINEARREG_ANGLE) — TA-Lib's
+/// LINEARREG_ANGLE: `atan(slope) · 180/π`, converting the raw slope
+/// coefficient to an angle in degrees (-90° to +90°). Useful for
+/// comparing slope magnitudes across different price scales in a
+/// bounded unit. Distinct from LINEARREG_SLOPE (raw units-per-bar)
+/// because angle normalizes relative to the price scale.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct LinearregAngleSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub length: usize,                 // 14
+    pub slope: f64,                    // raw (price-units per bar)
+    pub angle_deg: f64,                // atan(slope) · 180/π
+    pub angle_deg_prev: f64,
+    pub last_close: f64,
+    pub angle_label: String,           // STRONG_UP / UP / FLAT / DOWN / STRONG_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Hilbert Dominant Cycle Phase (HT_DCPHASE) — TA-Lib's HT_DCPHASE
+/// reuses the Ehlers homodyne discriminator pipeline (same as
+/// HT_DCPERIOD, ADR-175) and reports the phase of the dominant cycle
+/// at the current bar in degrees (0..360°). Useful for timing cycle
+/// turns — phase 0° is the cycle bottom, 180° is the top. Distinct
+/// from HT_DCPERIOD (cycle length in bars) and HT_TRENDMODE (trend
+/// vs cycle regime) because it reports the cycle's current position
+/// within its rotation rather than its length or regime.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct HtDcphaseSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub phase_deg: f64,                // 0..360°
+    pub phase_deg_prev: f64,
+    pub phase_delta: f64,              // smoothed derivative
+    pub period: f64,                   // dominant cycle period in bars
+    pub last_close: f64,
+    pub phase_label: String,           // CYCLE_BOTTOM / RISING / CYCLE_TOP / FALLING / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Hilbert Sine Wave (HT_SINE) — TA-Lib's HT_SINE emits two lines:
+/// `sine = sin(phase)` and `leadsine = sin(phase + 45°)`. Crossovers
+/// of sine/leadsine identify cycle turns in advance — leadsine
+/// crossing above sine signals an imminent cycle bottom, and crossing
+/// below signals an imminent top. Distinct from HT_DCPHASE (raw
+/// phase) because HT_SINE plots the sine-transformed phase, letting
+/// you visualize and cross-trigger cycle turns as bounded signals in
+/// [-1, +1].
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct HtSineSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub sine: f64,                     // -1..1
+    pub sine_prev: f64,
+    pub leadsine: f64,                 // sin(phase + 45°)
+    pub leadsine_prev: f64,
+    pub crossover: i32,                // +1 leadsine above (bottom turn), -1 below (top turn), 0 none
+    pub period: f64,
+    pub last_close: f64,
+    pub sine_label: String,            // CYCLE_TURN_UP / BULL / NEUTRAL / BEAR / CYCLE_TURN_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// Hilbert Phasor Components (HT_PHASOR) — TA-Lib's HT_PHASOR emits
+/// the raw in-phase (I) and quadrature (Q) components of the
+/// analytic signal produced by the Hilbert transform of smoothed
+/// price. Magnitude `sqrt(I² + Q²)` is the instantaneous cycle
+/// amplitude; `atan2(Q, I)` is the phase. Distinct from HT_DCPHASE
+/// (transforms I/Q into the phase angle) and HT_SINE (sine of the
+/// phase) because HT_PHASOR reports the raw I/Q components useful
+/// for custom cycle analysis and filter design.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct HtPhasorSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub i_comp: f64,                   // in-phase component
+    pub q_comp: f64,                   // quadrature component
+    pub i_prev: f64,
+    pub q_prev: f64,
+    pub magnitude: f64,                // sqrt(I² + Q²)
+    pub phase_deg: f64,                // atan2(Q, I) · 180/π
+    pub last_close: f64,
+    pub phasor_label: String,          // STRONG_CYCLE / CYCLE / WEAK_CYCLE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -29051,6 +29165,264 @@ pub fn compute_stochf_snapshot(
     }
 }
 
+/// Least-squares slope + intercept of `y[0..N]` vs `x=0..N`.
+/// Returns (slope, intercept).
+fn least_squares_slope_intercept(y: &[f64]) -> (f64, f64) {
+    let n = y.len() as f64;
+    if n < 2.0 { return (0.0, if y.is_empty() { 0.0 } else { y[0] }); }
+    let mx = (n - 1.0) / 2.0;
+    let my: f64 = y.iter().sum::<f64>() / n;
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for (i, &v) in y.iter().enumerate() {
+        let dx = i as f64 - mx;
+        num += dx * (v - my);
+        den += dx * dx;
+    }
+    let slope = if den.abs() > 1e-12 { num / den } else { 0.0 };
+    let intercept = my - slope * mx;
+    (slope, intercept)
+}
+
+pub fn compute_linearreg_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> LinearregSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length: usize = 14;
+    if n < length + 1 {
+        return LinearregSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            linearreg_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 1, n),
+            ..Default::default()
+        };
+    }
+    let closes_now: Vec<f64> = sorted[n - length..].iter().map(|r| r.close).collect();
+    let closes_prev: Vec<f64> = sorted[n - length - 1..n - 1].iter().map(|r| r.close).collect();
+    let (slope, intercept) = least_squares_slope_intercept(&closes_now);
+    let (slope_p, intercept_p) = least_squares_slope_intercept(&closes_prev);
+    let fitted = slope * (length as f64 - 1.0) + intercept;
+    let fitted_prev = slope_p * (length as f64 - 1.0) + intercept_p;
+    let last_close = sorted[n - 1].close;
+    let residual = last_close - fitted;
+    let residual_pct = if last_close.abs() > 1e-12 { 100.0 * residual / last_close } else { 0.0 };
+    let label = if residual_pct > 2.0 { "ABOVE_TREND" }
+        else if residual_pct < -2.0 { "BELOW_TREND" }
+        else { "NEAR_TREND" };
+    LinearregSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        fitted, fitted_prev, residual, residual_pct, last_close,
+        linearreg_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_linearreg_angle_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> LinearregAngleSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let length: usize = 14;
+    if n < length + 1 {
+        return LinearregAngleSnapshot {
+            symbol: sym, as_of: as_of.into(), length,
+            angle_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", length + 1, n),
+            ..Default::default()
+        };
+    }
+    let closes_now: Vec<f64> = sorted[n - length..].iter().map(|r| r.close).collect();
+    let closes_prev: Vec<f64> = sorted[n - length - 1..n - 1].iter().map(|r| r.close).collect();
+    let (slope, _) = least_squares_slope_intercept(&closes_now);
+    let (slope_p, _) = least_squares_slope_intercept(&closes_prev);
+    let angle_deg = slope.atan() * 180.0 / std::f64::consts::PI;
+    let angle_deg_prev = slope_p.atan() * 180.0 / std::f64::consts::PI;
+    let label = if angle_deg > 30.0 { "STRONG_UP" }
+        else if angle_deg > 5.0 { "UP" }
+        else if angle_deg < -30.0 { "STRONG_DOWN" }
+        else if angle_deg < -5.0 { "DOWN" }
+        else { "FLAT" };
+    LinearregAngleSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, length,
+        slope, angle_deg, angle_deg_prev,
+        last_close: sorted[n - 1].close,
+        angle_label: label.into(), note: String::new(),
+    }
+}
+
+/// Shared Ehlers Hilbert homodyne pipeline — returns (phase_deg[],
+/// period[], i_comp[], q_comp[], smooth_price[]) aligned to bars.
+/// Minimum warmup is 64 bars (first 5 are burn-in for smoothing).
+fn ehlers_hilbert_pipeline(closes: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    let n = closes.len();
+    if n < 7 {
+        return (vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![0.0; n]);
+    }
+    let mut smooth = vec![0.0f64; n];
+    for t in 3..n {
+        smooth[t] = (4.0 * closes[t] + 3.0 * closes[t - 1] + 2.0 * closes[t - 2] + closes[t - 3]) / 10.0;
+    }
+    let mut detrender = vec![0.0f64; n];
+    let mut i1 = vec![0.0f64; n];
+    let mut q1 = vec![0.0f64; n];
+    let mut i2 = vec![0.0f64; n];
+    let mut q2 = vec![0.0f64; n];
+    let mut period = vec![0.0f64; n];
+    let mut phase = vec![0.0f64; n];
+    for t in 6..n {
+        let p = period[t - 1];
+        let ad = 0.0962 * smooth[t] + 0.5769 * smooth[t - 2] - 0.5769 * smooth[t - 4] - 0.0962 * smooth[t - 6];
+        let adj = 0.075 * p + 0.54;
+        detrender[t] = ad * adj;
+        q1[t] = (0.0962 * detrender[t] + 0.5769 * detrender[t - 2] - 0.5769 * detrender[t - 4] - 0.0962 * detrender[t - 6]) * adj;
+        i1[t] = detrender[t - 3];
+        let ji = (0.0962 * i1[t] + 0.5769 * i1[t - 2] - 0.5769 * i1[t - 4] - 0.0962 * i1[t - 6]) * adj;
+        let jq = (0.0962 * q1[t] + 0.5769 * q1[t - 2] - 0.5769 * q1[t - 4] - 0.0962 * q1[t - 6]) * adj;
+        let i2_raw = i1[t] - jq;
+        let q2_raw = q1[t] + ji;
+        i2[t] = 0.2 * i2_raw + 0.8 * i2[t - 1];
+        q2[t] = 0.2 * q2_raw + 0.8 * q2[t - 1];
+        let re = i2[t] * i2[t - 1] + q2[t] * q2[t - 1];
+        let im = i2[t] * q2[t - 1] - q2[t] * i2[t - 1];
+        let re_s = 0.2 * re + 0.8 * if t > 0 { re } else { 0.0 };
+        let im_s = 0.2 * im + 0.8 * if t > 0 { im } else { 0.0 };
+        let mut per = if im_s.abs() > 1e-12 && re_s.abs() > 1e-12 {
+            360.0 / (im_s / re_s).atan().to_degrees().max(0.0001)
+        } else { p };
+        if per > 1.5 * p && p > 0.0 { per = 1.5 * p; }
+        if per < 0.67 * p && p > 0.0 { per = 0.67 * p; }
+        if per < 6.0 { per = 6.0; }
+        if per > 50.0 { per = 50.0; }
+        period[t] = 0.2 * per + 0.8 * p;
+        let ph_rad = if i1[t].abs() > 1e-12 {
+            (q1[t] / i1[t]).atan()
+        } else { 0.0 };
+        let mut ph_deg = ph_rad.to_degrees();
+        if i1[t] < 0.0 { ph_deg += 180.0; }
+        if ph_deg < 0.0 { ph_deg += 360.0; }
+        if ph_deg >= 360.0 { ph_deg -= 360.0; }
+        phase[t] = ph_deg;
+    }
+    (phase, period, i1, q1)
+}
+
+pub fn compute_ht_dcphase_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> HtDcphaseSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let need = 64;
+    if n < need {
+        return HtDcphaseSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            phase_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", need, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|r| r.close).collect();
+    let (phase, period, _i1, _q1) = ehlers_hilbert_pipeline(&closes);
+    let phase_deg = phase[n - 1];
+    let phase_deg_prev = phase[n - 2];
+    let mut phase_delta = phase_deg - phase_deg_prev;
+    if phase_delta > 180.0 { phase_delta -= 360.0; }
+    if phase_delta < -180.0 { phase_delta += 360.0; }
+    let label = if phase_deg < 45.0 || phase_deg > 315.0 { "CYCLE_BOTTOM" }
+        else if phase_deg < 135.0 { "RISING" }
+        else if phase_deg < 225.0 { "CYCLE_TOP" }
+        else { "FALLING" };
+    HtDcphaseSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        phase_deg, phase_deg_prev, phase_delta,
+        period: period[n - 1],
+        last_close: sorted[n - 1].close,
+        phase_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_ht_sine_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> HtSineSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let need = 64;
+    if n < need {
+        return HtSineSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            sine_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", need, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|r| r.close).collect();
+    let (phase, period, _i1, _q1) = ehlers_hilbert_pipeline(&closes);
+    let sine = (phase[n - 1].to_radians()).sin();
+    let sine_prev = (phase[n - 2].to_radians()).sin();
+    let leadsine = ((phase[n - 1] + 45.0).to_radians()).sin();
+    let leadsine_prev = ((phase[n - 2] + 45.0).to_radians()).sin();
+    let crossover = if leadsine > sine && leadsine_prev <= sine_prev { 1 }
+        else if leadsine < sine && leadsine_prev >= sine_prev { -1 }
+        else { 0 };
+    let label = if crossover == 1 { "CYCLE_TURN_UP" }
+        else if crossover == -1 { "CYCLE_TURN_DOWN" }
+        else if sine > 0.3 { "BULL" }
+        else if sine < -0.3 { "BEAR" }
+        else { "NEUTRAL" };
+    HtSineSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        sine, sine_prev, leadsine, leadsine_prev, crossover,
+        period: period[n - 1],
+        last_close: sorted[n - 1].close,
+        sine_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_ht_phasor_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> HtPhasorSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let need = 64;
+    if n < need {
+        return HtPhasorSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            phasor_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", need, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|r| r.close).collect();
+    let (_phase, _period, i1, q1) = ehlers_hilbert_pipeline(&closes);
+    let i_comp = i1[n - 1];
+    let q_comp = q1[n - 1];
+    let i_prev = i1[n - 2];
+    let q_prev = q1[n - 2];
+    let magnitude = (i_comp * i_comp + q_comp * q_comp).sqrt();
+    let phase_deg = q_comp.atan2(i_comp).to_degrees();
+    let last_close = sorted[n - 1].close;
+    let rel_mag = if last_close.abs() > 1e-12 { magnitude / last_close } else { 0.0 };
+    let label = if rel_mag > 0.02 { "STRONG_CYCLE" }
+        else if rel_mag > 0.005 { "CYCLE" }
+        else { "WEAK_CYCLE" };
+    HtPhasorSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        i_comp, q_comp, i_prev, q_prev,
+        magnitude, phase_deg,
+        last_close,
+        phasor_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -38503,6 +38875,169 @@ pub fn get_stochf(conn: &Connection, symbol: &str) -> Result<Option<StochfSnapsh
     if let Some(r) = rows.next().map_err(|e| format!("row stochf: {e}"))? {
         let j: String = r.get(0).map_err(|e| format!("get stochf: {e}"))?;
         let snap: StochfSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse stochf: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── ADR-176 Round 64 v66 schema + helpers ──────────────────────────────────
+
+pub fn create_research_tables_v66(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v65(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_linearreg (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_linearreg_updated ON research_linearreg(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_linearreg_angle (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_linearreg_angle_updated ON research_linearreg_angle(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_ht_dcphase (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ht_dcphase_updated ON research_ht_dcphase(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_ht_sine (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ht_sine_updated ON research_ht_sine(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_ht_phasor (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ht_phasor_updated ON research_ht_phasor(updated_at);",
+    ).map_err(|e| format!("create v66 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_linearreg(conn: &Connection, symbol: &str, snap: &LinearregSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v66(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("linearreg json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_linearreg (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert linearreg: {e}"))?;
+    Ok(())
+}
+
+pub fn get_linearreg(conn: &Connection, symbol: &str) -> Result<Option<LinearregSnapshot>, String> {
+    let _ = create_research_tables_v66(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_linearreg WHERE symbol = ?1")
+        .map_err(|e| format!("prep linearreg: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query linearreg: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row linearreg: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get linearreg: {e}"))?;
+        let snap: LinearregSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse linearreg: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_linearreg_angle(conn: &Connection, symbol: &str, snap: &LinearregAngleSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v66(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("linearreg_angle json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_linearreg_angle (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert linearreg_angle: {e}"))?;
+    Ok(())
+}
+
+pub fn get_linearreg_angle(conn: &Connection, symbol: &str) -> Result<Option<LinearregAngleSnapshot>, String> {
+    let _ = create_research_tables_v66(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_linearreg_angle WHERE symbol = ?1")
+        .map_err(|e| format!("prep linearreg_angle: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query linearreg_angle: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row linearreg_angle: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get linearreg_angle: {e}"))?;
+        let snap: LinearregAngleSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse linearreg_angle: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ht_dcphase(conn: &Connection, symbol: &str, snap: &HtDcphaseSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v66(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ht_dcphase json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ht_dcphase (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ht_dcphase: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ht_dcphase(conn: &Connection, symbol: &str) -> Result<Option<HtDcphaseSnapshot>, String> {
+    let _ = create_research_tables_v66(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ht_dcphase WHERE symbol = ?1")
+        .map_err(|e| format!("prep ht_dcphase: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query ht_dcphase: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row ht_dcphase: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get ht_dcphase: {e}"))?;
+        let snap: HtDcphaseSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse ht_dcphase: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ht_sine(conn: &Connection, symbol: &str, snap: &HtSineSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v66(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ht_sine json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ht_sine (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ht_sine: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ht_sine(conn: &Connection, symbol: &str) -> Result<Option<HtSineSnapshot>, String> {
+    let _ = create_research_tables_v66(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ht_sine WHERE symbol = ?1")
+        .map_err(|e| format!("prep ht_sine: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query ht_sine: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row ht_sine: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get ht_sine: {e}"))?;
+        let snap: HtSineSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse ht_sine: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ht_phasor(conn: &Connection, symbol: &str, snap: &HtPhasorSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v66(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ht_phasor json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ht_phasor (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ht_phasor: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ht_phasor(conn: &Connection, symbol: &str) -> Result<Option<HtPhasorSnapshot>, String> {
+    let _ = create_research_tables_v66(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ht_phasor WHERE symbol = ?1")
+        .map_err(|e| format!("prep ht_phasor: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query ht_phasor: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row ht_phasor: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get ht_phasor: {e}"))?;
+        let snap: HtPhasorSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse ht_phasor: {e}"))?;
         Ok(Some(snap))
     } else { Ok(None) }
 }
@@ -51089,6 +51624,137 @@ Trailing text.
         if snap.stochf_label != "INSUFFICIENT_DATA" {
             assert!(snap.fastk >= 0.0 && snap.fastk <= 100.0);
             assert!(snap.fastd >= 0.0 && snap.fastd <= 100.0);
+        }
+    }
+
+    // ── ADR-176 Round 64 tests ──
+    #[test]
+    fn linearreg_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = LinearregSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 30, length: 14,
+            fitted: 100.5, fitted_prev: 99.8, residual: -0.5, residual_pct: -0.5,
+            last_close: 100.0, linearreg_label: "NEAR_TREND".into(), note: String::new(),
+        };
+        upsert_linearreg(&conn, "TEST", &snap).unwrap();
+        let got = get_linearreg(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.linearreg_label, "NEAR_TREND");
+        assert!((got.fitted - 100.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn linearreg_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_linearreg_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.linearreg_label.as_str(),
+            "ABOVE_TREND" | "NEAR_TREND" | "BELOW_TREND" | "INSUFFICIENT_DATA"));
+        if snap.linearreg_label != "INSUFFICIENT_DATA" {
+            assert!(snap.fitted > 0.0);
+        }
+    }
+
+    #[test]
+    fn linearreg_angle_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = LinearregAngleSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 30, length: 14,
+            slope: 0.2, angle_deg: 11.3, angle_deg_prev: 10.5,
+            last_close: 100.0, angle_label: "UP".into(), note: String::new(),
+        };
+        upsert_linearreg_angle(&conn, "TEST", &snap).unwrap();
+        let got = get_linearreg_angle(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.angle_label, "UP");
+        assert!((got.angle_deg - 11.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn linearreg_angle_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_linearreg_angle_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.angle_label.as_str(),
+            "STRONG_UP" | "UP" | "FLAT" | "DOWN" | "STRONG_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.angle_label != "INSUFFICIENT_DATA" {
+            assert!(snap.angle_deg >= -90.0 && snap.angle_deg <= 90.0);
+        }
+    }
+
+    #[test]
+    fn ht_dcphase_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = HtDcphaseSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            phase_deg: 90.0, phase_deg_prev: 80.0, phase_delta: 10.0, period: 20.0,
+            last_close: 100.0, phase_label: "RISING".into(), note: String::new(),
+        };
+        upsert_ht_dcphase(&conn, "TEST", &snap).unwrap();
+        let got = get_ht_dcphase(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.phase_label, "RISING");
+        assert!((got.phase_deg - 90.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ht_dcphase_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ht_dcphase_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.phase_label.as_str(),
+            "CYCLE_BOTTOM" | "RISING" | "CYCLE_TOP" | "FALLING" | "INSUFFICIENT_DATA"));
+        if snap.phase_label != "INSUFFICIENT_DATA" {
+            assert!(snap.phase_deg >= 0.0 && snap.phase_deg < 360.0);
+            assert!(snap.period >= 6.0 && snap.period <= 50.0);
+        }
+    }
+
+    #[test]
+    fn ht_sine_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = HtSineSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            sine: 0.5, sine_prev: 0.3, leadsine: 0.6, leadsine_prev: 0.4,
+            crossover: 0, period: 20.0, last_close: 100.0,
+            sine_label: "BULL".into(), note: String::new(),
+        };
+        upsert_ht_sine(&conn, "TEST", &snap).unwrap();
+        let got = get_ht_sine(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.sine_label, "BULL");
+        assert!((got.sine - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ht_sine_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ht_sine_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.sine_label.as_str(),
+            "CYCLE_TURN_UP" | "BULL" | "NEUTRAL" | "BEAR" | "CYCLE_TURN_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.sine_label != "INSUFFICIENT_DATA" {
+            assert!(snap.sine >= -1.0 && snap.sine <= 1.0);
+            assert!(snap.leadsine >= -1.0 && snap.leadsine <= 1.0);
+        }
+    }
+
+    #[test]
+    fn ht_phasor_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = HtPhasorSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-17".into(), bars_used: 100,
+            i_comp: 2.0, q_comp: 3.0, i_prev: 1.8, q_prev: 2.5,
+            magnitude: 3.606, phase_deg: 56.3, last_close: 100.0,
+            phasor_label: "CYCLE".into(), note: String::new(),
+        };
+        upsert_ht_phasor(&conn, "TEST", &snap).unwrap();
+        let got = get_ht_phasor(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.phasor_label, "CYCLE");
+        assert!((got.i_comp - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ht_phasor_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ht_phasor_snapshot("T", "2026-04-17", &bars);
+        assert!(matches!(snap.phasor_label.as_str(),
+            "STRONG_CYCLE" | "CYCLE" | "WEAK_CYCLE" | "INSUFFICIENT_DATA"));
+        if snap.phasor_label != "INSUFFICIENT_DATA" {
+            assert!(snap.magnitude >= 0.0);
+            assert!(snap.phase_deg >= -180.0 && snap.phase_deg <= 180.0);
         }
     }
 }

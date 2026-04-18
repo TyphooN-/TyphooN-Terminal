@@ -502,6 +502,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_ht_trendmode",
     "research_accbands",
     "research_stochf",
+    // ── ADR-176 Round 64 ────────────────────────────
+    "research_linearreg",
+    "research_linearreg_angle",
+    "research_ht_dcphase",
+    "research_ht_sine",
+    "research_ht_phasor",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -2865,6 +2871,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-176 Round 64 ──
+        "research_linearreg" => Some(
+            "CREATE TABLE IF NOT EXISTS research_linearreg (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_linearreg_angle" => Some(
+            "CREATE TABLE IF NOT EXISTS research_linearreg_angle (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_ht_dcphase" => Some(
+            "CREATE TABLE IF NOT EXISTS research_ht_dcphase (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_ht_sine" => Some(
+            "CREATE TABLE IF NOT EXISTS research_ht_sine (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_ht_phasor" => Some(
+            "CREATE TABLE IF NOT EXISTS research_ht_phasor (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -3230,6 +3272,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_ht_trendmode" => Some("updated_at"),
         "research_accbands" => Some("updated_at"),
         "research_stochf" => Some("updated_at"),
+        // ── ADR-176 Round 64 ──
+        "research_linearreg" => Some("updated_at"),
+        "research_linearreg_angle" => Some("updated_at"),
+        "research_ht_dcphase" => Some("updated_at"),
+        "research_ht_sine" => Some("updated_at"),
+        "research_ht_phasor" => Some("updated_at"),
         _ => None,
     }
 }
