@@ -4691,7 +4691,70 @@ Requires n≥43 (2·period ADX seed + period ADXR lookback + 1); body
 reports period (14), adx_now, adx_prior, adxr, adxr_prev, last_close.
 Source: ADR-177 ADXR window.
 
-#### 2.318 Prior Ingested Web Research (INGESTED — ADR-130)
+#### 2.318 OHLC Average (AVGPRICE — ADR-178)
+
+Pulled from `research::get_avgprice`. TA-Lib's AVGPRICE function:
+`(open + high + low + close) / 4` — the simplest four-component OHLC
+average. Distinct from TYPPRICE (drops open), WCLPRICE (drops open,
+double-weights close), and MEDPRICE (uses only high/low). Used by
+smoothing transforms that want equal weight for all four OHLC
+components — e.g. some Heikin-Ashi variants and Ichimoku base-line
+approximations. ABOVE_CLOSE (avgprice > close by ≥0.1%) / NEAR_CLOSE
+/ BELOW_CLOSE / INSUFFICIENT_DATA labels. Requires n≥1; body reports
+open, high, low, close, avgprice, avgprice_prev, delta_pct. Source:
+ADR-178 AVGPRICE window.
+
+#### 2.319 Range Median (MEDPRICE — ADR-178)
+
+Pulled from `research::get_medprice`. TA-Lib's MEDPRICE function:
+`(high + low) / 2` — instantaneous range median, zero lookback.
+Distinct from MIDPRICE (ADR-177, 14-bar HHV/LLV smoothed midpoint)
+because MEDPRICE is a single-bar primitive. Used as the base input
+for AWESOME / ALLIGATOR / FRACTAL detectors that want the bar median
+rather than a smoothed band. ABOVE_MID (close > medprice by ≥0.05%)
+/ AT_MID / BELOW_MID / INSUFFICIENT_DATA labels. Requires n≥1; body
+reports high, low, close, medprice, medprice_prev, delta_pct.
+Source: ADR-178 MEDPRICE window.
+
+#### 2.320 Typical Price (TYPPRICE — ADR-178)
+
+Pulled from `research::get_typprice`. TA-Lib's TYPPRICE function:
+`(high + low + close) / 3` — canonical input for CCI, MFI, and
+several VWAP variants. Distinct from MEDPRICE (excludes close) and
+WCLPRICE (double-weights close) because TYPPRICE equally weights
+close alongside high/low without the open component, balancing
+range-center with actual settlement. ABOVE_CLOSE / NEAR_CLOSE /
+BELOW_CLOSE / INSUFFICIENT_DATA labels (mirrors AVGPRICE/WCLPRICE
+for symmetry). Requires n≥1; body reports high, low, close,
+typprice, typprice_prev, delta_pct. Source: ADR-178 TYPPRICE window.
+
+#### 2.321 Weighted Close (WCLPRICE — ADR-178)
+
+Pulled from `research::get_wclprice`. TA-Lib's WCLPRICE function:
+`(high + low + 2 × close) / 4` — double-weights the close to
+emphasise settlement-biased smoothing. Distinct from TYPPRICE
+(`(H+L+C)/3` equal-weight close) and AVGPRICE (`(O+H+L+C)/4`
+equal-weight all four). Used where close is more informative than
+range extremes — end-of-day signals, swing studies, position-trading
+models. ABOVE_CLOSE / NEAR_CLOSE / BELOW_CLOSE / INSUFFICIENT_DATA
+labels. Requires n≥1; body reports high, low, close, wclprice,
+wclprice_prev, delta_pct. Source: ADR-178 WCLPRICE window.
+
+#### 2.322 Close Variance (VARIANCE — ADR-178)
+
+Pulled from `research::get_variance`. TA-Lib's VARIANCE function:
+`σ² = Σ(x − μ)² / N` over 5 bars of close (population form, TA-Lib
+default `optInNbDev=0`). The base statistical primitive underlying
+STDDEV (`σ = √σ²`), Z-score normalisation, and Bollinger/Acceleration
+bands. Distinct from realised-variance (sums of squared log returns)
+and EWMA-variance (exponential decay) because VARIANCE uses a flat
+5-bar window over raw close values. HIGH_VOL (CV > 5%) / ELEVATED
+(> 2%) / NORMAL / LOW_VOL (< 0.5%) / INSUFFICIENT_DATA labels from
+coefficient-of-variation `stddev / |mean| × 100`. Requires n≥5; body
+reports period (5), mean, variance, variance_prev, stddev, cv,
+last_close. Source: ADR-178 VARIANCE window.
+
+#### 2.323 Prior Ingested Web Research (INGESTED — ADR-130)
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
@@ -4707,7 +4770,7 @@ timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
 Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
 
-#### 2.319 Sector peer comparison
+#### 2.324 Sector peer comparison
 
 Emitted only when the fundamentals row has a non-empty sector AND at least
 **3 other symbols** in `self.bg.all_fundamentals` share that sector. Compares
@@ -4967,8 +5030,11 @@ Question section, not per-symbol.
 | Daily bars required for stats | ≥20 | Needed for 20d return and ATR warm-up |
 
 There is no global packet size limit — total size scales with the number of
-symbols. A single S&P 500 symbol now produces a packet around **~91-175 KB**
-(up from 90-173 KB after ADR-176; ADR-177 adds five optional per-symbol
+symbols. A single S&P 500 symbol now produces a packet around **~92-176 KB**
+(up from 91-175 KB after ADR-177; ADR-178 adds five optional per-symbol
+blocks — AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE — each
+measuring ~2 k/v rows and adding ~190-260 bytes when populated, for a typical
++1.05 KB per symbol; ADR-177 added five optional per-symbol
 blocks — MIDPRICE / APO / MOM / SAREXT / ADXR — each measuring ~2 k/v rows
 and adding ~240-320 bytes when populated, for a typical +1.45 KB per symbol;
 ADR-176 added five optional per-symbol
