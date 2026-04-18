@@ -17,9 +17,9 @@ MT5 Terminal (Wine) → BarCacheWriter EA → typhoon_mt5_cache.db (MQL5/Files/)
 ```
 - **Format:** ZSTD-compressed binary OHLCV (6 × f64 per bar)
 - **Schema:** `bar_cache(key TEXT PK, data BLOB, timestamp INT, bar_count INT)`
-- **Key pattern:** `mt5:{broker}:{symbol}:{timeframe}` e.g. `mt5:CC:SLV:4Hour`
+- **Key pattern:** `mt5:{symbol}:{timeframe}` e.g. `mt5:EURUSD:1Hour` (BarCacheWriter is the sole producer; metadata rows — `mt5:__SYMBOLS__`, `mt5:__SPECS__:…`, `mt5:__SERVER__:…`, `mt5:__HEARTBEAT__:{acct}` — live under the `mt5:__<NAME>__[:…]` convention)
 - **Sync:** User-configurable up to 4 MT5 database paths (Settings → MT5 BarCacheWriter Sources)
-- **Sync mechanism:** Zero-copy blob transfer via `put_raw_blob()` — only overwrites if source timestamp is newer
+- **Sync mechanism:** Batched zero-copy blob transfer via `put_raw_blobs()` — one SQLite transaction per source, ON CONFLICT guard prevents older timestamps from clobbering newer
 - **Trigger:** Manual via `MT5SYNC` command or "Sync MT5 Data Now" button
 
 ### 2. Darwinex XLSX (DARWIN trade history)

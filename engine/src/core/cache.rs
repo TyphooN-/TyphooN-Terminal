@@ -1274,21 +1274,7 @@ impl SqliteCache {
         }
     }
 
-    /// Put a raw compressed blob (zero-copy from another database).
-    /// Overwrites if the source timestamp is newer.
-    pub fn put_raw_blob(&self, key: &str, blob: &[u8], ts: i64, bar_count: i64) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        conn.execute(
-            "INSERT INTO bar_cache (key, data, timestamp, bar_count)
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(key) DO UPDATE SET data=excluded.data, timestamp=excluded.timestamp, bar_count=excluded.bar_count
-             WHERE excluded.timestamp > bar_cache.timestamp",
-            params![key, blob, ts, bar_count],
-        ).map_err(|e| format!("Insert failed: {e}"))?;
-        Ok(())
-    }
-
-    /// Batch form of `put_raw_blob` — writes all supplied rows inside a
+    /// Batched raw-blob insert — writes all supplied rows inside a
     /// single SQLite transaction so the WAL fsync cost is amortised across
     /// the batch instead of paid per row. The same idempotent ON CONFLICT
     /// guard is applied, so older blobs never clobber newer ones even if
