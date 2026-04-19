@@ -35,10 +35,27 @@ fn main() -> eframe::Result {
     tracing::info!("Platform: {} {}", std::env::consts::OS, std::env::consts::ARCH);
     tracing::info!("Renderer: wgpu (Vulkan/Metal/DX12)");
 
-    // Cache path
-    let mut cache_path = dirs_home();
-    cache_path.push("cache");
-    cache_path.push("typhoon_cache.db");
+    // Resolve custom cache dir (user may have moved it to a NAS / faster drive).
+    // The setting is stored in `~/.config/typhoon-terminal/cache_location.txt`
+    // so it's readable before session.json is parsed. If set but the target
+    // directory no longer exists (unmounted share, removed drive), `cache_dir`
+    // falls back to the default — but we log a WARN so the user sees it, and
+    // the UI shows a red banner from `is_custom_cache_missing()`.
+    let configured_custom = app::read_custom_cache_dir();
+    if let Some(ref p) = configured_custom {
+        if !p.is_dir() {
+            tracing::warn!(
+                "Custom cache directory is configured but UNAVAILABLE: {} — falling back to default. \
+                 Mount the drive / restart the NAS and restart the terminal to restore.",
+                p.display()
+            );
+        } else {
+            tracing::info!("Custom cache directory: {}", p.display());
+        }
+    }
+    app::init_custom_cache_dir(configured_custom);
+
+    let cache_path = app::cache_db_path();
     if cache_path.exists() {
         if let Ok(meta) = std::fs::metadata(&cache_path) {
             tracing::info!("Cache: {} ({:.1} MB)", cache_path.display(), meta.len() as f64 / 1024.0 / 1024.0);
