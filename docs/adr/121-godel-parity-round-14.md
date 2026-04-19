@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108, ADR-109, ADR-110, ADR-111, ADR-112, ADR-113, ADR-114, ADR-115, ADR-116, ADR-117, ADR-118, ADR-119, ADR-120
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
+| --- | --- | --- | --- | --- | --- |
+| GROWM (GARP growth-at-reasonable-price composite) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| FLOW (smart-money flow: insider + 13F) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| REGIME (market regime classifier) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| RELVOL (relative volume unusual activity) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| MARGINS (margin trajectory) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented composite surfaces (GARP growth, smart-money flow, regime, unusual volume, margin trajectory); no TA-Lib primitives in this round.
+
 ## Context
 
 Round 13 (ADR-120) shipped the price-action-regime bundle

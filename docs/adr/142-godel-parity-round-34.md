@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-141
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| SAMPEN | No | No | Yes | Yes | No (deferred — ADR-188) |
+| PERMEN | No | No | Yes | Yes | No (deferred — ADR-188) |
+| RECFACT | No | No | Yes | Yes | No (deferred — ADR-188) |
+| KPSS | No | No | Yes | Yes | No (deferred — ADR-188) |
+| SPECENT | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical econometric primitives (sample entropy, permutation entropy, recovery factor, KPSS stationarity test, spectral entropy) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 33 (ADR-141) shipped UPR/LEVEREFF/DRAWDAR/VARHALF/GINI,

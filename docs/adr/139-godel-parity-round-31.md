@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-138
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| HILLTAIL | No | No | Yes | Yes | No (deferred — ADR-188) |
+| ARCHLM | No | No | Yes | Yes | No (deferred — ADR-188) |
+| PAINRATIO | No | No | Yes | Yes | No (deferred — ADR-188) |
+| CUSUM | No | No | Yes | Yes | No (deferred — ADR-188) |
+| CFVAR | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical econometric primitives (Hill tail index, Engle ARCH-LM test, Pain index + Pain ratio, Brown-Durbin-Evans CUSUM structural-break test, Cornish-Fisher VaR) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 30 (ADR-138) shipped PSR/ADF/MNKENDALL/BIPOWER/DDDUR,

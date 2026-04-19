@@ -3,6 +3,18 @@
 **Status:** Implemented
 **Date:** 2026-04-14
 
+## Parity classification
+
+| Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
+| --- | --- | --- | --- | --- | --- |
+| SPLT (stock split history) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| ETF (holdings breakdown) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| ANR (analyst recommendations + PT) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| ESG (ESG score) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| MEMB (index membership) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented research windows (splits, ETF holdings, analyst consensus, ESG, index membership); AI chat overhaul is UX infrastructure, not a parity feature.
+
 ## Context
 
 ADR-108/109/110 closed most of the professional-desk research surface a Godel

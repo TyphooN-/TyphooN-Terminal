@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-166
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| SMMA | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| ALLIGATOR | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| CRSI | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| SEB | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| IMI | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical indicators (Wilder Smoothed MA, Bill Williams Alligator, Connors RSI, Standard Error Bands, Intraday Momentum Index); none are TA-Lib primitives on their own.
+
 ## Context
 
 Round 54 (ADR-165) shipped AC/CHVOL/BBWIDTH/ELDERIMP/RMI; ADR-166

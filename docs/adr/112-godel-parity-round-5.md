@@ -3,6 +3,18 @@
 ## Status
 Accepted — 2026-04-14
 
+## Parity classification
+
+| Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
+| --- | --- | --- | --- | --- | --- |
+| INS (insider trades, Form 4) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| HDS (13F institutional holders) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| FLOAT (shares outstanding / free float) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| HP (historical daily price table) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| EPS (earnings surprise history) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented research windows (insider trades, 13F holders, float, historical OHLCV grid, EPS surprise); no TA-Lib primitives in this round.
+
 ## Context
 
 Round 4 (ADR-111) brought the per-symbol research surfaces to 20 commands

@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-185
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| CDLPIERCING | No | Yes (`CDLPIERCING`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLDRAGONFLYDOJI | No | Yes (`CDLDRAGONFLYDOJI`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLGRAVESTONEDOJI | No | Yes (`CDLGRAVESTONEDOJI`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLHANGINGMAN | No | Yes (`CDLHANGINGMAN`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLINVERTEDHAMMER | No | Yes (`CDLINVERTEDHAMMER`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure TA-Lib — closes complement families of Rounds 72-73 patterns: `CDLPIERCING` mirrors Dark Cloud Cover, `CDLDRAGONFLYDOJI` / `CDLGRAVESTONEDOJI` are T-shape doji variants, `CDLHANGINGMAN` / `CDLINVERTEDHAMMER` are Hammer / Shooting Star context-flipped mirrors.
+
 ## Context
 
 Rounds 72 and 73 (ADR-184/ADR-185) opened and extended the TA-Lib

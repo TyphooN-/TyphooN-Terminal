@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-133
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| CALMAR | No | No | Yes | Yes | No (deferred — ADR-188) |
+| ULCER | No | No | Yes | Yes | No (deferred — ADR-188) |
+| VARRATIO | No | No | Yes | Yes | No (deferred — ADR-188) |
+| AMIHUD | No | No | Yes | Yes | No (deferred — ADR-188) |
+| JBNORM | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical risk-return + econometric primitives (Calmar ratio, Ulcer index + Martin, Lo-MacKinlay variance ratio, Amihud illiquidity, Jarque-Bera normality test) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 25 (ADR-133) shipped the last cluster of "single-series

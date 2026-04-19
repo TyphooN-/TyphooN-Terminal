@@ -3,6 +3,16 @@
 **Status:** Implemented
 **Date:** 2026-04-14
 
+## Parity classification
+
+| Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
+| --- | --- | --- | --- | --- | --- |
+| FA (financial statements) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| MGMT (executive officers) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| COT (CFTC commitments of traders) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented research windows (fundamentals statements, management, CFTC positioning); no TA-Lib primitives in this round.
+
 ## Context
 
 ADR-108 wired the first wave of Godel-parity research surfaces (DES, PEERS,

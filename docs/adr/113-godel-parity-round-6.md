@@ -3,6 +3,18 @@
 ## Status
 Accepted — 2026-04-14
 
+## Parity classification
+
+| Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
+| --- | --- | --- | --- | --- | --- |
+| WEI (world equity indices) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| MOV (market movers) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| INDU (sector performance) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| CACS (corporate actions calendar) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| WACC (cost of capital, CAPM) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented research surfaces (world indices, movers, sector perf, corporate actions calendar, cost of capital); no TA-Lib primitives in this round.
+
 ## Context
 
 Round 5 (ADR-112) brought the per-symbol research surfaces to 25 commands

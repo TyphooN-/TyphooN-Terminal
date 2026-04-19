@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108, ADR-109, ADR-110, ADR-111, ADR-112, ADR-113, ADR-114
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
+| --- | --- | --- | --- | --- | --- |
+| HRA (historical return/risk analysis) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| DCF (discounted cash flow, FCFF) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| SVM (stock valuation model synthesis) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| OMON (options chain monitor) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| IVOL (implied vol rank / percentile) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented research surfaces (rolling return/risk, DCF, valuation synthesis, options chain, IV rank); no TA-Lib primitives in this round.
+
 ## Context
 
 Round 7 (ADR-114) closed the "light quant briefing" gap by adding WCR / BETA /

@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-171
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| WMA | Canonical (all terminals) | Yes (`WMA`) | Yes | Yes | No (deferred — ADR-188) |
+| RAINBOW | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| MESA_SINE | Canonical (all terminals) | Yes (`HT_SINE`) | Yes | Yes | No (deferred — ADR-188) |
+| FRAMA | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| IBS | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical indicators (linear-Weighted MA via TA-Lib `WMA`, Widner Rainbow recursive SMA fan, Ehlers MESA Sine Wave via `HT_SINE`, Ehlers FRAMA fractal-adaptive MA, Internal Bar Strength).
+
 ## Context
 
 Round 59 (ADR-171) shipped DEMARKER / GATOR / BW_MFI / VWMA / STDDEV.

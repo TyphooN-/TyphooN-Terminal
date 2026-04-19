@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-184
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| CDLMORNINGSTAR | No | Yes (`CDLMORNINGSTAR`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLEVENINGSTAR | No | Yes (`CDLEVENINGSTAR`) | Yes | Yes | No (deferred — ADR-188) |
+| CDL3BLACKCROWS | No | Yes (`CDL3BLACKCROWS`) | Yes | Yes | No (deferred — ADR-188) |
+| CDL3WHITESOLDIERS | No | Yes (`CDL3WHITESOLDIERS`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLDARKCLOUDCOVER | No | Yes (`CDLDARKCLOUDCOVER`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure TA-Lib — extends the `CDL*` family with three-bar patterns (Morning Star, Evening Star, Three Black Crows, Three White Soldiers) plus the two-bar Dark Cloud Cover, all reusing the Round-72 `cdl_scan` helper verbatim.
+
 ## Context
 
 Round 72 (ADR-184) opened the TA-Lib `CDL*` candlestick pattern

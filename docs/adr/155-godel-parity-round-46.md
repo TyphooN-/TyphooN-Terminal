@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-154
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| PPO | Canonical (all terminals) | Yes (`PPO`) | Yes | Yes | No (deferred — ADR-188) |
+| DPO | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| KST | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| ULTOSC | No | Yes (`ULTOSC`) | Yes | Yes | No (deferred — ADR-188) |
+| WILLR | Canonical (all terminals) | Yes (`WILLR`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical oscillators (PPO via TA-Lib `PPO`, DPO, KST, Williams %R via `WILLR`); Ultimate Oscillator is a TA-Lib-only primitive (`ULTOSC`) — not universally present on all terminals.
+
 ## Context
 
 Round 45 (ADR-154) shipped VORTEX/CHOP/OBV/TRIX/HMA, taking HP-local

@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-143
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| KSNORM | No | No | Yes | Yes | No (deferred — ADR-188) |
+| ADTEST | No | No | Yes | Yes | No (deferred — ADR-188) |
+| LMOM | No | No | Yes | Yes | No (deferred — ADR-188) |
+| KYLELAM | No | No | Yes | Yes | No (deferred — ADR-188) |
+| PEAKOVER | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical econometric primitives (Kolmogorov-Smirnov normality, Anderson-Darling normality, Hosking L-moments, Kyle's lambda price-impact, EVT Peaks-Over-Threshold) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 35 (ADR-143) shipped ROBVOL/RENYIENT/RETQUANT/MSENT/EWMAVOL, pushing

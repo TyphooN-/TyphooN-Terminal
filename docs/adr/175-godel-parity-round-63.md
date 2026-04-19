@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-174
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| LINEARREG_SLOPE | No | Yes (`LINEARREG_SLOPE`) | Yes | Yes | No (deferred — ADR-188) |
+| HT_DCPERIOD | No | Yes (`HT_DCPERIOD`) | Yes | Yes | No (deferred — ADR-188) |
+| HT_TRENDMODE | No | Yes (`HT_TRENDMODE`) | Yes | Yes | No (deferred — ADR-188) |
+| ACCBANDS | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| STOCHF | No | Yes (`STOCHF`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** mixed — TA-Lib-only primitives (`LINEARREG_SLOPE` raw least-squares slope, `HT_DCPERIOD` Hilbert dominant-cycle period, `HT_TRENDMODE` trend/cycle regime classifier, `STOCHF` unsmoothed fast stochastic) plus Acceleration Bands (Price Headley's canonical range-adaptive volatility envelope).
+
 ## Context
 
 Round 62 (ADR-174) shipped MASSINDEX / NATR / TTM_SQUEEZE / FORCE_INDEX /

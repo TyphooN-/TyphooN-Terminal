@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108, ADR-109, ADR-110, ADR-111, ADR-112, ADR-113, ADR-114, ADR-115, ADR-116
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
+| --- | --- | --- | --- | --- | --- |
+| LEV (debt leverage & coverage) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| ACRL (earnings quality / accruals) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| RVOL (realized volatility cone) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| FCFY (FCF yield / dividend sustainability) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| SHRT (short interest / days-to-cover) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented research surfaces (credit leverage, earnings quality, realized vol cone, FCF yield, short interest); no TA-Lib primitives in this round.
+
 ## Context
 
 Round 9 (ADR-116) closed the "time-series pattern analytics" gap with

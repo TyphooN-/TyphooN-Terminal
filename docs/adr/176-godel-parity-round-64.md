@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-175
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| LINEARREG | No | Yes (`LINEARREG`) | Yes | Yes | No (deferred — ADR-188) |
+| LINEARREG_ANGLE | No | Yes (`LINEARREG_ANGLE`) | Yes | Yes | No (deferred — ADR-188) |
+| HT_DCPHASE | No | Yes (`HT_DCPHASE`) | Yes | Yes | No (deferred — ADR-188) |
+| HT_SINE | No | Yes (`HT_SINE`) | Yes | Yes | No (deferred — ADR-188) |
+| HT_PHASOR | No | Yes (`HT_PHASOR`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure TA-Lib — five TA-Lib-only primitives completing the LINEARREG family (`LINEARREG` fitted value, `LINEARREG_ANGLE` slope-in-degrees) and filling out the Hilbert-transform cycle-analysis toolkit (`HT_DCPHASE`, `HT_SINE`, `HT_PHASOR`).
+
 ## Context
 
 Round 63 (ADR-175) shipped LINEARREG_SLOPE / HT_DCPERIOD / HT_TRENDMODE

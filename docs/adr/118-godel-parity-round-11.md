@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108, ADR-109, ADR-110, ADR-111, ADR-112, ADR-113, ADR-114, ADR-115, ADR-116, ADR-117
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
+| --- | --- | --- | --- | --- | --- |
+| ALTZ (Altman Z-Score) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| PTFS (Piotroski F-Score) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| VOLE (OHLC volatility estimators: Parkinson / GK / RS / YZ) | No | No (literature formulas) | Yes | Yes | No (deferred — ADR-188) |
+| EPSB (EPS beat streak) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| PTD (price target dispersion) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** mostly Godel-Terminal-documented (composite risk and consensus surfaces: Altman Z, Piotroski F, EPS streak, PT dispersion); VOLE bundles the OHLC volatility-estimator literature (Parkinson / Garman-Klass / Rogers-Satchell / Yang-Zhang) which are classical quant formulas, not TA-Lib functions.
+
 ## Context
 
 Round 10 (ADR-117) closed the "capital structure and cash-flow quality"

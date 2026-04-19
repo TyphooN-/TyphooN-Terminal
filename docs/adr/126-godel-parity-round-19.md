@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-125
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| DVDRANK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| EARMRANK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| UPDGRANK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| GY | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| DES | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented rank + time-series stat surfaces (dividend-growth rank, earnings-momentum rank, upgrade/downgrade rank, gap-yearly, daily-event streak); no TA-Lib primitives in this round.
+
 ## Context
 
 Round 18 (ADR-125) shipped LEVRANK / OPERANK / FQMRANK / LIQRANK / SURPSTK

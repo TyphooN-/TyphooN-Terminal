@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-134
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| OMEGA | No | No | Yes | Yes | No (deferred — ADR-188) |
+| DFA | No | No | Yes | Yes | No (deferred — ADR-188) |
+| BURKE | No | No | Yes | Yes | No (deferred — ADR-188) |
+| MONTHSEAS | No | No | Yes | Yes | No (deferred — ADR-188) |
+| ROLLSPRD | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical econometric primitives (Omega ratio, detrended fluctuation analysis, Burke ratio, monthly calendar seasonality, Roll implicit bid-ask spread) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 26 (ADR-134) shipped the core drawdown/liquidity/normality triad

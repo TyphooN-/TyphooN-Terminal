@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-160
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| DEMA | Canonical (all terminals) | Yes (`DEMA`) | Yes | Yes | No (deferred — ADR-188) |
+| TEMA | Canonical (all terminals) | Yes (`TEMA`) | Yes | Yes | No (deferred — ADR-188) |
+| LINREG | Canonical (all terminals) | Yes (`LINEARREG` / `LINEARREG_SLOPE` / `LINEARREG_INTERCEPT` / `LINEARREG_ANGLE`) | Yes | Yes | No (deferred — ADR-188) |
+| PIVOTS | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| HEIKIN | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical primitives common across all terminals (Mulloy DEMA via TA-Lib `DEMA`, TEMA via `TEMA`, OLS linear regression channel via `LINEARREG` family, classic floor-trader pivots, Heikin-Ashi candles).
+
 ## Context
 
 Round 50 (ADR-160) shipped STOCH/MACD/VWAP/MCGD/RWI, taking HP-local

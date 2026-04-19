@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-130
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| AUTOCOR | No | No | Yes | Yes | No (deferred — ADR-188) |
+| HURST | No | No | Yes | Yes | No (deferred — ADR-188) |
+| HITRATE | No | No | Yes | Yes | No (deferred — ADR-188) |
+| GLASYM | No | No | Yes | Yes | No (deferred — ADR-188) |
+| VOLRATIO | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical time-series primitives (serial autocorrelation, Hurst R/S long-memory, hit-rate, gain/loss asymmetry, volume accumulation ratio) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 22 (ADR-129) shipped a five-surface bundle of pure symbol-local

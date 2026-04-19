@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-180
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| MIN | No | Yes (`MIN`) | Yes | Yes | No (deferred — ADR-188) |
+| MAX | No | Yes (`MAX`) | Yes | Yes | No (deferred — ADR-188) |
+| MINMAX | No | Yes (`MINMAX`) | Yes | Yes | No (deferred — ADR-188) |
+| MININDEX | No | Yes (`MININDEX`) | Yes | Yes | No (deferred — ADR-188) |
+| MAXINDEX | No | Yes (`MAXINDEX`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure TA-Lib — the rolling-window extrema family (`MIN`, `MAX`, `MINMAX` levels + range) plus the recency scalars (`MININDEX`, `MAXINDEX` bars-since-extreme).
+
 ## Context
 
 Round 68 (ADR-180) shipped the TA-Lib rate-of-change family plus CORREL

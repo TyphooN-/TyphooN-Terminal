@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-183
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| CDLDOJI | No | Yes (`CDLDOJI`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLHAMMER | No | Yes (`CDLHAMMER`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLSHOOTINGSTAR | No | Yes (`CDLSHOOTINGSTAR`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLENGULFING | No | Yes (`CDLENGULFING`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLHARAMI | No | Yes (`CDLHARAMI`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure TA-Lib — opens the TA-Lib `CDL*` candlestick-pattern family with five common one- and two-bar formations (Doji, Hammer, Shooting Star, Engulfing, Harami) and establishes the shared `candle_metrics` + `cdl_scan` plumbing for future CDL* rounds.
+
 ## Context
 
 Round 71 (ADR-183) closed out five orphan TA-Lib primitives from

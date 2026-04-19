@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108, ADR-109, ADR-110, ADR-111, ADR-112, ADR-113, ADR-114, ADR-115, ADR-116, ADR-117, ADR-118, ADR-119
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
+| --- | --- | --- | --- | --- | --- |
+| MOM (Jegadeesh-Titman 12-1 momentum score) | Yes | No (academic factor) | Yes | Yes | No (deferred — ADR-188) |
+| LIQ (liquidity profile, Amihud+Corwin-Schultz) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| BREAK (breakout proximity) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| CCRL (cash conversion cycle) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| CREDIT (unified credit score, ALTZ+PTFS+LEV+ACRL fusion) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented composite surfaces (12-1 momentum, liquidity profile, breakout proximity, cash conversion cycle, fused credit score); no TA-Lib primitives in this round.
+
 ## Context
 
 Round 12 (ADR-119) shipped the "insider sentiment / dividend growth /

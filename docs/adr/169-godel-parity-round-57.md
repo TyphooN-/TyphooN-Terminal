@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-168
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| KDJ | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| QQE | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| PMO | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| CFO | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| TMF | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical indicators (Chinese KDJ stochastic variant, Livshin QQE smoothed RSI, Pring Price Momentum Oscillator, Chande Forecast Oscillator, Twiggs Money Flow); none are TA-Lib primitives on their own.
+
 ## Context
 
 Round 56 (ADR-168) shipped GMMA / MAENV / ADL / VHF / VROC. Round 57

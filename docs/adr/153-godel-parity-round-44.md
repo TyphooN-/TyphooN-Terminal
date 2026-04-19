@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-152
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| ADX | Canonical (all terminals) | Yes (`ADX` / `DX` / `PLUS_DI` / `MINUS_DI`) | Yes | Yes | No (deferred — ADR-188) |
+| CCI | Canonical (all terminals) | Yes (`CCI`) | Yes | Yes | No (deferred — ADR-188) |
+| CMF | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| MFI | Canonical (all terminals) | Yes (`MFI`) | Yes | Yes | No (deferred — ADR-188) |
+| PSAR | Canonical (all terminals) | Yes (`SAR` / `SAREXT`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical-analysis primitives common across all terminals (Wilder ADX via TA-Lib `ADX`, Lambert CCI via `CCI`, Chaikin Money Flow, Money Flow Index via `MFI`, Wilder Parabolic SAR via `SAR`). All except CMF are TA-Lib primitives.
+
 ## Context
 
 Round 43 (ADR-152) shipped ICHIMOKU/SUPERTREND/KELTNER/FISHER/AROON,

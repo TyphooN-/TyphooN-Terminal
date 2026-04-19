@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108, ADR-109, ADR-110, ADR-111, ADR-112, ADR-113, ADR-114, ADR-115
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
+| --- | --- | --- | --- | --- | --- |
+| SEAG (seasonality) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| COR (correlation matrix vs peers) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| TRA (total return analysis) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| TECH (technical indicators snapshot) | Canonical (all terminals) | No (compositional) | Yes | Yes | No (deferred — ADR-188) |
+| SKEW (volatility skew) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** mostly Godel-Terminal-documented research surfaces (seasonality, correlation, total return, vol skew); TECH bundles several canonical indicators into one packet-oriented view but is not a new indicator itself.
+
 ## Context
 
 Round 8 (ADR-115) closed the "price-derived risk analytics + fair value anchor"

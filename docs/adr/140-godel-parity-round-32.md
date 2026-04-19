@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-139
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| ENTROPY | No | No | Yes | Yes | No (deferred — ADR-188) |
+| RACHEV | No | No | Yes | Yes | No (deferred — ADR-188) |
+| GPR | No | No | Yes | Yes | No (deferred — ADR-188) |
+| PACF | No | No | Yes | Yes | No (deferred — ADR-188) |
+| APEN | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical econometric primitives (Shannon entropy, Rachev tail-asymmetry ratio, Gain-to-Pain + Profit Factor, partial autocorrelation PACF, approximate entropy ApEn) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 31 (ADR-139) shipped HILLTAIL/ARCHLM/PAINRATIO/CUSUM/CFVAR,

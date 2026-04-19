@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-155
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| MASS | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| CHAIKOSC | Canonical (all terminals) | Yes (`ADOSC`) | Yes | Yes | No (deferred — ADR-188) |
+| KLINGER | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| STOCHRSI | Canonical (all terminals) | Yes (`STOCHRSI`) | Yes | Yes | No (deferred — ADR-188) |
+| AWESOME | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical oscillators (Mass Index, Chaikin Oscillator via TA-Lib `ADOSC`, Klinger Volume Oscillator, Stochastic RSI via `STOCHRSI`, Awesome Oscillator).
+
 ## Context
 
 Round 46 (ADR-155) shipped PPO/DPO/KST/ULTOSC/WILLR, taking HP-local

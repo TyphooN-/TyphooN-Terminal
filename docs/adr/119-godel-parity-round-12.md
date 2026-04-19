@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108, ADR-109, ADR-110, ADR-111, ADR-112, ADR-113, ADR-114, ADR-115, ADR-116, ADR-117, ADR-118
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
+| --- | --- | --- | --- | --- | --- |
+| MNGR (insider activity bias) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| DIVG (dividend growth analysis) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| EARM (earnings momentum trend) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| SECTR (sector rotation strength) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| UPDM (upgrade/downgrade momentum) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented composite surfaces (insider bias, dividend growth, earnings momentum, sector rotation, analyst rotation); no TA-Lib primitives in this round.
+
 ## Context
 
 Round 11 (ADR-118) closed the "composite risk and analyst consensus" gap

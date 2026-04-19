@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-135
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| PARKINSON | No | No | Yes | Yes | No (deferred — ADR-188) |
+| GKVOL | No | No | Yes | Yes | No (deferred — ADR-188) |
+| RSVOL | No | No | Yes | Yes | No (deferred — ADR-188) |
+| CVAR | No | No | Yes | Yes | No (deferred — ADR-188) |
+| DOWEFFECT | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical range-based volatility + coherent risk + weekday-seasonality primitives (Parkinson, Garman-Klass, Rogers-Satchell, CVaR/Expected Shortfall, day-of-week effect) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 27 (ADR-135) shipped OMEGA/DFA/BURKE/MONTHSEAS/ROLLSPRD —

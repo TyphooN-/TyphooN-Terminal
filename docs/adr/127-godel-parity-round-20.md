@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-126
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| DVDYIELDRANK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| SHRANK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| ATRANN | Canonical (all terminals) | Yes (`ATR`) | Yes | Yes | No (deferred — ADR-188) |
+| DDHIST | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| PRICEPERF | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** mostly Godel-Terminal-documented rank + price-history surfaces (dividend yield rank, short-interest rank, drawdown history, multi-horizon performance); ATRANN is a Wilder ATR-annualized volatility overlay using the canonical TA-Lib `ATR` primitive.
+
 ## Context
 
 Round 19 (ADR-126) shipped DVDRANK / EARMRANK / UPDGRANK / GY / DES and

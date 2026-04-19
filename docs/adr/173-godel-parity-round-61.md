@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-172
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| LAGUERRE_RSI | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| ZIGZAG | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| PGO | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| HT_TRENDLINE | No | Yes (`HT_TRENDLINE`) | Yes | Yes | No (deferred — ADR-188) |
+| MIDPOINT | No | Yes (`MIDPOINT` / `MIDPRICE`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** mixed — canonical technical indicators (Laguerre RSI, ZigZag percent-threshold pivots, Pretty Good Oscillator) plus TA-Lib-only primitives (`HT_TRENDLINE` Hilbert instantaneous trendline, `MIDPOINT` / `MIDPRICE`).
+
 ## Context
 
 Round 60 (ADR-172) shipped WMA / RAINBOW / MESA_SINE / FRAMA / IBS.

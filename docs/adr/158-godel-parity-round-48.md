@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-157
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| EFI | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| EMV | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| NVI | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| PVI | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| COPPOCK | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical volume-flow and long-term-momentum oscillators common across all terminals (Elder Force Index, Ease of Movement, Negative/Positive Volume Index, Coppock Curve); none are in the TA-Lib catalog.
+
 ## Context
 
 Round 47 (ADR-156) shipped MASS/CHAIKOSC/KLINGER/STOCHRSI/AWESOME,

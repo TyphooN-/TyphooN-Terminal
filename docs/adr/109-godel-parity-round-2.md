@@ -3,6 +3,17 @@
 **Status:** Implemented
 **Date:** 2026-04-13
 
+## Parity classification
+
+| Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
+| --- | --- | --- | --- | --- | --- |
+| DVD (dividend history) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| EEB (forward earnings estimates) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| UPDG (upgrades/downgrades) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| GY (Treasury yield curve) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented research windows (dividend history, forward earnings, analyst rating changes, Treasury curve); no TA-Lib primitives in this round.
+
 ## Context
 
 ADR-108 wired the first wave of Godel-Terminal research windows (DES, PEERS,

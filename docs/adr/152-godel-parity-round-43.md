@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-151
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| ICHIMOKU | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| SUPERTREND | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| KELTNER | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| FISHER | No | No | Yes | Yes | No (deferred — ADR-188) |
+| AROON | Canonical (all terminals) | Yes (`AROON` / `AROONOSC`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical overlays common across all terminals (Ichimoku cloud, SuperTrend trailing ATR channel, Keltner bands, Aroon oscillator via TA-Lib `AROON` / `AROONOSC`); Ehlers Fisher Transform is not in TA-Lib catalog.
+
 ## Context
 
 Round 42 (ADR-151) shipped SQUEEZE/SQUEEZERANK/BBSQUEEZE/DONCHIAN/KAMA,

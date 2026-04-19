@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-178
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| PLUS_DI | No | Yes (`PLUS_DI`) | Yes | Yes | No (deferred — ADR-188) |
+| MINUS_DI | No | Yes (`MINUS_DI`) | Yes | Yes | No (deferred — ADR-188) |
+| PLUS_DM | No | Yes (`PLUS_DM`) | Yes | Yes | No (deferred — ADR-188) |
+| MINUS_DM | No | Yes (`MINUS_DM`) | Yes | Yes | No (deferred — ADR-188) |
+| DX | No | Yes (`DX`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure TA-Lib — the five Wilder Directional Movement System intermediates (`PLUS_DI`, `MINUS_DI`, `PLUS_DM`, `MINUS_DM`, `DX`) that underlie ADX (ADR-136) and ADXR (ADR-177).
+
 ## Context
 
 Round 66 (ADR-178) shipped the TA-Lib price-transform primitives

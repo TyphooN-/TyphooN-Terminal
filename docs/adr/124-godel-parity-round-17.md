@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-123
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| SIZEF | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| MOMF | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| PEADRANK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| FQM | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| REVRANK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented factor-rank / screen surfaces (size factor, momentum rank, PEAD rank, fundamental quality meter, revenue-CAGR rank); no TA-Lib primitives in this round.
+
 ## Context
 
 Round 16 (ADR-123) shipped VRK / QRK / RRK (rank overlays on VAL / QUAL

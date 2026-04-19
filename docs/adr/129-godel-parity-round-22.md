@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-128
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| RETSKEW | No | No | Yes | Yes | No (deferred — ADR-188) |
+| RETKURT | No | No | Yes | Yes | No (deferred — ADR-188) |
+| TAILR | No | No | Yes | Yes | No (deferred — ADR-188) |
+| RUNLEN | No | No | Yes | Yes | No (deferred — ADR-188) |
+| DAYRANGE | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical return-distribution and behavior primitives (skewness, excess kurtosis, tail ratio, up/down run length, daily-range compression) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 21 (ADR-128) shipped BETARANK / PEGRANK / FHIGHLOW / RVCONE /

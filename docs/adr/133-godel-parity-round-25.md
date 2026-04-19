@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-132
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| DOWNVOL | No | No | Yes | Yes | No (deferred — ADR-188) |
+| SHARPR | No | No | Yes | Yes | No (deferred — ADR-188) |
+| EFFRATIO | No | No | Yes | Yes | No (deferred — ADR-188) |
+| WICKBIAS | No | No | Yes | Yes | No (deferred — ADR-188) |
+| VOLOFVOL | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical risk-return primitives (downside deviation + Sortino, Sharpe, Kaufman efficiency ratio, wick-bias, vol-of-vol) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 24 (ADR-132) closed out five canonical HP-local single-series

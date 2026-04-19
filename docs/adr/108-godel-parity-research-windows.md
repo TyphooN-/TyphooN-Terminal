@@ -3,6 +3,21 @@
 **Status:** Implemented
 **Date:** 2026-04-13
 
+## Parity classification
+
+| Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
+| --- | --- | --- | --- | --- | --- |
+| DES (company overview) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| IPO Calendar | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| ERN (earnings history) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| PEERS | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| PRESS | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| SENTIMENT | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| TRANSCRIPTS | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| GLCO (commodities) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented research windows; no TA-Lib primitives in this round.
+
 ## Context
 
 ADR-107 delivered multi-source news (replacing the Finnhub-only pane) but left

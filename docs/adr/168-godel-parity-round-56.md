@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-167
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| GMMA | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| MAENV | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| ADL | Canonical (all terminals) | Yes (`AD`) | Yes | Yes | No (deferred — ADR-188) |
+| VHF | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| VROC | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical indicators (Guppy Multiple MA fan, MA envelopes, Chaikin Accumulation/Distribution line via TA-Lib `AD`, Vertical Horizontal Filter, Volume ROC).
+
 ## Context
 
 Round 55 (ADR-167) shipped SMMA / ALLIGATOR / CRSI / SEB / IMI. Round

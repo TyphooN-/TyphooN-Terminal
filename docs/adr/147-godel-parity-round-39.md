@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-146
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| GARCH11 | No | No | Yes | Yes | No (deferred — ADR-188) |
+| SADF | No | No | Yes | Yes | No (deferred — ADR-188) |
+| CORDIM | No | No | Yes | Yes | No (deferred — ADR-188) |
+| SKSPEC | No | No | Yes | Yes | No (deferred — ADR-188) |
+| AUTOMI | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical econometric primitives (Bollerslev GARCH(1,1), PWY Sup-ADF explosive-root test, Grassberger-Procaccia correlation dimension, rolling-skew stability spectrum, auto-mutual-information) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 38 (ADR-146) shipped BNSJUMP/PPROOT/MFDFA/HILLKS/TSI, pushing

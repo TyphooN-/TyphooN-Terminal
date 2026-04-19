@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-136
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| STERLING | No | No | Yes | Yes | No (deferred — ADR-188) |
+| KELLYF | No | No | Yes | Yes | No (deferred — ADR-188) |
+| LJUNGB | No | No | Yes | Yes | No (deferred — ADR-188) |
+| RUNSTEST | No | No | Yes | Yes | No (deferred — ADR-188) |
+| ZERORET | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical risk + econometric primitives (Sterling ratio, Kelly fraction, Ljung-Box Q, Wald-Wolfowitz runs test, Lesmond-Ogden-Trzcinka zero-return liquidity proxy) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 28 (ADR-136) shipped PARKINSON/GKVOL/RSVOL/CVAR/DOWEFFECT —

@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-124
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| LEVRANK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| OPERANK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| FQMRANK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| LIQRANK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| SURPSTK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented rank / streak surfaces (leverage rank, operating quality rank, FQM rank, liquidity rank, earnings-surprise streak); no TA-Lib primitives in this round.
+
 ## Context
 
 Round 17 (ADR-124) shipped SIZEF / MOMF / PEADRANK / FQM / REVRANK,

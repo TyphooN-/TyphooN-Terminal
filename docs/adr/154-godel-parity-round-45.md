@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-153
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| VORTEX | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| CHOP | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| OBV | Canonical (all terminals) | Yes (`OBV`) | Yes | Yes | No (deferred — ADR-188) |
+| TRIX | Canonical (all terminals) | Yes (`TRIX`) | Yes | Yes | No (deferred — ADR-188) |
+| HMA | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical-analysis primitives common across all terminals (Vortex, Choppiness Index, On-Balance Volume via TA-Lib `OBV`, TRIX via `TRIX`, Hull Moving Average). Vortex / Choppiness / HMA are not in the TA-Lib catalog.
+
 ## Context
 
 Round 44 (ADR-153) shipped ADX/CCI/CMF/MFI/PSAR, taking HP-local

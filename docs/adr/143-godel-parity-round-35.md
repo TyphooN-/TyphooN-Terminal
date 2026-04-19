@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-142
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| ROBVOL | No | No | Yes | Yes | No (deferred — ADR-188) |
+| RENYIENT | No | No | Yes | Yes | No (deferred — ADR-188) |
+| RETQUANT | No | No | Yes | Yes | No (deferred — ADR-188) |
+| MSENT | No | No | Yes | Yes | No (deferred — ADR-188) |
+| EWMAVOL | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical econometric primitives (robust MAD/IQR volatility, Rényi collision entropy, return quantile profile, multiscale entropy, RiskMetrics EWMA volatility) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 34 (ADR-142) shipped SAMPEN/PERMEN/RECFACT/KPSS/SPECENT,

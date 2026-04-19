@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-176
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| MIDPRICE | No | Yes (`MIDPRICE`) | Yes | Yes | No (deferred — ADR-188) |
+| APO | No | Yes (`APO`) | Yes | Yes | No (deferred — ADR-188) |
+| MOM | No | Yes (`MOM`) | Yes | Yes | No (deferred — ADR-188) |
+| SAREXT | No | Yes (`SAREXT`) | Yes | Yes | No (deferred — ADR-188) |
+| ADXR | No | Yes (`ADXR`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure TA-Lib — five TA-Lib-only primitives covering raw range-midpoint (`MIDPRICE`), absolute price oscillator (`APO`), raw momentum (`MOM`), extended asymmetric parabolic SAR (`SAREXT`), and ADX Rating (`ADXR`).
+
 ## Context
 
 Round 64 (ADR-176) shipped LINEARREG / LINEARREG_ANGLE / HT_DCPHASE /

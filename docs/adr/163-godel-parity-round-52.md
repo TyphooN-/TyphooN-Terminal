@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-162
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| ALMA | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| ZLEMA | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| ELDERRAY | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| TSF | No | Yes (`TSF`) | Yes | Yes | No (deferred — ADR-188) |
+| RVI | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical indicators (Arnaud Legoux MA, Zero-Lag EMA, Elder Bull/Bear Power, Ehlers Relative Vigor Index); TSF (Time Series Forecast) is a TA-Lib-only primitive (`TSF`) not broadly visible on chart terminals.
+
 ## Context
 
 Round 51 (ADR-161) shipped DEMA/TEMA/LINREG/PIVOTS/HEIKIN, taking

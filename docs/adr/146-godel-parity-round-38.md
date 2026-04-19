@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-145
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| BNSJUMP | No | No | Yes | Yes | No (deferred — ADR-188) |
+| PPROOT | No | No | Yes | Yes | No (deferred — ADR-188) |
+| MFDFA | No | No | Yes | Yes | No (deferred — ADR-188) |
+| HILLKS | No | No | Yes | Yes | No (deferred — ADR-188) |
+| TSI | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical econometric primitives (BNS jump test, Phillips-Perron unit-root, multifractal DFA, Hill tail goodness-of-fit, Blau True Strength Index) — not documented Godel Terminal features; none in the TA-Lib catalog (TSI is Blau 1991, not TA-Lib); classical quant-literature stats.
+
 ## Context
 
 Round 37 (ADR-145) shipped HIGUCHI/PICKANDS/KAPPA3/LYAPUNOV/RANKAC, pushing

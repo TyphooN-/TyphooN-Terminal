@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-122
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| VRK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| QRK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| RRK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| RELEPSGR | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| PEAD | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented factor-rank / event-drift surfaces (sector rank of VAL/QUAL/RISK composites, relative EPS growth, post-earnings drift); no TA-Lib primitives in this round.
+
 ## Context
 
 Round 15 (ADR-122) shipped VAL / QUAL / RISK / INSSTRK / COVG and

@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-179
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| ROC | No | Yes (`ROC`) | Yes | Yes | No (deferred — ADR-188) |
+| ROCP | No | Yes (`ROCP`) | Yes | Yes | No (deferred — ADR-188) |
+| ROCR | No | Yes (`ROCR`) | Yes | Yes | No (deferred — ADR-188) |
+| ROCR100 | No | Yes (`ROCR100`) | Yes | Yes | No (deferred — ADR-188) |
+| CORREL | No | Yes (`CORREL`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure TA-Lib — the four ROC-family scaling variants (`ROC` raw delta, `ROCP` percentage, `ROCR` ratio, `ROCR100` index-100) plus `CORREL` specialised as lag-1 autocorrelation.
+
 ## Context
 
 Round 67 (ADR-179) shipped the Wilder Directional Movement System

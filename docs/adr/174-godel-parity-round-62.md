@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-173
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| MASSINDEX | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| NATR | No | Yes (`NATR`) | Yes | Yes | No (deferred — ADR-188) |
+| TTM_SQUEEZE | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| FORCE_INDEX | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| TRANGE | No | Yes (`TRANGE`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** mixed — canonical technical indicators (Donald Dorsey Mass Index, TTM Squeeze regime, Elder Force Index) plus TA-Lib-only primitives (`NATR` normalised ATR, `TRANGE` raw single-bar True Range).
+
 ## Context
 
 Round 61 (ADR-173) shipped LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE /

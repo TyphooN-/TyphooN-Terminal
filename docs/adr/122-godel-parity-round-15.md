@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108, ADR-109, ADR-110, ADR-111, ADR-112, ADR-113, ADR-114, ADR-115, ADR-116, ADR-117, ADR-118, ADR-119, ADR-120, ADR-121
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| VAL | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| QUAL | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| RISK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| INSSTRK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| COVG | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented factor-rank / screen surfaces (value, quality, risk, insider streaks, analyst coverage breadth); no TA-Lib primitives in this round.
+
 ## Context
 
 Round 14 (ADR-121) shipped GROWM / FLOW / REGIME / RELVOL / MARGINS

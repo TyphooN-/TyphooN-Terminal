@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-127
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| BETARANK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| PEGRANK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| FHIGHLOW | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| RVCONE | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| CALPB | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** Godel-Terminal-documented rank + price-history surfaces (beta rank, PEG rank, realized-vol cone, calendar-period breakdowns); FHIGHLOW is a canonical 52-week high/low distance measure common across all terminals. No TA-Lib primitives in this round.
+
 ## Context
 
 Round 20 (ADR-127) shipped DVDYIELDRANK / SHRANK / ATRANN / DDHIST /

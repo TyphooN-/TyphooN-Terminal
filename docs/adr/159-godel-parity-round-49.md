@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-158
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| CMO | Canonical (all terminals) | Yes (`CMO`) | Yes | Yes | No (deferred — ADR-188) |
+| QSTICK | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| DISPARITY | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| BOP | No | Yes (`BOP`) | Yes | Yes | No (deferred — ADR-188) |
+| SCHAFF | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical momentum / trend-cycle oscillators (Chande CMO via TA-Lib `CMO`, Q-Stick, Disparity Index, Schaff Trend Cycle); Balance of Power is a TA-Lib-only primitive (`BOP`) not broadly visible on chart terminals.
+
 ## Context
 
 Round 48 (ADR-158) shipped EFI/EMV/NVI/PVI/COPPOCK, taking HP-local

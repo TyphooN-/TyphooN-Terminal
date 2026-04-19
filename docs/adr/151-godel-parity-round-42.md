@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-150
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| SQUEEZE | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| SQUEEZERANK | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| BBSQUEEZE | Canonical (all terminals) | Yes (`BBANDS`) | Yes | Yes | No (deferred — ADR-188) |
+| DONCHIAN | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| KAMA | Yes | Yes (`KAMA`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** mixed — Godel-documented composite short-squeeze score and rank watchlist; canonical technical overlays (Bollinger-band squeeze via TA-Lib `BBANDS`, Donchian N-bar channel, Kaufman Adaptive MA `KAMA`).
+
 ## Context
 
 Round 41 (ADR-150) shipped MCLEODLI/OUFIT/GPH/BURGSPEC/KENDALLTAU, taking

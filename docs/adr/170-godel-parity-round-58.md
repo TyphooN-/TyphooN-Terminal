@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-169
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| FRACTALS | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| IFT_RSI | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| MAMA | Canonical (all terminals) | Yes (`MAMA`) | Yes | Yes | No (deferred — ADR-188) |
+| COG | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| DIDI | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical indicators (Williams Fractals pivots, Ehlers Inverse Fisher RSI, Ehlers MESA Adaptive MA via TA-Lib `MAMA`, Ehlers Center of Gravity, Didi Aguiar 3-SMA crossover).
+
 ## Context
 
 Round 57 (ADR-169) shipped KDJ / QQE / PMO / CFO / TMF. Round 58

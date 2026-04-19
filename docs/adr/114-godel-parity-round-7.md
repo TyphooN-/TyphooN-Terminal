@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108, ADR-109, ADR-110, ADR-111, ADR-112, ADR-113
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
+| --- | --- | --- | --- | --- | --- |
+| WCR (world currency rates) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| BETA (rolling beta history) | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| DDM (Gordon dividend discount model) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| RV (relative valuation matrix) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+| FIGI (OpenFIGI identifier lookup) | Yes | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure Godel-Terminal-documented research surfaces (FX overview, rolling beta, DDM fair value, peer valuation matrix, FIGI lookup); no TA-Lib primitives in this round.
+
 ## Context
 
 Round 6 (ADR-113) closed the "global market context" gap by adding WEI / MOV /

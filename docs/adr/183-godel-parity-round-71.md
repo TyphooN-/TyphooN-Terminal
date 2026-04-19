@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-182
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| AROONOSC | No | Yes (`AROONOSC`) | Yes | Yes | No (deferred — ADR-188) |
+| MINMAXINDEX | No | Yes (`MINMAXINDEX`) | Yes | Yes | No (deferred — ADR-188) |
+| MACDEXT | No | Yes (`MACDEXT`) | Yes | Yes | No (deferred — ADR-188) |
+| MACDFIX | No | Yes (`MACDFIX`) | Yes | Yes | No (deferred — ADR-188) |
+| MAVP | No | Yes (`MAVP`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure TA-Lib — five orphan primitives completing partial families: `AROONOSC` standalone oscillator, `MINMAXINDEX` combined-indices extrema, `MACDEXT` configurable-MA MACD, `MACDFIX` fixed-12/26 MACD, `MAVP` variable-period moving average.
+
 ## Context
 
 Round 70 (ADR-182) shipped five mixed TA-Lib primitives (BBANDS / AD /

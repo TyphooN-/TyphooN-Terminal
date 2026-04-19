@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-148
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| DURBINWATSON | No | No | Yes | Yes | No (deferred — ADR-188) |
+| BDSTEST | No | No | Yes | Yes | No (deferred — ADR-188) |
+| BREUSCHPAGAN | No | No | Yes | Yes | No (deferred — ADR-188) |
+| TURNPTS | No | No | Yes | Yes | No (deferred — ADR-188) |
+| PERIODOGRAM | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical econometric primitives (Durbin-Watson AR(1) residual test, Brock-Dechert-Scheinkman nonlinear-iid test, Breusch-Pagan heteroskedasticity LM, Bartels turning-points test, Schuster periodogram) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 39 (ADR-147) shipped GARCH11/SADF/CORDIM/SKSPEC/AUTOMI, pushing

@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-170
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| DEMARKER | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| GATOR | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| BW_MFI | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| VWMA | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| STDDEV | Canonical (all terminals) | Yes (`STDDEV`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical indicators (DeMark Bounded Oscillator, Williams Gator Oscillator, Williams Market Facilitation Index, Volume-Weighted MA, rolling Standard Deviation via TA-Lib `STDDEV`).
+
 ## Context
 
 Round 58 (ADR-170) shipped FRACTALS / IFT_RSI / MAMA / COG / DIDI.

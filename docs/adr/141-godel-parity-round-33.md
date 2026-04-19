@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-140
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| UPR | No | No | Yes | Yes | No (deferred — ADR-188) |
+| LEVEREFF | No | No | Yes | Yes | No (deferred — ADR-188) |
+| DRAWDAR | No | No | Yes | Yes | No (deferred — ADR-188) |
+| VARHALF | No | No | Yes | Yes | No (deferred — ADR-188) |
+| GINI | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical econometric primitives (Upside Potential Ratio, Black leverage effect, Drawdown-at-Risk / CDaR, volatility half-life, Gini concentration of move magnitudes) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 32 (ADR-140) shipped ENTROPY/RACHEV/GPR/PACF/APEN,

@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-131
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| DRAWUP | No | No | Yes | Yes | No (deferred — ADR-188) |
+| GAPSTATS | No | No | Yes | Yes | No (deferred — ADR-188) |
+| VOLCLUSTER | No | No | Yes | Yes | No (deferred — ADR-188) |
+| CLOSEPLC | No | No | Yes | Yes | No (deferred — ADR-188) |
+| MRHL | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical HP-local primitives (rally history, overnight-gap stats, vol-clustering ACF, close placement, AR(1) mean-reversion half-life) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 23 (ADR-131) shipped five classical time-series surfaces for the

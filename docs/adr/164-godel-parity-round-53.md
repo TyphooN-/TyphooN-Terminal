@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-163
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| TRIMA | Canonical (all terminals) | Yes (`TRIMA`) | Yes | Yes | No (deferred — ADR-188) |
+| T3 | Canonical (all terminals) | Yes (`T3`) | Yes | Yes | No (deferred — ADR-188) |
+| VIDYA | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| SMI | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| PVT | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical indicators (Triangular MA via TA-Lib `TRIMA`, Tillson T3 via `T3`, Chande VIDYA adaptive MA, Blau Stochastic Momentum Index, Price-Volume Trend).
+
 ## Context
 
 Round 52 (ADR-163) shipped ALMA/ZLEMA/ELDERRAY/TSF/RVI, taking

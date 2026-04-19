@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-164
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| AC | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| CHVOL | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| BBWIDTH | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| ELDERIMP | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| RMI | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical indicators (Williams Accelerator Oscillator, Chaikin Volatility, Bollinger Bandwidth + percentile squeeze, Elder Impulse System, Altman Relative Momentum Index); none are TA-Lib primitives on their own.
+
 ## Context
 
 Round 53 (ADR-164) shipped TRIMA/T3/VIDYA/SMI/PVT, taking HP-local

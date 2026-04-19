@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-159
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| STOCH | Canonical (all terminals) | Yes (`STOCH` / `STOCHF`) | Yes | Yes | No (deferred — ADR-188) |
+| MACD | Canonical (all terminals) | Yes (`MACD` / `MACDEXT` / `MACDFIX`) | Yes | Yes | No (deferred — ADR-188) |
+| VWAP | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| MCGD | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+| RWI | Canonical (all terminals) | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** canonical technical oscillators / MAs common across all terminals (Lane Stochastic via TA-Lib `STOCH`, Appel MACD via `MACD`, rolling VWAP, McGinley Dynamic, Random Walk Index).
+
 ## Context
 
 Round 49 (ADR-159) shipped CMO/QSTICK/DISPARITY/BOP/SCHAFF, taking

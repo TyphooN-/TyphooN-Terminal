@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-177
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| AVGPRICE | No | Yes (`AVGPRICE`) | Yes | Yes | No (deferred — ADR-188) |
+| MEDPRICE | No | Yes (`MEDPRICE`) | Yes | Yes | No (deferred — ADR-188) |
+| TYPPRICE | No | Yes (`TYPPRICE`) | Yes | Yes | No (deferred — ADR-188) |
+| WCLPRICE | No | Yes (`WCLPRICE`) | Yes | Yes | No (deferred — ADR-188) |
+| VARIANCE | No | Yes (`VAR`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure TA-Lib — the four OHLC price-transform primitives (`AVGPRICE`, `MEDPRICE`, `TYPPRICE`, `WCLPRICE`) that feed downstream indicators plus the `VAR` base statistical variance primitive.
+
 ## Context
 
 Round 65 (ADR-177) shipped MIDPRICE / APO / MOM / SAREXT / ADXR. Round

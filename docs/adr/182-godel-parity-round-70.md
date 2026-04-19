@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-181
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| BBANDS | No | Yes (`BBANDS`) | Yes | Yes | No (deferred — ADR-188) |
+| AD | No | Yes (`AD`) | Yes | Yes | No (deferred — ADR-188) |
+| ADOSC | No | Yes (`ADOSC`) | Yes | Yes | No (deferred — ADR-188) |
+| SUM | No | Yes (`SUM`) | Yes | Yes | No (deferred — ADR-188) |
+| LINEARREG_INTERCEPT | No | Yes (`LINEARREG_INTERCEPT`) | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure TA-Lib — a mixed 5-pack closing partial families: `BBANDS` raw bands, TA-Lib `AD` / `ADOSC` parallels to existing ADL / CHAIKOSC, `SUM` rolling sum primitive, and `LINEARREG_INTERCEPT` completing the linear-regression family.
+
 ## Context
 
 Round 69 (ADR-181) shipped the TA-Lib rolling-extrema family (MIN /

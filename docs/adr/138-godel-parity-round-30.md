@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-137
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| PSR | No | No | Yes | Yes | No (deferred — ADR-188) |
+| ADF | No | No | Yes | Yes | No (deferred — ADR-188) |
+| MNKENDALL | No | No | Yes | Yes | No (deferred — ADR-188) |
+| BIPOWER | No | No | Yes | Yes | No (deferred — ADR-188) |
+| DDDUR | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical econometric primitives (Probabilistic Sharpe, Augmented Dickey-Fuller unit-root test, Mann-Kendall trend test, bipower jump decomposition, drawdown duration) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 29 (ADR-137) shipped STERLING/KELLYF/LJUNGB/RUNSTEST/ZERORET,

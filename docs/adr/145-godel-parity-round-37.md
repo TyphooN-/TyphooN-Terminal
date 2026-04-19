@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-144
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| HIGUCHI | No | No | Yes | Yes | No (deferred — ADR-188) |
+| PICKANDS | No | No | Yes | Yes | No (deferred — ADR-188) |
+| KAPPA3 | No | No | Yes | Yes | No (deferred — ADR-188) |
+| LYAPUNOV | No | No | Yes | Yes | No (deferred — ADR-188) |
+| RANKAC | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical econometric primitives (Higuchi fractal dimension, Pickands extreme-value index, Kaplan-Knowles kappa-3 ratio, Rosenstein Lyapunov exponent, Spearman rank autocorrelation) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 36 (ADR-144) shipped KSNORM/ADTEST/LMOM/KYLELAM/PEAKOVER, pushing

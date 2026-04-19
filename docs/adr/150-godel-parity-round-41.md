@@ -5,6 +5,18 @@
 **Supersedes/extends:** ADR-108 through ADR-149
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
 
+## Parity classification
+
+| Feature | Godel Terminal documented | TA-Lib primitive | Research packet | egui popup | Chart overlay |
+|---|---|---|---|---|---|
+| MCLEODLI | No | No | Yes | Yes | No (deferred — ADR-188) |
+| OUFIT | No | No | Yes | Yes | No (deferred — ADR-188) |
+| GPH | No | No | Yes | Yes | No (deferred — ADR-188) |
+| BURGSPEC | No | No | Yes | Yes | No (deferred — ADR-188) |
+| KENDALLTAU | No | No | Yes | Yes | No (deferred — ADR-188) |
+
+**Round classification:** pure quant/statistical econometric primitives (McLeod-Li squared-returns portmanteau, Ornstein-Uhlenbeck mean-reversion fit, Geweke-Porter-Hudak long-memory d, Burg maximum-entropy AR spectrum, Kendall's tau rank autocorrelation) — not documented Godel Terminal features and not TA-Lib catalog entries; classical quant-literature stats.
+
 ## Context
 
 Round 40 (ADR-149) shipped DURBINWATSON/BDSTEST/BREUSCHPAGAN/TURNPTS/PERIODOGRAM,
