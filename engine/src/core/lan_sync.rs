@@ -556,6 +556,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_cdl_shooting_star",
     "research_cdl_engulfing",
     "research_cdl_harami",
+    // ── ADR-185 Round 73 ────────────────────────────
+    "research_cdl_morning_star",
+    "research_cdl_evening_star",
+    "research_cdl_three_black_crows",
+    "research_cdl_three_white_soldiers",
+    "research_cdl_dark_cloud_cover",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -3242,6 +3248,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_cdl_morning_star" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_morning_star (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_evening_star" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_evening_star (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_three_black_crows" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_three_black_crows (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_three_white_soldiers" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_three_white_soldiers (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_dark_cloud_cover" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_dark_cloud_cover (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -3661,6 +3702,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_cdl_shooting_star" => Some("updated_at"),
         "research_cdl_engulfing" => Some("updated_at"),
         "research_cdl_harami" => Some("updated_at"),
+        // ── ADR-185 Round 73 ──
+        "research_cdl_morning_star" => Some("updated_at"),
+        "research_cdl_evening_star" => Some("updated_at"),
+        "research_cdl_three_black_crows" => Some("updated_at"),
+        "research_cdl_three_white_soldiers" => Some("updated_at"),
+        "research_cdl_dark_cloud_cover" => Some("updated_at"),
         _ => None,
     }
 }
