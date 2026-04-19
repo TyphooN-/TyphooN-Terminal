@@ -6996,6 +6996,106 @@ pub struct VarianceSnapshot {
     pub note: String,
 }
 
+// ── ADR-179 Round 67 ──────────────────────────────────────────────────────
+/// TA-Lib PLUS_DI — Wilder's Positive Directional Indicator.
+/// `+DI = 100 × (Wilder-smoothed +DM) / ATR` over 14-bar default.
+/// Measures upward directional movement strength: paired with −DI it
+/// forms the crossover signal under Wilder's Directional Movement System
+/// and feeds DX / ADX / ADXR (Rounds 31, 65).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PlusDiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub plus_di: f64,
+    pub plus_di_prev: f64,
+    pub minus_di: f64,                 // for crossover context
+    pub atr: f64,                      // Wilder-smoothed true range
+    pub last_close: f64,
+    pub plus_di_label: String,         // BULL_DOMINANT / BULL_LEAN / NEUTRAL / BEAR_LEAN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib MINUS_DI — Wilder's Negative Directional Indicator.
+/// `−DI = 100 × (Wilder-smoothed −DM) / ATR` over 14-bar default.
+/// Measures downward directional movement strength; mirror primitive of
+/// +DI under Wilder's DM System. Distinct from +DI's bull framing.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MinusDiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub minus_di: f64,
+    pub minus_di_prev: f64,
+    pub plus_di: f64,                  // for crossover context
+    pub atr: f64,                      // Wilder-smoothed true range
+    pub last_close: f64,
+    pub minus_di_label: String,        // BEAR_DOMINANT / BEAR_LEAN / NEUTRAL / BULL_LEAN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib PLUS_DM — Wilder's raw Positive Directional Movement.
+/// `+DM_t = max(0, H_t − H_{t−1})` only when that up-move exceeds
+/// `L_{t−1} − L_t`. Wilder-smoothed via the standard recursion
+/// `S_t = S_{t−1} − S_{t−1}/period + +DM_t`, the direct upstream of
+/// +DI (divides by ATR to normalise to 0–100).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PlusDmSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub plus_dm_raw: f64,              // latest bar's raw +DM
+    pub plus_dm_smoothed: f64,         // Wilder-smoothed Σ(+DM)
+    pub plus_dm_smoothed_prev: f64,
+    pub up_move: f64,                  // H_t − H_{t−1}
+    pub down_move: f64,                // L_{t−1} − L_t
+    pub last_close: f64,
+    pub plus_dm_label: String,         // BULL_PRESSURE / BULL_SOFT / NEUTRAL / BEAR_PRESSURE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib MINUS_DM — Wilder's raw Negative Directional Movement.
+/// `−DM_t = max(0, L_{t−1} − L_t)` only when that down-move exceeds
+/// `H_t − H_{t−1}`. Wilder-smoothed; direct upstream of −DI.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MinusDmSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub minus_dm_raw: f64,             // latest bar's raw −DM
+    pub minus_dm_smoothed: f64,        // Wilder-smoothed Σ(−DM)
+    pub minus_dm_smoothed_prev: f64,
+    pub up_move: f64,                  // H_t − H_{t−1}
+    pub down_move: f64,                // L_{t−1} − L_t
+    pub last_close: f64,
+    pub minus_dm_label: String,        // BEAR_PRESSURE / BEAR_SOFT / NEUTRAL / BULL_PRESSURE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib DX — Wilder's Directional Movement Index.
+/// `DX = 100 × |+DI − −DI| / (+DI + −DI)` — the unsmoothed directional
+/// dispersion that feeds ADX (Round 31) and ADXR (Round 65) via a
+/// further Wilder smoothing. DX alone is a raw directional-purity
+/// indicator: high when +DI and −DI diverge, regardless of sign.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DxSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub dx: f64,                       // 100·|+DI − −DI|/(+DI + −DI)
+    pub dx_prev: f64,
+    pub plus_di: f64,
+    pub minus_di: f64,
+    pub last_close: f64,
+    pub dx_label: String,              // STRONG_DIR / DIR / WEAK_DIR / NO_DIR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -30103,6 +30203,257 @@ pub fn compute_variance_snapshot(
     }
 }
 
+// ── ADR-179 Round 67 compute fns ────────────────────────────────────────────
+
+/// Build Wilder-smoothed +DM / −DM / TR / +DI / −DI series for the DMI
+/// family. Returns (plus_di, minus_di, atr, plus_smoothed, minus_smoothed,
+/// tr_smoothed, plus_dm_raw, minus_dm_raw) at the last bar, plus the
+/// previous-bar +DI / −DI / +DM smoothed / −DM smoothed for *_prev fields.
+/// Returns None if bars are insufficient.
+fn compute_dmi_series(
+    sorted: &[&HistoricalPriceRow], period: usize,
+) -> Option<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> {
+    let n = sorted.len();
+    // Need period+2 bars: period bars for Wilder seed + current + prior-smoothed history.
+    if n < period + 2 { return None; }
+    let mut tr = vec![0.0_f64; n];
+    let mut plus_dm = vec![0.0_f64; n];
+    let mut minus_dm = vec![0.0_f64; n];
+    for i in 1..n {
+        let hi = sorted[i].high;
+        let lo = sorted[i].low;
+        let pc = sorted[i - 1].close;
+        tr[i] = (hi - lo).max((hi - pc).abs()).max((lo - pc).abs());
+        let up_move = hi - sorted[i - 1].high;
+        let dn_move = sorted[i - 1].low - lo;
+        plus_dm[i] = if up_move > dn_move && up_move > 0.0 { up_move } else { 0.0 };
+        minus_dm[i] = if dn_move > up_move && dn_move > 0.0 { dn_move } else { 0.0 };
+    }
+    let p_f = period as f64;
+    let mut tr_smooth = vec![0.0_f64; n];
+    let mut plus_smooth = vec![0.0_f64; n];
+    let mut minus_smooth = vec![0.0_f64; n];
+    let mut plus_di = vec![0.0_f64; n];
+    let mut minus_di = vec![0.0_f64; n];
+    let mut atr = vec![0.0_f64; n];
+    tr_smooth[period] = tr[1..=period].iter().sum();
+    plus_smooth[period] = plus_dm[1..=period].iter().sum();
+    minus_smooth[period] = minus_dm[1..=period].iter().sum();
+    atr[period] = tr_smooth[period] / p_f;
+    if tr_smooth[period] > 0.0 {
+        plus_di[period] = 100.0 * plus_smooth[period] / tr_smooth[period];
+        minus_di[period] = 100.0 * minus_smooth[period] / tr_smooth[period];
+    }
+    for i in (period + 1)..n {
+        tr_smooth[i] = tr_smooth[i - 1] - tr_smooth[i - 1] / p_f + tr[i];
+        plus_smooth[i] = plus_smooth[i - 1] - plus_smooth[i - 1] / p_f + plus_dm[i];
+        minus_smooth[i] = minus_smooth[i - 1] - minus_smooth[i - 1] / p_f + minus_dm[i];
+        atr[i] = tr_smooth[i] / p_f;
+        if tr_smooth[i] > 0.0 {
+            plus_di[i] = 100.0 * plus_smooth[i] / tr_smooth[i];
+            minus_di[i] = 100.0 * minus_smooth[i] / tr_smooth[i];
+        }
+    }
+    Some((plus_di, minus_di, atr, plus_smooth, minus_smooth, tr_smooth, plus_dm, minus_dm))
+}
+
+/// Compute TA-Lib PLUS_DI — Wilder's Positive Directional Indicator (period 14).
+pub fn compute_plus_di_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PlusDiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    let min_bars = period + 2;
+    let series = compute_dmi_series(&sorted, period);
+    if n < min_bars || series.is_none() {
+        return PlusDiSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            plus_di_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let (plus_di, minus_di, atr, _ps, _ms, _ts, _pr, _mr) = series.unwrap();
+    let pdi_now = plus_di[n - 1];
+    let pdi_prev = plus_di[n - 2];
+    let mdi_now = minus_di[n - 1];
+    let diff = pdi_now - mdi_now;
+    let label = if diff > 10.0 { "BULL_DOMINANT" }
+        else if diff > 2.0 { "BULL_LEAN" }
+        else if diff < -10.0 { "BEAR_LEAN" }
+        else if diff < -2.0 { "BEAR_LEAN" }
+        else { "NEUTRAL" };
+    PlusDiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        plus_di: pdi_now, plus_di_prev: pdi_prev,
+        minus_di: mdi_now, atr: atr[n - 1],
+        last_close: sorted[n - 1].close,
+        plus_di_label: label.into(), note: String::new(),
+    }
+}
+
+/// Compute TA-Lib MINUS_DI — Wilder's Negative Directional Indicator (period 14).
+pub fn compute_minus_di_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MinusDiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    let min_bars = period + 2;
+    let series = compute_dmi_series(&sorted, period);
+    if n < min_bars || series.is_none() {
+        return MinusDiSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            minus_di_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let (plus_di, minus_di, atr, _ps, _ms, _ts, _pr, _mr) = series.unwrap();
+    let mdi_now = minus_di[n - 1];
+    let mdi_prev = minus_di[n - 2];
+    let pdi_now = plus_di[n - 1];
+    let diff = mdi_now - pdi_now;
+    let label = if diff > 10.0 { "BEAR_DOMINANT" }
+        else if diff > 2.0 { "BEAR_LEAN" }
+        else if diff < -10.0 { "BULL_LEAN" }
+        else if diff < -2.0 { "BULL_LEAN" }
+        else { "NEUTRAL" };
+    MinusDiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        minus_di: mdi_now, minus_di_prev: mdi_prev,
+        plus_di: pdi_now, atr: atr[n - 1],
+        last_close: sorted[n - 1].close,
+        minus_di_label: label.into(), note: String::new(),
+    }
+}
+
+/// Compute TA-Lib PLUS_DM — Wilder's raw Positive Directional Movement (period 14).
+pub fn compute_plus_dm_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> PlusDmSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    let min_bars = period + 2;
+    let series = compute_dmi_series(&sorted, period);
+    if n < min_bars || series.is_none() {
+        return PlusDmSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            plus_dm_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let (_pdi, _mdi, _atr, plus_smooth, _ms, _ts, plus_dm_raw_v, minus_dm_raw_v) = series.unwrap();
+    let pdm_s_now = plus_smooth[n - 1];
+    let pdm_s_prev = plus_smooth[n - 2];
+    let pdm_raw_now = plus_dm_raw_v[n - 1];
+    let mdm_raw_now = minus_dm_raw_v[n - 1];
+    let up = sorted[n - 1].high - sorted[n - 2].high;
+    let dn = sorted[n - 2].low - sorted[n - 1].low;
+    let label = if pdm_raw_now > 0.0 && pdm_raw_now > mdm_raw_now * 2.0 { "BULL_PRESSURE" }
+        else if pdm_raw_now > 0.0 && pdm_raw_now > mdm_raw_now { "BULL_SOFT" }
+        else if mdm_raw_now > pdm_raw_now && mdm_raw_now > 0.0 { "BEAR_PRESSURE" }
+        else { "NEUTRAL" };
+    PlusDmSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        plus_dm_raw: pdm_raw_now,
+        plus_dm_smoothed: pdm_s_now, plus_dm_smoothed_prev: pdm_s_prev,
+        up_move: up, down_move: dn,
+        last_close: sorted[n - 1].close,
+        plus_dm_label: label.into(), note: String::new(),
+    }
+}
+
+/// Compute TA-Lib MINUS_DM — Wilder's raw Negative Directional Movement (period 14).
+pub fn compute_minus_dm_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MinusDmSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    let min_bars = period + 2;
+    let series = compute_dmi_series(&sorted, period);
+    if n < min_bars || series.is_none() {
+        return MinusDmSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            minus_dm_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let (_pdi, _mdi, _atr, _ps, minus_smooth, _ts, plus_dm_raw_v, minus_dm_raw_v) = series.unwrap();
+    let mdm_s_now = minus_smooth[n - 1];
+    let mdm_s_prev = minus_smooth[n - 2];
+    let pdm_raw_now = plus_dm_raw_v[n - 1];
+    let mdm_raw_now = minus_dm_raw_v[n - 1];
+    let up = sorted[n - 1].high - sorted[n - 2].high;
+    let dn = sorted[n - 2].low - sorted[n - 1].low;
+    let label = if mdm_raw_now > 0.0 && mdm_raw_now > pdm_raw_now * 2.0 { "BEAR_PRESSURE" }
+        else if mdm_raw_now > 0.0 && mdm_raw_now > pdm_raw_now { "BEAR_SOFT" }
+        else if pdm_raw_now > mdm_raw_now && pdm_raw_now > 0.0 { "BULL_PRESSURE" }
+        else { "NEUTRAL" };
+    MinusDmSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        minus_dm_raw: mdm_raw_now,
+        minus_dm_smoothed: mdm_s_now, minus_dm_smoothed_prev: mdm_s_prev,
+        up_move: up, down_move: dn,
+        last_close: sorted[n - 1].close,
+        minus_dm_label: label.into(), note: String::new(),
+    }
+}
+
+/// Compute TA-Lib DX — Wilder's Directional Movement Index (period 14).
+/// `DX = 100 · |+DI − −DI| / (+DI + −DI)`; the raw (unsmoothed)
+/// directional-purity signal that ADX then Wilder-smooths.
+pub fn compute_dx_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> DxSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    let min_bars = period + 2;
+    let series = compute_dmi_series(&sorted, period);
+    if n < min_bars || series.is_none() {
+        return DxSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            dx_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let (plus_di, minus_di, _atr, _ps, _ms, _ts, _pr, _mr) = series.unwrap();
+    let dx_at = |i: usize| -> f64 {
+        let s = plus_di[i] + minus_di[i];
+        if s > 0.0 { 100.0 * (plus_di[i] - minus_di[i]).abs() / s } else { 0.0 }
+    };
+    let dx_now = dx_at(n - 1);
+    let dx_prev = dx_at(n - 2);
+    let label = if dx_now >= 40.0 { "STRONG_DIR" }
+        else if dx_now >= 25.0 { "DIR" }
+        else if dx_now >= 15.0 { "WEAK_DIR" }
+        else { "NO_DIR" };
+    DxSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        dx: dx_now, dx_prev,
+        plus_di: plus_di[n - 1], minus_di: minus_di[n - 1],
+        last_close: sorted[n - 1].close,
+        dx_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -40042,6 +40393,168 @@ pub fn get_variance(conn: &Connection, symbol: &str) -> Result<Option<VarianceSn
     if let Some(r) = rows.next().map_err(|e| format!("row variance: {e}"))? {
         let j: String = r.get(0).map_err(|e| format!("get variance: {e}"))?;
         let snap: VarianceSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse variance: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── ADR-179 Round 67 schema (v69) ──────────────────────────────────────────
+pub fn create_research_tables_v69(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v68(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_plus_di (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_plus_di_updated ON research_plus_di(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_minus_di (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_minus_di_updated ON research_minus_di(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_plus_dm (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_plus_dm_updated ON research_plus_dm(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_minus_dm (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_minus_dm_updated ON research_minus_dm(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_dx (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_dx_updated ON research_dx(updated_at);",
+    ).map_err(|e| format!("create v69 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_plus_di(conn: &Connection, symbol: &str, snap: &PlusDiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v69(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("plus_di json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_plus_di (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert plus_di: {e}"))?;
+    Ok(())
+}
+
+pub fn get_plus_di(conn: &Connection, symbol: &str) -> Result<Option<PlusDiSnapshot>, String> {
+    let _ = create_research_tables_v69(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_plus_di WHERE symbol = ?1")
+        .map_err(|e| format!("prep plus_di: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query plus_di: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row plus_di: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get plus_di: {e}"))?;
+        let snap: PlusDiSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse plus_di: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_minus_di(conn: &Connection, symbol: &str, snap: &MinusDiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v69(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("minus_di json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_minus_di (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert minus_di: {e}"))?;
+    Ok(())
+}
+
+pub fn get_minus_di(conn: &Connection, symbol: &str) -> Result<Option<MinusDiSnapshot>, String> {
+    let _ = create_research_tables_v69(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_minus_di WHERE symbol = ?1")
+        .map_err(|e| format!("prep minus_di: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query minus_di: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row minus_di: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get minus_di: {e}"))?;
+        let snap: MinusDiSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse minus_di: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_plus_dm(conn: &Connection, symbol: &str, snap: &PlusDmSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v69(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("plus_dm json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_plus_dm (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert plus_dm: {e}"))?;
+    Ok(())
+}
+
+pub fn get_plus_dm(conn: &Connection, symbol: &str) -> Result<Option<PlusDmSnapshot>, String> {
+    let _ = create_research_tables_v69(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_plus_dm WHERE symbol = ?1")
+        .map_err(|e| format!("prep plus_dm: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query plus_dm: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row plus_dm: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get plus_dm: {e}"))?;
+        let snap: PlusDmSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse plus_dm: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_minus_dm(conn: &Connection, symbol: &str, snap: &MinusDmSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v69(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("minus_dm json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_minus_dm (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert minus_dm: {e}"))?;
+    Ok(())
+}
+
+pub fn get_minus_dm(conn: &Connection, symbol: &str) -> Result<Option<MinusDmSnapshot>, String> {
+    let _ = create_research_tables_v69(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_minus_dm WHERE symbol = ?1")
+        .map_err(|e| format!("prep minus_dm: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query minus_dm: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row minus_dm: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get minus_dm: {e}"))?;
+        let snap: MinusDmSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse minus_dm: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_dx(conn: &Connection, symbol: &str, snap: &DxSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v69(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("dx json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_dx (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert dx: {e}"))?;
+    Ok(())
+}
+
+pub fn get_dx(conn: &Connection, symbol: &str) -> Result<Option<DxSnapshot>, String> {
+    let _ = create_research_tables_v69(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_dx WHERE symbol = ?1")
+        .map_err(|e| format!("prep dx: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query dx: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row dx: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get dx: {e}"))?;
+        let snap: DxSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse dx: {e}"))?;
         Ok(Some(snap))
     } else { Ok(None) }
 }
@@ -53038,6 +53551,150 @@ Trailing text.
         if snap.variance_label != "INSUFFICIENT_DATA" {
             assert!(snap.variance >= 0.0);
             assert!((snap.stddev - snap.variance.sqrt()).abs() < 1e-9);
+        }
+    }
+
+    // ── ADR-179 Round 67 ──
+    #[test]
+    fn plus_di_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = PlusDiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 14, plus_di: 28.5, plus_di_prev: 27.8,
+            minus_di: 18.0, atr: 2.1, last_close: 101.0,
+            plus_di_label: "BULL_DOMINANT".into(), note: String::new(),
+        };
+        upsert_plus_di(&conn, "TEST", &snap).unwrap();
+        let got = get_plus_di(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.plus_di_label, "BULL_DOMINANT");
+        assert!((got.plus_di - 28.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn plus_di_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_plus_di_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.plus_di_label.as_str(),
+            "BULL_DOMINANT" | "BULL_LEAN" | "NEUTRAL" | "BEAR_LEAN" | "INSUFFICIENT_DATA"));
+        if snap.plus_di_label != "INSUFFICIENT_DATA" {
+            assert!(snap.plus_di >= 0.0 && snap.plus_di <= 100.0);
+            assert!(snap.atr >= 0.0);
+        }
+    }
+
+    #[test]
+    fn minus_di_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MinusDiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 14, minus_di: 32.0, minus_di_prev: 30.5,
+            plus_di: 18.0, atr: 2.4, last_close: 99.0,
+            minus_di_label: "BEAR_DOMINANT".into(), note: String::new(),
+        };
+        upsert_minus_di(&conn, "TEST", &snap).unwrap();
+        let got = get_minus_di(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.minus_di_label, "BEAR_DOMINANT");
+        assert!((got.minus_di - 32.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn minus_di_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_minus_di_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.minus_di_label.as_str(),
+            "BEAR_DOMINANT" | "BEAR_LEAN" | "NEUTRAL" | "BULL_LEAN" | "INSUFFICIENT_DATA"));
+        if snap.minus_di_label != "INSUFFICIENT_DATA" {
+            assert!(snap.minus_di >= 0.0 && snap.minus_di <= 100.0);
+            assert!(snap.atr >= 0.0);
+        }
+    }
+
+    #[test]
+    fn plus_dm_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = PlusDmSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 14, plus_dm_raw: 1.2,
+            plus_dm_smoothed: 8.5, plus_dm_smoothed_prev: 8.2,
+            up_move: 1.2, down_move: 0.3,
+            last_close: 101.0,
+            plus_dm_label: "BULL_PRESSURE".into(), note: String::new(),
+        };
+        upsert_plus_dm(&conn, "TEST", &snap).unwrap();
+        let got = get_plus_dm(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.plus_dm_label, "BULL_PRESSURE");
+        assert!((got.plus_dm_smoothed - 8.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn plus_dm_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_plus_dm_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.plus_dm_label.as_str(),
+            "BULL_PRESSURE" | "BULL_SOFT" | "NEUTRAL" | "BEAR_PRESSURE" | "INSUFFICIENT_DATA"));
+        if snap.plus_dm_label != "INSUFFICIENT_DATA" {
+            assert!(snap.plus_dm_raw >= 0.0);
+            assert!(snap.plus_dm_smoothed >= 0.0);
+        }
+    }
+
+    #[test]
+    fn minus_dm_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MinusDmSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 14, minus_dm_raw: 0.9,
+            minus_dm_smoothed: 7.1, minus_dm_smoothed_prev: 7.0,
+            up_move: 0.2, down_move: 0.9,
+            last_close: 99.0,
+            minus_dm_label: "BEAR_PRESSURE".into(), note: String::new(),
+        };
+        upsert_minus_dm(&conn, "TEST", &snap).unwrap();
+        let got = get_minus_dm(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.minus_dm_label, "BEAR_PRESSURE");
+        assert!((got.minus_dm_smoothed - 7.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn minus_dm_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_minus_dm_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.minus_dm_label.as_str(),
+            "BEAR_PRESSURE" | "BEAR_SOFT" | "NEUTRAL" | "BULL_PRESSURE" | "INSUFFICIENT_DATA"));
+        if snap.minus_dm_label != "INSUFFICIENT_DATA" {
+            assert!(snap.minus_dm_raw >= 0.0);
+            assert!(snap.minus_dm_smoothed >= 0.0);
+        }
+    }
+
+    #[test]
+    fn dx_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = DxSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 14, dx: 28.0, dx_prev: 26.0,
+            plus_di: 28.5, minus_di: 16.0, last_close: 101.0,
+            dx_label: "DIR".into(), note: String::new(),
+        };
+        upsert_dx(&conn, "TEST", &snap).unwrap();
+        let got = get_dx(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.dx_label, "DIR");
+        assert!((got.dx - 28.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn dx_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_dx_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.dx_label.as_str(),
+            "STRONG_DIR" | "DIR" | "WEAK_DIR" | "NO_DIR" | "INSUFFICIENT_DATA"));
+        if snap.dx_label != "INSUFFICIENT_DATA" {
+            let s = snap.plus_di + snap.minus_di;
+            if s > 0.0 {
+                let expected = 100.0 * (snap.plus_di - snap.minus_di).abs() / s;
+                assert!((snap.dx - expected).abs() < 1e-6);
+            }
+            assert!(snap.dx >= 0.0 && snap.dx <= 100.0);
         }
     }
 }
