@@ -258,6 +258,17 @@ pub struct Bar {
     pub volume: f64,
 }
 
+/// Outcome of a bar fetch — tells the caller whether to enqueue a retry.
+/// `Complete` means the API returned everything it had. `RateLimitedPartial`
+/// means we got some bars but paginated pages remain behind a 429 wall.
+/// `RateLimitedEmpty` means the first request 429'd before any bars landed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchOutcome {
+    Complete,
+    RateLimitedPartial,
+    RateLimitedEmpty,
+}
+
 impl AlpacaBroker {
     pub fn new(api_key: String, secret_key: String, paper: bool) -> Self {
         let base_url = if paper {
@@ -1132,13 +1143,13 @@ impl AlpacaBroker {
         symbol: &str,
         timeframe: &str,
         progress: Option<&tokio::sync::mpsc::UnboundedSender<String>>,
-    ) -> Result<Vec<Bar>, String> {
+    ) -> Result<(Vec<Bar>, FetchOutcome), String> {
         let is_crypto = symbol.contains('/');
 
         // Monthly: aggregate from weekly
         if timeframe == "1Month" {
-            let weekly = Box::pin(self.get_all_bars(symbol, "1Week", progress)).await?;
-            return Ok(Self::aggregate_weekly_to_monthly(&weekly));
+            let (weekly, outcome) = Box::pin(self.get_all_bars(symbol, "1Week", progress)).await?;
+            return Ok((Self::aggregate_weekly_to_monthly(&weekly), outcome));
         }
 
         let base = if is_crypto {
@@ -1158,6 +1169,9 @@ impl AlpacaBroker {
             let mut next_page_token: Option<String> = None;
             let mut chunk_count = 0u32;
             let fetch_start = std::time::Instant::now();
+            // Track whether we aborted mid-pagination due to a 429 so the
+            // caller can enqueue a retry for the unfetched tail.
+            let mut rate_limited = false;
 
             loop {
                 self.rate_limiter.wait().await;
@@ -1183,6 +1197,7 @@ impl AlpacaBroker {
                 if resp.status().as_u16() == 429 {
                     self.rate_limiter.trigger_cooldown().await;
                     self.rate_limiter.wait().await;
+                    rate_limited = true;
                     if all_bars.is_empty() { last_error = "Rate limited".into(); break; }
                     // Accept partial data on rate limit
                     break;
@@ -1224,12 +1239,23 @@ impl AlpacaBroker {
             if !all_bars.is_empty() {
                 all_bars.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
                 all_bars.dedup_by(|a, b| a.timestamp == b.timestamp);
-                tracing::info!("{} {}: get_all_bars complete — {} bars in {}s",
-                    symbol, timeframe, all_bars.len(), fetch_start.elapsed().as_secs());
-                return Ok(all_bars);
+                let outcome = if rate_limited { FetchOutcome::RateLimitedPartial } else { FetchOutcome::Complete };
+                tracing::info!("{} {}: get_all_bars {} — {} bars in {}s",
+                    symbol, timeframe,
+                    if rate_limited { "partial (rate-limited)" } else { "complete" },
+                    all_bars.len(), fetch_start.elapsed().as_secs());
+                return Ok((all_bars, outcome));
+            }
+            if rate_limited {
+                // First-page 429 with zero bars — signal to the retry queue.
+                return Ok((Vec::new(), FetchOutcome::RateLimitedEmpty));
             }
         }
-        if last_error.is_empty() { Ok(Vec::new()) } else { Err(last_error) }
+        if last_error.is_empty() {
+            Ok((Vec::new(), FetchOutcome::Complete))
+        } else {
+            Err(last_error)
+        }
     }
 
     pub async fn get_bars(
@@ -1238,7 +1264,10 @@ impl AlpacaBroker {
         timeframe: &str,
         limit: u32,
     ) -> Result<Vec<Bar>, String> {
-        self.get_bars_after(symbol, timeframe, limit, None).await
+        // Strip the FetchOutcome here so this trait-exposed method keeps its
+        // existing signature. The retry queue runs off direct get_bars_after
+        // callers that care about partial/rate-limited results.
+        self.get_bars_after(symbol, timeframe, limit, None).await.map(|(bars, _)| bars)
     }
 
     /// Fetch bars, optionally starting after a given timestamp (for incremental fetching).
@@ -1250,20 +1279,20 @@ impl AlpacaBroker {
         timeframe: &str,
         limit: u32,
         after_timestamp: Option<&str>,
-    ) -> Result<Vec<Bar>, String> {
+    ) -> Result<(Vec<Bar>, FetchOutcome), String> {
         let is_crypto = symbol.contains('/');
 
         // Alpaca doesn't support 1Month — fetch weekly bars and aggregate
         if timeframe == "1Month" {
             // Fetch enough weekly bars: ~4.3 weeks per month, request 5x for safety
-            let weekly = Box::pin(self.get_bars(symbol, "1Week", (limit * 5).max(1000))).await?;
+            let (weekly, outcome) = Box::pin(self.get_bars_after(symbol, "1Week", (limit * 5).max(1000), after_timestamp)).await?;
             let monthly = Self::aggregate_weekly_to_monthly(&weekly);
             let trimmed = if monthly.len() > limit as usize {
                 monthly[monthly.len() - limit as usize..].to_vec()
             } else {
                 monthly
             };
-            return Ok(trimmed);
+            return Ok((trimmed, outcome));
         }
 
         let actual_tf = timeframe;
@@ -1351,6 +1380,9 @@ impl AlpacaBroker {
             let mut chunk_count = 0u32;
             const MAX_RATE_LIMIT_RETRIES: u32 = 3;
             let fetch_start = std::time::Instant::now();
+            // Flip true if we bailed mid-pagination due to exhausted 429 retries
+            // so the caller can queue a follow-up fetch for the tail.
+            let mut rate_limited = false;
 
             loop {
                 // Centralized rate limiter — respects global request budget + adaptive pacing
@@ -1410,6 +1442,7 @@ impl AlpacaBroker {
                             self.rate_limiter.wait().await;
                             continue; // retry the same chunk (page_token unchanged)
                         }
+                        rate_limited = true;
                         if !all_bars.is_empty() {
                             tracing::warn!("429 rate limit: max retries for {} @ {}, returning {} bars",
                                 symbol, actual_tf, all_bars.len());
@@ -1511,7 +1544,12 @@ impl AlpacaBroker {
                     "Loaded {} bars for {} @ {} (feed={}, {} chunks, {}s total)",
                     all_bars.len(), symbol, actual_tf, feed_label, chunk_count, elapsed_secs
                 );
-                return Ok(all_bars);
+                let outcome = if rate_limited { FetchOutcome::RateLimitedPartial } else { FetchOutcome::Complete };
+                return Ok((all_bars, outcome));
+            }
+            if rate_limited {
+                // First-page 429 with zero bars — caller should retry.
+                return Ok((Vec::new(), FetchOutcome::RateLimitedEmpty));
             }
         }
 
