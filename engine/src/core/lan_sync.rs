@@ -532,6 +532,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_rocr",
     "research_rocr100",
     "research_correl",
+    // ── ADR-181 Round 69 ────────────────────────────
+    "research_min",
+    "research_max",
+    "research_minmax",
+    "research_minindex",
+    "research_maxindex",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -3075,6 +3081,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-181 Round 69 ──
+        "research_min" => Some(
+            "CREATE TABLE IF NOT EXISTS research_min (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_max" => Some(
+            "CREATE TABLE IF NOT EXISTS research_max (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_minmax" => Some(
+            "CREATE TABLE IF NOT EXISTS research_minmax (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_minindex" => Some(
+            "CREATE TABLE IF NOT EXISTS research_minindex (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_maxindex" => Some(
+            "CREATE TABLE IF NOT EXISTS research_maxindex (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -3470,6 +3512,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_rocr" => Some("updated_at"),
         "research_rocr100" => Some("updated_at"),
         "research_correl" => Some("updated_at"),
+        // ── ADR-181 Round 69 ──
+        "research_min" => Some("updated_at"),
+        "research_max" => Some("updated_at"),
+        "research_minmax" => Some("updated_at"),
+        "research_minindex" => Some("updated_at"),
+        "research_maxindex" => Some("updated_at"),
         _ => None,
     }
 }

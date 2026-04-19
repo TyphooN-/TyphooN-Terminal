@@ -7190,6 +7190,95 @@ pub struct CorrelSnapshot {
     pub note: String,
 }
 
+/// TA-Lib MIN — minimum of close over a rolling window (period 30).
+/// The rolling-window support level. Combined with `last_close`, the
+/// distance above the minimum gives a support-proximity label.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MinSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 30
+    pub min_val: f64,                  // min(close) over last period
+    pub min_prev: f64,                 // min(close) ending at bar n-2
+    pub max_ref: f64,                  // max(close) in same window (for position pct)
+    pub last_close: f64,
+    pub position_pct: f64,             // (close - min) / (max - min) · 100 ∈ [0, 100]
+    pub min_label: String,             // NEAR_LOW / MID / NEAR_HIGH / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib MAX — maximum of close over a rolling window (period 30).
+/// The rolling-window resistance level. Distance below the maximum gives
+/// a resistance-proximity label.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MaxSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 30
+    pub max_val: f64,                  // max(close) over last period
+    pub max_prev: f64,
+    pub min_ref: f64,                  // min(close) in same window
+    pub last_close: f64,
+    pub position_pct: f64,             // (close - min) / (max - min) · 100
+    pub max_label: String,             // NEAR_HIGH / MID / NEAR_LOW / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib MINMAX — both endpoints of the rolling window in one snapshot,
+/// plus `range_width` and `range_pct` which expose the regime (tight
+/// range = consolidation, wide range = trending).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MinMaxSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 30
+    pub min_val: f64,
+    pub max_val: f64,
+    pub range_width: f64,              // max - min (price-space width)
+    pub range_pct: f64,                // 100 · range_width / last_close (range-as-%-of-close)
+    pub last_close: f64,
+    pub position_pct: f64,             // (close - min) / range
+    pub minmax_label: String,          // RANGE_WIDE / RANGE_NORMAL / RANGE_TIGHT / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib MININDEX — bar index at which the window minimum occurred,
+/// expressed as a recency (0 = most-recent bar, period-1 = oldest).
+/// Labels capture "how fresh is the low?" — a useful lagging-signal for
+/// exhaustion vs. continued weakness.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MinIndexSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 30
+    pub min_val: f64,
+    pub min_index_bars_ago: usize,     // 0 = most recent bar is the low; period-1 = window start
+    pub min_index_bars_ago_prev: usize,
+    pub last_close: f64,
+    pub min_index_label: String,       // FRESH_LOW / RECENT_LOW / OLD_LOW / STALE_LOW / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib MAXINDEX — bar index at which the window maximum occurred,
+/// expressed as a recency. Mirror of MININDEX.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MaxIndexSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 30
+    pub max_val: f64,
+    pub max_index_bars_ago: usize,
+    pub max_index_bars_ago_prev: usize,
+    pub last_close: f64,
+    pub max_index_label: String,       // FRESH_HIGH / RECENT_HIGH / OLD_HIGH / STALE_HIGH / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -30742,6 +30831,213 @@ pub fn compute_correl_snapshot(
     }
 }
 
+// ── ADR-181 Round 69 compute fns ────────────────────────────────────────────
+
+/// Walk the trailing `period`-bar window ending at `end_idx` and return
+/// `(min_val, min_idx_in_series, max_val, max_idx_in_series)`. The two
+/// indices are absolute positions in the sorted array (so `end_idx -
+/// idx_in_series` gives a "bars ago" recency).
+fn window_extrema(sorted: &[&HistoricalPriceRow], end_idx: usize, period: usize) -> (f64, usize, f64, usize) {
+    let start = end_idx + 1 - period;
+    let mut min_val = sorted[start].close;
+    let mut max_val = sorted[start].close;
+    let mut min_idx = start;
+    let mut max_idx = start;
+    for i in (start + 1)..=end_idx {
+        let c = sorted[i].close;
+        if c < min_val { min_val = c; min_idx = i; }
+        if c > max_val { max_val = c; max_idx = i; }
+    }
+    (min_val, min_idx, max_val, max_idx)
+}
+
+fn position_label(pct: f64, high_is_positive: bool) -> &'static str {
+    // Three-band cutoff (25% / 75%) — labels depend on whether the
+    // caller is framing MIN (near low = bad / bullish-setup) or MAX
+    // (near high = good / breakout-setup). Same cutoffs either way,
+    // naming reversed.
+    if high_is_positive {
+        if pct >= 75.0 { "NEAR_HIGH" }
+        else if pct <= 25.0 { "NEAR_LOW" }
+        else { "MID" }
+    } else {
+        if pct <= 25.0 { "NEAR_LOW" }
+        else if pct >= 75.0 { "NEAR_HIGH" }
+        else { "MID" }
+    }
+}
+
+fn recency_label(bars_ago: usize, period: usize, is_high: bool) -> &'static str {
+    let frac = bars_ago as f64 / period as f64;
+    if is_high {
+        if frac <= 0.1 { "FRESH_HIGH" }
+        else if frac <= 0.33 { "RECENT_HIGH" }
+        else if frac <= 0.66 { "OLD_HIGH" }
+        else { "STALE_HIGH" }
+    } else {
+        if frac <= 0.1 { "FRESH_LOW" }
+        else if frac <= 0.33 { "RECENT_LOW" }
+        else if frac <= 0.66 { "OLD_LOW" }
+        else { "STALE_LOW" }
+    }
+}
+
+pub fn compute_min_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MinSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 30usize;
+    let min_bars = period + 1;
+    if n < min_bars {
+        return MinSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            min_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let (min_now, _, max_now, _) = window_extrema(&sorted, n - 1, period);
+    let (min_prev, _, _, _) = window_extrema(&sorted, n - 2, period);
+    let close = sorted[n - 1].close;
+    let range = max_now - min_now;
+    let pct = if range.abs() > 1e-12 { (close - min_now) / range * 100.0 } else { 50.0 };
+    MinSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        min_val: min_now, min_prev, max_ref: max_now,
+        last_close: close, position_pct: pct,
+        min_label: position_label(pct, true).into(), note: String::new(),
+    }
+}
+
+pub fn compute_max_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MaxSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 30usize;
+    let min_bars = period + 1;
+    if n < min_bars {
+        return MaxSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            max_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let (min_now, _, max_now, _) = window_extrema(&sorted, n - 1, period);
+    let (_, _, max_prev, _) = window_extrema(&sorted, n - 2, period);
+    let close = sorted[n - 1].close;
+    let range = max_now - min_now;
+    let pct = if range.abs() > 1e-12 { (close - min_now) / range * 100.0 } else { 50.0 };
+    MaxSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        max_val: max_now, max_prev, min_ref: min_now,
+        last_close: close, position_pct: pct,
+        max_label: position_label(pct, true).into(), note: String::new(),
+    }
+}
+
+pub fn compute_minmax_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MinMaxSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 30usize;
+    let min_bars = period + 1;
+    if n < min_bars {
+        return MinMaxSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            minmax_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let (min_now, _, max_now, _) = window_extrema(&sorted, n - 1, period);
+    let close = sorted[n - 1].close;
+    let range = max_now - min_now;
+    let range_pct = if close.abs() > 1e-12 { 100.0 * range / close } else { 0.0 };
+    let pos_pct = if range.abs() > 1e-12 { (close - min_now) / range * 100.0 } else { 50.0 };
+    let label = if range_pct >= 15.0 { "RANGE_WIDE" }
+        else if range_pct >= 5.0 { "RANGE_NORMAL" }
+        else { "RANGE_TIGHT" };
+    MinMaxSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        min_val: min_now, max_val: max_now,
+        range_width: range, range_pct,
+        last_close: close, position_pct: pos_pct,
+        minmax_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_minindex_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MinIndexSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 30usize;
+    let min_bars = period + 1;
+    if n < min_bars {
+        return MinIndexSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            min_index_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let (min_now, min_idx_now, _, _) = window_extrema(&sorted, n - 1, period);
+    let (_, min_idx_prev, _, _) = window_extrema(&sorted, n - 2, period);
+    let bars_ago = (n - 1).saturating_sub(min_idx_now);
+    let bars_ago_prev = (n - 2).saturating_sub(min_idx_prev);
+    MinIndexSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        min_val: min_now, min_index_bars_ago: bars_ago,
+        min_index_bars_ago_prev: bars_ago_prev,
+        last_close: sorted[n - 1].close,
+        min_index_label: recency_label(bars_ago, period, false).into(),
+        note: String::new(),
+    }
+}
+
+pub fn compute_maxindex_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MaxIndexSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 30usize;
+    let min_bars = period + 1;
+    if n < min_bars {
+        return MaxIndexSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            max_index_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let (_, _, max_now, max_idx_now) = window_extrema(&sorted, n - 1, period);
+    let (_, _, _, max_idx_prev) = window_extrema(&sorted, n - 2, period);
+    let bars_ago = (n - 1).saturating_sub(max_idx_now);
+    let bars_ago_prev = (n - 2).saturating_sub(max_idx_prev);
+    MaxIndexSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        max_val: max_now, max_index_bars_ago: bars_ago,
+        max_index_bars_ago_prev: bars_ago_prev,
+        last_close: sorted[n - 1].close,
+        max_index_label: recency_label(bars_ago, period, true).into(),
+        note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -41006,6 +41302,169 @@ pub fn get_correl(conn: &Connection, symbol: &str) -> Result<Option<CorrelSnapsh
     if let Some(r) = rows.next().map_err(|e| format!("row correl: {e}"))? {
         let j: String = r.get(0).map_err(|e| format!("get correl: {e}"))?;
         let snap: CorrelSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse correl: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── ADR-181 Round 69 — schema v71 + upsert/get helpers ─────────────────────
+
+pub fn create_research_tables_v71(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v70(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_min (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_min_updated ON research_min(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_max (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_max_updated ON research_max(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_minmax (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_minmax_updated ON research_minmax(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_minindex (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_minindex_updated ON research_minindex(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_maxindex (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_maxindex_updated ON research_maxindex(updated_at);",
+    ).map_err(|e| format!("create v71 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_min(conn: &Connection, symbol: &str, snap: &MinSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v71(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("min json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_min (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert min: {e}"))?;
+    Ok(())
+}
+
+pub fn get_min(conn: &Connection, symbol: &str) -> Result<Option<MinSnapshot>, String> {
+    let _ = create_research_tables_v71(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_min WHERE symbol = ?1")
+        .map_err(|e| format!("prep min: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query min: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row min: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get min: {e}"))?;
+        let snap: MinSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse min: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_max(conn: &Connection, symbol: &str, snap: &MaxSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v71(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("max json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_max (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert max: {e}"))?;
+    Ok(())
+}
+
+pub fn get_max(conn: &Connection, symbol: &str) -> Result<Option<MaxSnapshot>, String> {
+    let _ = create_research_tables_v71(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_max WHERE symbol = ?1")
+        .map_err(|e| format!("prep max: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query max: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row max: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get max: {e}"))?;
+        let snap: MaxSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse max: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_minmax(conn: &Connection, symbol: &str, snap: &MinMaxSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v71(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("minmax json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_minmax (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert minmax: {e}"))?;
+    Ok(())
+}
+
+pub fn get_minmax(conn: &Connection, symbol: &str) -> Result<Option<MinMaxSnapshot>, String> {
+    let _ = create_research_tables_v71(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_minmax WHERE symbol = ?1")
+        .map_err(|e| format!("prep minmax: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query minmax: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row minmax: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get minmax: {e}"))?;
+        let snap: MinMaxSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse minmax: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_minindex(conn: &Connection, symbol: &str, snap: &MinIndexSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v71(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("minindex json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_minindex (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert minindex: {e}"))?;
+    Ok(())
+}
+
+pub fn get_minindex(conn: &Connection, symbol: &str) -> Result<Option<MinIndexSnapshot>, String> {
+    let _ = create_research_tables_v71(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_minindex WHERE symbol = ?1")
+        .map_err(|e| format!("prep minindex: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query minindex: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row minindex: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get minindex: {e}"))?;
+        let snap: MinIndexSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse minindex: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_maxindex(conn: &Connection, symbol: &str, snap: &MaxIndexSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v71(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("maxindex json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_maxindex (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert maxindex: {e}"))?;
+    Ok(())
+}
+
+pub fn get_maxindex(conn: &Connection, symbol: &str) -> Result<Option<MaxIndexSnapshot>, String> {
+    let _ = create_research_tables_v71(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_maxindex WHERE symbol = ?1")
+        .map_err(|e| format!("prep maxindex: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query maxindex: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row maxindex: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get maxindex: {e}"))?;
+        let snap: MaxIndexSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse maxindex: {e}"))?;
         Ok(Some(snap))
     } else { Ok(None) }
 }
@@ -54283,6 +54742,144 @@ Trailing text.
         if snap.correl_label != "INSUFFICIENT_DATA" {
             assert!(snap.correl >= -1.0 - 1e-9 && snap.correl <= 1.0 + 1e-9);
             assert!(snap.stddev_x >= 0.0 && snap.stddev_y >= 0.0);
+        }
+    }
+
+    // ── ADR-181 Round 69 ──
+    #[test]
+    fn min_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MinSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 30, min_val: 95.0, min_prev: 95.2, max_ref: 110.0,
+            last_close: 102.0, position_pct: 46.67,
+            min_label: "MID".into(), note: String::new(),
+        };
+        upsert_min(&conn, "TEST", &snap).unwrap();
+        let got = get_min(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.min_label, "MID");
+        assert!((got.min_val - 95.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn min_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_min_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.min_label.as_str(),
+            "NEAR_LOW" | "MID" | "NEAR_HIGH" | "INSUFFICIENT_DATA"));
+        if snap.min_label != "INSUFFICIENT_DATA" {
+            assert!(snap.min_val <= snap.last_close + 1e-9);
+            assert!(snap.position_pct >= 0.0 - 1e-6 && snap.position_pct <= 100.0 + 1e-6);
+        }
+    }
+
+    #[test]
+    fn max_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MaxSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 30, max_val: 110.0, max_prev: 109.5, min_ref: 95.0,
+            last_close: 108.0, position_pct: 86.67,
+            max_label: "NEAR_HIGH".into(), note: String::new(),
+        };
+        upsert_max(&conn, "TEST", &snap).unwrap();
+        let got = get_max(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.max_label, "NEAR_HIGH");
+        assert!((got.max_val - 110.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn max_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_max_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.max_label.as_str(),
+            "NEAR_LOW" | "MID" | "NEAR_HIGH" | "INSUFFICIENT_DATA"));
+        if snap.max_label != "INSUFFICIENT_DATA" {
+            assert!(snap.max_val >= snap.last_close - 1e-9);
+            assert!(snap.max_val >= snap.min_ref - 1e-9);
+        }
+    }
+
+    #[test]
+    fn minmax_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MinMaxSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 30, min_val: 95.0, max_val: 110.0,
+            range_width: 15.0, range_pct: 13.88,
+            last_close: 108.0, position_pct: 86.67,
+            minmax_label: "RANGE_NORMAL".into(), note: String::new(),
+        };
+        upsert_minmax(&conn, "TEST", &snap).unwrap();
+        let got = get_minmax(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.minmax_label, "RANGE_NORMAL");
+        assert!((got.range_width - 15.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn minmax_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_minmax_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.minmax_label.as_str(),
+            "RANGE_WIDE" | "RANGE_NORMAL" | "RANGE_TIGHT" | "INSUFFICIENT_DATA"));
+        if snap.minmax_label != "INSUFFICIENT_DATA" {
+            let expected = snap.max_val - snap.min_val;
+            assert!((snap.range_width - expected).abs() < 1e-9);
+            assert!(snap.max_val >= snap.min_val);
+        }
+    }
+
+    #[test]
+    fn minindex_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MinIndexSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 30, min_val: 95.0,
+            min_index_bars_ago: 3, min_index_bars_ago_prev: 4,
+            last_close: 102.0,
+            min_index_label: "FRESH_LOW".into(), note: String::new(),
+        };
+        upsert_minindex(&conn, "TEST", &snap).unwrap();
+        let got = get_minindex(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.min_index_label, "FRESH_LOW");
+        assert_eq!(got.min_index_bars_ago, 3);
+    }
+
+    #[test]
+    fn minindex_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_minindex_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.min_index_label.as_str(),
+            "FRESH_LOW" | "RECENT_LOW" | "OLD_LOW" | "STALE_LOW" | "INSUFFICIENT_DATA"));
+        if snap.min_index_label != "INSUFFICIENT_DATA" {
+            assert!(snap.min_index_bars_ago < snap.period);
+        }
+    }
+
+    #[test]
+    fn maxindex_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MaxIndexSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 30, max_val: 110.0,
+            max_index_bars_ago: 2, max_index_bars_ago_prev: 3,
+            last_close: 108.0,
+            max_index_label: "FRESH_HIGH".into(), note: String::new(),
+        };
+        upsert_maxindex(&conn, "TEST", &snap).unwrap();
+        let got = get_maxindex(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.max_index_label, "FRESH_HIGH");
+        assert_eq!(got.max_index_bars_ago, 2);
+    }
+
+    #[test]
+    fn maxindex_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_maxindex_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.max_index_label.as_str(),
+            "FRESH_HIGH" | "RECENT_HIGH" | "OLD_HIGH" | "STALE_HIGH" | "INSUFFICIENT_DATA"));
+        if snap.max_index_label != "INSUFFICIENT_DATA" {
+            assert!(snap.max_index_bars_ago < snap.period);
         }
     }
 }
