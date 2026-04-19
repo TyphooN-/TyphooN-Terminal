@@ -538,6 +538,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_minmax",
     "research_minindex",
     "research_maxindex",
+    // ── ADR-182 Round 70 ────────────────────────────
+    "research_bbands",
+    "research_ad",
+    "research_adosc",
+    "research_sum",
+    "research_linreg_intercept",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -3117,6 +3123,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-182 Round 70 ──
+        "research_bbands" => Some(
+            "CREATE TABLE IF NOT EXISTS research_bbands (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_ad" => Some(
+            "CREATE TABLE IF NOT EXISTS research_ad (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_adosc" => Some(
+            "CREATE TABLE IF NOT EXISTS research_adosc (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_sum" => Some(
+            "CREATE TABLE IF NOT EXISTS research_sum (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_linreg_intercept" => Some(
+            "CREATE TABLE IF NOT EXISTS research_linreg_intercept (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -3518,6 +3560,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_minmax" => Some("updated_at"),
         "research_minindex" => Some("updated_at"),
         "research_maxindex" => Some("updated_at"),
+        // ── ADR-182 Round 70 ──
+        "research_bbands" => Some("updated_at"),
+        "research_ad" => Some("updated_at"),
+        "research_adosc" => Some("updated_at"),
+        "research_sum" => Some("updated_at"),
+        "research_linreg_intercept" => Some("updated_at"),
         _ => None,
     }
 }

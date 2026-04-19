@@ -7279,6 +7279,117 @@ pub struct MaxIndexSnapshot {
     pub note: String,
 }
 
+// ── Round 70 — BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT (ADR-182) ──
+
+/// TA-Lib BBANDS — Bollinger Bands around a 20-bar SMA ± 2·σ.
+/// Classic volatility-band oscillator. Position within the bands
+/// (`pct_b`) and band width relative to mid (`bandwidth`) together
+/// capture both where price is and how dynamic the band regime is.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct BbandsSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 20
+    pub num_std: f64,                  // 2.0
+    pub upper: f64,
+    pub middle: f64,                   // SMA_period(close)
+    pub lower: f64,
+    pub upper_prev: f64,
+    pub middle_prev: f64,
+    pub lower_prev: f64,
+    pub last_close: f64,
+    pub pct_b: f64,                    // 100 · (close − lower) / (upper − lower)
+    pub bandwidth: f64,                // 100 · (upper − lower) / middle
+    pub bbands_label: String,          // ABOVE_UPPER / UPPER_HALF / LOWER_HALF / BELOW_LOWER / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib AD — Chaikin Accumulation/Distribution Line.
+/// Cumulative `MF × volume` where `MF = ((close − low) − (high − close)) /
+/// (high − low)`. A running total of volume-weighted close bias within
+/// each bar's range — rising = net buying, falling = net distribution.
+/// The scalar `ad_slope` is the 10-bar linear-regression slope of the
+/// line for label classification.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AdSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ad: f64,                       // cumulative A/D at last bar
+    pub ad_prev: f64,                  // cumulative A/D at bar n-2
+    pub ad_delta: f64,                 // ad − ad_prev
+    pub ad_slope: f64,                 // 10-bar slope of AD series
+    pub last_close: f64,
+    pub ad_label: String,              // STRONG_ACCUM / ACCUM / FLAT / DIST / STRONG_DIST / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib ADOSC — Chaikin Accumulation/Distribution Oscillator.
+/// `fast_EMA(AD) − slow_EMA(AD)` with default (fast=3, slow=10). A
+/// zero-centred momentum oscillator on the AD line — signals
+/// accumulation/distribution impulses that the raw AD slope can't
+/// pick up.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AdoscSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub fast_period: usize,            // 3
+    pub slow_period: usize,            // 10
+    pub adosc: f64,
+    pub adosc_prev: f64,
+    pub last_close: f64,
+    pub ad_ref: f64,                   // underlying AD value at same bar (for cross-ref)
+    pub adosc_label: String,           // STRONG_BULL / BULL / FLAT / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib SUM — rolling sum of close over a 30-bar window. The raw
+/// primitive SMA is built on top of (SMA = SUM / period) — distinct
+/// because SUM is an absolute quantity useful for compounding
+/// calculations, whereas SMA is an average. Label classifies whether
+/// the sum is rising (momentum) or falling (decay) by comparing the
+/// current sum to the sum one bar earlier.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SumSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 30
+    pub sum: f64,
+    pub sum_prev: f64,
+    pub sum_delta: f64,
+    pub sum_pct_change: f64,           // 100 · (sum − sum_prev) / sum_prev
+    pub last_close: f64,
+    pub sum_label: String,             // STRONG_UP / UP / FLAT / DOWN / STRONG_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib LINEARREG_INTERCEPT — the `b` coefficient in `y = m·x + b`
+/// where `y = close` and `x = bar_index` over a 14-bar window.
+/// Complements the already-shipped LINEARREG (endpoint), LINEARREG_ANGLE,
+/// LINEARREG_SLOPE, and TSF primitives. The intercept alone is not a
+/// signal; it is the *level* the regression predicts at x=0 (the
+/// oldest bar in the window). The informative scalar is
+/// `intercept − last_close`, which says how far the regression
+/// has walked from its oldest bar.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct LinearRegInterceptSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub intercept: f64,
+    pub intercept_prev: f64,
+    pub slope: f64,                    // for cross-ref with LINEARREG_SLOPE
+    pub last_close: f64,
+    pub drift: f64,                    // last_close − intercept (how far price is from regression base)
+    pub drift_pct: f64,                // 100 · drift / intercept
+    pub linreg_intercept_label: String, // STRONG_ADVANCE / ADVANCE / FLAT / DECLINE / STRONG_DECLINE / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -31038,6 +31149,268 @@ pub fn compute_maxindex_snapshot(
     }
 }
 
+// ── Round 70 — BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT ──
+
+/// Compute SMA + sample stddev over a window ending at end_idx.
+fn sma_stddev(sorted: &[&HistoricalPriceRow], end_idx: usize, period: usize) -> (f64, f64) {
+    let start = end_idx + 1 - period;
+    let mut sum = 0.0f64;
+    for i in start..=end_idx { sum += sorted[i].close; }
+    let mean = sum / period as f64;
+    let mut ss = 0.0f64;
+    for i in start..=end_idx {
+        let d = sorted[i].close - mean;
+        ss += d * d;
+    }
+    let var = ss / period as f64; // TA-Lib uses population variance for BBANDS
+    (mean, var.max(0.0).sqrt())
+}
+
+/// Cumulative Chaikin A/D line across all bars (same ordering as input).
+fn ad_line(sorted: &[&HistoricalPriceRow]) -> Vec<f64> {
+    let mut out = Vec::with_capacity(sorted.len());
+    let mut ad = 0.0f64;
+    for b in sorted.iter() {
+        let hl = b.high - b.low;
+        let mf = if hl > 0.0 { ((b.close - b.low) - (b.high - b.close)) / hl } else { 0.0 };
+        ad += mf * b.volume as f64;
+        out.push(ad);
+    }
+    out
+}
+
+/// Least-squares slope of y over x = [0..n) for the last `period` samples.
+fn last_window_slope(values: &[f64], period: usize) -> f64 {
+    let n = values.len();
+    if n < period || period < 2 { return 0.0; }
+    let start = n - period;
+    let pf = period as f64;
+    let mean_x = (period as f64 - 1.0) / 2.0;
+    let mut mean_y = 0.0f64;
+    for i in start..n { mean_y += values[i]; }
+    mean_y /= pf;
+    let mut num = 0.0f64;
+    let mut den = 0.0f64;
+    for i in 0..period {
+        let dx = i as f64 - mean_x;
+        let dy = values[start + i] - mean_y;
+        num += dx * dy;
+        den += dx * dx;
+    }
+    if den == 0.0 { 0.0 } else { num / den }
+}
+
+pub fn compute_bbands_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> BbandsSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 20usize;
+    let num_std = 2.0f64;
+    let min_bars = period + 1;
+    if n < min_bars {
+        return BbandsSnapshot {
+            symbol: sym, as_of: as_of.into(), period, num_std,
+            bbands_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let (mid_now, sd_now) = sma_stddev(&sorted, n - 1, period);
+    let (mid_prev, sd_prev) = sma_stddev(&sorted, n - 2, period);
+    let upper = mid_now + num_std * sd_now;
+    let lower = mid_now - num_std * sd_now;
+    let upper_p = mid_prev + num_std * sd_prev;
+    let lower_p = mid_prev - num_std * sd_prev;
+    let close = sorted[n - 1].close;
+    let width = upper - lower;
+    let pct_b = if width > 0.0 { 100.0 * (close - lower) / width } else { 50.0 };
+    let bandwidth = if mid_now > 0.0 { 100.0 * width / mid_now } else { 0.0 };
+    let label = if close > upper { "ABOVE_UPPER" }
+        else if close >= mid_now { "UPPER_HALF" }
+        else if close >= lower { "LOWER_HALF" }
+        else { "BELOW_LOWER" };
+    BbandsSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period, num_std,
+        upper, middle: mid_now, lower,
+        upper_prev: upper_p, middle_prev: mid_prev, lower_prev: lower_p,
+        last_close: close, pct_b, bandwidth,
+        bbands_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_ad_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AdSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let slope_window = 10usize;
+    let min_bars = slope_window + 2;
+    if n < min_bars {
+        return AdSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            ad_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let ad = ad_line(&sorted);
+    let ad_now = ad[n - 1];
+    let ad_prev = ad[n - 2];
+    let delta = ad_now - ad_prev;
+    let slope = last_window_slope(&ad, slope_window);
+    let abs_slope = slope.abs();
+    let mean_ad_abs = ad.iter().map(|v| v.abs()).sum::<f64>() / n as f64;
+    let rel = if mean_ad_abs > 0.0 { abs_slope / mean_ad_abs } else { 0.0 };
+    let label = if slope > 0.0 && rel >= 0.05 { "STRONG_ACCUM" }
+        else if slope > 0.0 && rel >= 0.01 { "ACCUM" }
+        else if slope < 0.0 && rel >= 0.05 { "STRONG_DIST" }
+        else if slope < 0.0 && rel >= 0.01 { "DIST" }
+        else { "FLAT" };
+    AdSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        ad: ad_now, ad_prev, ad_delta: delta, ad_slope: slope,
+        last_close: sorted[n - 1].close,
+        ad_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_adosc_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AdoscSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let fast = 3usize;
+    let slow = 10usize;
+    let min_bars = slow + 2;
+    if n < min_bars {
+        return AdoscSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            fast_period: fast, slow_period: slow,
+            adosc_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let ad = ad_line(&sorted);
+    let fast_ema = ema_series(&ad, fast);
+    let slow_ema = ema_series(&ad, slow);
+    let adosc_now = fast_ema[n - 1] - slow_ema[n - 1];
+    let adosc_prev = fast_ema[n - 2] - slow_ema[n - 2];
+    let mean_ad_abs = ad.iter().map(|v| v.abs()).sum::<f64>() / n as f64;
+    let rel = if mean_ad_abs > 0.0 { adosc_now.abs() / mean_ad_abs } else { 0.0 };
+    let label = if adosc_now > 0.0 && rel >= 0.1 { "STRONG_BULL" }
+        else if adosc_now > 0.0 && rel >= 0.02 { "BULL" }
+        else if adosc_now < 0.0 && rel >= 0.1 { "STRONG_BEAR" }
+        else if adosc_now < 0.0 && rel >= 0.02 { "BEAR" }
+        else { "FLAT" };
+    AdoscSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        fast_period: fast, slow_period: slow,
+        adosc: adosc_now, adosc_prev,
+        last_close: sorted[n - 1].close,
+        ad_ref: ad[n - 1],
+        adosc_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_sum_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> SumSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 30usize;
+    let min_bars = period + 1;
+    if n < min_bars {
+        return SumSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            sum_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let mut sum_now = 0.0f64;
+    for i in (n - period)..n { sum_now += sorted[i].close; }
+    let mut sum_prev = 0.0f64;
+    for i in (n - 1 - period)..(n - 1) { sum_prev += sorted[i].close; }
+    let delta = sum_now - sum_prev;
+    let pct = if sum_prev != 0.0 { 100.0 * delta / sum_prev } else { 0.0 };
+    let label = if pct >= 1.0 { "STRONG_UP" }
+        else if pct >= 0.2 { "UP" }
+        else if pct <= -1.0 { "STRONG_DOWN" }
+        else if pct <= -0.2 { "DOWN" }
+        else { "FLAT" };
+    SumSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        sum: sum_now, sum_prev, sum_delta: delta, sum_pct_change: pct,
+        last_close: sorted[n - 1].close,
+        sum_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_linearreg_intercept_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> LinearRegInterceptSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    let min_bars = period + 1;
+    if n < min_bars {
+        return LinearRegInterceptSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            linreg_intercept_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    // Compute slope + intercept on the last `period` closes against x = [0..period).
+    let compute = |end_idx: usize| -> (f64, f64) {
+        let start = end_idx + 1 - period;
+        let pf = period as f64;
+        let mean_x = (pf - 1.0) / 2.0;
+        let mut mean_y = 0.0f64;
+        for i in start..=end_idx { mean_y += sorted[i].close; }
+        mean_y /= pf;
+        let mut num = 0.0f64;
+        let mut den = 0.0f64;
+        for j in 0..period {
+            let dx = j as f64 - mean_x;
+            let dy = sorted[start + j].close - mean_y;
+            num += dx * dy;
+            den += dx * dx;
+        }
+        let m = if den == 0.0 { 0.0 } else { num / den };
+        let b = mean_y - m * mean_x;
+        (m, b)
+    };
+    let (slope_now, intercept_now) = compute(n - 1);
+    let (_, intercept_prev) = compute(n - 2);
+    let close = sorted[n - 1].close;
+    let drift = close - intercept_now;
+    let drift_pct = if intercept_now != 0.0 { 100.0 * drift / intercept_now } else { 0.0 };
+    let label = if drift_pct >= 5.0 { "STRONG_ADVANCE" }
+        else if drift_pct >= 1.0 { "ADVANCE" }
+        else if drift_pct <= -5.0 { "STRONG_DECLINE" }
+        else if drift_pct <= -1.0 { "DECLINE" }
+        else { "FLAT" };
+    LinearRegInterceptSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        intercept: intercept_now, intercept_prev, slope: slope_now,
+        last_close: close, drift, drift_pct,
+        linreg_intercept_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -41465,6 +41838,169 @@ pub fn get_maxindex(conn: &Connection, symbol: &str) -> Result<Option<MaxIndexSn
     if let Some(r) = rows.next().map_err(|e| format!("row maxindex: {e}"))? {
         let j: String = r.get(0).map_err(|e| format!("get maxindex: {e}"))?;
         let snap: MaxIndexSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse maxindex: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── Round 70 v72 schema: BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT ──
+
+pub fn create_research_tables_v72(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v71(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_bbands (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_bbands_updated ON research_bbands(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_ad (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_ad_updated ON research_ad(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_adosc (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_adosc_updated ON research_adosc(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_sum (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_sum_updated ON research_sum(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_linreg_intercept (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_linreg_intercept_updated ON research_linreg_intercept(updated_at);",
+    ).map_err(|e| format!("create v72 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_bbands(conn: &Connection, symbol: &str, snap: &BbandsSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v72(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("bbands json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_bbands (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert bbands: {e}"))?;
+    Ok(())
+}
+
+pub fn get_bbands(conn: &Connection, symbol: &str) -> Result<Option<BbandsSnapshot>, String> {
+    let _ = create_research_tables_v72(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_bbands WHERE symbol = ?1")
+        .map_err(|e| format!("prep bbands: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query bbands: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row bbands: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get bbands: {e}"))?;
+        let snap: BbandsSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse bbands: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_ad(conn: &Connection, symbol: &str, snap: &AdSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v72(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("ad json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_ad (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert ad: {e}"))?;
+    Ok(())
+}
+
+pub fn get_ad(conn: &Connection, symbol: &str) -> Result<Option<AdSnapshot>, String> {
+    let _ = create_research_tables_v72(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_ad WHERE symbol = ?1")
+        .map_err(|e| format!("prep ad: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query ad: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row ad: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get ad: {e}"))?;
+        let snap: AdSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse ad: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_adosc(conn: &Connection, symbol: &str, snap: &AdoscSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v72(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("adosc json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_adosc (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert adosc: {e}"))?;
+    Ok(())
+}
+
+pub fn get_adosc(conn: &Connection, symbol: &str) -> Result<Option<AdoscSnapshot>, String> {
+    let _ = create_research_tables_v72(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_adosc WHERE symbol = ?1")
+        .map_err(|e| format!("prep adosc: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query adosc: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row adosc: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get adosc: {e}"))?;
+        let snap: AdoscSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse adosc: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_sum(conn: &Connection, symbol: &str, snap: &SumSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v72(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("sum json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_sum (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert sum: {e}"))?;
+    Ok(())
+}
+
+pub fn get_sum(conn: &Connection, symbol: &str) -> Result<Option<SumSnapshot>, String> {
+    let _ = create_research_tables_v72(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_sum WHERE symbol = ?1")
+        .map_err(|e| format!("prep sum: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query sum: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row sum: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get sum: {e}"))?;
+        let snap: SumSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse sum: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_linreg_intercept(conn: &Connection, symbol: &str, snap: &LinearRegInterceptSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v72(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("linreg_intercept json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_linreg_intercept (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert linreg_intercept: {e}"))?;
+    Ok(())
+}
+
+pub fn get_linreg_intercept(conn: &Connection, symbol: &str) -> Result<Option<LinearRegInterceptSnapshot>, String> {
+    let _ = create_research_tables_v72(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_linreg_intercept WHERE symbol = ?1")
+        .map_err(|e| format!("prep linreg_intercept: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query linreg_intercept: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row linreg_intercept: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get linreg_intercept: {e}"))?;
+        let snap: LinearRegInterceptSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse linreg_intercept: {e}"))?;
         Ok(Some(snap))
     } else { Ok(None) }
 }
@@ -54880,6 +55416,152 @@ Trailing text.
             "FRESH_HIGH" | "RECENT_HIGH" | "OLD_HIGH" | "STALE_HIGH" | "INSUFFICIENT_DATA"));
         if snap.max_index_label != "INSUFFICIENT_DATA" {
             assert!(snap.max_index_bars_ago < snap.period);
+        }
+    }
+
+    // ── Round 70 tests — BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT ──
+
+    #[test]
+    fn bbands_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = BbandsSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 20, num_std: 2.0,
+            upper: 110.0, middle: 100.0, lower: 90.0,
+            upper_prev: 109.0, middle_prev: 99.0, lower_prev: 89.0,
+            last_close: 105.0, pct_b: 75.0, bandwidth: 20.0,
+            bbands_label: "UPPER_HALF".into(), note: String::new(),
+        };
+        upsert_bbands(&conn, "TEST", &snap).unwrap();
+        let got = get_bbands(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.bbands_label, "UPPER_HALF");
+        assert_eq!(got.period, 20);
+    }
+
+    #[test]
+    fn bbands_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_bbands_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.bbands_label.as_str(),
+            "ABOVE_UPPER" | "UPPER_HALF" | "LOWER_HALF" | "BELOW_LOWER" | "INSUFFICIENT_DATA"));
+        if snap.bbands_label != "INSUFFICIENT_DATA" {
+            assert!(snap.upper > snap.middle);
+            assert!(snap.middle > snap.lower);
+            // middle identity: SMA of last 20 closes
+            let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+            sorted.sort_by(|a, b| a.date.cmp(&b.date));
+            let n = sorted.len();
+            let expected_mid = (0..20).map(|k| sorted[n - 20 + k].close).sum::<f64>() / 20.0;
+            assert!((snap.middle - expected_mid).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn ad_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = AdSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            ad: 12345.0, ad_prev: 12300.0, ad_delta: 45.0, ad_slope: 5.2,
+            last_close: 108.0,
+            ad_label: "ACCUM".into(), note: String::new(),
+        };
+        upsert_ad(&conn, "TEST", &snap).unwrap();
+        let got = get_ad(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.ad_label, "ACCUM");
+        assert_eq!(got.ad_delta, 45.0);
+    }
+
+    #[test]
+    fn ad_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_ad_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.ad_label.as_str(),
+            "STRONG_ACCUM" | "ACCUM" | "FLAT" | "DIST" | "STRONG_DIST" | "INSUFFICIENT_DATA"));
+        if snap.ad_label != "INSUFFICIENT_DATA" {
+            assert!((snap.ad - snap.ad_prev - snap.ad_delta).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn adosc_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = AdoscSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            fast_period: 3, slow_period: 10,
+            adosc: 123.4, adosc_prev: 100.0,
+            last_close: 108.0, ad_ref: 50000.0,
+            adosc_label: "BULL".into(), note: String::new(),
+        };
+        upsert_adosc(&conn, "TEST", &snap).unwrap();
+        let got = get_adosc(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.adosc_label, "BULL");
+        assert_eq!(got.fast_period, 3);
+    }
+
+    #[test]
+    fn adosc_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_adosc_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.adosc_label.as_str(),
+            "STRONG_BULL" | "BULL" | "FLAT" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+    }
+
+    #[test]
+    fn sum_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = SumSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 30, sum: 3000.0, sum_prev: 2970.0,
+            sum_delta: 30.0, sum_pct_change: 1.01,
+            last_close: 101.0,
+            sum_label: "STRONG_UP".into(), note: String::new(),
+        };
+        upsert_sum(&conn, "TEST", &snap).unwrap();
+        let got = get_sum(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.sum_label, "STRONG_UP");
+        assert_eq!(got.period, 30);
+    }
+
+    #[test]
+    fn sum_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_sum_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.sum_label.as_str(),
+            "STRONG_UP" | "UP" | "FLAT" | "DOWN" | "STRONG_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.sum_label != "INSUFFICIENT_DATA" {
+            // sum identity: sum of last 30 closes
+            let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+            sorted.sort_by(|a, b| a.date.cmp(&b.date));
+            let n = sorted.len();
+            let expected = (0..30).map(|k| sorted[n - 30 + k].close).sum::<f64>();
+            assert!((snap.sum - expected).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn linreg_intercept_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = LinearRegInterceptSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 14, intercept: 95.0, intercept_prev: 94.5,
+            slope: 0.5, last_close: 100.0, drift: 5.0, drift_pct: 5.26,
+            linreg_intercept_label: "STRONG_ADVANCE".into(), note: String::new(),
+        };
+        upsert_linreg_intercept(&conn, "TEST", &snap).unwrap();
+        let got = get_linreg_intercept(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.linreg_intercept_label, "STRONG_ADVANCE");
+        assert_eq!(got.period, 14);
+    }
+
+    #[test]
+    fn linreg_intercept_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_linearreg_intercept_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.linreg_intercept_label.as_str(),
+            "STRONG_ADVANCE" | "ADVANCE" | "FLAT" | "DECLINE" | "STRONG_DECLINE" | "INSUFFICIENT_DATA"));
+        if snap.linreg_intercept_label != "INSUFFICIENT_DATA" {
+            // drift identity: last_close - intercept
+            assert!((snap.drift - (snap.last_close - snap.intercept)).abs() < 1e-6);
         }
     }
 }
