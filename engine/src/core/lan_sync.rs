@@ -550,6 +550,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_macdext",
     "research_macdfix",
     "research_mavp",
+    // ── ADR-184 Round 72 ────────────────────────────
+    "research_cdl_doji",
+    "research_cdl_hammer",
+    "research_cdl_shooting_star",
+    "research_cdl_engulfing",
+    "research_cdl_harami",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -3201,6 +3207,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_cdl_doji" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_doji (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_hammer" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_hammer (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_shooting_star" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_shooting_star (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_engulfing" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_engulfing (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_harami" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_harami (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -3614,6 +3655,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_macdext" => Some("updated_at"),
         "research_macdfix" => Some("updated_at"),
         "research_mavp" => Some("updated_at"),
+        // ── ADR-184 Round 72 ──
+        "research_cdl_doji" => Some("updated_at"),
+        "research_cdl_hammer" => Some("updated_at"),
+        "research_cdl_shooting_star" => Some("updated_at"),
+        "research_cdl_engulfing" => Some("updated_at"),
+        "research_cdl_harami" => Some("updated_at"),
         _ => None,
     }
 }
