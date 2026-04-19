@@ -574,6 +574,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_cdl_marubozu",
     "research_cdl_spinning_top",
     "research_cdl_tristar",
+    // ── ADR-191 Round 76 ────────────────────────────
+    "research_cdl_doji_star",
+    "research_cdl_morning_doji_star",
+    "research_cdl_evening_doji_star",
+    "research_cdl_abandoned_baby",
+    "research_cdl_three_inside",
     // ── ADR-189 Round 76 ────────────────────────────
     "research_modsharpe",
     "research_hsiehtest",
@@ -3377,6 +3383,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_cdl_doji_star" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_doji_star (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_morning_doji_star" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_morning_doji_star (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_evening_doji_star" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_evening_doji_star (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_abandoned_baby" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_abandoned_baby (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_three_inside" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_three_inside (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         "research_modsharpe" => Some(
             "CREATE TABLE IF NOT EXISTS research_modsharpe (
                 symbol TEXT PRIMARY KEY,
@@ -3884,6 +3925,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_cdl_marubozu" => Some("updated_at"),
         "research_cdl_spinning_top" => Some("updated_at"),
         "research_cdl_tristar" => Some("updated_at"),
+        // ── ADR-191 Round 76 ──
+        "research_cdl_doji_star" => Some("updated_at"),
+        "research_cdl_morning_doji_star" => Some("updated_at"),
+        "research_cdl_evening_doji_star" => Some("updated_at"),
+        "research_cdl_abandoned_baby" => Some("updated_at"),
+        "research_cdl_three_inside" => Some("updated_at"),
         // ── ADR-189 Round 76 ──
         "research_modsharpe" => Some("updated_at"),
         "research_hsiehtest" => Some("updated_at"),

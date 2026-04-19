@@ -7944,6 +7944,125 @@ pub struct CdlTristarSnapshot {
     pub note: String,
 }
 
+/// TA-Lib CDLDOJISTAR — Doji Star (2-bar reversal precursor).
+/// Prior bar has a real body (body ≥ 30% of range), current bar
+/// is a doji (body ≤ 5% of range) that gaps away from the prior
+/// close. -100 (bearish) when prior is green and current doji
+/// gaps above prior close; +100 (bullish) when prior is red and
+/// current doji gaps below prior close. Precursor to the full
+/// 3-bar MORNINGDOJISTAR / EVENINGDOJISTAR patterns.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlDojiStarSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, -100 bearish, 0 none
+    pub pattern_value_prev: i32,
+    pub prior_body_pct_range: f64,     // ≥ 30% to qualify as real body
+    pub current_body_pct_range: f64,   // ≤ 5% to qualify as doji
+    pub gap_pct: f64,                  // signed % gap from prior close
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_doji_star_label: String, // BULLISH_PATTERN / BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLMORNINGDOJISTAR — Morning Doji Star (3-bar bullish
+/// reversal, doji-middle variant of R73 MORNINGSTAR). Bar 1 is a
+/// long red body (≥ 30% of range); bar 2 is a doji (body ≤ 5%)
+/// that gaps below bar 1's close; bar 3 is green and closes above
+/// bar 1's midpoint. Stronger bullish-reversal conviction than
+/// regular morning star because the doji indicates explicit
+/// equilibrium after the sell-off before the recovery.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlMorningDojiStarSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, 0 none
+    pub pattern_value_prev: i32,
+    pub bar1_body_pct_range: f64,      // ≥ 30%
+    pub bar2_body_pct_range: f64,      // doji ≤ 5%
+    pub bar3_close_vs_bar1_mid_pct: f64, // signed % above (positive) bar 1 midpoint
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_morning_doji_star_label: String, // BULLISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLEVENINGDOJISTAR — Evening Doji Star (3-bar bearish
+/// reversal, doji-middle variant of R73 EVENINGSTAR). Bar 1 is a
+/// long green body; bar 2 is a doji that gaps above bar 1's close;
+/// bar 3 is red and closes below bar 1's midpoint. Stronger
+/// bearish-reversal conviction than regular evening star because
+/// the doji indicates explicit equilibrium after the rally before
+/// the breakdown.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlEveningDojiStarSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // -100 bearish, 0 none
+    pub pattern_value_prev: i32,
+    pub bar1_body_pct_range: f64,      // ≥ 30%
+    pub bar2_body_pct_range: f64,      // doji ≤ 5%
+    pub bar3_close_vs_bar1_mid_pct: f64, // signed % below (negative) bar 1 midpoint
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_evening_doji_star_label: String, // BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLABANDONEDBABY — Abandoned Baby (strongest 3-bar star
+/// variant). Doji "abandoned" by full-body-and-shadow gaps on both
+/// sides. Bullish: bar 1 long red, bar 2 doji with bar2.high <
+/// bar1.low (no overlap), bar 3 green with bar3.low > bar2.high
+/// (full gap away). Bearish: mirror. Rare but very high-conviction
+/// reversal signal.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlAbandonedBabySnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, -100 bearish, 0 none
+    pub pattern_value_prev: i32,
+    pub bar1_body_pct_range: f64,      // ≥ 30%
+    pub bar2_body_pct_range: f64,      // doji ≤ 5%
+    pub gap_down_pct: f64,             // signed % gap between bar 1 low and bar 2 high
+    pub gap_up_pct: f64,               // signed % gap between bar 2 high and bar 3 low
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_abandoned_baby_label: String, // BULLISH_PATTERN / BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDL3INSIDE — Three Inside Up/Down (confirmed Harami).
+/// Bar 1 has a long body; bar 2 is a small body of the opposite
+/// colour fully contained within bar 1's body (Harami geometry);
+/// bar 3 closes beyond bar 1's body in the direction opposite to
+/// bar 1 (confirmation). Bullish: bar 1 red + bar 2 small green
+/// inside + bar 3 closes above bar 1's open. Bearish: mirror.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlThreeInsideSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, -100 bearish, 0 none
+    pub pattern_value_prev: i32,
+    pub bar1_body_pct_range: f64,      // ≥ 30%
+    pub body_size_ratio: f64,          // bar 2 body / bar 1 body, < 1.0 when match
+    pub bar3_close_vs_bar1_open_pct: f64, // signed % distance from bar 1 open
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_three_inside_label: String, // BULLISH_PATTERN / BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── ADR-189 Round 76 (Quant Stats) surfaces ───────────────────────────────
 
 /// MODSHARPE — Pezier-White Adjusted Sharpe Ratio.
@@ -33463,6 +33582,312 @@ pub fn compute_cdl_tristar_snapshot(
     }
 }
 
+pub fn compute_cdl_doji_star_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlDojiStarSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 3 {
+        return CdlDojiStarSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_doji_star_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥3 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    // Doji Star: prior bar with real body (≥ 30% of range); current is a
+    // doji (body ≤ 5% of range) whose entire body gaps away from prior
+    // close. Bearish (-100) when prior green + gap up; bullish (+100) when
+    // prior red + gap down.
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        let prior = s[i - 1];
+        let cur = s[i];
+        let (p_body, _, _, _, p_body_pct, p_is_bull) = candle_metrics(prior);
+        let (_, _, _, _, c_body_pct, _) = candle_metrics(cur);
+        if p_body < 1e-12 || p_body_pct < 30.0 { return 0; }
+        if c_body_pct > 5.0 { return 0; } // current must be doji
+        let c_low_body = cur.open.min(cur.close);
+        let c_high_body = cur.open.max(cur.close);
+        if p_is_bull {
+            // prior green → bearish top star: doji body above prior close
+            if c_low_body > prior.close { -100 } else { 0 }
+        } else {
+            // prior red → bullish bottom star: doji body below prior close
+            if c_high_body < prior.close { 100 } else { 0 }
+        }
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 1, detect);
+    let prior = sorted[n - 2];
+    let cur = sorted[n - 1];
+    let (_, _, _, _, p_body_pct, p_is_bull) = candle_metrics(prior);
+    let (_, _, _, _, c_body_pct, _) = candle_metrics(cur);
+    let c_low_body = cur.open.min(cur.close);
+    let c_high_body = cur.open.max(cur.close);
+    // signed gap: positive = gap up (bearish), negative = gap down (bullish)
+    let gap_pct = if prior.close.abs() > 1e-12 {
+        if p_is_bull {
+            100.0 * (c_low_body - prior.close) / prior.close
+        } else {
+            100.0 * (c_high_body - prior.close) / prior.close
+        }
+    } else { 0.0 };
+    let label = match last_val {
+        100 => "BULLISH_PATTERN",
+        -100 => "BEARISH_PATTERN",
+        _ => "NO_PATTERN",
+    };
+    CdlDojiStarSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        prior_body_pct_range: p_body_pct, current_body_pct_range: c_body_pct,
+        gap_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: cur.close,
+        cdl_doji_star_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_morning_doji_star_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlMorningDojiStarSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 4 {
+        return CdlMorningDojiStarSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_morning_doji_star_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥4 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    // Morning Doji Star (3-bar bullish): bar 1 long red, bar 2 doji
+    // gapping below bar 1 close, bar 3 green closing above bar 1 midpoint.
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 2 { return 0; }
+        let b0 = s[i - 2]; let b1 = s[i - 1]; let b2 = s[i];
+        let (body0, _, _, _, body0_pct, bull0) = candle_metrics(b0);
+        let (_, _, _, _, body1_pct, _) = candle_metrics(b1);
+        let (body2, _, _, _, _, bull2) = candle_metrics(b2);
+        if body0 < 1e-12 || body2 < 1e-12 { return 0; }
+        if bull0 { return 0; }                // bar 1 must be red
+        if body0_pct < 30.0 { return 0; }      // bar 1 long body
+        if body1_pct > 5.0 { return 0; }       // bar 2 doji
+        if !bull2 { return 0; }                // bar 3 must be green
+        // bar 2 body gaps below bar 1 close
+        let b1_high_body = b1.open.max(b1.close);
+        if b1_high_body >= b0.close { return 0; }
+        let midpoint_b0 = (b0.open + b0.close) / 2.0;
+        if b2.close > midpoint_b0 { 100 } else { 0 }
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 2, detect);
+    let b0 = sorted[n - 3]; let b1 = sorted[n - 2]; let b2 = sorted[n - 1];
+    let (_, _, _, _, body0_pct, _) = candle_metrics(b0);
+    let (_, _, _, _, body1_pct, _) = candle_metrics(b1);
+    let mid0 = (b0.open + b0.close) / 2.0;
+    let pct_above = if mid0.abs() > 1e-12 { 100.0 * (b2.close - mid0) / mid0 } else { 0.0 };
+    let label = if last_match { "BULLISH_PATTERN" } else { "NO_PATTERN" };
+    CdlMorningDojiStarSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        bar1_body_pct_range: body0_pct, bar2_body_pct_range: body1_pct,
+        bar3_close_vs_bar1_mid_pct: pct_above,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b2.close,
+        cdl_morning_doji_star_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_evening_doji_star_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlEveningDojiStarSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 4 {
+        return CdlEveningDojiStarSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_evening_doji_star_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥4 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    // Evening Doji Star (3-bar bearish): bar 1 long green, bar 2 doji
+    // gapping above bar 1 close, bar 3 red closing below bar 1 midpoint.
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 2 { return 0; }
+        let b0 = s[i - 2]; let b1 = s[i - 1]; let b2 = s[i];
+        let (body0, _, _, _, body0_pct, bull0) = candle_metrics(b0);
+        let (_, _, _, _, body1_pct, _) = candle_metrics(b1);
+        let (body2, _, _, _, _, bull2) = candle_metrics(b2);
+        if body0 < 1e-12 || body2 < 1e-12 { return 0; }
+        if !bull0 { return 0; }                // bar 1 must be green
+        if body0_pct < 30.0 { return 0; }      // bar 1 long body
+        if body1_pct > 5.0 { return 0; }       // bar 2 doji
+        if bull2 { return 0; }                 // bar 3 must be red
+        // bar 2 body gaps above bar 1 close
+        let b1_low_body = b1.open.min(b1.close);
+        if b1_low_body <= b0.close { return 0; }
+        let midpoint_b0 = (b0.open + b0.close) / 2.0;
+        if b2.close < midpoint_b0 { -100 } else { 0 }
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 2, detect);
+    let b0 = sorted[n - 3]; let b1 = sorted[n - 2]; let b2 = sorted[n - 1];
+    let (_, _, _, _, body0_pct, _) = candle_metrics(b0);
+    let (_, _, _, _, body1_pct, _) = candle_metrics(b1);
+    let mid0 = (b0.open + b0.close) / 2.0;
+    let pct_below = if mid0.abs() > 1e-12 { 100.0 * (b2.close - mid0) / mid0 } else { 0.0 };
+    let label = if last_match { "BEARISH_PATTERN" } else { "NO_PATTERN" };
+    CdlEveningDojiStarSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        bar1_body_pct_range: body0_pct, bar2_body_pct_range: body1_pct,
+        bar3_close_vs_bar1_mid_pct: pct_below,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b2.close,
+        cdl_evening_doji_star_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_abandoned_baby_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlAbandonedBabySnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 4 {
+        return CdlAbandonedBabySnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_abandoned_baby_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥4 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    // Abandoned Baby: doji isolated by full-shadow gaps on BOTH sides.
+    // Bullish: bar 1 long red, bar 2 doji with bar2.high < bar1.low,
+    // bar 3 green with bar3.low > bar2.high.
+    // Bearish: bar 1 long green, bar 2 doji with bar2.low > bar1.high,
+    // bar 3 red with bar3.high < bar2.low.
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 2 { return 0; }
+        let b0 = s[i - 2]; let b1 = s[i - 1]; let b2 = s[i];
+        let (body0, _, _, _, body0_pct, bull0) = candle_metrics(b0);
+        let (_, _, _, _, body1_pct, _) = candle_metrics(b1);
+        let (body2, _, _, _, _, bull2) = candle_metrics(b2);
+        if body0 < 1e-12 || body2 < 1e-12 { return 0; }
+        if body0_pct < 30.0 { return 0; }       // bar 1 long body
+        if body1_pct > 5.0 { return 0; }        // bar 2 doji
+        if !bull0 && bull2 {
+            // bullish path: bar 1 red, bar 3 green, with full-shadow gaps
+            if b1.high < b0.low && b2.low > b1.high { return 100; }
+        } else if bull0 && !bull2 {
+            // bearish path: bar 1 green, bar 3 red, with full-shadow gaps
+            if b1.low > b0.high && b2.high < b1.low { return -100; }
+        }
+        0
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 2, detect);
+    let b0 = sorted[n - 3]; let b1 = sorted[n - 2]; let b2 = sorted[n - 1];
+    let (_, _, _, _, body0_pct, _) = candle_metrics(b0);
+    let (_, _, _, _, body1_pct, _) = candle_metrics(b1);
+    // Report signed gap magnitudes as computed on the last triplet.
+    let (gap_down_pct, gap_up_pct) = match last_val {
+        100 => {
+            let gd = if b0.low.abs() > 1e-12 { 100.0 * (b0.low - b1.high) / b0.low } else { 0.0 };
+            let gu = if b1.high.abs() > 1e-12 { 100.0 * (b2.low - b1.high) / b1.high } else { 0.0 };
+            (gd, gu)
+        }
+        -100 => {
+            let gd = if b0.high.abs() > 1e-12 { 100.0 * (b0.high - b1.low) / b0.high } else { 0.0 };
+            let gu = if b1.low.abs() > 1e-12 { 100.0 * (b2.high - b1.low) / b1.low } else { 0.0 };
+            (gd, gu)
+        }
+        _ => (0.0, 0.0),
+    };
+    let label = match last_val {
+        100 => "BULLISH_PATTERN",
+        -100 => "BEARISH_PATTERN",
+        _ => "NO_PATTERN",
+    };
+    CdlAbandonedBabySnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        bar1_body_pct_range: body0_pct, bar2_body_pct_range: body1_pct,
+        gap_down_pct, gap_up_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b2.close,
+        cdl_abandoned_baby_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_three_inside_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlThreeInsideSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 4 {
+        return CdlThreeInsideSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_three_inside_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥4 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    // Three Inside Up/Down: Harami in bars 1-2, confirmation close in bar 3.
+    // Bullish: bar 1 red long, bar 2 small green contained inside bar 1 body,
+    //   bar 3 closes above bar 1 open.
+    // Bearish: bar 1 green long, bar 2 small red contained inside bar 1 body,
+    //   bar 3 closes below bar 1 open.
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 2 { return 0; }
+        let b0 = s[i - 2]; let b1 = s[i - 1]; let b2 = s[i];
+        let (body0, _, _, _, body0_pct, bull0) = candle_metrics(b0);
+        let (_, _, _, _, _, bull1) = candle_metrics(b1);
+        if body0 < 1e-12 || body0_pct < 30.0 { return 0; }
+        if bull0 == bull1 { return 0; } // opposite colours for Harami
+        let b0_low_body = b0.open.min(b0.close);
+        let b0_high_body = b0.open.max(b0.close);
+        let b1_low_body = b1.open.min(b1.close);
+        let b1_high_body = b1.open.max(b1.close);
+        if !(b1_low_body >= b0_low_body && b1_high_body <= b0_high_body) { return 0; }
+        if !bull0 {
+            // bullish: bar 1 red, bar 3 closes above bar 1 open (above body top)
+            if b2.close > b0.open { return 100; }
+        } else {
+            // bearish: bar 1 green, bar 3 closes below bar 1 open (below body bottom)
+            if b2.close < b0.open { return -100; }
+        }
+        0
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 2, detect);
+    let b0 = sorted[n - 3]; let b1 = sorted[n - 2]; let b2 = sorted[n - 1];
+    let (body0, _, _, _, body0_pct, _) = candle_metrics(b0);
+    let (body1, _, _, _, _, _) = candle_metrics(b1);
+    let ratio = if body0 > 1e-12 { body1 / body0 } else { 0.0 };
+    let pct_from_b0_open = if b0.open.abs() > 1e-12 { 100.0 * (b2.close - b0.open) / b0.open } else { 0.0 };
+    let label = match last_val {
+        100 => "BULLISH_PATTERN",
+        -100 => "BEARISH_PATTERN",
+        _ => "NO_PATTERN",
+    };
+    CdlThreeInsideSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        bar1_body_pct_range: body0_pct, body_size_ratio: ratio,
+        bar3_close_vs_bar1_open_pct: pct_from_b0_open,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b2.close,
+        cdl_three_inside_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-189 Round 76 (Quant Stats) compute fns ────────────────────────────
 
 /// MODSHARPE compute: Pezier-White Adjusted Sharpe Ratio.
@@ -45839,6 +46264,171 @@ pub fn get_kupiecpof(conn: &Connection, symbol: &str) -> Result<Option<KupiecPof
     if let Some(r) = rows.next().map_err(|e| format!("row kupiecpof: {e}"))? {
         let j: String = r.get(0).map_err(|e| format!("get kupiecpof: {e}"))?;
         let snap: KupiecPofSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse kupiecpof: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── ADR-191 Round 76 schema v80 (TA-Lib CDL) ─────────────
+//    CDLDOJISTAR / CDLMORNINGDOJISTAR / CDLEVENINGDOJISTAR /
+//    CDLABANDONEDBABY / CDL3INSIDE
+
+pub fn create_research_tables_v80(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v79(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_cdl_doji_star (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_doji_star_updated ON research_cdl_doji_star(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_morning_doji_star (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_morning_doji_star_updated ON research_cdl_morning_doji_star(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_evening_doji_star (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_evening_doji_star_updated ON research_cdl_evening_doji_star(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_abandoned_baby (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_abandoned_baby_updated ON research_cdl_abandoned_baby(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_three_inside (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_three_inside_updated ON research_cdl_three_inside(updated_at);",
+    ).map_err(|e| format!("create v80 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_cdl_doji_star(conn: &Connection, symbol: &str, snap: &CdlDojiStarSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v80(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_doji_star json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_doji_star (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_doji_star: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_doji_star(conn: &Connection, symbol: &str) -> Result<Option<CdlDojiStarSnapshot>, String> {
+    let _ = create_research_tables_v80(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_doji_star WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_doji_star: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_doji_star: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_doji_star: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_doji_star: {e}"))?;
+        let snap: CdlDojiStarSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_doji_star: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_morning_doji_star(conn: &Connection, symbol: &str, snap: &CdlMorningDojiStarSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v80(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_morning_doji_star json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_morning_doji_star (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_morning_doji_star: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_morning_doji_star(conn: &Connection, symbol: &str) -> Result<Option<CdlMorningDojiStarSnapshot>, String> {
+    let _ = create_research_tables_v80(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_morning_doji_star WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_morning_doji_star: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_morning_doji_star: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_morning_doji_star: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_morning_doji_star: {e}"))?;
+        let snap: CdlMorningDojiStarSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_morning_doji_star: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_evening_doji_star(conn: &Connection, symbol: &str, snap: &CdlEveningDojiStarSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v80(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_evening_doji_star json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_evening_doji_star (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_evening_doji_star: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_evening_doji_star(conn: &Connection, symbol: &str) -> Result<Option<CdlEveningDojiStarSnapshot>, String> {
+    let _ = create_research_tables_v80(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_evening_doji_star WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_evening_doji_star: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_evening_doji_star: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_evening_doji_star: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_evening_doji_star: {e}"))?;
+        let snap: CdlEveningDojiStarSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_evening_doji_star: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_abandoned_baby(conn: &Connection, symbol: &str, snap: &CdlAbandonedBabySnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v80(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_abandoned_baby json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_abandoned_baby (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_abandoned_baby: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_abandoned_baby(conn: &Connection, symbol: &str) -> Result<Option<CdlAbandonedBabySnapshot>, String> {
+    let _ = create_research_tables_v80(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_abandoned_baby WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_abandoned_baby: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_abandoned_baby: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_abandoned_baby: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_abandoned_baby: {e}"))?;
+        let snap: CdlAbandonedBabySnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_abandoned_baby: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_three_inside(conn: &Connection, symbol: &str, snap: &CdlThreeInsideSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v80(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_three_inside json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_three_inside (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_three_inside: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_three_inside(conn: &Connection, symbol: &str) -> Result<Option<CdlThreeInsideSnapshot>, String> {
+    let _ = create_research_tables_v80(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_three_inside WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_three_inside: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_three_inside: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_three_inside: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_three_inside: {e}"))?;
+        let snap: CdlThreeInsideSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_three_inside: {e}"))?;
         Ok(Some(snap))
     } else { Ok(None) }
 }
@@ -60360,6 +60950,229 @@ Trailing text.
         assert_eq!(snap.cdl_tristar_label, "BULLISH_PATTERN");
         assert_eq!(snap.pattern_value, 100);
         assert!(snap.avg_body_pct_range <= 5.0);
+    }
+
+    // ── Round 76 tests — CDLDOJISTAR / CDLMORNINGDOJISTAR /
+    //    CDLEVENINGDOJISTAR / CDLABANDONEDBABY / CDL3INSIDE ──
+
+    #[test]
+    fn cdl_doji_star_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlDojiStarSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 50,
+            pattern_value: 100, pattern_value_prev: 0,
+            prior_body_pct_range: 70.0, current_body_pct_range: 3.0,
+            gap_pct: -1.5,
+            last_bar_match: true, days_since_pattern: 0, last_close: 99.0,
+            cdl_doji_star_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_doji_star(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_doji_star(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_doji_star_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+    }
+
+    #[test]
+    fn cdl_doji_star_compute_detects() {
+        let mut bars = boring_green_bars(3, 5);
+        // Prior: big red body (open 110, close 100, range ~11, body 10 ≥ 30%).
+        bars.push(HistoricalPriceRow {
+            date: "2024-06-05".into(),
+            open: 110.0, high: 110.0, low: 99.0, close: 100.0,
+            adj_close: 100.0, volume: 1_000_000.0, change: -10.0, change_pct: -9.0,
+        });
+        // Current: doji gapping BELOW prior close (bullish bottom star).
+        // Body at 95, range 94..96 → body_pct ≈ 5% or less; body entirely below 100.
+        bars.push(HistoricalPriceRow {
+            date: "2024-06-06".into(),
+            open: 95.02, high: 96.0, low: 94.0, close: 94.98,
+            adj_close: 94.98, volume: 1_000_000.0, change: -5.02, change_pct: -5.02,
+        });
+        let snap = compute_cdl_doji_star_snapshot("T", "2026-04-19", &bars);
+        assert_eq!(snap.cdl_doji_star_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.current_body_pct_range <= 5.0);
+        assert!(snap.gap_pct < 0.0); // gap down signed negative
+    }
+
+    #[test]
+    fn cdl_morning_doji_star_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlMorningDojiStarSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 80,
+            pattern_value: 100, pattern_value_prev: 0,
+            bar1_body_pct_range: 75.0, bar2_body_pct_range: 3.0,
+            bar3_close_vs_bar1_mid_pct: 2.5,
+            last_bar_match: true, days_since_pattern: 0, last_close: 103.5,
+            cdl_morning_doji_star_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_morning_doji_star(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_morning_doji_star(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_morning_doji_star_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+    }
+
+    #[test]
+    fn cdl_morning_doji_star_compute_detects() {
+        let mut bars = boring_green_bars(10, 7);
+        // Bar 1: long red body (open 104, close 100)
+        bars.push(HistoricalPriceRow {
+            date: "2024-07-11".into(),
+            open: 104.0, high: 104.5, low: 99.5, close: 100.0,
+            adj_close: 100.0, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        // Bar 2: doji gapping below bar 1 close (100). Body at 97, range 96.5..97.8.
+        bars.push(HistoricalPriceRow {
+            date: "2024-07-12".into(),
+            open: 97.0, high: 97.8, low: 96.5, close: 97.02,
+            adj_close: 97.02, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        // Bar 3: green, closes above bar 1 midpoint (102)
+        bars.push(HistoricalPriceRow {
+            date: "2024-07-13".into(),
+            open: 98.0, high: 104.5, low: 97.9, close: 104.0,
+            adj_close: 104.0, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        let snap = compute_cdl_morning_doji_star_snapshot("T", "2026-04-19", &bars);
+        assert_eq!(snap.cdl_morning_doji_star_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.bar2_body_pct_range <= 5.0);
+        assert!(snap.bar3_close_vs_bar1_mid_pct > 0.0);
+    }
+
+    #[test]
+    fn cdl_evening_doji_star_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlEveningDojiStarSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 80,
+            pattern_value: -100, pattern_value_prev: 0,
+            bar1_body_pct_range: 75.0, bar2_body_pct_range: 3.0,
+            bar3_close_vs_bar1_mid_pct: -2.5,
+            last_bar_match: true, days_since_pattern: 0, last_close: 98.5,
+            cdl_evening_doji_star_label: "BEARISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_evening_doji_star(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_evening_doji_star(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_evening_doji_star_label, "BEARISH_PATTERN");
+        assert_eq!(got.pattern_value, -100);
+    }
+
+    #[test]
+    fn cdl_evening_doji_star_compute_detects() {
+        let mut bars = boring_green_bars(10, 7);
+        // Bar 1: long green body (open 100, close 104)
+        bars.push(HistoricalPriceRow {
+            date: "2024-07-11".into(),
+            open: 100.0, high: 104.5, low: 99.5, close: 104.0,
+            adj_close: 104.0, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        // Bar 2: doji gapping above bar 1 close (104). Body at 107, range 106.5..107.8.
+        bars.push(HistoricalPriceRow {
+            date: "2024-07-12".into(),
+            open: 107.0, high: 107.8, low: 106.5, close: 107.02,
+            adj_close: 107.02, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        // Bar 3: red, closes below bar 1 midpoint (102)
+        bars.push(HistoricalPriceRow {
+            date: "2024-07-13".into(),
+            open: 106.0, high: 106.1, low: 99.5, close: 100.0,
+            adj_close: 100.0, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        let snap = compute_cdl_evening_doji_star_snapshot("T", "2026-04-19", &bars);
+        assert_eq!(snap.cdl_evening_doji_star_label, "BEARISH_PATTERN");
+        assert_eq!(snap.pattern_value, -100);
+        assert!(snap.bar2_body_pct_range <= 5.0);
+        assert!(snap.bar3_close_vs_bar1_mid_pct < 0.0);
+    }
+
+    #[test]
+    fn cdl_abandoned_baby_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlAbandonedBabySnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 60,
+            pattern_value: 100, pattern_value_prev: 0,
+            bar1_body_pct_range: 85.0, bar2_body_pct_range: 3.0,
+            gap_down_pct: 1.5, gap_up_pct: 1.8,
+            last_bar_match: true, days_since_pattern: 0, last_close: 103.0,
+            cdl_abandoned_baby_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_abandoned_baby(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_abandoned_baby(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_abandoned_baby_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+    }
+
+    #[test]
+    fn cdl_abandoned_baby_compute_detects() {
+        let mut bars = boring_green_bars(10, 7);
+        // Bar 1: long red body, low = 99. (open 110, close 100, high 111, low 99)
+        bars.push(HistoricalPriceRow {
+            date: "2024-07-11".into(),
+            open: 110.0, high: 111.0, low: 99.0, close: 100.0,
+            adj_close: 100.0, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        // Bar 2: doji with high = 95 (< bar1.low 99). body around 94, range 93..95.
+        bars.push(HistoricalPriceRow {
+            date: "2024-07-12".into(),
+            open: 94.0, high: 95.0, low: 93.0, close: 94.05,
+            adj_close: 94.05, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        // Bar 3: green with low = 96 (> bar2.high 95). body 100→108, range 96..108.
+        bars.push(HistoricalPriceRow {
+            date: "2024-07-13".into(),
+            open: 100.0, high: 108.0, low: 96.0, close: 108.0,
+            adj_close: 108.0, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        let snap = compute_cdl_abandoned_baby_snapshot("T", "2026-04-19", &bars);
+        assert_eq!(snap.cdl_abandoned_baby_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.bar2_body_pct_range <= 5.0);
+    }
+
+    #[test]
+    fn cdl_three_inside_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlThreeInsideSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 70,
+            pattern_value: 100, pattern_value_prev: 0,
+            bar1_body_pct_range: 75.0, body_size_ratio: 0.25,
+            bar3_close_vs_bar1_open_pct: 1.5,
+            last_bar_match: true, days_since_pattern: 0, last_close: 112.0,
+            cdl_three_inside_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_three_inside(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_three_inside(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_three_inside_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+        assert!(got.body_size_ratio < 1.0);
+    }
+
+    #[test]
+    fn cdl_three_inside_compute_detects() {
+        let mut bars = boring_green_bars(10, 7);
+        // Bar 1: long red body (open 110, close 100, range 111..99, body_pct ≈ 83%)
+        bars.push(HistoricalPriceRow {
+            date: "2024-07-11".into(),
+            open: 110.0, high: 111.0, low: 99.0, close: 100.0,
+            adj_close: 100.0, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        // Bar 2: small green body inside bar 1 body (100..110) — open 103, close 107.
+        bars.push(HistoricalPriceRow {
+            date: "2024-07-12".into(),
+            open: 103.0, high: 107.5, low: 102.5, close: 107.0,
+            adj_close: 107.0, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        // Bar 3: closes above bar 1 open (110), i.e., 112.
+        bars.push(HistoricalPriceRow {
+            date: "2024-07-13".into(),
+            open: 108.0, high: 112.5, low: 107.5, close: 112.0,
+            adj_close: 112.0, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        let snap = compute_cdl_three_inside_snapshot("T", "2026-04-19", &bars);
+        assert_eq!(snap.cdl_three_inside_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.body_size_ratio < 1.0);
+        assert!(snap.bar3_close_vs_bar1_open_pct > 0.0);
     }
 
     // ── ADR-189 Round 76 (Quant Stats) tests ──
