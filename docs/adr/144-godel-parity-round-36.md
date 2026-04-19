@@ -1,4 +1,4 @@
-# ADR-144: Godel Parity Round 36 — KSNORM / ADTEST / LMOM / KYLELAM / PEAKOVER
+# ADR-144: Quant Stats Round 36 — KSNORM / ADTEST / LMOM / KYLELAM / PEAKOVER
 
 **Status:** Accepted
 **Date:** 2026-04-16

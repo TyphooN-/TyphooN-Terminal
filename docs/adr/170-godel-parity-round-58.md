@@ -1,4 +1,4 @@
-# ADR-170: Godel Parity Round 58 — FRACTALS / IFT_RSI / MAMA / COG / DIDI
+# ADR-170: TA-Lib + Godel Parity Round 58 — FRACTALS / IFT_RSI / MAMA / COG / DIDI
 
 **Status:** Accepted
 **Date:** 2026-04-17

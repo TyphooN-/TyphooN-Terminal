@@ -1,4 +1,4 @@
-# ADR-118: Godel Parity Round 11 — ALTZ / PTFS / VOLE / EPSB / PTD
+# ADR-118: TA-Lib + Godel Parity Round 11 — ALTZ / PTFS / VOLE / EPSB / PTD
 
 **Status:** Accepted
 **Date:** 2026-04-14

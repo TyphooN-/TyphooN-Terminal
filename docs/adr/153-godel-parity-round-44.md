@@ -1,4 +1,4 @@
-# ADR-153: Godel Parity Round 44 — ADX / CCI / CMF / MFI / PSAR
+# ADR-153: TA-Lib + Godel Parity Round 44 — ADX / CCI / CMF / MFI / PSAR
 
 **Status:** Accepted
 **Date:** 2026-04-17

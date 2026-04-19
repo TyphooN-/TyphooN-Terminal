@@ -1,4 +1,4 @@
-# ADR-187: TA-Lib + Godel Parity Round 75 — CDLHARAMICROSS / CDLLONGLEGGEDDOJI / CDLMARUBOZU / CDLSPINNINGTOP / CDLTRISTAR (research-layer, chart-overlay TBD)
+# ADR-187: TA-Lib Parity Round 75 — CDLHARAMICROSS / CDLLONGLEGGEDDOJI / CDLMARUBOZU / CDLSPINNINGTOP / CDLTRISTAR (research-layer, chart-overlay TBD)
 
 **Status:** Accepted
 **Date:** 2026-04-19

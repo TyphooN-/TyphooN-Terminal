@@ -1,4 +1,4 @@
-# ADR-183: Godel Parity Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP
+# ADR-183: TA-Lib Parity Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP
 
 **Status:** Accepted
 **Date:** 2026-04-18

@@ -1,4 +1,4 @@
-# ADR-134: Godel Parity Round 26 — CALMAR / ULCER / VARRATIO / AMIHUD / JBNORM
+# ADR-134: Quant Stats Round 26 — CALMAR / ULCER / VARRATIO / AMIHUD / JBNORM
 
 **Status:** Accepted
 **Date:** 2026-04-15

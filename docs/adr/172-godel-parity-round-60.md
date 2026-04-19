@@ -1,4 +1,4 @@
-# ADR-172: Godel Parity Round 60 — WMA / RAINBOW / MESA_SINE / FRAMA / IBS
+# ADR-172: TA-Lib + Godel Parity Round 60 — WMA / RAINBOW / MESA_SINE / FRAMA / IBS
 
 **Status:** Accepted
 **Date:** 2026-04-17

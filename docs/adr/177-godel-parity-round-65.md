@@ -1,4 +1,4 @@
-# ADR-177: Godel Parity Round 65 — MIDPRICE / APO / MOM / SAREXT / ADXR
+# ADR-177: TA-Lib Parity Round 65 — MIDPRICE / APO / MOM / SAREXT / ADXR
 
 **Status:** Accepted
 **Date:** 2026-04-18

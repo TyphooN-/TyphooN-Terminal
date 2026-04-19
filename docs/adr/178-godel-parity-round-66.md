@@ -1,4 +1,4 @@
-# ADR-178: Godel Parity Round 66 — AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE
+# ADR-178: TA-Lib Parity Round 66 — AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE
 
 **Status:** Accepted
 **Date:** 2026-04-18

@@ -1,4 +1,4 @@
-# ADR-152: Godel Parity Round 43 — ICHIMOKU / SUPERTREND / KELTNER / FISHER / AROON
+# ADR-152: TA-Lib + Godel Parity Round 43 — ICHIMOKU / SUPERTREND / KELTNER / FISHER / AROON
 
 **Status:** Accepted
 **Date:** 2026-04-17

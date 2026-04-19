@@ -1,4 +1,4 @@
-# ADR-140: Godel Parity Round 32 — ENTROPY / RACHEV / GPR / PACF / APEN
+# ADR-140: Quant Stats Round 32 — ENTROPY / RACHEV / GPR / PACF / APEN
 
 **Status:** Accepted
 **Date:** 2026-04-16

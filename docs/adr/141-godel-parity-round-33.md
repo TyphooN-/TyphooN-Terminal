@@ -1,4 +1,4 @@
-# ADR-141: Godel Parity Round 33 — UPR / LEVEREFF / DRAWDAR / VARHALF / GINI
+# ADR-141: Quant Stats Round 33 — UPR / LEVEREFF / DRAWDAR / VARHALF / GINI
 
 **Status:** Accepted
 **Date:** 2026-04-16

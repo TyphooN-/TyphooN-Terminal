@@ -1,4 +1,4 @@
-# ADR-173: Godel Parity Round 61 — LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT
+# ADR-173: TA-Lib + Godel Parity Round 61 — LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT
 
 **Status:** Accepted
 **Date:** 2026-04-17

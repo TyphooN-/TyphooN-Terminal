@@ -1,4 +1,4 @@
-# ADR-147: Godel Parity Round 39 — GARCH11 / SADF / CORDIM / SKSPEC / AUTOMI
+# ADR-147: Quant Stats Round 39 — GARCH11 / SADF / CORDIM / SKSPEC / AUTOMI
 
 **Status:** Accepted
 **Date:** 2026-04-16

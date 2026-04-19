@@ -1,4 +1,4 @@
-# ADR-139: Godel Parity Round 31 — HILLTAIL / ARCHLM / PAINRATIO / CUSUM / CFVAR
+# ADR-139: Quant Stats Round 31 — HILLTAIL / ARCHLM / PAINRATIO / CUSUM / CFVAR
 
 **Status:** Accepted
 **Date:** 2026-04-15

@@ -1,4 +1,4 @@
-# ADR-181: Godel Parity Round 69 — MIN / MAX / MINMAX / MININDEX / MAXINDEX
+# ADR-181: TA-Lib Parity Round 69 — MIN / MAX / MINMAX / MININDEX / MAXINDEX
 
 **Status:** Accepted
 **Date:** 2026-04-18

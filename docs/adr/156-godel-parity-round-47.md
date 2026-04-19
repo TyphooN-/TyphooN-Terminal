@@ -1,4 +1,4 @@
-# ADR-156: Godel Parity Round 47 — MASS / CHAIKOSC / KLINGER / STOCHRSI / AWESOME
+# ADR-156: TA-Lib + Godel Parity Round 47 — MASS / CHAIKOSC / KLINGER / STOCHRSI / AWESOME
 
 **Status:** Accepted
 **Date:** 2026-04-17

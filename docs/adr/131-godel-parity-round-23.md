@@ -1,4 +1,4 @@
-# ADR-131: Godel Parity Round 23 — AUTOCOR / HURST / HITRATE / GLASYM / VOLRATIO
+# ADR-131: Quant Stats Round 23 — AUTOCOR / HURST / HITRATE / GLASYM / VOLRATIO
 
 **Status:** Accepted
 **Date:** 2026-04-15

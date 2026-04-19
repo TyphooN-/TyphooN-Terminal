@@ -1,4 +1,4 @@
-# ADR-145: Godel Parity Round 37 — HIGUCHI / PICKANDS / KAPPA3 / LYAPUNOV / RANKAC
+# ADR-145: Quant Stats Round 37 — HIGUCHI / PICKANDS / KAPPA3 / LYAPUNOV / RANKAC
 
 **Status:** Accepted
 **Date:** 2026-04-16

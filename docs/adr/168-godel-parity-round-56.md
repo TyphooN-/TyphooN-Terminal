@@ -1,4 +1,4 @@
-# ADR-168: Godel Parity Round 56 — GMMA / MAENV / ADL / VHF / VROC
+# ADR-168: TA-Lib + Godel Parity Round 56 — GMMA / MAENV / ADL / VHF / VROC
 
 **Status:** Accepted
 **Date:** 2026-04-17

@@ -1,4 +1,4 @@
-# ADR-142: Godel Parity Round 34 — SAMPEN / PERMEN / RECFACT / KPSS / SPECENT
+# ADR-142: Quant Stats Round 34 — SAMPEN / PERMEN / RECFACT / KPSS / SPECENT
 
 **Status:** Accepted
 **Date:** 2026-04-16

@@ -1,4 +1,4 @@
-# ADR-137: Godel Parity Round 29 — STERLING / KELLYF / LJUNGB / RUNSTEST / ZERORET
+# ADR-137: Quant Stats Round 29 — STERLING / KELLYF / LJUNGB / RUNSTEST / ZERORET
 
 **Status:** Accepted
 **Date:** 2026-04-15

@@ -1,4 +1,4 @@
-# ADR-136: Godel Parity Round 28 — PARKINSON / GKVOL / RSVOL / CVAR / DOWEFFECT
+# ADR-136: Quant Stats Round 28 — PARKINSON / GKVOL / RSVOL / CVAR / DOWEFFECT
 
 **Status:** Accepted
 **Date:** 2026-04-15

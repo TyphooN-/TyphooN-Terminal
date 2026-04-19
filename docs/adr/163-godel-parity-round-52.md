@@ -1,4 +1,4 @@
-# ADR-163: Godel Parity Round 52 — ALMA / ZLEMA / ELDERRAY / TSF / RVI
+# ADR-163: TA-Lib + Godel Parity Round 52 — ALMA / ZLEMA / ELDERRAY / TSF / RVI
 
 **Status:** Accepted
 **Date:** 2026-04-17

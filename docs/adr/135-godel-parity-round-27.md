@@ -1,4 +1,4 @@
-# ADR-135: Godel Parity Round 27 — OMEGA / DFA / BURKE / MONTHSEAS / ROLLSPRD
+# ADR-135: Quant Stats Round 27 — OMEGA / DFA / BURKE / MONTHSEAS / ROLLSPRD
 
 **Status:** Accepted
 **Date:** 2026-04-15

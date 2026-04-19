@@ -1,4 +1,4 @@
-# ADR-161: Godel Parity Round 51 — DEMA / TEMA / LINREG / PIVOTS / HEIKIN
+# ADR-161: TA-Lib + Godel Parity Round 51 — DEMA / TEMA / LINREG / PIVOTS / HEIKIN
 
 **Status:** Accepted
 **Date:** 2026-04-17

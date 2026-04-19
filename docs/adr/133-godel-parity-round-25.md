@@ -1,4 +1,4 @@
-# ADR-133: Godel Parity Round 25 — DOWNVOL / SHARPR / EFFRATIO / WICKBIAS / VOLOFVOL
+# ADR-133: Quant Stats Round 25 — DOWNVOL / SHARPR / EFFRATIO / WICKBIAS / VOLOFVOL
 
 **Status:** Accepted
 **Date:** 2026-04-15

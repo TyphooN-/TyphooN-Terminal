@@ -1,4 +1,4 @@
-# ADR-138: Godel Parity Round 30 — PSR / ADF / MNKENDALL / BIPOWER / DDDUR
+# ADR-138: Quant Stats Round 30 — PSR / ADF / MNKENDALL / BIPOWER / DDDUR
 
 **Status:** Accepted
 **Date:** 2026-04-15

@@ -1,4 +1,4 @@
-# ADR-151: Godel Parity Round 42 — SQUEEZE / SQUEEZERANK / BBSQUEEZE / DONCHIAN / KAMA
+# ADR-151: TA-Lib + Godel Parity Round 42 — SQUEEZE / SQUEEZERANK / BBSQUEEZE / DONCHIAN / KAMA
 
 **Status:** Accepted
 **Date:** 2026-04-17

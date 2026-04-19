@@ -1,4 +1,4 @@
-# ADR-146: Godel Parity Round 38 — BNSJUMP / PPROOT / MFDFA / HILLKS / TSI
+# ADR-146: Quant Stats Round 38 — BNSJUMP / PPROOT / MFDFA / HILLKS / TSI
 
 **Status:** Accepted
 **Date:** 2026-04-16

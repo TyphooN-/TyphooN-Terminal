@@ -1,4 +1,4 @@
-# ADR-164: Godel Parity Round 53 — TRIMA / T3 / VIDYA / SMI / PVT
+# ADR-164: TA-Lib + Godel Parity Round 53 — TRIMA / T3 / VIDYA / SMI / PVT
 
 **Status:** Accepted
 **Date:** 2026-04-17

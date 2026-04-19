@@ -1,4 +1,4 @@
-# ADR-127: Godel Parity Round 20 — DVDYIELDRANK / SHRANK / ATRANN / DDHIST / PRICEPERF
+# ADR-127: TA-Lib + Godel Parity Round 20 — DVDYIELDRANK / SHRANK / ATRANN / DDHIST / PRICEPERF
 
 **Status:** Accepted
 **Date:** 2026-04-15

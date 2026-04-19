@@ -1,4 +1,4 @@
-# ADR-143: Godel Parity Round 35 — ROBVOL / RENYIENT / RETQUANT / MSENT / EWMAVOL
+# ADR-143: Quant Stats Round 35 — ROBVOL / RENYIENT / RETQUANT / MSENT / EWMAVOL
 
 **Status:** Accepted
 **Date:** 2026-04-16

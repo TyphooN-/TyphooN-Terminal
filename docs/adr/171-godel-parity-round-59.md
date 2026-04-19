@@ -1,4 +1,4 @@
-# ADR-171: Godel Parity Round 59 — DEMARKER / GATOR / BW_MFI / VWMA / STDDEV
+# ADR-171: TA-Lib + Godel Parity Round 59 — DEMARKER / GATOR / BW_MFI / VWMA / STDDEV
 
 **Status:** Accepted
 **Date:** 2026-04-17

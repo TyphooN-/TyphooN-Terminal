@@ -1,4 +1,4 @@
-# ADR-160: Godel Parity Round 50 — STOCH / MACD / VWAP / MCGD / RWI
+# ADR-160: TA-Lib + Godel Parity Round 50 — STOCH / MACD / VWAP / MCGD / RWI
 
 **Status:** Accepted
 **Date:** 2026-04-17

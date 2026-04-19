@@ -1,4 +1,4 @@
-# ADR-116: Godel Parity Round 9 — SEAG / COR / TRA / TECH / SKEW
+# ADR-116: TA-Lib + Godel Parity Round 9 — SEAG / COR / TRA / TECH / SKEW
 
 **Status:** Accepted
 **Date:** 2026-04-14

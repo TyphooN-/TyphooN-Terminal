@@ -1,4 +1,4 @@
-# ADR-182: Godel Parity Round 70 — BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT
+# ADR-182: TA-Lib Parity Round 70 — BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT
 
 **Status:** Accepted
 **Date:** 2026-04-18

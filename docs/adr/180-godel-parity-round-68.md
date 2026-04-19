@@ -1,4 +1,4 @@
-# ADR-180: Godel Parity Round 68 — ROC / ROCP / ROCR / ROCR100 / CORREL
+# ADR-180: TA-Lib Parity Round 68 — ROC / ROCP / ROCR / ROCR100 / CORREL
 
 **Status:** Accepted
 **Date:** 2026-04-18

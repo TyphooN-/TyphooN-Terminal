@@ -1,4 +1,4 @@
-# ADR-179: Godel Parity Round 67 — PLUS_DI / MINUS_DI / PLUS_DM / MINUS_DM / DX
+# ADR-179: TA-Lib Parity Round 67 — PLUS_DI / MINUS_DI / PLUS_DM / MINUS_DM / DX
 
 **Status:** Accepted
 **Date:** 2026-04-18

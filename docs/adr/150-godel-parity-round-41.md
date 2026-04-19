@@ -1,4 +1,4 @@
-# ADR-150: Godel Parity Round 41 — MCLEODLI / OUFIT / GPH / BURGSPEC / KENDALLTAU
+# ADR-150: Quant Stats Round 41 — MCLEODLI / OUFIT / GPH / BURGSPEC / KENDALLTAU
 
 **Status:** Accepted
 **Date:** 2026-04-17

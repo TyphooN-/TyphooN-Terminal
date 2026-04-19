@@ -1,4 +1,4 @@
-# ADR-132: Godel Parity Round 24 — DRAWUP / GAPSTATS / VOLCLUSTER / CLOSEPLC / MRHL
+# ADR-132: Quant Stats Round 24 — DRAWUP / GAPSTATS / VOLCLUSTER / CLOSEPLC / MRHL
 
 **Status:** Accepted
 **Date:** 2026-04-15

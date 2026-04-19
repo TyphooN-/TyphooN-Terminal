@@ -1,4 +1,4 @@
-# ADR-174: Godel Parity Round 62 — MASSINDEX / NATR / TTM_SQUEEZE / FORCE_INDEX / TRANGE
+# ADR-174: TA-Lib + Godel Parity Round 62 — MASSINDEX / NATR / TTM_SQUEEZE / FORCE_INDEX / TRANGE
 
 **Status:** Accepted
 **Date:** 2026-04-17

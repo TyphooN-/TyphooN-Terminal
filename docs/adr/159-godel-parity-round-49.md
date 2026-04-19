@@ -1,4 +1,4 @@
-# ADR-159: Godel Parity Round 49 — CMO / QSTICK / DISPARITY / BOP / SCHAFF
+# ADR-159: TA-Lib + Godel Parity Round 49 — CMO / QSTICK / DISPARITY / BOP / SCHAFF
 
 **Status:** Accepted
 **Date:** 2026-04-17

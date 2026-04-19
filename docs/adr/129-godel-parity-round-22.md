@@ -1,4 +1,4 @@
-# ADR-129: Godel Parity Round 22 — RETSKEW / RETKURT / TAILR / RUNLEN / DAYRANGE
+# ADR-129: Quant Stats Round 22 — RETSKEW / RETKURT / TAILR / RUNLEN / DAYRANGE
 
 **Status:** Accepted
 **Date:** 2026-04-15

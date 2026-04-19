@@ -1,4 +1,4 @@
-# ADR-154: Godel Parity Round 45 — VORTEX / CHOP / OBV / TRIX / HMA
+# ADR-154: TA-Lib + Godel Parity Round 45 — VORTEX / CHOP / OBV / TRIX / HMA
 
 **Status:** Accepted
 **Date:** 2026-04-17

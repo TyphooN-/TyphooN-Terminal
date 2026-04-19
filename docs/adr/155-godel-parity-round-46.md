@@ -1,4 +1,4 @@
-# ADR-155: Godel Parity Round 46 — PPO / DPO / KST / ULTOSC / WILLR
+# ADR-155: TA-Lib + Godel Parity Round 46 — PPO / DPO / KST / ULTOSC / WILLR
 
 **Status:** Accepted
 **Date:** 2026-04-17
