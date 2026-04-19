@@ -544,6 +544,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_adosc",
     "research_sum",
     "research_linreg_intercept",
+    // ── ADR-183 Round 71 ────────────────────────────
+    "research_aroonosc",
+    "research_minmaxindex",
+    "research_macdext",
+    "research_macdfix",
+    "research_mavp",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -3159,6 +3165,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-183 Round 71 ──
+        "research_aroonosc" => Some(
+            "CREATE TABLE IF NOT EXISTS research_aroonosc (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_minmaxindex" => Some(
+            "CREATE TABLE IF NOT EXISTS research_minmaxindex (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_macdext" => Some(
+            "CREATE TABLE IF NOT EXISTS research_macdext (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_macdfix" => Some(
+            "CREATE TABLE IF NOT EXISTS research_macdfix (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_mavp" => Some(
+            "CREATE TABLE IF NOT EXISTS research_mavp (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -3566,6 +3608,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_adosc" => Some("updated_at"),
         "research_sum" => Some("updated_at"),
         "research_linreg_intercept" => Some("updated_at"),
+        // ── ADR-183 Round 71 ──
+        "research_aroonosc" => Some("updated_at"),
+        "research_minmaxindex" => Some("updated_at"),
+        "research_macdext" => Some("updated_at"),
+        "research_macdfix" => Some("updated_at"),
+        "research_mavp" => Some("updated_at"),
         _ => None,
     }
 }

@@ -7390,6 +7390,120 @@ pub struct LinearRegInterceptSnapshot {
     pub note: String,
 }
 
+// ── Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP (ADR-183) ──
+
+/// TA-Lib AROONOSC — Aroon Oscillator = AROON_UP − AROON_DOWN over a
+/// 14-bar window. Complements the already-shipped AROON primitive by
+/// surfacing the signed differential directly — values near +100 signal
+/// strong uptrend (recent high very fresh, low stale), −100 strong
+/// downtrend, near zero mixed/no-trend.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AroonoscSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 14
+    pub aroonosc: f64,                 // aroon_up − aroon_down ∈ [-100, 100]
+    pub aroonosc_prev: f64,
+    pub aroon_up: f64,                 // for cross-ref
+    pub aroon_down: f64,
+    pub last_close: f64,
+    pub aroonosc_label: String,        // STRONG_BULL / BULL / FLAT / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib MINMAXINDEX — combined rolling-window MININDEX + MAXINDEX in
+/// one snapshot plus `age_diff` (bars between the two extrema) and
+/// `extrema_order` (HIGH_FIRST / LOW_FIRST / SAME_BAR) which together
+/// describe the window's directional signature. Completes the
+/// Round 69 rolling-extrema family.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MinMaxIndexSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 30
+    pub min_index_bars_ago: usize,
+    pub max_index_bars_ago: usize,
+    pub age_diff: i64,                 // min_idx − max_idx (signed — positive means max is fresher)
+    pub extrema_order: String,         // HIGH_FIRST / LOW_FIRST / SAME_BAR
+    pub last_close: f64,
+    pub minmaxindex_label: String,     // FRESH_HIGH / FRESH_LOW / MID / OLD_EXTREMA / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib MACDEXT — MACD with *configurable MA types* for fast, slow,
+/// and signal. This snapshot pins all three to SMA (the classic "simple
+/// MACD" textbook form) to give agents a deterministic alternative to
+/// the default EMA-based MACD. Complements the existing MACD snapshot
+/// (Round 7 era) without replacing it.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MacdextSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub fast_period: usize,            // 12
+    pub slow_period: usize,            // 26
+    pub signal_period: usize,          // 9
+    pub ma_type: String,               // "SMA" for this snapshot
+    pub macd: f64,                     // fast_MA − slow_MA
+    pub macd_prev: f64,
+    pub signal: f64,                   // MA(macd)
+    pub signal_prev: f64,
+    pub hist: f64,                     // macd − signal
+    pub hist_prev: f64,
+    pub last_close: f64,
+    pub macdext_label: String,         // STRONG_BULL / BULL / FLAT / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib MACDFIX — MACD with *hardcoded* 12/26 fast/slow (fix = fixed)
+/// and configurable signal (9 default). Historically the most-widely
+/// used MACD form — this snapshot surfaces the canonical 12/26/9
+/// EMA-based MACD. Distinct from the existing Round 7 MACD snapshot in
+/// that it exposes the hardcoded-fast/slow as an explicit constraint,
+/// useful for agents wanting to verify textbook parameters.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MacdfixSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub fast_period: usize,            // 12 (fixed)
+    pub slow_period: usize,            // 26 (fixed)
+    pub signal_period: usize,          // 9
+    pub macd: f64,                     // EMA12(close) − EMA26(close)
+    pub macd_prev: f64,
+    pub signal: f64,                   // EMA9(macd)
+    pub signal_prev: f64,
+    pub hist: f64,                     // macd − signal
+    pub hist_prev: f64,
+    pub last_close: f64,
+    pub macdfix_label: String,         // STRONG_BULL / BULL / FLAT / BEAR / STRONG_BEAR / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib MAVP — Moving Average with Variable Period. Unlike SMA/EMA/WMA
+/// which all use a single fixed period, MAVP takes a per-bar period
+/// array — the MA at bar t is computed with a t-specific lookback. This
+/// snapshot uses a linear ramp (5 at start → 30 at end) to exercise the
+/// polymorphic behaviour and emit a single scalar at the last bar
+/// (last-bar period = 30). Label classifies sign of mavp_delta.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct MavpSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub min_period: usize,             // 5 (ramp start)
+    pub max_period: usize,             // 30 (ramp end)
+    pub last_bar_period: usize,        // period used at final bar (== max_period)
+    pub mavp: f64,
+    pub mavp_prev: f64,
+    pub mavp_delta: f64,
+    pub last_close: f64,
+    pub mavp_label: String,            // STRONG_UP / UP / FLAT / DOWN / STRONG_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -31411,6 +31525,255 @@ pub fn compute_linearreg_intercept_snapshot(
     }
 }
 
+// ── Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
+
+/// Shared AROON computation over the last (period+1) bars ending at end_idx.
+/// Returns (aroon_up, aroon_down). Uses `high` for up, `low` for down — the
+/// TA-Lib convention. Matches the existing compute_aroon_snapshot math but
+/// takes any period (AROONOSC uses 14, not 25).
+fn aroon_up_down(sorted: &[&HistoricalPriceRow], end_idx: usize, period: usize) -> (f64, f64) {
+    let start = end_idx - period;
+    let window = &sorted[start..=end_idx];
+    let mut hi_idx = 0usize;
+    let mut lo_idx = 0usize;
+    for (i, b) in window.iter().enumerate() {
+        if b.high > window[hi_idx].high { hi_idx = i; }
+        if b.low < window[lo_idx].low { lo_idx = i; }
+    }
+    let last_idx = window.len() - 1;
+    let bars_since_high = (last_idx - hi_idx) as f64;
+    let bars_since_low = (last_idx - lo_idx) as f64;
+    let pf = period as f64;
+    (100.0 * (pf - bars_since_high) / pf, 100.0 * (pf - bars_since_low) / pf)
+}
+
+pub fn compute_aroonosc_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> AroonoscSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 14usize;
+    let min_bars = period + 2;
+    if n < min_bars {
+        return AroonoscSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            aroonosc_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let (up_now, down_now) = aroon_up_down(&sorted, n - 1, period);
+    let (up_prev, down_prev) = aroon_up_down(&sorted, n - 2, period);
+    let osc_now = up_now - down_now;
+    let osc_prev = up_prev - down_prev;
+    let label = if osc_now >= 50.0 { "STRONG_BULL" }
+        else if osc_now >= 15.0 { "BULL" }
+        else if osc_now <= -50.0 { "STRONG_BEAR" }
+        else if osc_now <= -15.0 { "BEAR" }
+        else { "FLAT" };
+    AroonoscSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        aroonosc: osc_now, aroonosc_prev: osc_prev,
+        aroon_up: up_now, aroon_down: down_now,
+        last_close: sorted[n - 1].close,
+        aroonosc_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_minmaxindex_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MinMaxIndexSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 30usize;
+    let min_bars = period + 1;
+    if n < min_bars {
+        return MinMaxIndexSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            minmaxindex_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let (_, min_idx, _, max_idx) = window_extrema(&sorted, n - 1, period);
+    let min_ago = (n - 1) - min_idx;
+    let max_ago = (n - 1) - max_idx;
+    let age_diff = min_ago as i64 - max_ago as i64;
+    let order = if min_idx > max_idx { "LOW_FIRST" }
+        else if min_idx < max_idx { "HIGH_FIRST" }
+        else { "SAME_BAR" };
+    // Priority label: whichever extremum is fresher, if close to present.
+    let fresh_cutoff = (period as f64 / 6.0) as usize;
+    let stale_cutoff = (2 * period / 3) as usize;
+    let label = if min_ago <= fresh_cutoff && max_ago > min_ago { "FRESH_LOW" }
+        else if max_ago <= fresh_cutoff && min_ago > max_ago { "FRESH_HIGH" }
+        else if min_ago >= stale_cutoff && max_ago >= stale_cutoff { "OLD_EXTREMA" }
+        else { "MID" };
+    MinMaxIndexSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        min_index_bars_ago: min_ago, max_index_bars_ago: max_ago,
+        age_diff, extrema_order: order.into(),
+        last_close: sorted[n - 1].close,
+        minmaxindex_label: label.into(), note: String::new(),
+    }
+}
+
+/// Shared MACD line + signal + histogram generator given a per-bar
+/// MA fn (ema_series or sma_series). Returns (macd_now, macd_prev,
+/// sig_now, sig_prev, hist_now, hist_prev).
+fn macd_triplet<F>(closes: &[f64], fast: usize, slow: usize, signal: usize, ma: F)
+    -> (f64, f64, f64, f64, f64, f64)
+where F: Fn(&[f64], usize) -> Vec<f64>,
+{
+    let n = closes.len();
+    let fast_ma = ma(closes, fast);
+    let slow_ma = ma(closes, slow);
+    let mut macd_line = Vec::with_capacity(n);
+    for i in 0..n { macd_line.push(fast_ma[i] - slow_ma[i]); }
+    let sig_line = ma(&macd_line, signal);
+    let macd_now = macd_line[n - 1];
+    let macd_prev = macd_line[n - 2];
+    let sig_now = sig_line[n - 1];
+    let sig_prev = sig_line[n - 2];
+    (macd_now, macd_prev, sig_now, sig_prev, macd_now - sig_now, macd_prev - sig_prev)
+}
+
+fn macd_label(hist: f64, hist_prev: f64) -> &'static str {
+    let rising = hist > hist_prev;
+    let falling = hist < hist_prev;
+    if hist > 0.0 && rising { "STRONG_BULL" }
+    else if hist > 0.0 { "BULL" }
+    else if hist < 0.0 && falling { "STRONG_BEAR" }
+    else if hist < 0.0 { "BEAR" }
+    else { "FLAT" }
+}
+
+pub fn compute_macdext_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MacdextSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let fast = 12usize;
+    let slow = 26usize;
+    let signal = 9usize;
+    let min_bars = slow + signal + 2;
+    if n < min_bars {
+        return MacdextSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            fast_period: fast, slow_period: slow, signal_period: signal,
+            ma_type: "SMA".into(),
+            macdext_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let (macd, macd_p, sig, sig_p, hist, hist_p) =
+        macd_triplet(&closes, fast, slow, signal, sma_series);
+    MacdextSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        fast_period: fast, slow_period: slow, signal_period: signal,
+        ma_type: "SMA".into(),
+        macd, macd_prev: macd_p, signal: sig, signal_prev: sig_p,
+        hist, hist_prev: hist_p,
+        last_close: sorted[n - 1].close,
+        macdext_label: macd_label(hist, hist_p).into(),
+        note: String::new(),
+    }
+}
+
+pub fn compute_macdfix_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MacdfixSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let fast = 12usize; // hardcoded per TA-Lib
+    let slow = 26usize; // hardcoded per TA-Lib
+    let signal = 9usize;
+    let min_bars = slow + signal + 2;
+    if n < min_bars {
+        return MacdfixSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            fast_period: fast, slow_period: slow, signal_period: signal,
+            macdfix_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let closes: Vec<f64> = sorted.iter().map(|b| b.close).collect();
+    let (macd, macd_p, sig, sig_p, hist, hist_p) =
+        macd_triplet(&closes, fast, slow, signal, ema_series);
+    MacdfixSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        fast_period: fast, slow_period: slow, signal_period: signal,
+        macd, macd_prev: macd_p, signal: sig, signal_prev: sig_p,
+        hist, hist_prev: hist_p,
+        last_close: sorted[n - 1].close,
+        macdfix_label: macd_label(hist, hist_p).into(),
+        note: String::new(),
+    }
+}
+
+pub fn compute_mavp_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> MavpSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let min_period = 5usize;
+    let max_period = 30usize;
+    let min_bars = max_period + 2;
+    if n < min_bars {
+        return MavpSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            min_period, max_period, last_bar_period: max_period,
+            mavp_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    // Per-bar period = linear ramp from min_period (start) to max_period (end).
+    let period_at = |i: usize| -> usize {
+        if n <= 1 { return max_period; }
+        let frac = i as f64 / (n - 1) as f64;
+        let p = min_period as f64 + frac * (max_period as f64 - min_period as f64);
+        (p.round() as usize).clamp(min_period, max_period)
+    };
+    let ma_at = |end_idx: usize| -> f64 {
+        let p = period_at(end_idx);
+        if end_idx + 1 < p { return 0.0; }
+        let start = end_idx + 1 - p;
+        let mut s = 0.0;
+        for i in start..=end_idx { s += sorted[i].close; }
+        s / p as f64
+    };
+    let mavp_now = ma_at(n - 1);
+    let mavp_prev = ma_at(n - 2);
+    let delta = mavp_now - mavp_prev;
+    let pct = if mavp_prev.abs() > 1e-12 { 100.0 * delta / mavp_prev } else { 0.0 };
+    let label = if pct >= 1.0 { "STRONG_UP" }
+        else if pct >= 0.2 { "UP" }
+        else if pct <= -1.0 { "STRONG_DOWN" }
+        else if pct <= -0.2 { "DOWN" }
+        else { "FLAT" };
+    MavpSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        min_period, max_period, last_bar_period: period_at(n - 1),
+        mavp: mavp_now, mavp_prev, mavp_delta: delta,
+        last_close: sorted[n - 1].close,
+        mavp_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -42001,6 +42364,169 @@ pub fn get_linreg_intercept(conn: &Connection, symbol: &str) -> Result<Option<Li
     if let Some(r) = rows.next().map_err(|e| format!("row linreg_intercept: {e}"))? {
         let j: String = r.get(0).map_err(|e| format!("get linreg_intercept: {e}"))?;
         let snap: LinearRegInterceptSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse linreg_intercept: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP (ADR-183) ──
+
+pub fn create_research_tables_v73(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v72(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_aroonosc (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_aroonosc_updated ON research_aroonosc(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_minmaxindex (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_minmaxindex_updated ON research_minmaxindex(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_macdext (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_macdext_updated ON research_macdext(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_macdfix (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_macdfix_updated ON research_macdfix(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_mavp (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_mavp_updated ON research_mavp(updated_at);",
+    ).map_err(|e| format!("create v73 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_aroonosc(conn: &Connection, symbol: &str, snap: &AroonoscSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v73(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("aroonosc json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_aroonosc (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert aroonosc: {e}"))?;
+    Ok(())
+}
+
+pub fn get_aroonosc(conn: &Connection, symbol: &str) -> Result<Option<AroonoscSnapshot>, String> {
+    let _ = create_research_tables_v73(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_aroonosc WHERE symbol = ?1")
+        .map_err(|e| format!("prep aroonosc: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query aroonosc: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row aroonosc: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get aroonosc: {e}"))?;
+        let snap: AroonoscSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse aroonosc: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_minmaxindex(conn: &Connection, symbol: &str, snap: &MinMaxIndexSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v73(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("minmaxindex json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_minmaxindex (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert minmaxindex: {e}"))?;
+    Ok(())
+}
+
+pub fn get_minmaxindex(conn: &Connection, symbol: &str) -> Result<Option<MinMaxIndexSnapshot>, String> {
+    let _ = create_research_tables_v73(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_minmaxindex WHERE symbol = ?1")
+        .map_err(|e| format!("prep minmaxindex: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query minmaxindex: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row minmaxindex: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get minmaxindex: {e}"))?;
+        let snap: MinMaxIndexSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse minmaxindex: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_macdext(conn: &Connection, symbol: &str, snap: &MacdextSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v73(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("macdext json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_macdext (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert macdext: {e}"))?;
+    Ok(())
+}
+
+pub fn get_macdext(conn: &Connection, symbol: &str) -> Result<Option<MacdextSnapshot>, String> {
+    let _ = create_research_tables_v73(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_macdext WHERE symbol = ?1")
+        .map_err(|e| format!("prep macdext: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query macdext: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row macdext: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get macdext: {e}"))?;
+        let snap: MacdextSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse macdext: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_macdfix(conn: &Connection, symbol: &str, snap: &MacdfixSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v73(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("macdfix json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_macdfix (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert macdfix: {e}"))?;
+    Ok(())
+}
+
+pub fn get_macdfix(conn: &Connection, symbol: &str) -> Result<Option<MacdfixSnapshot>, String> {
+    let _ = create_research_tables_v73(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_macdfix WHERE symbol = ?1")
+        .map_err(|e| format!("prep macdfix: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query macdfix: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row macdfix: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get macdfix: {e}"))?;
+        let snap: MacdfixSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse macdfix: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_mavp(conn: &Connection, symbol: &str, snap: &MavpSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v73(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("mavp json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_mavp (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert mavp: {e}"))?;
+    Ok(())
+}
+
+pub fn get_mavp(conn: &Connection, symbol: &str) -> Result<Option<MavpSnapshot>, String> {
+    let _ = create_research_tables_v73(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_mavp WHERE symbol = ?1")
+        .map_err(|e| format!("prep mavp: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query mavp: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row mavp: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get mavp: {e}"))?;
+        let snap: MavpSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse mavp: {e}"))?;
         Ok(Some(snap))
     } else { Ok(None) }
 }
@@ -55562,6 +56088,162 @@ Trailing text.
         if snap.linreg_intercept_label != "INSUFFICIENT_DATA" {
             // drift identity: last_close - intercept
             assert!((snap.drift - (snap.last_close - snap.intercept)).abs() < 1e-6);
+        }
+    }
+
+    // ── ADR-183 Round 71 tests ──────────────────────────────────────────────
+
+    #[test]
+    fn aroonosc_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = AroonoscSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 14, aroonosc: 42.86, aroonosc_prev: 35.71,
+            aroon_up: 71.43, aroon_down: 28.57, last_close: 100.0,
+            aroonosc_label: "BULL".into(), note: String::new(),
+        };
+        upsert_aroonosc(&conn, "TEST", &snap).unwrap();
+        let got = get_aroonosc(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.aroonosc_label, "BULL");
+        assert_eq!(got.period, 14);
+    }
+
+    #[test]
+    fn aroonosc_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_aroonosc_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.aroonosc_label.as_str(),
+            "STRONG_BULL" | "BULL" | "FLAT" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.aroonosc_label != "INSUFFICIENT_DATA" {
+            // Identity: aroonosc = aroon_up - aroon_down
+            assert!((snap.aroonosc - (snap.aroon_up - snap.aroon_down)).abs() < 1e-6);
+            assert!(snap.aroonosc >= -100.0 && snap.aroonosc <= 100.0);
+            assert_eq!(snap.period, 14);
+        }
+    }
+
+    #[test]
+    fn minmaxindex_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MinMaxIndexSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 30, min_index_bars_ago: 5, max_index_bars_ago: 2,
+            age_diff: 3, extrema_order: "LOW_FIRST".into(),
+            last_close: 100.0,
+            minmaxindex_label: "FRESH_HIGH".into(), note: String::new(),
+        };
+        upsert_minmaxindex(&conn, "TEST", &snap).unwrap();
+        let got = get_minmaxindex(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.minmaxindex_label, "FRESH_HIGH");
+        assert_eq!(got.extrema_order, "LOW_FIRST");
+    }
+
+    #[test]
+    fn minmaxindex_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_minmaxindex_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.minmaxindex_label.as_str(),
+            "FRESH_HIGH" | "FRESH_LOW" | "MID" | "OLD_EXTREMA" | "INSUFFICIENT_DATA"));
+        if snap.minmaxindex_label != "INSUFFICIENT_DATA" {
+            assert!(snap.min_index_bars_ago < snap.period);
+            assert!(snap.max_index_bars_ago < snap.period);
+            // Identity: age_diff == min_index - max_index (signed)
+            assert_eq!(snap.age_diff,
+                snap.min_index_bars_ago as i64 - snap.max_index_bars_ago as i64);
+            assert!(matches!(snap.extrema_order.as_str(),
+                "HIGH_FIRST" | "LOW_FIRST" | "SAME_BAR"));
+        }
+    }
+
+    #[test]
+    fn macdext_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MacdextSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            fast_period: 12, slow_period: 26, signal_period: 9,
+            ma_type: "SMA".into(),
+            macd: 1.2, macd_prev: 1.0, signal: 0.9, signal_prev: 0.8,
+            hist: 0.3, hist_prev: 0.2, last_close: 100.0,
+            macdext_label: "STRONG_BULL".into(), note: String::new(),
+        };
+        upsert_macdext(&conn, "TEST", &snap).unwrap();
+        let got = get_macdext(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.macdext_label, "STRONG_BULL");
+        assert_eq!(got.ma_type, "SMA");
+    }
+
+    #[test]
+    fn macdext_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_macdext_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.macdext_label.as_str(),
+            "STRONG_BULL" | "BULL" | "FLAT" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.macdext_label != "INSUFFICIENT_DATA" {
+            assert_eq!(snap.ma_type, "SMA");
+            assert_eq!(snap.fast_period, 12);
+            assert_eq!(snap.slow_period, 26);
+            // Identity: hist == macd - signal
+            assert!((snap.hist - (snap.macd - snap.signal)).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn macdfix_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MacdfixSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            fast_period: 12, slow_period: 26, signal_period: 9,
+            macd: 1.1, macd_prev: 0.9, signal: 0.8, signal_prev: 0.7,
+            hist: 0.3, hist_prev: 0.2, last_close: 100.0,
+            macdfix_label: "BULL".into(), note: String::new(),
+        };
+        upsert_macdfix(&conn, "TEST", &snap).unwrap();
+        let got = get_macdfix(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.macdfix_label, "BULL");
+        assert_eq!(got.fast_period, 12);
+    }
+
+    #[test]
+    fn macdfix_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_macdfix_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.macdfix_label.as_str(),
+            "STRONG_BULL" | "BULL" | "FLAT" | "BEAR" | "STRONG_BEAR" | "INSUFFICIENT_DATA"));
+        if snap.macdfix_label != "INSUFFICIENT_DATA" {
+            // Identity: hardcoded 12/26 periods
+            assert_eq!(snap.fast_period, 12);
+            assert_eq!(snap.slow_period, 26);
+            // Identity: hist == macd - signal
+            assert!((snap.hist - (snap.macd - snap.signal)).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn mavp_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = MavpSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            min_period: 5, max_period: 30, last_bar_period: 30,
+            mavp: 100.0, mavp_prev: 99.5, mavp_delta: 0.5, last_close: 101.0,
+            mavp_label: "UP".into(), note: String::new(),
+        };
+        upsert_mavp(&conn, "TEST", &snap).unwrap();
+        let got = get_mavp(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.mavp_label, "UP");
+        assert_eq!(got.last_bar_period, 30);
+    }
+
+    #[test]
+    fn mavp_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_mavp_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.mavp_label.as_str(),
+            "STRONG_UP" | "UP" | "FLAT" | "DOWN" | "STRONG_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.mavp_label != "INSUFFICIENT_DATA" {
+            assert_eq!(snap.last_bar_period, 30);
+            // Identity: delta = mavp - mavp_prev
+            assert!((snap.mavp_delta - (snap.mavp - snap.mavp_prev)).abs() < 1e-9);
+            assert!(snap.mavp > 0.0);
         }
     }
 }
