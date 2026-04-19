@@ -32988,7 +32988,7 @@ pub fn compute_cdl_harami_cross_snapshot(
         let prior = s[i - 1];
         let cur = s[i];
         let (p_body, _, _, _, p_body_pct, p_is_bull) = candle_metrics(prior);
-        let (c_body, _, _, _, c_body_pct, _) = candle_metrics(cur);
+        let (_, _, _, _, c_body_pct, _) = candle_metrics(cur);
         if p_body < 1e-12 || p_body_pct < 30.0 { return 0; }
         if c_body_pct > 5.0 { return 0; } // current must be doji
         let p_low_body = prior.open.min(prior.close);
