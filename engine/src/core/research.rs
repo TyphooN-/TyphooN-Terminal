@@ -7944,6 +7944,125 @@ pub struct CdlTristarSnapshot {
     pub note: String,
 }
 
+// ── ADR-189 Round 76 (Quant Stats) surfaces ───────────────────────────────
+
+/// MODSHARPE — Pezier-White Adjusted Sharpe Ratio.
+/// Classical Sharpe SR = √252 · E[r]/σ[r] assumes normal returns. The
+/// Pezier-White (2006) adjustment corrects for higher moments:
+///     ASR = SR · [1 + (S/6)·SR − ((K−3)/24)·SR²]
+/// where S is skewness and K is kurtosis of bar-level returns. For
+/// negatively-skewed fat-tailed distributions the adjustment reduces
+/// the headline Sharpe; for positively-skewed returns it can boost it.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ModSharpeSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub annualization_factor: f64, // 252 for daily bars
+    pub mean_return_bar: f64,      // arithmetic mean of bar returns
+    pub stdev_return_bar: f64,
+    pub skewness: f64,             // 3rd standardised central moment
+    pub excess_kurtosis: f64,      // K − 3
+    pub sharpe_ratio: f64,         // annualised classical Sharpe
+    pub adjusted_sharpe: f64,      // annualised Pezier-White ASR
+    pub adjustment_factor: f64,    // ASR / SR
+    pub modsharpe_label: String,   // STRONG_POS / MODERATE_POS / WEAK / MODERATE_NEG / STRONG_NEG / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// HSIEHTEST — Hsieh (1989) third-moment nonlinearity test.
+/// Fits AR(1) residuals ε_t = r_t − μ − φ·r_{t-1}, then probes the
+/// standardised third cross-moment T(i,j) = E[ε_{t−i} ε_{t−j} ε_t]/σ³.
+/// Under linearity, T(i,j) = 0 for all (i,j). We test lags (1,1) and
+/// (2,2); |z| > 1.96 indicates statistically detectable nonlinearity.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct HsiehTestSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub ar_order: usize,           // 1
+    pub t_11: f64,                 // standardised third moment at lag (1,1)
+    pub t_22: f64,                 // at (2,2)
+    pub z_11: f64,                 // asymptotic z-stat of T(1,1) · √n / √6
+    pub z_22: f64,
+    pub max_abs_z: f64,            // max(|z_11|, |z_22|)
+    pub critical_95: f64,          // 1.96
+    pub reject_null: bool,         // max_abs_z > 1.96
+    pub hsieh_label: String,       // LINEAR / MILD_NONLIN / STRONG_NONLIN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// CHOWBREAK — Chow (1960) mean-shift structural break F-test.
+/// Splits the return series at n/2 and compares the pooled-mean
+/// RSS to the sum of within-group RSS. F = [(RSS_p − RSS_u)/k] /
+/// [RSS_u/(n−2k)] with k=1 regressor (constant). Large F ⇒ reject
+/// "no break at n/2". Useful as a quick structural-change screen.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ChowBreakSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub break_point_idx: usize,    // n/2
+    pub rss_pooled: f64,
+    pub rss_unrestricted: f64,     // RSS_1 + RSS_2 with separate means
+    pub mean_pre: f64,
+    pub mean_post: f64,
+    pub k_regressors: usize,       // 1 (constant-only model)
+    pub f_stat: f64,
+    pub df_num: usize,
+    pub df_den: usize,
+    pub critical_95: f64,          // ≈ 3.84 for k=1, large n
+    pub reject_null: bool,
+    pub chowbreak_label: String,   // NO_BREAK / MILD_BREAK / STRONG_BREAK / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// DRIFTBURST — Christensen-Oomen-Renò (2018) drift-burst hypothesis test.
+/// Scans the return series with a Gaussian kernel to compute a
+/// rolling drift-to-volatility ratio T(t) = √h · μ̂(t)/σ̂(t). Large
+/// |T(t)| is a local "drift burst" — a period where the trend
+/// dominates the volatility scale. Reports the maximum over the
+/// window and the number of excursions above |T|>3 (approx 99%
+/// pointwise critical value).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DriftBurstSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub kernel_bandwidth_bars: f64, // σ of Gaussian kernel (half-width)
+    pub max_abs_statistic: f64,     // max_t |T(t)|
+    pub max_stat_signed: f64,       // signed T at argmax |T|
+    pub max_at_offset: usize,       // bars before series end (0 = latest)
+    pub excursions_gt_3: usize,     // count of t with |T(t)| > 3
+    pub critical_99_approx: f64,    // 3.0 (pointwise)
+    pub driftburst_label: String,   // NO_BURST / MILD_BURST / STRONG_BURST / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// HLVCLUST — Parkinson high-low volatility clustering (Ljung-Box on
+/// log-range series). The Parkinson range estimator is
+/// σ̂²_P(t) = (1/(4 ln 2)) · ln(H_t/L_t)². We form v_t = ln(σ̂_P(t))
+/// (or equivalently 0.5·ln(ln(H/L)²) up to a constant) and apply
+/// Ljung-Box to lag h=10. Rejecting white noise on v_t confirms
+/// volatility clustering even without return-based GARCH machinery.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct HlvClustSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub lag_h: usize,              // 10
+    pub parkinson_vol_bar: f64,    // mean σ̂_P per bar
+    pub parkinson_vol_annualised: f64, // × √252
+    pub ac_lag1: f64,              // lag-1 autocorrelation of log-range series
+    pub ac_lag5: f64,              // lag-5
+    pub lb_q_stat: f64,            // Ljung-Box Q at lag h
+    pub critical_95: f64,          // χ²(h) 95%
+    pub p_value: f64,
+    pub reject_null: bool,
+    pub hlvclust_label: String,    // NO_CLUST / MILD_CLUST / STRONG_CLUST / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -33221,6 +33340,311 @@ pub fn compute_cdl_tristar_snapshot(
     }
 }
 
+// ── ADR-189 Round 76 (Quant Stats) compute fns ────────────────────────────
+
+/// MODSHARPE compute: Pezier-White Adjusted Sharpe Ratio.
+/// ASR = SR · [1 + (S/6)·SR − ((K−3)/24)·SR²] where S, K are the skewness
+/// and kurtosis of bar-level log-returns. Annualised with √252.
+pub fn compute_modsharpe_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ModSharpeSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let n = log_rets.len();
+    if n < 30 {
+        return ModSharpeSnapshot { symbol: sym, as_of: as_of.into(),
+            modsharpe_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥30 returns, got {}", n), ..Default::default() };
+    }
+    let nf = n as f64;
+    let mean: f64 = log_rets.iter().sum::<f64>() / nf;
+    let var: f64 = log_rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / nf;
+    let sd = var.sqrt();
+    if sd <= f64::EPSILON {
+        return ModSharpeSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            modsharpe_label: "INSUFFICIENT_DATA".into(),
+            note: "zero return stdev".into(), ..Default::default() };
+    }
+    let m3: f64 = log_rets.iter().map(|r| ((r - mean) / sd).powi(3)).sum::<f64>() / nf;
+    let m4: f64 = log_rets.iter().map(|r| ((r - mean) / sd).powi(4)).sum::<f64>() / nf;
+    let skew = m3;
+    let ek = m4 - 3.0;
+    let ann = 252.0_f64;
+    let sr = ann.sqrt() * mean / sd;
+    let adj = 1.0 + (skew / 6.0) * sr - (ek / 24.0) * sr * sr;
+    let asr = sr * adj;
+    let factor = if sr.abs() > f64::EPSILON { asr / sr } else { 0.0 };
+    let label = if asr > 1.0 { "STRONG_POS" }
+        else if asr > 0.3 { "MODERATE_POS" }
+        else if asr > -0.3 { "WEAK" }
+        else if asr > -1.0 { "MODERATE_NEG" }
+        else { "STRONG_NEG" };
+    ModSharpeSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        annualization_factor: ann, mean_return_bar: mean, stdev_return_bar: sd,
+        skewness: skew, excess_kurtosis: ek,
+        sharpe_ratio: sr, adjusted_sharpe: asr, adjustment_factor: factor,
+        modsharpe_label: label.into(), note: String::new(),
+    }
+}
+
+/// HSIEHTEST compute: Hsieh (1989) third-moment nonlinearity test.
+/// Fits AR(1) to log-returns, standardises the residuals, then probes
+/// T(i,j) = E[e_{t-i} e_{t-j} e_t] at lag pairs (1,1) and (2,2).
+/// Under H0 of linearity, m·T(i,j) is asymptotically N(0, 6) (for i=j
+/// under approximate normality of e). Returns z = T · √(m/6).
+pub fn compute_hsieh_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> HsiehTestSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let n = log_rets.len();
+    if n < 50 {
+        return HsiehTestSnapshot { symbol: sym, as_of: as_of.into(),
+            hsieh_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥50 returns, got {}", n), ..Default::default() };
+    }
+    // AR(1) fit: r_t = α + φ·r_{t-1} + ε_t
+    let m = n - 1;
+    let mut sx = 0.0f64; let mut sy = 0.0f64;
+    for i in 0..m { sx += log_rets[i]; sy += log_rets[i + 1]; }
+    let mx = sx / m as f64; let my = sy / m as f64;
+    let mut sxx = 0.0f64; let mut sxy = 0.0f64;
+    for i in 0..m {
+        let dx = log_rets[i] - mx;
+        sxx += dx * dx;
+        sxy += dx * (log_rets[i + 1] - my);
+    }
+    let phi = if sxx > f64::EPSILON { sxy / sxx } else { 0.0 };
+    let alpha = my - phi * mx;
+    let mut resid: Vec<f64> = Vec::with_capacity(m);
+    for i in 0..m {
+        resid.push(log_rets[i + 1] - (alpha + phi * log_rets[i]));
+    }
+    let mr = resid.len();
+    let rmean: f64 = resid.iter().sum::<f64>() / mr as f64;
+    let rvar: f64 = resid.iter().map(|e| (e - rmean).powi(2)).sum::<f64>() / mr as f64;
+    let rsd = rvar.sqrt();
+    if rsd <= f64::EPSILON {
+        return HsiehTestSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n, ar_order: 1,
+            hsieh_label: "INSUFFICIENT_DATA".into(),
+            note: "zero residual variance".into(), ..Default::default() };
+    }
+    let e: Vec<f64> = resid.iter().map(|v| (v - rmean) / rsd).collect();
+    let compute_t = |i: usize, j: usize| -> (f64, usize) {
+        let start = i.max(j);
+        if start >= e.len() { return (0.0, 0); }
+        let mut acc = 0.0f64;
+        let mut cnt = 0usize;
+        for t in start..e.len() {
+            acc += e[t - i] * e[t - j] * e[t];
+            cnt += 1;
+        }
+        if cnt == 0 { (0.0, 0) } else { (acc / cnt as f64, cnt) }
+    };
+    let (t11, n11) = compute_t(1, 1);
+    let (t22, n22) = compute_t(2, 2);
+    let z_for = |t: f64, c: usize| -> f64 {
+        if c < 8 { return 0.0; }
+        t * ((c as f64) / 6.0).sqrt()
+    };
+    let z11 = z_for(t11, n11);
+    let z22 = z_for(t22, n22);
+    let max_abs = z11.abs().max(z22.abs());
+    let crit = 1.96_f64;
+    let reject = max_abs > crit;
+    let label = if !reject { "LINEAR" }
+        else if max_abs > 2.0 * crit { "STRONG_NONLIN" }
+        else { "MILD_NONLIN" };
+    HsiehTestSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        ar_order: 1, t_11: t11, t_22: t22, z_11: z11, z_22: z22,
+        max_abs_z: max_abs, critical_95: crit, reject_null: reject,
+        hsieh_label: label.into(), note: String::new(),
+    }
+}
+
+/// CHOWBREAK compute: mean-shift Chow F-test at n/2.
+/// F = [(RSS_p − RSS_u) / k] / [RSS_u / (n − 2k)] with k = 1 (constant).
+/// Compares pooled-mean RSS against the sum of within-half RSS values.
+pub fn compute_chowbreak_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> ChowBreakSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let n = log_rets.len();
+    if n < 40 {
+        return ChowBreakSnapshot { symbol: sym, as_of: as_of.into(),
+            chowbreak_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥40 returns, got {}", n), ..Default::default() };
+    }
+    let bp = n / 2;
+    let pre = &log_rets[..bp];
+    let post = &log_rets[bp..];
+    let n1 = pre.len(); let n2 = post.len();
+    let mean_p: f64 = log_rets.iter().sum::<f64>() / n as f64;
+    let mean_pre: f64 = pre.iter().sum::<f64>() / n1 as f64;
+    let mean_post: f64 = post.iter().sum::<f64>() / n2 as f64;
+    let rss_p: f64 = log_rets.iter().map(|r| (r - mean_p).powi(2)).sum();
+    let rss_1: f64 = pre.iter().map(|r| (r - mean_pre).powi(2)).sum();
+    let rss_2: f64 = post.iter().map(|r| (r - mean_post).powi(2)).sum();
+    let rss_u = rss_1 + rss_2;
+    let k = 1usize;
+    let df1 = k;
+    let df2 = n.saturating_sub(2 * k);
+    if rss_u <= f64::EPSILON || df2 == 0 {
+        return ChowBreakSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            break_point_idx: bp, k_regressors: k,
+            chowbreak_label: "INSUFFICIENT_DATA".into(),
+            note: "degenerate RSS".into(), ..Default::default() };
+    }
+    let f_stat = ((rss_p - rss_u) / df1 as f64) / (rss_u / df2 as f64);
+    let f_stat = f_stat.max(0.0);
+    let critical_95 = 3.84_f64; // χ²(1)/1 ≈ F(1, ∞) at α=5%
+    let reject = f_stat > critical_95;
+    let label = if !reject { "NO_BREAK" }
+        else if f_stat > 3.0 * critical_95 { "STRONG_BREAK" }
+        else { "MILD_BREAK" };
+    ChowBreakSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        break_point_idx: bp, rss_pooled: rss_p, rss_unrestricted: rss_u,
+        mean_pre, mean_post, k_regressors: k,
+        f_stat, df_num: df1, df_den: df2, critical_95, reject_null: reject,
+        chowbreak_label: label.into(), note: String::new(),
+    }
+}
+
+/// DRIFTBURST compute: Christensen-Oomen-Renò (2018) drift-burst statistic.
+/// For each candidate time t in [bw, n), compute Gaussian-kernel-weighted
+/// mean μ̂(t) and sd σ̂(t) of the log-return series, then form the
+/// standardised statistic T(t) = √h · μ̂(t)/σ̂(t) where h is the sum of
+/// weights. Report max_t |T(t)|, its signed value, its offset from the
+/// series end, and the count of excursions with |T| > 3.
+pub fn compute_driftburst_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> DriftBurstSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, log_rets) = trailing_log_returns(bars);
+    let n = log_rets.len();
+    if n < 50 {
+        return DriftBurstSnapshot { symbol: sym, as_of: as_of.into(),
+            driftburst_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥50 returns, got {}", n), ..Default::default() };
+    }
+    let bw = 10.0_f64;
+    let bw_int = bw as usize;
+    let two_bw2 = 2.0 * bw * bw;
+    let mut max_abs = 0.0f64;
+    let mut max_signed = 0.0f64;
+    let mut max_at: usize = 0;
+    let mut excursions: usize = 0;
+    for t in bw_int..n {
+        let mut sw = 0.0f64;
+        let mut swr = 0.0f64;
+        let lo = t.saturating_sub(4 * bw_int);
+        for s in lo..=t {
+            let ds = (s as f64) - (t as f64);
+            let w = (-(ds * ds) / two_bw2).exp();
+            sw += w;
+            swr += w * log_rets[s];
+        }
+        if sw <= f64::EPSILON { continue; }
+        let mu = swr / sw;
+        let mut sws = 0.0f64;
+        for s in lo..=t {
+            let ds = (s as f64) - (t as f64);
+            let w = (-(ds * ds) / two_bw2).exp();
+            sws += w * (log_rets[s] - mu).powi(2);
+        }
+        let var = sws / sw;
+        let sigma = var.sqrt();
+        if sigma <= f64::EPSILON { continue; }
+        let stat = sw.sqrt() * mu / sigma;
+        if stat.abs() > 3.0 { excursions += 1; }
+        if stat.abs() > max_abs {
+            max_abs = stat.abs();
+            max_signed = stat;
+            max_at = n - 1 - t;
+        }
+    }
+    let crit = 3.0_f64;
+    let label = if max_abs < crit { "NO_BURST" }
+        else if max_abs < 5.0 { "MILD_BURST" }
+        else { "STRONG_BURST" };
+    DriftBurstSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        kernel_bandwidth_bars: bw,
+        max_abs_statistic: max_abs, max_stat_signed: max_signed,
+        max_at_offset: max_at, excursions_gt_3: excursions,
+        critical_99_approx: crit,
+        driftburst_label: label.into(), note: String::new(),
+    }
+}
+
+/// HLVCLUST compute: Parkinson high-low volatility clustering Ljung-Box.
+/// Forms the log-range series lr_t = ln(H_t/L_t), applies Ljung-Box at
+/// h=10, and reports lag-1 / lag-5 autocorrelations plus Q statistic.
+pub fn compute_hlvclust_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> HlvClustSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let mut lr: Vec<f64> = Vec::with_capacity(sorted.len());
+    for bar in sorted.iter() {
+        if bar.high > 0.0 && bar.low > 0.0 && bar.high > bar.low {
+            let v = (bar.high / bar.low).ln();
+            if v.is_finite() && v > 0.0 { lr.push(v); }
+        }
+    }
+    let n = lr.len();
+    if n < 30 {
+        return HlvClustSnapshot { symbol: sym, as_of: as_of.into(),
+            hlvclust_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥30 valid H/L bars, got {}", n), ..Default::default() };
+    }
+    let pk: Vec<f64> = lr.iter().map(|v| v / (4.0_f64 * std::f64::consts::LN_2).sqrt()).collect();
+    let pk_mean: f64 = pk.iter().sum::<f64>() / n as f64;
+    let pk_ann = pk_mean * (252.0_f64).sqrt();
+    // Autocorrelation computed on the centred log-range series
+    let mean: f64 = lr.iter().sum::<f64>() / n as f64;
+    let var: f64 = lr.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n as f64;
+    if var <= f64::EPSILON {
+        return HlvClustSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            hlvclust_label: "INSUFFICIENT_DATA".into(),
+            note: "zero log-range variance".into(), ..Default::default() };
+    }
+    let rho_k = |k: usize| -> f64 {
+        let mut num = 0.0f64;
+        for t in k..n {
+            num += (lr[t] - mean) * (lr[t - k] - mean);
+        }
+        num / (n as f64 * var)
+    };
+    let h = 10usize;
+    let mut q = 0.0f64;
+    for k in 1..=h {
+        let r = rho_k(k);
+        q += r * r / (n as f64 - k as f64);
+    }
+    q *= n as f64 * (n as f64 + 2.0);
+    let ac1 = rho_k(1);
+    let ac5 = rho_k(5);
+    let crit = 18.307_f64; // χ²(10) at 95%
+    let p = chi2_upper_tail(q, h);
+    let reject = q > crit;
+    let label = if !reject { "NO_CLUST" }
+        else if q < 2.0 * crit { "MILD_CLUST" }
+        else { "STRONG_CLUST" };
+    HlvClustSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        lag_h: h, parkinson_vol_bar: pk_mean, parkinson_vol_annualised: pk_ann,
+        ac_lag1: ac1, ac_lag5: ac5,
+        lb_q_stat: q, critical_95: crit, p_value: p, reject_null: reject,
+        hlvclust_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -44629,6 +45053,169 @@ pub fn get_cdl_tristar(conn: &Connection, symbol: &str) -> Result<Option<CdlTris
     if let Some(r) = rows.next().map_err(|e| format!("row cdl_tristar: {e}"))? {
         let j: String = r.get(0).map_err(|e| format!("get cdl_tristar: {e}"))?;
         let snap: CdlTristarSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_tristar: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── ADR-189 Round 76 schema v78 (Quant Stats) ─────────────────────────────
+
+pub fn create_research_tables_v78(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v77(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_modsharpe (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_modsharpe_updated ON research_modsharpe(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_hsiehtest (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_hsiehtest_updated ON research_hsiehtest(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_chowbreak (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_chowbreak_updated ON research_chowbreak(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_driftburst (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_driftburst_updated ON research_driftburst(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_hlvclust (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_hlvclust_updated ON research_hlvclust(updated_at);",
+    ).map_err(|e| format!("create v78 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_modsharpe(conn: &Connection, symbol: &str, snap: &ModSharpeSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v78(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("modsharpe json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_modsharpe (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert modsharpe: {e}"))?;
+    Ok(())
+}
+
+pub fn get_modsharpe(conn: &Connection, symbol: &str) -> Result<Option<ModSharpeSnapshot>, String> {
+    let _ = create_research_tables_v78(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_modsharpe WHERE symbol = ?1")
+        .map_err(|e| format!("prep modsharpe: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query modsharpe: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row modsharpe: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get modsharpe: {e}"))?;
+        let snap: ModSharpeSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse modsharpe: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_hsiehtest(conn: &Connection, symbol: &str, snap: &HsiehTestSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v78(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("hsiehtest json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_hsiehtest (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert hsiehtest: {e}"))?;
+    Ok(())
+}
+
+pub fn get_hsiehtest(conn: &Connection, symbol: &str) -> Result<Option<HsiehTestSnapshot>, String> {
+    let _ = create_research_tables_v78(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_hsiehtest WHERE symbol = ?1")
+        .map_err(|e| format!("prep hsiehtest: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query hsiehtest: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row hsiehtest: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get hsiehtest: {e}"))?;
+        let snap: HsiehTestSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse hsiehtest: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_chowbreak(conn: &Connection, symbol: &str, snap: &ChowBreakSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v78(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("chowbreak json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_chowbreak (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert chowbreak: {e}"))?;
+    Ok(())
+}
+
+pub fn get_chowbreak(conn: &Connection, symbol: &str) -> Result<Option<ChowBreakSnapshot>, String> {
+    let _ = create_research_tables_v78(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_chowbreak WHERE symbol = ?1")
+        .map_err(|e| format!("prep chowbreak: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query chowbreak: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row chowbreak: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get chowbreak: {e}"))?;
+        let snap: ChowBreakSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse chowbreak: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_driftburst(conn: &Connection, symbol: &str, snap: &DriftBurstSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v78(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("driftburst json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_driftburst (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert driftburst: {e}"))?;
+    Ok(())
+}
+
+pub fn get_driftburst(conn: &Connection, symbol: &str) -> Result<Option<DriftBurstSnapshot>, String> {
+    let _ = create_research_tables_v78(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_driftburst WHERE symbol = ?1")
+        .map_err(|e| format!("prep driftburst: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query driftburst: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row driftburst: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get driftburst: {e}"))?;
+        let snap: DriftBurstSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse driftburst: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_hlvclust(conn: &Connection, symbol: &str, snap: &HlvClustSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v78(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("hlvclust json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_hlvclust (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert hlvclust: {e}"))?;
+    Ok(())
+}
+
+pub fn get_hlvclust(conn: &Connection, symbol: &str) -> Result<Option<HlvClustSnapshot>, String> {
+    let _ = create_research_tables_v78(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_hlvclust WHERE symbol = ?1")
+        .map_err(|e| format!("prep hlvclust: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query hlvclust: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row hlvclust: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get hlvclust: {e}"))?;
+        let snap: HlvClustSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse hlvclust: {e}"))?;
         Ok(Some(snap))
     } else { Ok(None) }
 }
@@ -59150,5 +59737,178 @@ Trailing text.
         assert_eq!(snap.cdl_tristar_label, "BULLISH_PATTERN");
         assert_eq!(snap.pattern_value, 100);
         assert!(snap.avg_body_pct_range <= 5.0);
+    }
+
+    // ── ADR-189 Round 76 (Quant Stats) tests ──
+
+    #[test]
+    fn modsharpe_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ModSharpeSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 252,
+            annualization_factor: 252.0,
+            mean_return_bar: 0.0008, stdev_return_bar: 0.012,
+            skewness: -0.35, excess_kurtosis: 3.2,
+            sharpe_ratio: 1.06, adjusted_sharpe: 0.78, adjustment_factor: 0.736,
+            modsharpe_label: "MODERATE_POS".into(), note: String::new(),
+        };
+        upsert_modsharpe(&conn, "TEST", &snap).unwrap();
+        let got = get_modsharpe(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.modsharpe_label, "MODERATE_POS");
+        assert!((got.sharpe_ratio - 1.06).abs() < 1e-9);
+        assert!((got.adjusted_sharpe - 0.78).abs() < 1e-9);
+    }
+
+    #[test]
+    fn modsharpe_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_modsharpe_snapshot("T", "2026-04-19", &bars);
+        assert!(matches!(snap.modsharpe_label.as_str(),
+            "STRONG_POS" | "MODERATE_POS" | "WEAK" | "MODERATE_NEG" | "STRONG_NEG" | "INSUFFICIENT_DATA"));
+        if snap.modsharpe_label != "INSUFFICIENT_DATA" {
+            assert!(snap.annualization_factor > 0.0);
+            assert!(snap.stdev_return_bar > 0.0);
+            assert!(snap.sharpe_ratio.is_finite());
+            assert!(snap.adjusted_sharpe.is_finite());
+            assert!(snap.skewness.is_finite());
+            assert!(snap.excess_kurtosis.is_finite());
+        }
+    }
+
+    #[test]
+    fn hsiehtest_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = HsiehTestSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 252,
+            ar_order: 1, t_11: 0.08, t_22: -0.03,
+            z_11: 1.62, z_22: -0.6, max_abs_z: 1.62,
+            critical_95: 1.96, reject_null: false,
+            hsieh_label: "LINEAR".into(), note: String::new(),
+        };
+        upsert_hsiehtest(&conn, "TEST", &snap).unwrap();
+        let got = get_hsiehtest(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.hsieh_label, "LINEAR");
+        assert!((got.max_abs_z - 1.62).abs() < 1e-9);
+        assert_eq!(got.ar_order, 1);
+    }
+
+    #[test]
+    fn hsiehtest_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_hsieh_snapshot("T", "2026-04-19", &bars);
+        assert!(matches!(snap.hsieh_label.as_str(),
+            "LINEAR" | "MILD_NONLIN" | "STRONG_NONLIN" | "INSUFFICIENT_DATA"));
+        if snap.hsieh_label != "INSUFFICIENT_DATA" {
+            assert!(snap.critical_95 > 0.0);
+            assert!(snap.t_11.is_finite());
+            assert!(snap.t_22.is_finite());
+            assert!(snap.z_11.is_finite());
+            assert!(snap.z_22.is_finite());
+            assert!(snap.max_abs_z >= 0.0);
+            assert_eq!(snap.ar_order, 1);
+        }
+    }
+
+    #[test]
+    fn chowbreak_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ChowBreakSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 200,
+            break_point_idx: 100, rss_pooled: 0.028, rss_unrestricted: 0.024,
+            mean_pre: 0.001, mean_post: -0.0005,
+            k_regressors: 1, f_stat: 8.3, df_num: 1, df_den: 198, critical_95: 3.84,
+            reject_null: true,
+            chowbreak_label: "MILD_BREAK".into(), note: String::new(),
+        };
+        upsert_chowbreak(&conn, "TEST", &snap).unwrap();
+        let got = get_chowbreak(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.chowbreak_label, "MILD_BREAK");
+        assert!((got.f_stat - 8.3).abs() < 1e-9);
+        assert_eq!(got.break_point_idx, 100);
+    }
+
+    #[test]
+    fn chowbreak_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_chowbreak_snapshot("T", "2026-04-19", &bars);
+        assert!(matches!(snap.chowbreak_label.as_str(),
+            "NO_BREAK" | "MILD_BREAK" | "STRONG_BREAK" | "INSUFFICIENT_DATA"));
+        if snap.chowbreak_label != "INSUFFICIENT_DATA" {
+            assert!(snap.f_stat.is_finite() && snap.f_stat >= 0.0);
+            assert!(snap.rss_pooled >= snap.rss_unrestricted - 1e-12);
+            assert!(snap.critical_95 > 0.0);
+            assert_eq!(snap.break_point_idx, snap.bars_used / 2);
+            assert_eq!(snap.k_regressors, 1);
+            assert!(snap.df_den > 0);
+        }
+    }
+
+    #[test]
+    fn driftburst_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = DriftBurstSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 252,
+            kernel_bandwidth_bars: 10.0,
+            max_abs_statistic: 4.2, max_stat_signed: 4.2, max_at_offset: 15,
+            excursions_gt_3: 3, critical_99_approx: 3.0,
+            driftburst_label: "MILD_BURST".into(), note: String::new(),
+        };
+        upsert_driftburst(&conn, "TEST", &snap).unwrap();
+        let got = get_driftburst(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.driftburst_label, "MILD_BURST");
+        assert!((got.max_abs_statistic - 4.2).abs() < 1e-9);
+        assert_eq!(got.excursions_gt_3, 3);
+    }
+
+    #[test]
+    fn driftburst_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_driftburst_snapshot("T", "2026-04-19", &bars);
+        assert!(matches!(snap.driftburst_label.as_str(),
+            "NO_BURST" | "MILD_BURST" | "STRONG_BURST" | "INSUFFICIENT_DATA"));
+        if snap.driftburst_label != "INSUFFICIENT_DATA" {
+            assert!(snap.max_abs_statistic >= 0.0);
+            assert!(snap.max_abs_statistic.is_finite());
+            assert!(snap.max_stat_signed.is_finite());
+            assert!(snap.critical_99_approx > 0.0);
+            assert!(snap.kernel_bandwidth_bars > 0.0);
+            assert!(snap.max_at_offset < snap.bars_used);
+        }
+    }
+
+    #[test]
+    fn hlvclust_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = HlvClustSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 252,
+            lag_h: 10, parkinson_vol_bar: 0.014, parkinson_vol_annualised: 0.22,
+            ac_lag1: 0.18, ac_lag5: 0.07,
+            lb_q_stat: 35.2, critical_95: 18.307, p_value: 0.00011,
+            reject_null: true,
+            hlvclust_label: "STRONG_CLUST".into(), note: String::new(),
+        };
+        upsert_hlvclust(&conn, "TEST", &snap).unwrap();
+        let got = get_hlvclust(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.hlvclust_label, "STRONG_CLUST");
+        assert!((got.lb_q_stat - 35.2).abs() < 1e-9);
+        assert_eq!(got.lag_h, 10);
+    }
+
+    #[test]
+    fn hlvclust_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_hlvclust_snapshot("T", "2026-04-19", &bars);
+        assert!(matches!(snap.hlvclust_label.as_str(),
+            "NO_CLUST" | "MILD_CLUST" | "STRONG_CLUST" | "INSUFFICIENT_DATA"));
+        if snap.hlvclust_label != "INSUFFICIENT_DATA" {
+            assert!(snap.lb_q_stat >= 0.0 && snap.lb_q_stat.is_finite());
+            assert!(snap.critical_95 > 0.0);
+            assert!(snap.parkinson_vol_bar >= 0.0);
+            assert!(snap.parkinson_vol_annualised >= 0.0);
+            assert!(snap.ac_lag1.is_finite());
+            assert!(snap.ac_lag5.is_finite());
+            assert!(snap.p_value >= 0.0 && snap.p_value <= 1.0);
+            assert_eq!(snap.lag_h, 10);
+        }
     }
 }

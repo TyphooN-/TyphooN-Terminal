@@ -574,6 +574,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_cdl_marubozu",
     "research_cdl_spinning_top",
     "research_cdl_tristar",
+    // ── ADR-189 Round 76 ────────────────────────────
+    "research_modsharpe",
+    "research_hsiehtest",
+    "research_chowbreak",
+    "research_driftburst",
+    "research_hlvclust",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -3365,6 +3371,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_modsharpe" => Some(
+            "CREATE TABLE IF NOT EXISTS research_modsharpe (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_hsiehtest" => Some(
+            "CREATE TABLE IF NOT EXISTS research_hsiehtest (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_chowbreak" => Some(
+            "CREATE TABLE IF NOT EXISTS research_chowbreak (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_driftburst" => Some(
+            "CREATE TABLE IF NOT EXISTS research_driftburst (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_hlvclust" => Some(
+            "CREATE TABLE IF NOT EXISTS research_hlvclust (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -3802,6 +3843,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_cdl_marubozu" => Some("updated_at"),
         "research_cdl_spinning_top" => Some("updated_at"),
         "research_cdl_tristar" => Some("updated_at"),
+        // ── ADR-189 Round 76 ──
+        "research_modsharpe" => Some("updated_at"),
+        "research_hsiehtest" => Some("updated_at"),
+        "research_chowbreak" => Some("updated_at"),
+        "research_driftburst" => Some("updated_at"),
+        "research_hlvclust" => Some("updated_at"),
         _ => None,
     }
 }
