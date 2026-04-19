@@ -362,6 +362,87 @@ impl SqliteCache {
         Ok(Self { conn: Mutex::new(conn), read_conn: Mutex::new(read_conn), db_path: path.clone() })
     }
 
+    /// Open an existing MT5 source DB in read-write mode — exclusively for
+    /// terminal-side cleanup (post-merge row DELETE on /dev/shm files).
+    ///
+    /// Unlike `open()`, this does NOT touch journal_mode, does NOT create or
+    /// migrate tables, and does NOT set auto_vacuum. BarCacheWriter owns the
+    /// schema and the `PRAGMA journal_mode=DELETE` setting; altering either
+    /// from the terminal side would clobber the EA's assumptions. The 10 s
+    /// busy_timeout lets us wait out BCW's exclusive write windows (each
+    /// per-symbol transaction is sub-second).
+    pub fn open_source_rw(path: &PathBuf) -> Result<Self, String> {
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ).map_err(|e| format!("SQLite RW open failed: {e}"))?;
+        conn.busy_timeout(std::time::Duration::from_secs(10))
+            .map_err(|e| format!("SQLite busy_timeout failed: {e}"))?;
+        let _ = conn.execute_batch("
+            PRAGMA cache_size=-16000;
+            PRAGMA temp_store=MEMORY;
+        ");
+        let read_conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ).map_err(|e| format!("SQLite RW-read conn failed: {e}"))?;
+        read_conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| format!("SQLite RW-read busy_timeout failed: {e}"))?;
+        Ok(Self { conn: Mutex::new(conn), read_conn: Mutex::new(read_conn), db_path: path.clone() })
+    }
+
+    /// Delete a batch of bar_cache rows by `(key, expected_ts)`. Used by
+    /// Mt5Sync's post-merge cleanup — keys that have just been copied to the
+    /// target DB are removed from the source /dev/shm DB so tmpfs doesn't
+    /// accumulate the terminal's already-merged history.
+    ///
+    /// The `expected_ts` guard (`timestamp = ?2`) makes the delete atomic
+    /// relative to the prior read: if BCW rewrote the row between Mt5Sync's
+    /// read and this delete (e.g. mid-pass new-bar export), the source
+    /// timestamp will have advanced past what we recorded, the WHERE clause
+    /// won't match, and the row survives to be picked up on the next sync
+    /// pass. Without this guard the race could drop a newly-written BCW row
+    /// that we hadn't merged yet — the in-memory target_meta would still
+    /// reflect the old ts and target would lag one bar behind source until
+    /// the NEXT re-export.
+    ///
+    /// Metadata rows (`mt5:__…`) are filtered out at the SQL layer so callers
+    /// don't need to pre-partition the key list. Runs inside a single
+    /// transaction — one fsync regardless of batch size.
+    pub fn delete_bar_keys(&self, keys: &[(String, i64)]) -> Result<u64, String> {
+        if keys.is_empty() { return Ok(0); }
+        let mut conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let tx = conn.transaction().map_err(|e| format!("begin tx failed: {e}"))?;
+        let mut deleted = 0u64;
+        {
+            let mut stmt = tx.prepare_cached(
+                "DELETE FROM bar_cache WHERE key = ?1 AND timestamp = ?2 \
+                 AND key NOT LIKE 'mt5:\\_\\_%' ESCAPE '\\'",
+            ).map_err(|e| format!("prepare failed: {e}"))?;
+            for (k, ts) in keys {
+                deleted = deleted.saturating_add(
+                    stmt.execute(params![k, ts]).unwrap_or(0) as u64
+                );
+            }
+        }
+        tx.commit().map_err(|e| format!("commit failed: {e}"))?;
+        Ok(deleted)
+    }
+
+    /// Run full `VACUUM` on the source DB to rebuild it and release pages
+    /// back to the filesystem. BCW does not configure `auto_vacuum` so
+    /// freelist pages are never reclaimed automatically — a full VACUUM is
+    /// the only way to shrink the /dev/shm file. On tmpfs this is fast
+    /// (~50 ms for a 100 MB DB — no physical disk I/O), so we run it after
+    /// every sync pass that deleted rows. Requires an exclusive lock;
+    /// `busy_timeout=10s` from `open_source_rw` handles BCW write windows.
+    pub fn vacuum_source(&self) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        conn.execute_batch("VACUUM")
+            .map_err(|e| format!("VACUUM failed: {e}"))?;
+        Ok(())
+    }
+
     /// Store bar data in packed binary format + zstd compression.
     /// Binary format is ~3-5x smaller than JSON before compression.
     /// Uses zstd level 3 — same as put_bars_fast. Level 9 was wasteful since
