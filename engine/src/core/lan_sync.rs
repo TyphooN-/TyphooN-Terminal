@@ -568,6 +568,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_cdl_gravestone_doji",
     "research_cdl_hanging_man",
     "research_cdl_inverted_hammer",
+    // ── ADR-187 Round 75 ────────────────────────────
+    "research_cdl_harami_cross",
+    "research_cdl_long_legged_doji",
+    "research_cdl_marubozu",
+    "research_cdl_spinning_top",
+    "research_cdl_tristar",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -3324,6 +3330,41 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_cdl_harami_cross" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_harami_cross (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_long_legged_doji" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_long_legged_doji (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_marubozu" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_marubozu (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_spinning_top" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_spinning_top (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_tristar" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_tristar (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -3755,6 +3796,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_cdl_gravestone_doji" => Some("updated_at"),
         "research_cdl_hanging_man" => Some("updated_at"),
         "research_cdl_inverted_hammer" => Some("updated_at"),
+        // ── ADR-187 Round 75 ──
+        "research_cdl_harami_cross" => Some("updated_at"),
+        "research_cdl_long_legged_doji" => Some("updated_at"),
+        "research_cdl_marubozu" => Some("updated_at"),
+        "research_cdl_spinning_top" => Some("updated_at"),
+        "research_cdl_tristar" => Some("updated_at"),
         _ => None,
     }
 }
