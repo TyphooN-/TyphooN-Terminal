@@ -7718,6 +7718,116 @@ pub struct CdlDarkCloudCoverSnapshot {
     pub note: String,
 }
 
+// ── ADR-186 Round 74 — CDLPIERCING / CDLDRAGONFLYDOJI / CDLGRAVESTONEDOJI / CDLHANGINGMAN / CDLINVERTEDHAMMER ──
+
+/// TA-Lib CDLPIERCING — Piercing Line (2-bar bullish reversal, mirror
+/// of Dark Cloud Cover). Prior bar red with large body; current bar
+/// green, opens below prior low, closes above prior midpoint (≥ 50%
+/// penetration). Emits +100 on match.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlPiercingSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, 0 none
+    pub pattern_value_prev: i32,
+    pub penetration_pct: f64,          // 100 · (current_close - prior_close) / prior_body
+    pub prior_body_pct_range: f64,
+    pub current_body_pct_range: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_piercing_label: String, // BULLISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLDRAGONFLYDOJI — Dragonfly Doji (single-bar support
+/// signal). Doji body (≤ 5% of range) with open ≈ high ≈ close
+/// and long lower shadow. T-shape indicating rejection of lower
+/// prices. TA-Lib emits +100 on match.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlDragonflyDojiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, 0 none
+    pub pattern_value_prev: i32,
+    pub body_pct_range: f64,
+    pub upper_shadow_pct: f64,         // % of range above body
+    pub lower_shadow_pct: f64,         // % of range below body (dominant for dragonfly)
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_dragonfly_doji_label: String, // BULLISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLGRAVESTONEDOJI — Gravestone Doji (single-bar resistance
+/// signal). Doji body (≤ 5% of range) with open ≈ low ≈ close and
+/// long upper shadow. Inverted-T shape indicating rejection of
+/// higher prices. TA-Lib emits -100 on match.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlGravestoneDojiSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // -100 bearish, 0 none
+    pub pattern_value_prev: i32,
+    pub body_pct_range: f64,
+    pub upper_shadow_pct: f64,         // dominant for gravestone
+    pub lower_shadow_pct: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_gravestone_doji_label: String, // BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLHANGINGMAN — Hanging Man (single-bar bearish reversal
+/// at tops). Geometrically identical to the Hammer but appearing at
+/// market tops instead of bottoms: small body in the upper third,
+/// long lower shadow ≥ 2× body, minimal upper shadow. TA-Lib emits
+/// -100 on match (sign-flipped from Hammer's +100 to signal bearish
+/// top context vs. bullish bottom context).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlHangingManSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // -100 bearish, 0 none
+    pub pattern_value_prev: i32,
+    pub body_pct_range: f64,
+    pub upper_shadow_pct: f64,
+    pub lower_shadow_pct: f64,         // dominant (≥ 2× body)
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_hanging_man_label: String, // BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLINVERTEDHAMMER — Inverted Hammer (single-bar bullish
+/// reversal at bottoms). Mirror of Shooting Star but appearing at
+/// bottoms instead of tops: small body in the lower third, long
+/// upper shadow ≥ 2× body, minimal lower shadow. TA-Lib emits
+/// +100 on match (sign-flipped from Shooting Star's -100).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlInvertedHammerSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, 0 none
+    pub pattern_value_prev: i32,
+    pub body_pct_range: f64,
+    pub upper_shadow_pct: f64,         // dominant (≥ 2× body)
+    pub lower_shadow_pct: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_inverted_hammer_label: String, // BULLISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -32509,6 +32619,237 @@ pub fn compute_cdl_dark_cloud_cover_snapshot(
     }
 }
 
+// ── ADR-186 Round 74 compute fns — CDLPIERCING / CDLDRAGONFLYDOJI /
+//    CDLGRAVESTONEDOJI / CDLHANGINGMAN / CDLINVERTEDHAMMER ──
+
+pub fn compute_cdl_piercing_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlPiercingSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 3 {
+        return CdlPiercingSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_piercing_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥3 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    // Piercing Line (2-bar bullish reversal — mirror of Dark Cloud Cover):
+    //   prior bar: red with body ≥ 30% of range,
+    //   current bar: green, opens below prior low, closes above prior midpoint.
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 1 { return 0; }
+        let b0 = s[i - 1]; let b1 = s[i];
+        let (body0, _, _, _, body0_pct, bull0) = candle_metrics(b0);
+        let (body1, _, _, _, _body1_pct, bull1) = candle_metrics(b1);
+        if body0 < 1e-12 || body1 < 1e-12 { return 0; }
+        if bull0 { return 0; }                     // prior must be red
+        if !bull1 { return 0; }                    // current must be green
+        if body0_pct < 30.0 { return 0; }
+        if b1.open >= b0.low { return 0; }         // current opens below prior low
+        let midpoint0 = (b0.open + b0.close) / 2.0;
+        if b1.close <= midpoint0 { return 0; }     // current closes above prior midpoint
+        if b1.close >= b0.open { return 0; }       // but not above prior open (engulfing)
+        100
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 1, detect);
+    let b0 = sorted[n - 2]; let b1 = sorted[n - 1];
+    let (body0, _, _, _, body0_pct, _) = candle_metrics(b0);
+    let (_, _, _, _, body1_pct, _) = candle_metrics(b1);
+    let pen = if body0 > 1e-12 { 100.0 * (b1.close - b0.close) / body0 } else { 0.0 };
+    let label = if last_match { "BULLISH_PATTERN" } else { "NO_PATTERN" };
+    CdlPiercingSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        penetration_pct: pen,
+        prior_body_pct_range: body0_pct, current_body_pct_range: body1_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b1.close,
+        cdl_piercing_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_dragonfly_doji_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlDragonflyDojiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 2 {
+        return CdlDragonflyDojiSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_dragonfly_doji_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥2 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    // Dragonfly Doji: body ≤ 5% of range, upper shadow ≤ 5% of range,
+    // lower shadow ≥ 60% of range (T-shape).
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        let b = s[i];
+        let (_, range, upper, lower, body_pct, _) = candle_metrics(b);
+        if range < 1e-12 { return 0; }
+        let upper_pct = 100.0 * upper / range;
+        let lower_pct = 100.0 * lower / range;
+        if body_pct > 5.0 { return 0; }
+        if upper_pct > 5.0 { return 0; }
+        if lower_pct < 60.0 { return 0; }
+        100
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 0, detect);
+    let b = sorted[n - 1];
+    let (_, range, upper, lower, body_pct, _) = candle_metrics(b);
+    let (upper_pct, lower_pct) = if range > 1e-12 {
+        (100.0 * upper / range, 100.0 * lower / range)
+    } else { (0.0, 0.0) };
+    let label = if last_match { "BULLISH_PATTERN" } else { "NO_PATTERN" };
+    CdlDragonflyDojiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        body_pct_range: body_pct, upper_shadow_pct: upper_pct, lower_shadow_pct: lower_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b.close,
+        cdl_dragonfly_doji_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_gravestone_doji_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlGravestoneDojiSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 2 {
+        return CdlGravestoneDojiSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_gravestone_doji_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥2 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    // Gravestone Doji: body ≤ 5% of range, lower shadow ≤ 5% of range,
+    // upper shadow ≥ 60% of range (inverted-T shape).
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        let b = s[i];
+        let (_, range, upper, lower, body_pct, _) = candle_metrics(b);
+        if range < 1e-12 { return 0; }
+        let upper_pct = 100.0 * upper / range;
+        let lower_pct = 100.0 * lower / range;
+        if body_pct > 5.0 { return 0; }
+        if lower_pct > 5.0 { return 0; }
+        if upper_pct < 60.0 { return 0; }
+        -100
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 0, detect);
+    let b = sorted[n - 1];
+    let (_, range, upper, lower, body_pct, _) = candle_metrics(b);
+    let (upper_pct, lower_pct) = if range > 1e-12 {
+        (100.0 * upper / range, 100.0 * lower / range)
+    } else { (0.0, 0.0) };
+    let label = if last_match { "BEARISH_PATTERN" } else { "NO_PATTERN" };
+    CdlGravestoneDojiSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        body_pct_range: body_pct, upper_shadow_pct: upper_pct, lower_shadow_pct: lower_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b.close,
+        cdl_gravestone_doji_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_hanging_man_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlHangingManSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 2 {
+        return CdlHangingManSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_hanging_man_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥2 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    // Hanging Man (geometrically identical to Hammer): small body in
+    // upper third, lower shadow ≥ 2 × body, upper shadow ≤ body.
+    // Emits -100 (bearish at tops) per TA-Lib convention.
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        let b = s[i];
+        let (body, _, upper, lower, body_pct, _) = candle_metrics(b);
+        if body < 1e-12 { return 0; }
+        if body_pct > 30.0 { return 0; }
+        if lower < 2.0 * body { return 0; }
+        if upper > body { return 0; }
+        -100
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 0, detect);
+    let b = sorted[n - 1];
+    let (_, range, upper, lower, body_pct, _) = candle_metrics(b);
+    let (upper_pct, lower_pct) = if range > 1e-12 {
+        (100.0 * upper / range, 100.0 * lower / range)
+    } else { (0.0, 0.0) };
+    let label = if last_match { "BEARISH_PATTERN" } else { "NO_PATTERN" };
+    CdlHangingManSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        body_pct_range: body_pct, upper_shadow_pct: upper_pct, lower_shadow_pct: lower_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b.close,
+        cdl_hanging_man_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_inverted_hammer_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlInvertedHammerSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 2 {
+        return CdlInvertedHammerSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_inverted_hammer_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥2 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    // Inverted Hammer (geometrically identical to Shooting Star): small
+    // body in lower third, upper shadow ≥ 2 × body, lower shadow ≤ body.
+    // Emits +100 (bullish at bottoms) per TA-Lib convention.
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        let b = s[i];
+        let (body, _, upper, lower, body_pct, _) = candle_metrics(b);
+        if body < 1e-12 { return 0; }
+        if body_pct > 30.0 { return 0; }
+        if upper < 2.0 * body { return 0; }
+        if lower > body { return 0; }
+        100
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 0, detect);
+    let b = sorted[n - 1];
+    let (_, range, upper, lower, body_pct, _) = candle_metrics(b);
+    let (upper_pct, lower_pct) = if range > 1e-12 {
+        (100.0 * upper / range, 100.0 * lower / range)
+    } else { (0.0, 0.0) };
+    let label = if last_match { "BULLISH_PATTERN" } else { "NO_PATTERN" };
+    CdlInvertedHammerSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        body_pct_range: body_pct, upper_shadow_pct: upper_pct, lower_shadow_pct: lower_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b.close,
+        cdl_inverted_hammer_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -43588,6 +43929,171 @@ pub fn get_cdl_dark_cloud_cover(conn: &Connection, symbol: &str) -> Result<Optio
     if let Some(r) = rows.next().map_err(|e| format!("row cdl_dcc: {e}"))? {
         let j: String = r.get(0).map_err(|e| format!("get cdl_dcc: {e}"))?;
         let snap: CdlDarkCloudCoverSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_dcc: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── ADR-186 Round 74 schema v76 + upsert/get fns — CDLPIERCING /
+//    CDLDRAGONFLYDOJI / CDLGRAVESTONEDOJI / CDLHANGINGMAN /
+//    CDLINVERTEDHAMMER ──
+
+pub fn create_research_tables_v76(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v75(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_cdl_piercing (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_piercing_updated ON research_cdl_piercing(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_dragonfly_doji (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_dragonfly_doji_updated ON research_cdl_dragonfly_doji(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_gravestone_doji (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_gravestone_doji_updated ON research_cdl_gravestone_doji(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_hanging_man (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_hanging_man_updated ON research_cdl_hanging_man(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_inverted_hammer (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_inverted_hammer_updated ON research_cdl_inverted_hammer(updated_at);",
+    ).map_err(|e| format!("create v76 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_cdl_piercing(conn: &Connection, symbol: &str, snap: &CdlPiercingSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v76(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_piercing json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_piercing (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_piercing: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_piercing(conn: &Connection, symbol: &str) -> Result<Option<CdlPiercingSnapshot>, String> {
+    let _ = create_research_tables_v76(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_piercing WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_piercing: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_piercing: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_piercing: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_piercing: {e}"))?;
+        let snap: CdlPiercingSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_piercing: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_dragonfly_doji(conn: &Connection, symbol: &str, snap: &CdlDragonflyDojiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v76(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_dragonfly json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_dragonfly_doji (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_dragonfly: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_dragonfly_doji(conn: &Connection, symbol: &str) -> Result<Option<CdlDragonflyDojiSnapshot>, String> {
+    let _ = create_research_tables_v76(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_dragonfly_doji WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_dragonfly: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_dragonfly: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_dragonfly: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_dragonfly: {e}"))?;
+        let snap: CdlDragonflyDojiSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_dragonfly: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_gravestone_doji(conn: &Connection, symbol: &str, snap: &CdlGravestoneDojiSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v76(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_gravestone json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_gravestone_doji (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_gravestone: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_gravestone_doji(conn: &Connection, symbol: &str) -> Result<Option<CdlGravestoneDojiSnapshot>, String> {
+    let _ = create_research_tables_v76(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_gravestone_doji WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_gravestone: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_gravestone: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_gravestone: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_gravestone: {e}"))?;
+        let snap: CdlGravestoneDojiSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_gravestone: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_hanging_man(conn: &Connection, symbol: &str, snap: &CdlHangingManSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v76(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_hanging_man json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_hanging_man (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_hanging_man: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_hanging_man(conn: &Connection, symbol: &str) -> Result<Option<CdlHangingManSnapshot>, String> {
+    let _ = create_research_tables_v76(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_hanging_man WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_hanging_man: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_hanging_man: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_hanging_man: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_hanging_man: {e}"))?;
+        let snap: CdlHangingManSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_hanging_man: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_inverted_hammer(conn: &Connection, symbol: &str, snap: &CdlInvertedHammerSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v76(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_inv_hammer json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_inverted_hammer (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_inv_hammer: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_inverted_hammer(conn: &Connection, symbol: &str) -> Result<Option<CdlInvertedHammerSnapshot>, String> {
+    let _ = create_research_tables_v76(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_inverted_hammer WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_inv_hammer: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_inv_hammer: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_inv_hammer: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_inv_hammer: {e}"))?;
+        let snap: CdlInvertedHammerSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_inv_hammer: {e}"))?;
         Ok(Some(snap))
     } else { Ok(None) }
 }
@@ -57759,5 +58265,172 @@ Trailing text.
         assert_eq!(snap.pattern_value, -100);
         // Identity: penetration_pct > 0 when bearish (prior_close above current_close)
         assert!(snap.penetration_pct > 0.0);
+    }
+
+    // ── ADR-186 Round 74 tests — CDLPIERCING / CDLDRAGONFLYDOJI /
+    //    CDLGRAVESTONEDOJI / CDLHANGINGMAN / CDLINVERTEDHAMMER ──
+
+    #[test]
+    fn cdl_piercing_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlPiercingSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 100,
+            pattern_value: 100, pattern_value_prev: 0,
+            penetration_pct: 65.0, prior_body_pct_range: 80.0, current_body_pct_range: 70.0,
+            last_bar_match: true, days_since_pattern: 0, last_close: 103.0,
+            cdl_piercing_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_piercing(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_piercing(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_piercing_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+    }
+
+    #[test]
+    fn cdl_piercing_compute_detects() {
+        let mut bars = boring_green_bars(10, 12);
+        // Prior bar: red, body ≥ 30% of range. open 104, close 100, body 4, range 4.5
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-11".into(),
+            open: 104.0, high: 104.2, low: 99.7, close: 100.0,
+            adj_close: 100.0, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        // Current bar: green. open 99.5 (< prior_low 99.7), close 103 (> prior_midpoint 102),
+        //   but close 103 < prior_open 104 (not engulfing). body 3.5, range 4.
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-12".into(),
+            open: 99.5, high: 103.3, low: 99.3, close: 103.0,
+            adj_close: 103.0, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        let snap = compute_cdl_piercing_snapshot("T", "2026-04-18", &bars);
+        assert_eq!(snap.cdl_piercing_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.penetration_pct > 0.0);
+    }
+
+    #[test]
+    fn cdl_dragonfly_doji_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlDragonflyDojiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 50,
+            pattern_value: 100, pattern_value_prev: 0,
+            body_pct_range: 2.0, upper_shadow_pct: 3.0, lower_shadow_pct: 80.0,
+            last_bar_match: true, days_since_pattern: 0, last_close: 50.1,
+            cdl_dragonfly_doji_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_dragonfly_doji(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_dragonfly_doji(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_dragonfly_doji_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+    }
+
+    #[test]
+    fn cdl_dragonfly_doji_compute_detects() {
+        let mut bars = boring_green_bars(5, 3);
+        // Dragonfly: open 100, close 100.1 (tiny body 0.1), high 100.2, low 95 (long lower shadow 5)
+        bars.push(HistoricalPriceRow {
+            date: "2024-03-06".into(),
+            open: 100.0, high: 100.2, low: 95.0, close: 100.1,
+            adj_close: 100.1, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        let snap = compute_cdl_dragonfly_doji_snapshot("T", "2026-04-18", &bars);
+        assert_eq!(snap.cdl_dragonfly_doji_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.lower_shadow_pct > snap.upper_shadow_pct);
+    }
+
+    #[test]
+    fn cdl_gravestone_doji_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlGravestoneDojiSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 50,
+            pattern_value: -100, pattern_value_prev: 0,
+            body_pct_range: 2.0, upper_shadow_pct: 80.0, lower_shadow_pct: 3.0,
+            last_bar_match: true, days_since_pattern: 0, last_close: 50.0,
+            cdl_gravestone_doji_label: "BEARISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_gravestone_doji(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_gravestone_doji(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_gravestone_doji_label, "BEARISH_PATTERN");
+        assert_eq!(got.pattern_value, -100);
+    }
+
+    #[test]
+    fn cdl_gravestone_doji_compute_detects() {
+        let mut bars = boring_green_bars(5, 4);
+        // Gravestone: open 100.1, close 100 (tiny body 0.1), high 105 (long upper shadow 5), low 99.95
+        bars.push(HistoricalPriceRow {
+            date: "2024-04-06".into(),
+            open: 100.1, high: 105.0, low: 99.95, close: 100.0,
+            adj_close: 100.0, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        let snap = compute_cdl_gravestone_doji_snapshot("T", "2026-04-18", &bars);
+        assert_eq!(snap.cdl_gravestone_doji_label, "BEARISH_PATTERN");
+        assert_eq!(snap.pattern_value, -100);
+        assert!(snap.upper_shadow_pct > snap.lower_shadow_pct);
+    }
+
+    #[test]
+    fn cdl_hanging_man_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlHangingManSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 50,
+            pattern_value: -100, pattern_value_prev: 0,
+            body_pct_range: 20.0, upper_shadow_pct: 5.0, lower_shadow_pct: 70.0,
+            last_bar_match: true, days_since_pattern: 0, last_close: 100.5,
+            cdl_hanging_man_label: "BEARISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_hanging_man(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_hanging_man(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_hanging_man_label, "BEARISH_PATTERN");
+        assert_eq!(got.pattern_value, -100);
+    }
+
+    #[test]
+    fn cdl_hanging_man_compute_detects() {
+        let mut bars = boring_green_bars(5, 5);
+        // Hanging Man / Hammer geometry: body 0.5 (open 100, close 100.5), range ~4.
+        // High 100.7 (upper shadow 0.2 ≤ body), low 96.5 (lower shadow 3.5 ≥ 2 × body).
+        bars.push(HistoricalPriceRow {
+            date: "2024-05-06".into(),
+            open: 100.0, high: 100.7, low: 96.5, close: 100.5,
+            adj_close: 100.5, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        let snap = compute_cdl_hanging_man_snapshot("T", "2026-04-18", &bars);
+        assert_eq!(snap.cdl_hanging_man_label, "BEARISH_PATTERN");
+        assert_eq!(snap.pattern_value, -100);
+        assert!(snap.lower_shadow_pct > snap.upper_shadow_pct);
+    }
+
+    #[test]
+    fn cdl_inverted_hammer_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlInvertedHammerSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 50,
+            pattern_value: 100, pattern_value_prev: 0,
+            body_pct_range: 20.0, upper_shadow_pct: 70.0, lower_shadow_pct: 5.0,
+            last_bar_match: true, days_since_pattern: 0, last_close: 100.5,
+            cdl_inverted_hammer_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_inverted_hammer(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_inverted_hammer(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_inverted_hammer_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+    }
+
+    #[test]
+    fn cdl_inverted_hammer_compute_detects() {
+        let mut bars = boring_green_bars(5, 6);
+        // Inverted hammer / shooting star geometry: body 0.5 (open 100, close 100.5),
+        // range ~4. Upper shadow 3.5 (≥ 2 × body), lower shadow 0.2 (≤ body).
+        bars.push(HistoricalPriceRow {
+            date: "2024-06-06".into(),
+            open: 100.0, high: 104.0, low: 99.8, close: 100.5,
+            adj_close: 100.5, volume: 1_000_000.0, change: 0.0, change_pct: 0.0,
+        });
+        let snap = compute_cdl_inverted_hammer_snapshot("T", "2026-04-18", &bars);
+        assert_eq!(snap.cdl_inverted_hammer_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.upper_shadow_pct > snap.lower_shadow_pct);
     }
 }
