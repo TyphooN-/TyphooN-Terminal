@@ -8063,6 +8063,129 @@ pub struct HlvClustSnapshot {
     pub note: String,
 }
 
+/// YANGZHANG — Yang-Zhang (2000) three-component range volatility estimator.
+/// σ²_YZ = σ²_O + k·σ²_C + (1-k)·σ²_RS, where σ²_O is overnight open-vs-prev-close
+/// variance, σ²_C is close-to-close variance, σ²_RS is the Rogers-Satchell intraday
+/// component, and k = 0.34 / (1.34 + (n+1)/(n-1)) minimises variance under a
+/// drift-free Brownian assumption. Asymptotically the most efficient of the
+/// range-based estimators that use OHLC data.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct YangZhangVolSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub overnight_var: f64,        // σ²_O
+    pub open_to_close_var: f64,    // σ²_C (open-to-close close variant)
+    pub rs_component: f64,         // σ²_RS
+    pub k_weight: f64,             // 0.34 / (1.34 + (n+1)/(n-1))
+    pub yz_vol_bar: f64,           // √σ²_YZ per bar
+    pub yz_vol_annualised_pct: f64, // yz_vol_bar × √252 × 100
+    pub cc_vol_annualised_pct: f64, // close-to-close comparison σ × √252 × 100
+    pub efficiency_vs_close: f64,   // cc_vol / yz_vol (higher = YZ more efficient)
+    pub yangzhang_label: String,    // VERY_LOW / LOW / MODERATE / HIGH / VERY_HIGH / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// KUIPER — Kuiper (1960) two-sided empirical CDF goodness-of-fit statistic
+/// against standard normal. V = D⁺ + D⁻ where D⁺ = max(F_n(x) − F(x)) and
+/// D⁻ = max(F(x) − F_n(x)). More sensitive to tail departures than
+/// Kolmogorov-Smirnov. Uses Stephens (1970) finite-n modification
+/// V* = V · (√n + 0.155 + 0.24/√n); reject normality at 95% if V* > 1.747.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct KuiperSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub mean: f64,                  // sample μ of returns (for standardisation)
+    pub stdev: f64,                 // sample σ
+    pub d_plus: f64,                // max(F_n − F)
+    pub d_minus: f64,               // max(F − F_n)
+    pub v_stat: f64,                // D⁺ + D⁻
+    pub v_stat_adj: f64,            // Stephens-modified V*
+    pub critical_95: f64,           // 1.747 for standard normal
+    pub p_value_approx: f64,        // Stephens 1970 approximation
+    pub reject_null: bool,          // V* > 1.747
+    pub kuiper_label: String,       // NORMAL / MILD_DEPART / STRONG_DEPART / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// DAGOSTINO — D'Agostino-Pearson (1973) K² omnibus normality test.
+/// Transforms sample skewness via D'Agostino (1970) to z_skew and
+/// sample kurtosis via Anscombe-Glynn (1983) to z_kurt; combined
+/// K² = z_skew² + z_kurt² is asymptotically χ²(2) under H0: normal.
+/// Complements Jarque-Bera by exposing whether skew or kurt dominates
+/// the departure. Reject at 95% if K² > 5.991.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DagostinoSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub skewness: f64,              // sample b1
+    pub excess_kurtosis: f64,       // sample b2 − 3
+    pub z_skew: f64,                // D'Agostino transformed skew z-stat
+    pub z_kurt: f64,                // Anscombe-Glynn transformed kurt z-stat
+    pub k2_stat: f64,               // z_skew² + z_kurt²
+    pub critical_95: f64,           // 5.991
+    pub p_value: f64,
+    pub reject_null: bool,
+    pub dagostino_label: String,    // NORMAL / SKEW_DOMINANT / KURT_DOMINANT / BOTH_DEPART / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// BAIPERRON — Bai-Perron (1998) sup-F structural-break test with
+/// interior search over [0.15n, 0.85n] (Andrews 1993 trimming).
+/// Extends CHOWBREAK by searching *where* the break is rather than
+/// assuming n/2. Reports sup-F over the trimmed interior and the
+/// argmax break index. Rejects H0 "no break" at 95% if sup-F exceeds
+/// the Andrews (1993) critical value (≈8.58 for 15% trim, k=1).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct BaiPerronSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub trim_fraction: f64,         // 0.15
+    pub search_lo: usize,           // ⌈0.15n⌉
+    pub search_hi: usize,           // ⌊0.85n⌋
+    pub best_break_idx: usize,      // argmax over search range
+    pub sup_f_stat: f64,
+    pub mean_pre: f64,
+    pub mean_post: f64,
+    pub rss_no_break: f64,
+    pub rss_at_best: f64,
+    pub critical_95: f64,           // Andrews 1993: ≈8.58 for 15% trim, k=1
+    pub p_value_approx: f64,        // Hansen (1997) F-asymptotic approx
+    pub reject_null: bool,
+    pub baiperron_label: String,    // NO_BREAK / MILD_BREAK / STRONG_BREAK / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// KUPIECPOF — Kupiec (1995) Proportion-of-Failures VaR backtest.
+/// Builds a rolling historical-VaR_{α=0.95} from the first `rolling_window`
+/// bars and counts exceedances in the remaining test window. Likelihood
+/// ratio: LR_POF = −2·ln[((1−α)^{T_ok}·α^{T_fail}) / ((1−p̂)^{T_ok}·p̂^{T_fail})]
+/// where p̂ is the realised exceedance rate. LR_POF is asymptotically χ²(1)
+/// under H0: realised exceedance rate equals nominal α.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct KupiecPofSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub confidence_level: f64,      // 0.95
+    pub nominal_exceedance_rate: f64, // 1 − confidence_level = 0.05
+    pub rolling_window: usize,      // 60
+    pub test_window: usize,         // bars_used − rolling_window
+    pub var_latest_bar: f64,        // latest VaR estimate (positive number; -VaR is the threshold)
+    pub n_exceedances: usize,
+    pub expected_exceedances: f64,
+    pub realised_exceedance_rate: f64,
+    pub lr_pof_stat: f64,
+    pub critical_95: f64,           // 3.841 = χ²_95(1)
+    pub p_value: f64,
+    pub reject_null: bool,
+    pub kupiec_label: String,       // GOOD_FIT / OVER_ESTIMATED / UNDER_ESTIMATED / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -33645,6 +33768,343 @@ pub fn compute_hlvclust_snapshot(
     }
 }
 
+// ── ADR-190 Round 77: YANGZHANG / KUIPER / DAGOSTINO / BAIPERRON / KUPIECPOF ──
+
+pub fn compute_yangzhang_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> YangZhangVolSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    // Filter to bars with valid OHLC
+    let valid: Vec<&HistoricalPriceRow> = sorted.iter().copied()
+        .filter(|b| b.open > 0.0 && b.high > 0.0 && b.low > 0.0 && b.close > 0.0
+            && b.high >= b.low && b.high >= b.open.max(b.close) && b.low <= b.open.min(b.close))
+        .collect();
+    let n = valid.len();
+    if n < 30 {
+        return YangZhangVolSnapshot { symbol: sym, as_of: as_of.into(),
+            yangzhang_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥30 valid OHLC bars, got {}", n), ..Default::default() };
+    }
+    // Overnight: o_t = ln(O_t / C_{t-1}) for t=1..n-1; n_o = n-1
+    let mut o: Vec<f64> = Vec::with_capacity(n - 1);
+    for t in 1..n { let v = (valid[t].open / valid[t-1].close).ln(); if v.is_finite() { o.push(v); } }
+    // Open-to-close: c_t = ln(C_t / O_t) for t=0..n-1
+    let mut c: Vec<f64> = Vec::with_capacity(n);
+    for t in 0..n { let v = (valid[t].close / valid[t].open).ln(); if v.is_finite() { c.push(v); } }
+    // Rogers-Satchell: rs_t = ln(H/C)·ln(H/O) + ln(L/C)·ln(L/O)
+    let mut rs: Vec<f64> = Vec::with_capacity(n);
+    for b in valid.iter() {
+        let lh_c = (b.high / b.close).ln();
+        let lh_o = (b.high / b.open).ln();
+        let ll_c = (b.low / b.close).ln();
+        let ll_o = (b.low / b.open).ln();
+        let v = lh_c * lh_o + ll_c * ll_o;
+        if v.is_finite() { rs.push(v); }
+    }
+    if o.len() < 2 || c.len() < 2 || rs.is_empty() {
+        return YangZhangVolSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            yangzhang_label: "INSUFFICIENT_DATA".into(),
+            note: "empty O/C/RS after filter".into(), ..Default::default() };
+    }
+    let mean_o = o.iter().sum::<f64>() / o.len() as f64;
+    let mean_c = c.iter().sum::<f64>() / c.len() as f64;
+    let var_o = o.iter().map(|v| (v - mean_o).powi(2)).sum::<f64>() / (o.len() - 1) as f64;
+    let var_c = c.iter().map(|v| (v - mean_c).powi(2)).sum::<f64>() / (c.len() - 1) as f64;
+    let mean_rs = rs.iter().sum::<f64>() / rs.len() as f64;
+    // Yang-Zhang weight (requires n≥2)
+    let n_f = n as f64;
+    let k = 0.34 / (1.34 + (n_f + 1.0) / (n_f - 1.0));
+    let var_yz = var_o + k * var_c + (1.0 - k) * mean_rs;
+    if !var_yz.is_finite() || var_yz < 0.0 {
+        return YangZhangVolSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            yangzhang_label: "INSUFFICIENT_DATA".into(),
+            note: format!("non-finite or negative σ²_YZ: {:.3e}", var_yz), ..Default::default() };
+    }
+    let yz_bar = var_yz.sqrt();
+    let yz_ann = yz_bar * (252.0_f64).sqrt();
+    let yz_ann_pct = yz_ann * 100.0;
+    // Close-to-close reference σ
+    let mut r: Vec<f64> = Vec::with_capacity(n - 1);
+    for t in 1..n { let v = (valid[t].close / valid[t-1].close).ln(); if v.is_finite() { r.push(v); } }
+    let mean_r = r.iter().sum::<f64>() / r.len() as f64;
+    let var_r = r.iter().map(|v| (v - mean_r).powi(2)).sum::<f64>() / (r.len() - 1).max(1) as f64;
+    let cc_ann_pct = var_r.sqrt() * (252.0_f64).sqrt() * 100.0;
+    let eff = if yz_ann_pct > 0.0 { cc_ann_pct / yz_ann_pct } else { 0.0 };
+    let label = match yz_ann_pct {
+        x if x < 10.0 => "VERY_LOW",
+        x if x < 20.0 => "LOW",
+        x if x < 35.0 => "MODERATE",
+        x if x < 60.0 => "HIGH",
+        _ => "VERY_HIGH",
+    };
+    YangZhangVolSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        overnight_var: var_o, open_to_close_var: var_c, rs_component: mean_rs,
+        k_weight: k, yz_vol_bar: yz_bar, yz_vol_annualised_pct: yz_ann_pct,
+        cc_vol_annualised_pct: cc_ann_pct, efficiency_vs_close: eff,
+        yangzhang_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_kuiper_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> KuiperSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, rets) = trailing_log_returns(bars);
+    let n = rets.len();
+    if n < 30 {
+        return KuiperSnapshot { symbol: sym, as_of: as_of.into(),
+            kuiper_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥30 returns, got {}", n), ..Default::default() };
+    }
+    let mean = rets.iter().sum::<f64>() / n as f64;
+    let var = rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1) as f64;
+    if var <= f64::EPSILON {
+        return KuiperSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            kuiper_label: "INSUFFICIENT_DATA".into(),
+            note: "zero return variance".into(), ..Default::default() };
+    }
+    let sd = var.sqrt();
+    let mut z: Vec<f64> = rets.iter().map(|r| (r - mean) / sd).collect();
+    z.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let nf = n as f64;
+    let mut d_plus = 0.0f64;
+    let mut d_minus = 0.0f64;
+    for (i, zi) in z.iter().enumerate() {
+        let f_theoretical = std_normal_cdf(*zi);
+        let f_above = (i + 1) as f64 / nf;
+        let f_below = i as f64 / nf;
+        let dp = f_above - f_theoretical;
+        let dm = f_theoretical - f_below;
+        if dp > d_plus { d_plus = dp; }
+        if dm > d_minus { d_minus = dm; }
+    }
+    let v = d_plus + d_minus;
+    let sqrt_n = nf.sqrt();
+    let v_adj = v * (sqrt_n + 0.155 + 0.24 / sqrt_n);
+    let crit = 1.747_f64;
+    // Stephens (1970) asymptotic p-value: p ≈ Σ_{m=1}^∞ (8m²V*² − 2) e^{-2m²V*²} · 2
+    let mut p = 0.0f64;
+    for m in 1..=6 {
+        let mf = m as f64;
+        let arg = 2.0 * mf * mf * v_adj * v_adj;
+        p += (4.0 * mf * mf * v_adj * v_adj - 1.0) * 2.0 * (-arg).exp();
+    }
+    let p = p.clamp(0.0, 1.0);
+    let reject = v_adj > crit;
+    let label = if !reject { "NORMAL" }
+        else if v_adj < 2.0 * crit { "MILD_DEPART" }
+        else { "STRONG_DEPART" };
+    KuiperSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        mean, stdev: sd,
+        d_plus, d_minus, v_stat: v, v_stat_adj: v_adj,
+        critical_95: crit, p_value_approx: p, reject_null: reject,
+        kuiper_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_dagostino_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> DagostinoSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, rets) = trailing_log_returns(bars);
+    let n = rets.len();
+    if n < 30 {
+        return DagostinoSnapshot { symbol: sym, as_of: as_of.into(),
+            dagostino_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥30 returns, got {}", n), ..Default::default() };
+    }
+    let nf = n as f64;
+    let mean = rets.iter().sum::<f64>() / nf;
+    let m2 = rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / nf;
+    let m3 = rets.iter().map(|r| (r - mean).powi(3)).sum::<f64>() / nf;
+    let m4 = rets.iter().map(|r| (r - mean).powi(4)).sum::<f64>() / nf;
+    if m2 <= f64::EPSILON {
+        return DagostinoSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n,
+            dagostino_label: "INSUFFICIENT_DATA".into(),
+            note: "zero return variance".into(), ..Default::default() };
+    }
+    let b1 = m3 / m2.powf(1.5);
+    let b2 = m4 / (m2 * m2); // raw kurtosis
+    let ex_kurt = b2 - 3.0;
+    // D'Agostino (1970) transformed skewness z
+    let y = b1 * ((nf + 1.0) * (nf + 3.0) / (6.0 * (nf - 2.0))).sqrt();
+    let beta2 = 3.0 * (nf * nf + 27.0 * nf - 70.0) * (nf + 1.0) * (nf + 3.0)
+        / ((nf - 2.0) * (nf + 5.0) * (nf + 7.0) * (nf + 9.0));
+    let wsq = -1.0 + (2.0 * (beta2 - 1.0)).sqrt();
+    let z_skew = if wsq > 1.0 {
+        let w = wsq.sqrt();
+        let delta = 1.0 / (w.ln()).sqrt();
+        let alpha = (2.0 / (wsq - 1.0)).sqrt();
+        let ya = y / alpha;
+        delta * (ya + (ya * ya + 1.0).sqrt()).ln()
+    } else {
+        // fall back to raw z
+        b1 * (nf / 6.0).sqrt()
+    };
+    // Anscombe-Glynn (1983) transformed kurtosis z
+    let mu_k = 3.0 * (nf - 1.0) / (nf + 1.0);
+    let sigma2_k = 24.0 * nf * (nf - 2.0) * (nf - 3.0)
+        / ((nf + 1.0).powi(2) * (nf + 3.0) * (nf + 5.0));
+    let x_k = (b2 - mu_k) / sigma2_k.sqrt();
+    let beta_skew_k = 6.0 * (nf * nf - 5.0 * nf + 2.0) / ((nf + 7.0) * (nf + 9.0))
+        * (6.0 * (nf + 3.0) * (nf + 5.0) / (nf * (nf - 2.0) * (nf - 3.0))).sqrt();
+    let z_kurt = if beta_skew_k > 0.0 {
+        let a_k = 6.0 + (8.0 / beta_skew_k)
+            * (2.0 / beta_skew_k + (1.0 + 4.0 / (beta_skew_k * beta_skew_k)).sqrt());
+        let denom = 1.0 + x_k * (2.0 / (a_k - 4.0)).sqrt();
+        if denom > 0.0 && a_k > 4.0 {
+            let term = (1.0 - 2.0 / a_k) / denom;
+            let inner = term.cbrt(); // cube root handles negative reliably
+            (1.0 - 2.0 / (9.0 * a_k) - inner) / (2.0 / (9.0 * a_k)).sqrt()
+        } else {
+            (b2 - 3.0) * (nf / 24.0).sqrt()
+        }
+    } else {
+        (b2 - 3.0) * (nf / 24.0).sqrt()
+    };
+    let k2 = z_skew * z_skew + z_kurt * z_kurt;
+    let crit = 5.991_f64; // χ²_95(2)
+    let p = chi2_upper_tail(k2, 2);
+    let reject = k2 > crit;
+    let az_s = z_skew.abs();
+    let az_k = z_kurt.abs();
+    let label = if !reject { "NORMAL" }
+        else if az_s > 1.96 && az_k > 1.96 { "BOTH_DEPART" }
+        else if az_s >= az_k { "SKEW_DOMINANT" }
+        else { "KURT_DOMINANT" };
+    DagostinoSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        skewness: b1, excess_kurtosis: ex_kurt,
+        z_skew, z_kurt, k2_stat: k2,
+        critical_95: crit, p_value: p, reject_null: reject,
+        dagostino_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_baiperron_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> BaiPerronSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, rets) = trailing_log_returns(bars);
+    let n = rets.len();
+    let trim = 0.15_f64;
+    if n < 40 {
+        return BaiPerronSnapshot { symbol: sym, as_of: as_of.into(), trim_fraction: trim,
+            baiperron_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥40 returns, got {}", n), ..Default::default() };
+    }
+    let nf = n as f64;
+    let mean_full = rets.iter().sum::<f64>() / nf;
+    let rss_full = rets.iter().map(|r| (r - mean_full).powi(2)).sum::<f64>();
+    if rss_full <= f64::EPSILON {
+        return BaiPerronSnapshot { symbol: sym, as_of: as_of.into(), bars_used: n, trim_fraction: trim,
+            baiperron_label: "INSUFFICIENT_DATA".into(),
+            note: "zero total RSS".into(), ..Default::default() };
+    }
+    let lo = (trim * nf).ceil() as usize;
+    let hi = ((1.0 - trim) * nf).floor() as usize;
+    let mut best_tau = lo;
+    let mut best_f = 0.0f64;
+    let mut best_mean_pre = 0.0f64;
+    let mut best_mean_post = 0.0f64;
+    let mut best_rss_u = rss_full;
+    for tau in lo..hi {
+        let pre = &rets[..tau];
+        let post = &rets[tau..];
+        let mean_pre = pre.iter().sum::<f64>() / pre.len() as f64;
+        let mean_post = post.iter().sum::<f64>() / post.len() as f64;
+        let rss_pre: f64 = pre.iter().map(|r| (r - mean_pre).powi(2)).sum();
+        let rss_post: f64 = post.iter().map(|r| (r - mean_post).powi(2)).sum();
+        let rss_u = rss_pre + rss_post;
+        if rss_u <= f64::EPSILON { continue; }
+        let k = 1.0;
+        let f_stat = ((rss_full - rss_u) / k) / (rss_u / (nf - 2.0 * k));
+        if f_stat > best_f {
+            best_f = f_stat;
+            best_tau = tau;
+            best_mean_pre = mean_pre;
+            best_mean_post = mean_post;
+            best_rss_u = rss_u;
+        }
+    }
+    // Andrews (1993) critical value for sup-F with π0=0.15, k=1, 95%: ≈ 8.58
+    let crit = 8.58_f64;
+    // Hansen (1997) conservative p-value upper-bound using χ²(1) (slightly optimistic vs true sup-F)
+    let p = chi2_upper_tail(best_f, 1);
+    let reject = best_f > crit;
+    let label = if !reject { "NO_BREAK" }
+        else if best_f < 2.0 * crit { "MILD_BREAK" }
+        else { "STRONG_BREAK" };
+    BaiPerronSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        trim_fraction: trim, search_lo: lo, search_hi: hi,
+        best_break_idx: best_tau, sup_f_stat: best_f,
+        mean_pre: best_mean_pre, mean_post: best_mean_post,
+        rss_no_break: rss_full, rss_at_best: best_rss_u,
+        critical_95: crit, p_value_approx: p, reject_null: reject,
+        baiperron_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_kupiecpof_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> KupiecPofSnapshot {
+    let sym = symbol.to_uppercase();
+    let (_, rets) = trailing_log_returns(bars);
+    let n = rets.len();
+    let conf = 0.95_f64;
+    let alpha = 1.0 - conf; // 0.05
+    let rolling = 60usize;
+    if n < rolling + 30 {
+        return KupiecPofSnapshot { symbol: sym, as_of: as_of.into(),
+            confidence_level: conf, nominal_exceedance_rate: alpha, rolling_window: rolling,
+            kupiec_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} returns for VaR backtest, got {}", rolling + 30, n), ..Default::default() };
+    }
+    let mut n_exc = 0usize;
+    let mut last_var = 0.0f64;
+    for t in rolling..n {
+        let mut win: Vec<f64> = rets[t - rolling..t].to_vec();
+        win.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        // Historical VaR at 95% confidence: 5th percentile of returns, reported as positive loss
+        let q5 = quantile_f64(&win, alpha);
+        let var_t = -q5;
+        if rets[t] < q5 { n_exc += 1; }
+        if t == n - 1 { last_var = var_t; }
+    }
+    let test_window = n - rolling;
+    let expected = test_window as f64 * alpha;
+    let p_hat = n_exc as f64 / test_window as f64;
+    let t_ok = test_window - n_exc;
+    let lr = {
+        // LR_POF = 2 · [ T_f·ln(p̂/α) + T_o·ln((1-p̂)/(1-α)) ]; handle p̂=0 or 1
+        let term_f = if n_exc > 0 { n_exc as f64 * (p_hat / alpha).ln() } else { 0.0 };
+        let term_o = if t_ok > 0 { t_ok as f64 * ((1.0 - p_hat) / (1.0 - alpha)).ln() } else { 0.0 };
+        2.0 * (term_f + term_o)
+    };
+    let lr = if lr.is_finite() && lr >= 0.0 { lr } else { 0.0 };
+    let crit = 3.841_f64; // χ²_95(1)
+    let p = chi2_upper_tail(lr, 1);
+    let reject = lr > crit;
+    let label = if !reject { "GOOD_FIT" }
+        else if p_hat < alpha { "OVER_ESTIMATED" }
+        else { "UNDER_ESTIMATED" };
+    KupiecPofSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        confidence_level: conf, nominal_exceedance_rate: alpha,
+        rolling_window: rolling, test_window,
+        var_latest_bar: last_var,
+        n_exceedances: n_exc, expected_exceedances: expected,
+        realised_exceedance_rate: p_hat,
+        lr_pof_stat: lr, critical_95: crit, p_value: p, reject_null: reject,
+        kupiec_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -45216,6 +45676,169 @@ pub fn get_hlvclust(conn: &Connection, symbol: &str) -> Result<Option<HlvClustSn
     if let Some(r) = rows.next().map_err(|e| format!("row hlvclust: {e}"))? {
         let j: String = r.get(0).map_err(|e| format!("get hlvclust: {e}"))?;
         let snap: HlvClustSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse hlvclust: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── ADR-190 Round 77 schema v79 (Quant Stats) ─────────────────────────────
+
+pub fn create_research_tables_v79(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v78(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_yangzhang (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_yangzhang_updated ON research_yangzhang(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_kuiper (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_kuiper_updated ON research_kuiper(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_dagostino (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_dagostino_updated ON research_dagostino(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_baiperron (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_baiperron_updated ON research_baiperron(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_kupiecpof (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_kupiecpof_updated ON research_kupiecpof(updated_at);",
+    ).map_err(|e| format!("create v79 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_yangzhang(conn: &Connection, symbol: &str, snap: &YangZhangVolSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v79(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("yangzhang json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_yangzhang (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert yangzhang: {e}"))?;
+    Ok(())
+}
+
+pub fn get_yangzhang(conn: &Connection, symbol: &str) -> Result<Option<YangZhangVolSnapshot>, String> {
+    let _ = create_research_tables_v79(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_yangzhang WHERE symbol = ?1")
+        .map_err(|e| format!("prep yangzhang: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query yangzhang: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row yangzhang: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get yangzhang: {e}"))?;
+        let snap: YangZhangVolSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse yangzhang: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_kuiper(conn: &Connection, symbol: &str, snap: &KuiperSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v79(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("kuiper json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_kuiper (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert kuiper: {e}"))?;
+    Ok(())
+}
+
+pub fn get_kuiper(conn: &Connection, symbol: &str) -> Result<Option<KuiperSnapshot>, String> {
+    let _ = create_research_tables_v79(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_kuiper WHERE symbol = ?1")
+        .map_err(|e| format!("prep kuiper: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query kuiper: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row kuiper: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get kuiper: {e}"))?;
+        let snap: KuiperSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse kuiper: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_dagostino(conn: &Connection, symbol: &str, snap: &DagostinoSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v79(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("dagostino json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_dagostino (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert dagostino: {e}"))?;
+    Ok(())
+}
+
+pub fn get_dagostino(conn: &Connection, symbol: &str) -> Result<Option<DagostinoSnapshot>, String> {
+    let _ = create_research_tables_v79(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_dagostino WHERE symbol = ?1")
+        .map_err(|e| format!("prep dagostino: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query dagostino: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row dagostino: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get dagostino: {e}"))?;
+        let snap: DagostinoSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse dagostino: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_baiperron(conn: &Connection, symbol: &str, snap: &BaiPerronSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v79(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("baiperron json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_baiperron (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert baiperron: {e}"))?;
+    Ok(())
+}
+
+pub fn get_baiperron(conn: &Connection, symbol: &str) -> Result<Option<BaiPerronSnapshot>, String> {
+    let _ = create_research_tables_v79(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_baiperron WHERE symbol = ?1")
+        .map_err(|e| format!("prep baiperron: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query baiperron: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row baiperron: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get baiperron: {e}"))?;
+        let snap: BaiPerronSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse baiperron: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_kupiecpof(conn: &Connection, symbol: &str, snap: &KupiecPofSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v79(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("kupiecpof json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_kupiecpof (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert kupiecpof: {e}"))?;
+    Ok(())
+}
+
+pub fn get_kupiecpof(conn: &Connection, symbol: &str) -> Result<Option<KupiecPofSnapshot>, String> {
+    let _ = create_research_tables_v79(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_kupiecpof WHERE symbol = ?1")
+        .map_err(|e| format!("prep kupiecpof: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query kupiecpof: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row kupiecpof: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get kupiecpof: {e}"))?;
+        let snap: KupiecPofSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse kupiecpof: {e}"))?;
         Ok(Some(snap))
     } else { Ok(None) }
 }
@@ -59909,6 +60532,182 @@ Trailing text.
             assert!(snap.ac_lag5.is_finite());
             assert!(snap.p_value >= 0.0 && snap.p_value <= 1.0);
             assert_eq!(snap.lag_h, 10);
+        }
+    }
+
+    // ── ADR-190 Round 77 (Quant Stats) tests ──
+
+    #[test]
+    fn yangzhang_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = YangZhangVolSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 200,
+            overnight_var: 0.00008, open_to_close_var: 0.00015, rs_component: 0.00012,
+            k_weight: 0.1618, yz_vol_bar: 0.0152, yz_vol_annualised_pct: 24.2,
+            cc_vol_annualised_pct: 22.1, efficiency_vs_close: 0.91,
+            yangzhang_label: "MODERATE".into(), note: String::new(),
+        };
+        upsert_yangzhang(&conn, "TEST", &snap).unwrap();
+        let got = get_yangzhang(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.yangzhang_label, "MODERATE");
+        assert!((got.yz_vol_annualised_pct - 24.2).abs() < 1e-9);
+        assert!((got.k_weight - 0.1618).abs() < 1e-9);
+    }
+
+    #[test]
+    fn yangzhang_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_yangzhang_snapshot("T", "2026-04-19", &bars);
+        assert!(matches!(snap.yangzhang_label.as_str(),
+            "VERY_LOW" | "LOW" | "MODERATE" | "HIGH" | "VERY_HIGH" | "INSUFFICIENT_DATA"));
+        if snap.yangzhang_label != "INSUFFICIENT_DATA" {
+            assert!(snap.yz_vol_bar >= 0.0);
+            assert!(snap.yz_vol_annualised_pct >= 0.0);
+            assert!(snap.k_weight > 0.0 && snap.k_weight < 1.0);
+            assert!(snap.overnight_var.is_finite());
+            assert!(snap.open_to_close_var >= 0.0);
+            assert!(snap.cc_vol_annualised_pct >= 0.0);
+        }
+    }
+
+    #[test]
+    fn kuiper_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = KuiperSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 252,
+            mean: 0.0005, stdev: 0.013,
+            d_plus: 0.056, d_minus: 0.042, v_stat: 0.098, v_stat_adj: 1.62,
+            critical_95: 1.747, p_value_approx: 0.118, reject_null: false,
+            kuiper_label: "NORMAL".into(), note: String::new(),
+        };
+        upsert_kuiper(&conn, "TEST", &snap).unwrap();
+        let got = get_kuiper(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.kuiper_label, "NORMAL");
+        assert!((got.v_stat_adj - 1.62).abs() < 1e-9);
+        assert!((got.critical_95 - 1.747).abs() < 1e-9);
+    }
+
+    #[test]
+    fn kuiper_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_kuiper_snapshot("T", "2026-04-19", &bars);
+        assert!(matches!(snap.kuiper_label.as_str(),
+            "NORMAL" | "MILD_DEPART" | "STRONG_DEPART" | "INSUFFICIENT_DATA"));
+        if snap.kuiper_label != "INSUFFICIENT_DATA" {
+            assert!(snap.d_plus >= 0.0);
+            assert!(snap.d_minus >= 0.0);
+            assert!(snap.v_stat >= 0.0);
+            assert!(snap.v_stat_adj >= snap.v_stat);
+            assert!(snap.p_value_approx >= 0.0 && snap.p_value_approx <= 1.0);
+            assert!((snap.critical_95 - 1.747).abs() < 1e-9);
+            assert!(snap.stdev > 0.0);
+        }
+    }
+
+    #[test]
+    fn dagostino_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = DagostinoSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 252,
+            skewness: -0.4, excess_kurtosis: 2.8,
+            z_skew: -2.1, z_kurt: 3.3, k2_stat: 15.3,
+            critical_95: 5.991, p_value: 0.00047, reject_null: true,
+            dagostino_label: "BOTH_DEPART".into(), note: String::new(),
+        };
+        upsert_dagostino(&conn, "TEST", &snap).unwrap();
+        let got = get_dagostino(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.dagostino_label, "BOTH_DEPART");
+        assert!((got.k2_stat - 15.3).abs() < 1e-9);
+        assert!((got.critical_95 - 5.991).abs() < 1e-9);
+    }
+
+    #[test]
+    fn dagostino_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_dagostino_snapshot("T", "2026-04-19", &bars);
+        assert!(matches!(snap.dagostino_label.as_str(),
+            "NORMAL" | "SKEW_DOMINANT" | "KURT_DOMINANT" | "BOTH_DEPART" | "INSUFFICIENT_DATA"));
+        if snap.dagostino_label != "INSUFFICIENT_DATA" {
+            assert!(snap.skewness.is_finite());
+            assert!(snap.excess_kurtosis.is_finite());
+            assert!(snap.z_skew.is_finite());
+            assert!(snap.z_kurt.is_finite());
+            assert!(snap.k2_stat >= 0.0 && snap.k2_stat.is_finite());
+            assert!(snap.p_value >= 0.0 && snap.p_value <= 1.0);
+            assert!((snap.critical_95 - 5.991).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn baiperron_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = BaiPerronSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 200,
+            trim_fraction: 0.15, search_lo: 30, search_hi: 170,
+            best_break_idx: 95, sup_f_stat: 12.4,
+            mean_pre: 0.0012, mean_post: -0.0005,
+            rss_no_break: 0.028, rss_at_best: 0.024,
+            critical_95: 8.58, p_value_approx: 0.00043, reject_null: true,
+            baiperron_label: "MILD_BREAK".into(), note: String::new(),
+        };
+        upsert_baiperron(&conn, "TEST", &snap).unwrap();
+        let got = get_baiperron(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.baiperron_label, "MILD_BREAK");
+        assert!((got.sup_f_stat - 12.4).abs() < 1e-9);
+        assert_eq!(got.best_break_idx, 95);
+    }
+
+    #[test]
+    fn baiperron_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_baiperron_snapshot("T", "2026-04-19", &bars);
+        assert!(matches!(snap.baiperron_label.as_str(),
+            "NO_BREAK" | "MILD_BREAK" | "STRONG_BREAK" | "INSUFFICIENT_DATA"));
+        if snap.baiperron_label != "INSUFFICIENT_DATA" {
+            assert!(snap.sup_f_stat >= 0.0 && snap.sup_f_stat.is_finite());
+            assert!(snap.rss_no_break >= snap.rss_at_best - 1e-12);
+            assert!(snap.search_lo < snap.search_hi);
+            assert!(snap.best_break_idx >= snap.search_lo);
+            assert!(snap.best_break_idx <= snap.search_hi);
+            assert!((snap.trim_fraction - 0.15).abs() < 1e-9);
+            assert!((snap.critical_95 - 8.58).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn kupiecpof_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = KupiecPofSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-19".into(), bars_used: 252,
+            confidence_level: 0.95, nominal_exceedance_rate: 0.05,
+            rolling_window: 60, test_window: 192, var_latest_bar: 0.021,
+            n_exceedances: 14, expected_exceedances: 9.6,
+            realised_exceedance_rate: 0.0729,
+            lr_pof_stat: 1.8, critical_95: 3.841, p_value: 0.18, reject_null: false,
+            kupiec_label: "GOOD_FIT".into(), note: String::new(),
+        };
+        upsert_kupiecpof(&conn, "TEST", &snap).unwrap();
+        let got = get_kupiecpof(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.kupiec_label, "GOOD_FIT");
+        assert!((got.lr_pof_stat - 1.8).abs() < 1e-9);
+        assert_eq!(got.n_exceedances, 14);
+    }
+
+    #[test]
+    fn kupiecpof_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_kupiecpof_snapshot("T", "2026-04-19", &bars);
+        assert!(matches!(snap.kupiec_label.as_str(),
+            "GOOD_FIT" | "OVER_ESTIMATED" | "UNDER_ESTIMATED" | "INSUFFICIENT_DATA"));
+        if snap.kupiec_label != "INSUFFICIENT_DATA" {
+            assert!((snap.confidence_level - 0.95).abs() < 1e-9);
+            assert!((snap.nominal_exceedance_rate - 0.05).abs() < 1e-9);
+            assert_eq!(snap.rolling_window, 60);
+            assert_eq!(snap.test_window, snap.bars_used - snap.rolling_window);
+            assert!(snap.lr_pof_stat >= 0.0 && snap.lr_pof_stat.is_finite());
+            assert!(snap.p_value >= 0.0 && snap.p_value <= 1.0);
+            assert!((snap.critical_95 - 3.841).abs() < 1e-9);
+            assert!(snap.n_exceedances <= snap.test_window);
         }
     }
 }
