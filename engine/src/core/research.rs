@@ -7096,6 +7096,100 @@ pub struct DxSnapshot {
     pub note: String,
 }
 
+// ── ADR-180 Round 68 ──────────────────────────────────────────────────────
+/// TA-Lib ROC — raw Rate of Change `close_t − close_{t−n}` (period 10).
+/// Raw price delta; distinct from ROCP (percentage) and ROCR (ratio).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct RocSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 10
+    pub roc: f64,                      // close_t − close_{t-n}
+    pub roc_prev: f64,
+    pub close_now: f64,
+    pub close_lag: f64,                // close_{t-n}
+    pub last_close: f64,
+    pub roc_label: String,             // STRONG_UP / UP / NEUTRAL / DOWN / STRONG_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib ROCP — Rate of Change Percentage `(close_t − close_{t−n}) / close_{t−n}`.
+/// The "percentage change" form used widely in risk-return math.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct RocpSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 10
+    pub rocp: f64,                     // (close_t − close_{t-n}) / close_{t-n}  (unitless)
+    pub rocp_prev: f64,
+    pub rocp_pct: f64,                 // rocp × 100 (percent display)
+    pub close_now: f64,
+    pub close_lag: f64,
+    pub last_close: f64,
+    pub rocp_label: String,            // STRONG_UP / UP / NEUTRAL / DOWN / STRONG_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib ROCR — Rate of Change Ratio `close_t / close_{t−n}` (period 10).
+/// Ratio-form rate of change — 1.0 is no change, >1 up, <1 down.
+/// Direct input for compounding return aggregations.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct RocrSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 10
+    pub rocr: f64,                     // close_t / close_{t-n}
+    pub rocr_prev: f64,
+    pub close_now: f64,
+    pub close_lag: f64,
+    pub last_close: f64,
+    pub rocr_label: String,            // STRONG_UP / UP / NEUTRAL / DOWN / STRONG_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib ROCR100 — Rate of Change Ratio ×100 `100 · close_t / close_{t−n}`.
+/// 100 = no change, >100 up, <100 down. Scales ROCR to an index-like
+/// band directly comparable to CCI / PPO / ADX with zero unit-mismatch.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct Rocr100Snapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 10
+    pub rocr100: f64,                  // 100 · close_t / close_{t-n}
+    pub rocr100_prev: f64,
+    pub close_now: f64,
+    pub close_lag: f64,
+    pub last_close: f64,
+    pub rocr100_label: String,         // STRONG_UP / UP / NEUTRAL / DOWN / STRONG_DOWN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CORREL — rolling Pearson correlation.
+/// Per-symbol instantiation: lag-1 autocorrelation of close over 30
+/// bars (`ρ(close_t, close_{t-1})`). Measures serial-dependence:
+/// values near +1 indicate strong momentum (consecutive closes move
+/// together), near 0 a random walk, near −1 mean-reversion.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CorrelSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub period: usize,                 // 30
+    pub correl: f64,                   // Pearson correlation ∈ [-1, 1]
+    pub correl_prev: f64,
+    pub mean_x: f64,                   // mean(close_t)
+    pub mean_y: f64,                   // mean(close_{t-1})
+    pub stddev_x: f64,
+    pub stddev_y: f64,
+    pub last_close: f64,
+    pub correl_label: String,          // STRONG_MOMO / MOMO / RANDOM_WALK / MEAN_REVERT / STRONG_MEAN_REVERT / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── Finnhub fetchers ───────────────────────────────────────────────────────
 
 /// Finnhub /stock/profile2 — company profile.
@@ -30454,6 +30548,200 @@ pub fn compute_dx_snapshot(
     }
 }
 
+// ── ADR-180 Round 68 compute fns ────────────────────────────────────────────
+
+fn roc_label(pct: f64) -> &'static str {
+    if pct >= 5.0 { "STRONG_UP" }
+    else if pct >= 1.0 { "UP" }
+    else if pct <= -5.0 { "STRONG_DOWN" }
+    else if pct <= -1.0 { "DOWN" }
+    else { "NEUTRAL" }
+}
+
+pub fn compute_roc_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> RocSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 10usize;
+    let min_bars = period + 2;
+    if n < min_bars {
+        return RocSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            roc_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let close_now = sorted[n - 1].close;
+    let close_lag = sorted[n - 1 - period].close;
+    let close_prev = sorted[n - 2].close;
+    let close_lag_prev = sorted[n - 2 - period].close;
+    let roc = close_now - close_lag;
+    let roc_prev = close_prev - close_lag_prev;
+    let pct = if close_lag.abs() > 1e-12 { (roc / close_lag) * 100.0 } else { 0.0 };
+    RocSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        roc, roc_prev,
+        close_now, close_lag, last_close: close_now,
+        roc_label: roc_label(pct).into(), note: String::new(),
+    }
+}
+
+pub fn compute_rocp_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> RocpSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 10usize;
+    let min_bars = period + 2;
+    if n < min_bars {
+        return RocpSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            rocp_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let close_now = sorted[n - 1].close;
+    let close_lag = sorted[n - 1 - period].close;
+    let close_prev = sorted[n - 2].close;
+    let close_lag_prev = sorted[n - 2 - period].close;
+    let rocp = if close_lag.abs() > 1e-12 { (close_now - close_lag) / close_lag } else { 0.0 };
+    let rocp_prev = if close_lag_prev.abs() > 1e-12 { (close_prev - close_lag_prev) / close_lag_prev } else { 0.0 };
+    let rocp_pct = rocp * 100.0;
+    RocpSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        rocp, rocp_prev, rocp_pct,
+        close_now, close_lag, last_close: close_now,
+        rocp_label: roc_label(rocp_pct).into(), note: String::new(),
+    }
+}
+
+pub fn compute_rocr_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> RocrSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 10usize;
+    let min_bars = period + 2;
+    if n < min_bars {
+        return RocrSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            rocr_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let close_now = sorted[n - 1].close;
+    let close_lag = sorted[n - 1 - period].close;
+    let close_prev = sorted[n - 2].close;
+    let close_lag_prev = sorted[n - 2 - period].close;
+    let rocr = if close_lag.abs() > 1e-12 { close_now / close_lag } else { 1.0 };
+    let rocr_prev = if close_lag_prev.abs() > 1e-12 { close_prev / close_lag_prev } else { 1.0 };
+    let pct = (rocr - 1.0) * 100.0;
+    RocrSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        rocr, rocr_prev,
+        close_now, close_lag, last_close: close_now,
+        rocr_label: roc_label(pct).into(), note: String::new(),
+    }
+}
+
+pub fn compute_rocr100_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> Rocr100Snapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 10usize;
+    let min_bars = period + 2;
+    if n < min_bars {
+        return Rocr100Snapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            rocr100_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let close_now = sorted[n - 1].close;
+    let close_lag = sorted[n - 1 - period].close;
+    let close_prev = sorted[n - 2].close;
+    let close_lag_prev = sorted[n - 2 - period].close;
+    let rocr100 = if close_lag.abs() > 1e-12 { 100.0 * close_now / close_lag } else { 100.0 };
+    let rocr100_prev = if close_lag_prev.abs() > 1e-12 { 100.0 * close_prev / close_lag_prev } else { 100.0 };
+    let pct = rocr100 - 100.0;
+    Rocr100Snapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        rocr100, rocr100_prev,
+        close_now, close_lag, last_close: close_now,
+        rocr100_label: roc_label(pct).into(), note: String::new(),
+    }
+}
+
+/// Pearson correlation of (close_t, close_{t-1}) over the last `period`
+/// bars — a lag-1 autocorrelation for single-symbol momentum / mean-
+/// reversion classification. `ρ → +1` is strong momentum,
+/// `ρ → 0` is a random walk, `ρ → −1` is strong mean reversion.
+pub fn compute_correl_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CorrelSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    let period = 30usize;
+    let min_bars = period + 2;
+    if n < min_bars {
+        return CorrelSnapshot {
+            symbol: sym, as_of: as_of.into(), period,
+            correl_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥{} bars, got {}", min_bars, n),
+            ..Default::default()
+        };
+    }
+    let correl_at = |end_idx: usize| -> (f64, f64, f64, f64, f64) {
+        let start = end_idx + 1 - period;
+        let xs: Vec<f64> = (start..=end_idx).map(|i| sorted[i].close).collect();
+        let ys: Vec<f64> = (start..=end_idx).map(|i| sorted[i - 1].close).collect();
+        let mx: f64 = xs.iter().sum::<f64>() / period as f64;
+        let my: f64 = ys.iter().sum::<f64>() / period as f64;
+        let mut sxx = 0.0f64; let mut syy = 0.0f64; let mut sxy = 0.0f64;
+        for i in 0..period {
+            let dx = xs[i] - mx;
+            let dy = ys[i] - my;
+            sxx += dx * dx;
+            syy += dy * dy;
+            sxy += dx * dy;
+        }
+        let sdx = (sxx / period as f64).sqrt();
+        let sdy = (syy / period as f64).sqrt();
+        let rho = if sxx > 0.0 && syy > 0.0 { sxy / (sxx.sqrt() * syy.sqrt()) } else { 0.0 };
+        (rho, mx, my, sdx, sdy)
+    };
+    let (rho_now, mx, my, sdx, sdy) = correl_at(n - 1);
+    let (rho_prev, _, _, _, _) = correl_at(n - 2);
+    let label = if rho_now >= 0.7 { "STRONG_MOMO" }
+        else if rho_now >= 0.2 { "MOMO" }
+        else if rho_now <= -0.7 { "STRONG_MEAN_REVERT" }
+        else if rho_now <= -0.2 { "MEAN_REVERT" }
+        else { "RANDOM_WALK" };
+    CorrelSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n, period,
+        correl: rho_now, correl_prev: rho_prev,
+        mean_x: mx, mean_y: my, stddev_x: sdx, stddev_y: sdy,
+        last_close: sorted[n - 1].close,
+        correl_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
@@ -40555,6 +40843,169 @@ pub fn get_dx(conn: &Connection, symbol: &str) -> Result<Option<DxSnapshot>, Str
     if let Some(r) = rows.next().map_err(|e| format!("row dx: {e}"))? {
         let j: String = r.get(0).map_err(|e| format!("get dx: {e}"))?;
         let snap: DxSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse dx: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── ADR-180 Round 68 — schema v70 + upsert/get helpers ─────────────────────
+
+pub fn create_research_tables_v70(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v69(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_roc (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_roc_updated ON research_roc(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_rocp (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_rocp_updated ON research_rocp(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_rocr (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_rocr_updated ON research_rocr(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_rocr100 (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_rocr100_updated ON research_rocr100(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_correl (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_correl_updated ON research_correl(updated_at);",
+    ).map_err(|e| format!("create v70 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_roc(conn: &Connection, symbol: &str, snap: &RocSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v70(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("roc json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_roc (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert roc: {e}"))?;
+    Ok(())
+}
+
+pub fn get_roc(conn: &Connection, symbol: &str) -> Result<Option<RocSnapshot>, String> {
+    let _ = create_research_tables_v70(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_roc WHERE symbol = ?1")
+        .map_err(|e| format!("prep roc: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query roc: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row roc: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get roc: {e}"))?;
+        let snap: RocSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse roc: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_rocp(conn: &Connection, symbol: &str, snap: &RocpSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v70(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("rocp json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_rocp (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert rocp: {e}"))?;
+    Ok(())
+}
+
+pub fn get_rocp(conn: &Connection, symbol: &str) -> Result<Option<RocpSnapshot>, String> {
+    let _ = create_research_tables_v70(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_rocp WHERE symbol = ?1")
+        .map_err(|e| format!("prep rocp: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query rocp: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row rocp: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get rocp: {e}"))?;
+        let snap: RocpSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse rocp: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_rocr(conn: &Connection, symbol: &str, snap: &RocrSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v70(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("rocr json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_rocr (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert rocr: {e}"))?;
+    Ok(())
+}
+
+pub fn get_rocr(conn: &Connection, symbol: &str) -> Result<Option<RocrSnapshot>, String> {
+    let _ = create_research_tables_v70(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_rocr WHERE symbol = ?1")
+        .map_err(|e| format!("prep rocr: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query rocr: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row rocr: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get rocr: {e}"))?;
+        let snap: RocrSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse rocr: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_rocr100(conn: &Connection, symbol: &str, snap: &Rocr100Snapshot) -> Result<(), String> {
+    let _ = create_research_tables_v70(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("rocr100 json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_rocr100 (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert rocr100: {e}"))?;
+    Ok(())
+}
+
+pub fn get_rocr100(conn: &Connection, symbol: &str) -> Result<Option<Rocr100Snapshot>, String> {
+    let _ = create_research_tables_v70(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_rocr100 WHERE symbol = ?1")
+        .map_err(|e| format!("prep rocr100: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query rocr100: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row rocr100: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get rocr100: {e}"))?;
+        let snap: Rocr100Snapshot = serde_json::from_str(&j).map_err(|e| format!("parse rocr100: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_correl(conn: &Connection, symbol: &str, snap: &CorrelSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v70(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("correl json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_correl (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert correl: {e}"))?;
+    Ok(())
+}
+
+pub fn get_correl(conn: &Connection, symbol: &str) -> Result<Option<CorrelSnapshot>, String> {
+    let _ = create_research_tables_v70(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_correl WHERE symbol = ?1")
+        .map_err(|e| format!("prep correl: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query correl: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row correl: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get correl: {e}"))?;
+        let snap: CorrelSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse correl: {e}"))?;
         Ok(Some(snap))
     } else { Ok(None) }
 }
@@ -53695,6 +54146,143 @@ Trailing text.
                 assert!((snap.dx - expected).abs() < 1e-6);
             }
             assert!(snap.dx >= 0.0 && snap.dx <= 100.0);
+        }
+    }
+
+    // ── ADR-180 Round 68 ──
+    #[test]
+    fn roc_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = RocSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 10, roc: 1.8, roc_prev: 1.2,
+            close_now: 101.8, close_lag: 100.0, last_close: 101.8,
+            roc_label: "UP".into(), note: String::new(),
+        };
+        upsert_roc(&conn, "TEST", &snap).unwrap();
+        let got = get_roc(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.roc_label, "UP");
+        assert!((got.roc - 1.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn roc_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_roc_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.roc_label.as_str(),
+            "STRONG_UP" | "UP" | "NEUTRAL" | "DOWN" | "STRONG_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.roc_label != "INSUFFICIENT_DATA" {
+            assert!((snap.roc - (snap.close_now - snap.close_lag)).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn rocp_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = RocpSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 10, rocp: 0.018, rocp_prev: 0.012, rocp_pct: 1.8,
+            close_now: 101.8, close_lag: 100.0, last_close: 101.8,
+            rocp_label: "UP".into(), note: String::new(),
+        };
+        upsert_rocp(&conn, "TEST", &snap).unwrap();
+        let got = get_rocp(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.rocp_label, "UP");
+        assert!((got.rocp_pct - 1.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rocp_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_rocp_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.rocp_label.as_str(),
+            "STRONG_UP" | "UP" | "NEUTRAL" | "DOWN" | "STRONG_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.rocp_label != "INSUFFICIENT_DATA" && snap.close_lag.abs() > 1e-9 {
+            let expected = (snap.close_now - snap.close_lag) / snap.close_lag;
+            assert!((snap.rocp - expected).abs() < 1e-9);
+            assert!((snap.rocp_pct - expected * 100.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn rocr_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = RocrSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 10, rocr: 1.018, rocr_prev: 1.012,
+            close_now: 101.8, close_lag: 100.0, last_close: 101.8,
+            rocr_label: "UP".into(), note: String::new(),
+        };
+        upsert_rocr(&conn, "TEST", &snap).unwrap();
+        let got = get_rocr(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.rocr_label, "UP");
+        assert!((got.rocr - 1.018).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rocr_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_rocr_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.rocr_label.as_str(),
+            "STRONG_UP" | "UP" | "NEUTRAL" | "DOWN" | "STRONG_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.rocr_label != "INSUFFICIENT_DATA" && snap.close_lag.abs() > 1e-9 {
+            let expected = snap.close_now / snap.close_lag;
+            assert!((snap.rocr - expected).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn rocr100_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = Rocr100Snapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 10, rocr100: 101.8, rocr100_prev: 101.2,
+            close_now: 101.8, close_lag: 100.0, last_close: 101.8,
+            rocr100_label: "UP".into(), note: String::new(),
+        };
+        upsert_rocr100(&conn, "TEST", &snap).unwrap();
+        let got = get_rocr100(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.rocr100_label, "UP");
+        assert!((got.rocr100 - 101.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rocr100_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_rocr100_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.rocr100_label.as_str(),
+            "STRONG_UP" | "UP" | "NEUTRAL" | "DOWN" | "STRONG_DOWN" | "INSUFFICIENT_DATA"));
+        if snap.rocr100_label != "INSUFFICIENT_DATA" && snap.close_lag.abs() > 1e-9 {
+            let expected = 100.0 * snap.close_now / snap.close_lag;
+            assert!((snap.rocr100 - expected).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn correl_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CorrelSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-18".into(), bars_used: 60,
+            period: 30, correl: 0.82, correl_prev: 0.79,
+            mean_x: 101.0, mean_y: 100.8, stddev_x: 1.2, stddev_y: 1.1,
+            last_close: 101.5,
+            correl_label: "STRONG_MOMO".into(), note: String::new(),
+        };
+        upsert_correl(&conn, "TEST", &snap).unwrap();
+        let got = get_correl(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.correl_label, "STRONG_MOMO");
+        assert!((got.correl - 0.82).abs() < 1e-6);
+    }
+
+    #[test]
+    fn correl_compute_oscillating() {
+        let bars = synthetic_oscillating_bars_150();
+        let snap = compute_correl_snapshot("T", "2026-04-18", &bars);
+        assert!(matches!(snap.correl_label.as_str(),
+            "STRONG_MOMO" | "MOMO" | "RANDOM_WALK" | "MEAN_REVERT" | "STRONG_MEAN_REVERT" | "INSUFFICIENT_DATA"));
+        if snap.correl_label != "INSUFFICIENT_DATA" {
+            assert!(snap.correl >= -1.0 - 1e-9 && snap.correl <= 1.0 + 1e-9);
+            assert!(snap.stddev_x >= 0.0 && snap.stddev_y >= 0.0);
         }
     }
 }

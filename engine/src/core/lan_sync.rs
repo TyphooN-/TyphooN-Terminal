@@ -526,6 +526,12 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_plus_dm",
     "research_minus_dm",
     "research_dx",
+    // ── ADR-180 Round 68 ────────────────────────────
+    "research_roc",
+    "research_rocp",
+    "research_rocr",
+    "research_rocr100",
+    "research_correl",
 ];
 
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
@@ -3033,6 +3039,42 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        // ── ADR-180 Round 68 ──
+        "research_roc" => Some(
+            "CREATE TABLE IF NOT EXISTS research_roc (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_rocp" => Some(
+            "CREATE TABLE IF NOT EXISTS research_rocp (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_rocr" => Some(
+            "CREATE TABLE IF NOT EXISTS research_rocr (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_rocr100" => Some(
+            "CREATE TABLE IF NOT EXISTS research_rocr100 (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_correl" => Some(
+            "CREATE TABLE IF NOT EXISTS research_correl (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         _ => None,
     }
 }
@@ -3422,6 +3464,12 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_plus_dm" => Some("updated_at"),
         "research_minus_dm" => Some("updated_at"),
         "research_dx" => Some("updated_at"),
+        // ── ADR-180 Round 68 ──
+        "research_roc" => Some("updated_at"),
+        "research_rocp" => Some("updated_at"),
+        "research_rocr" => Some("updated_at"),
+        "research_rocr100" => Some("updated_at"),
+        "research_correl" => Some("updated_at"),
         _ => None,
     }
 }
