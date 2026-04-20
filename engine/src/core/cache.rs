@@ -756,6 +756,31 @@ impl SqliteCache {
         Ok(result)
     }
 
+    /// Same as `detailed_stats` plus per-row blob byte size for the Storage
+    /// Manager size column. `LENGTH(data)` on a BLOB is O(1) in SQLite — the
+    /// payload length is recorded in the row header, so adding the column
+    /// does not stream blob bodies off disk. Tuple order is (key, bar_count,
+    /// timestamp, blob_bytes).
+    pub fn detailed_stats_with_size(&self) -> Result<Vec<(String, i64, i64, i64)>, String> {
+        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT key, bar_count, timestamp, LENGTH(data) FROM bar_cache ORDER BY key"
+        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        }).map_err(|e| format!("SQLite query failed: {e}"))?;
+        let mut result = Vec::new();
+        for row in rows {
+            if let Ok(r) = row { result.push(r); }
+        }
+        Ok(result)
+    }
+
     /// Search cache keys by substring pattern. Uses SQL LIKE — avoids pulling the
     /// full bar_cache table into memory for partial-match fallbacks.
     ///
