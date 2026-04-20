@@ -72,6 +72,7 @@ pub struct GpuCompute {
     williams_r_pipeline: wgpu::ComputePipeline,
     obv_pipeline: wgpu::ComputePipeline,
     momentum_pipeline: wgpu::ComputePipeline,
+    var_osc_pipeline: wgpu::ComputePipeline,
     psar_pipeline: wgpu::ComputePipeline,
     ichimoku_pipeline: wgpu::ComputePipeline,
     cci_ohlc_pipeline: wgpu::ComputePipeline,
@@ -101,42 +102,73 @@ pub struct GpuCompute {
 
 impl GpuCompute {
     /// Compute Anchored VWAP from anchor bar to end. Needs close+volume interleaved buffer.
-    pub fn compute_anchored_vwap(&self, closes: &[f32], volumes: &[f32], anchor_bar: u32) -> Option<Vec<f32>> {
-        if closes.len() != volumes.len() || closes.is_empty() { return None; }
+    pub fn compute_anchored_vwap(
+        &self,
+        closes: &[f32],
+        volumes: &[f32],
+        anchor_bar: u32,
+    ) -> Option<Vec<f32>> {
+        if closes.len() != volumes.len() || closes.is_empty() {
+            return None;
+        }
         let rb_buf = self.readback_buffer.as_ref()?;
         let n = closes.len() as u32;
 
         let mut interleaved = Vec::with_capacity(n as usize * 2);
-        for i in 0..n as usize { interleaved.push(closes[i]); interleaved.push(volumes[i]); }
+        for i in 0..n as usize {
+            interleaved.push(closes[i]);
+            interleaved.push(volumes[i]);
+        }
 
         let input_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("avwap_in"), size: (n as u64) * 8,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("avwap_in"),
+            size: (n as u64) * 8,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&input_buf, 0, bytemuck_cast_slice(&interleaved));
+        self.queue
+            .write_buffer(&input_buf, 0, bytemuck_cast_slice(&interleaved));
 
         let out_size = (n as u64) * 4;
         let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("avwap_out"), size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            label: Some("avwap_out"),
+            size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
         });
         let params = [anchor_bar, n];
         let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("avwap_params"), size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("avwap_params"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        self.queue
+            .write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("avwap_bg"), layout: &self.bind_group_layout,
+            label: Some("avwap_bg"),
+            layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: input_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: out_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("avwap_pass"), timestamp_writes: None });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("avwap_pass"),
+                timestamp_writes: None,
+            });
             pass.set_pipeline(&self.anchored_vwap_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(1, 1, 1);
@@ -146,9 +178,18 @@ impl GpuCompute {
         self.queue.submit(std::iter::once(encoder.finish()));
         let slice = rb_buf.slice(0..read_size);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
-        if rx.recv().ok()?.is_err() { return None; }
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
         let data = slice.get_mapped_range();
         let result = bytemuck_cast_slice_to_f32(&data);
         drop(data);
@@ -236,11 +277,16 @@ impl GpuCompute {
         // Create all indicator pipelines using same bind group layout
         let make_pipeline = |label: &str, source: &str| -> wgpu::ComputePipeline {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()),
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
             });
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(label), layout: Some(&pipeline_layout), module: &shader,
-                entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
             })
         };
         let rsi_pipeline = make_pipeline("rsi_pipeline", RSI_SHADER);
@@ -256,6 +302,7 @@ impl GpuCompute {
         let williams_r_pipeline = make_pipeline("williams_r_pipeline", WILLIAMS_R_SHADER);
         let obv_pipeline = make_pipeline("obv_pipeline", OBV_SHADER);
         let momentum_pipeline = make_pipeline("momentum_pipeline", MOMENTUM_SHADER);
+        let var_osc_pipeline = make_pipeline("var_osc_pipeline", VAR_OSCILLATOR_SHADER);
         let psar_pipeline = make_pipeline("psar_pipeline", PSAR_SHADER);
         let ichimoku_pipeline = make_pipeline("ichimoku_pipeline", ICHIMOKU_SHADER);
         let cci_ohlc_pipeline = make_pipeline("cci_ohlc_pipeline", CCI_GPU_SHADER);
@@ -308,6 +355,7 @@ impl GpuCompute {
             williams_r_pipeline,
             obv_pipeline,
             momentum_pipeline,
+            var_osc_pipeline,
             psar_pipeline,
             ichimoku_pipeline,
             cci_ohlc_pipeline,
@@ -350,7 +398,13 @@ impl GpuCompute {
     /// PERF4: Buffer pool — if bar_count matches the pooled size, reuse existing buffers
     /// and only update their contents (write_buffer). Saves O(N) buffer allocations per frame
     /// when re-uploading the same chart (e.g., forming bar updates).
-    pub fn upload_bars_full(&mut self, closes: &[f32], highs: &[f32], lows: &[f32], volumes: &[f32]) {
+    pub fn upload_bars_full(
+        &mut self,
+        closes: &[f32],
+        highs: &[f32],
+        lows: &[f32],
+        volumes: &[f32],
+    ) {
         let bar_count = closes.len() as u32;
         self.bar_count = bar_count;
         let same_size = bar_count == self.pooled_bar_count && self.bar_buffer.is_some();
@@ -389,7 +443,9 @@ impl GpuCompute {
             }
 
             // Midpoints (high+low)/2 for Fisher Transform
-            let mids: Vec<f32> = (0..bar_count as usize).map(|i| (highs[i] + lows[i]) / 2.0).collect();
+            let mids: Vec<f32> = (0..bar_count as usize)
+                .map(|i| (highs[i] + lows[i]) / 2.0)
+                .collect();
             if !same_size || self.mid_buffer.is_none() {
                 self.mid_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("mid_data"),
@@ -414,7 +470,8 @@ impl GpuCompute {
                 }));
             }
             if let Some(ref buf) = self.vol_buffer {
-                self.queue.write_buffer(buf, 0, bytemuck_cast_slice(volumes));
+                self.queue
+                    .write_buffer(buf, 0, bytemuck_cast_slice(volumes));
             }
         }
 
@@ -423,26 +480,36 @@ impl GpuCompute {
             let out_size = (bar_count as u64) * 4;
             let out_size_4x = (bar_count as u64) * 16;
             self.sma_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("sma_output"), size: out_size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+                label: Some("sma_output"),
+                size: out_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
             }));
             self.ema_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("ema_output"), size: out_size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+                label: Some("ema_output"),
+                size: out_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
             }));
             self.readback_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("readback"), size: out_size_4x,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+                label: Some("readback"),
+                size: out_size_4x,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             }));
             self.ind_out_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("ind_out_shared"), size: out_size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+                label: Some("ind_out_shared"),
+                size: out_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
             }));
             // params buffer is fixed 8-byte, only allocate once
             if self.ind_params_buffer.is_none() {
                 self.ind_params_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("ind_params_shared"), size: 8,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+                    label: Some("ind_params_shared"),
+                    size: 8,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
                 }));
             }
             self.pooled_bar_count = bar_count;
@@ -451,8 +518,15 @@ impl GpuCompute {
 
     /// Generic dispatch: run a compute pipeline with close prices as input, return f32 per bar.
     /// Uses shared output + params buffers (populated in `upload_bars`) to avoid per-call allocations.
-    fn dispatch_indicator(&self, pipeline: &wgpu::ComputePipeline, period: u32, parallel: bool) -> Option<Vec<f32>> {
-        if self.bar_count == 0 { return None; }
+    fn dispatch_indicator(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        period: u32,
+        parallel: bool,
+    ) -> Option<Vec<f32>> {
+        if self.bar_count == 0 {
+            return None;
+        }
         let bar_buf = self.bar_buffer.as_ref()?;
         let rb_buf = self.readback_buffer.as_ref()?;
         let out_buf = self.ind_out_buffer.as_ref()?;
@@ -460,21 +534,33 @@ impl GpuCompute {
 
         let out_size = (self.bar_count as u64) * 4;
         let params = [period, self.bar_count];
-        self.queue.write_buffer(params_buffer, 0, bytemuck_cast_slice(&params));
+        self.queue
+            .write_buffer(params_buffer, 0, bytemuck_cast_slice(&params));
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ind_bg"), layout: &self.bind_group_layout,
+            label: Some("ind_bg"),
+            layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: bar_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: bar_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: out_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("ind_pass"), timestamp_writes: None,
+                label: Some("ind_pass"),
+                timestamp_writes: None,
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
@@ -489,9 +575,18 @@ impl GpuCompute {
 
         let slice = rb_buf.slice(0..out_size);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
-        if rx.recv().ok()?.is_err() { return None; }
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
         let data = slice.get_mapped_range();
         let result = bytemuck_cast_slice_to_f32(&data);
         drop(data);
@@ -500,37 +595,60 @@ impl GpuCompute {
     }
 
     /// Generic dispatch with OHLC input (for ATR, Stochastic, ADX)
-    fn dispatch_ohlc_indicator(&self, pipeline: &wgpu::ComputePipeline, period: u32, out_per_bar: u32) -> Option<Vec<f32>> {
-        if self.bar_count == 0 { return None; }
+    fn dispatch_ohlc_indicator(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        period: u32,
+        out_per_bar: u32,
+    ) -> Option<Vec<f32>> {
+        if self.bar_count == 0 {
+            return None;
+        }
         let ohlc_buf = self.ohlc_buffer.as_ref()?;
         let rb_buf = self.readback_buffer.as_ref()?;
 
         let out_size = (self.bar_count as u64) * (out_per_bar as u64) * 4;
         let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ohlc_ind_out"), size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            label: Some("ohlc_ind_out"),
+            size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
         });
 
         let params = [period, self.bar_count];
         let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ohlc_ind_params"), size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("ohlc_ind_params"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        self.queue
+            .write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ohlc_ind_bg"), layout: &self.bind_group_layout,
+            label: Some("ohlc_ind_bg"),
+            layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: ohlc_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ohlc_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: out_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("ohlc_ind_pass"), timestamp_writes: None,
+                label: Some("ohlc_ind_pass"),
+                timestamp_writes: None,
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
@@ -542,9 +660,18 @@ impl GpuCompute {
         let read_size = out_size.min(rb_buf.size());
         let slice = rb_buf.slice(0..read_size);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
-        if rx.recv().ok()?.is_err() { return None; }
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
         let data = slice.get_mapped_range();
         let result = bytemuck_cast_slice_to_f32(&data);
         drop(data);
@@ -555,7 +682,12 @@ impl GpuCompute {
     // ─── Public indicator compute methods ───
 
     /// Generic public dispatch for SMA/EMA/RSI/KAMA using close prices.
-    pub fn dispatch_indicator_pub(&self, indicator: &Indicator, period: u32, parallel: bool) -> Option<Vec<f32>> {
+    pub fn dispatch_indicator_pub(
+        &self,
+        indicator: &Indicator,
+        period: u32,
+        parallel: bool,
+    ) -> Option<Vec<f32>> {
         let pipeline = match indicator {
             Indicator::Sma => &self.sma_pipeline,
             Indicator::Ema => &self.ema_pipeline,
@@ -578,6 +710,11 @@ impl GpuCompute {
         self.dispatch_indicator(&self.momentum_pipeline, period, true)
     }
 
+    /// Compute VaR oscillator on GPU using rolling parametric 95% VaR.
+    pub fn compute_var_oscillator_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.var_osc_pipeline, period, false)
+    }
+
     /// Compute Parabolic SAR on GPU. Returns f32 per bar. Requires OHLC upload.
     pub fn compute_psar_gpu(&self) -> Option<Vec<f32>> {
         self.dispatch_ohlc_indicator(&self.psar_pipeline, 0, 1)
@@ -595,31 +732,51 @@ impl GpuCompute {
 
     /// Compute CCI on GPU from OHLC (computes typical price internally). Parallel.
     pub fn compute_cci_gpu(&self, period: u32) -> Option<Vec<f32>> {
-        if self.bar_count == 0 { return None; }
+        if self.bar_count == 0 {
+            return None;
+        }
         let ohlc_buf = self.ohlc_buffer.as_ref()?;
         let rb_buf = self.readback_buffer.as_ref()?;
         let out_size = (self.bar_count as u64) * 4;
         let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cci_out"), size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            label: Some("cci_out"),
+            size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
         });
         let params = [period, self.bar_count];
         let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cci_params"), size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("cci_params"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        self.queue
+            .write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("cci_bg"), layout: &self.bind_group_layout,
+            label: Some("cci_bg"),
+            layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: ohlc_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ohlc_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: out_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("cci_pass"), timestamp_writes: None });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("cci_pass"),
+                timestamp_writes: None,
+            });
             pass.set_pipeline(&self.cci_ohlc_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups((self.bar_count + 255) / 256, 1, 1);
@@ -629,9 +786,18 @@ impl GpuCompute {
         self.queue.submit(std::iter::once(encoder.finish()));
         let slice = rb_buf.slice(0..read_size);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
-        if rx.recv().ok()?.is_err() { return None; }
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
         let data = slice.get_mapped_range();
         let result = bytemuck_cast_slice_to_f32(&data);
         drop(data);
@@ -642,49 +808,89 @@ impl GpuCompute {
     /// Compute OBV on GPU using real volume data.
     /// Caller provides pre-interleaved [close, volume] pairs.
     pub fn compute_obv_gpu_with_cv(&self, cv_interleaved: &[f32]) -> Option<Vec<f32>> {
-        if self.bar_count == 0 { return None; }
+        if self.bar_count == 0 {
+            return None;
+        }
         let rb_buf = self.readback_buffer.as_ref()?;
         let n = self.bar_count as usize;
-        if cv_interleaved.len() != n * 2 { return None; }
+        if cv_interleaved.len() != n * 2 {
+            return None;
+        }
 
         let cv_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("obv_cv"), size: (n as u64) * 8,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("obv_cv"),
+            size: (n as u64) * 8,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&cv_buf, 0, bytemuck_cast_slice(cv_interleaved));
+        self.queue
+            .write_buffer(&cv_buf, 0, bytemuck_cast_slice(cv_interleaved));
 
         let out_size = (n as u64) * 4;
         let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("obv_out"), size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            label: Some("obv_out"),
+            size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
         });
         let params = [0u32, self.bar_count];
         let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("obv_params"), size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("obv_params"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        self.queue
+            .write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("obv_bg"), layout: &self.bind_group_layout,
+            label: Some("obv_bg"),
+            layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: cv_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: cv_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: out_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("obv_dispatch") });
-        { let mut pass = encoder.begin_compute_pass(&Default::default()); pass.set_pipeline(&self.obv_pipeline); pass.set_bind_group(0, &bind_group, &[]); pass.dispatch_workgroups(1, 1, 1); }
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("obv_dispatch"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.obv_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
         let read_size = out_size.min(rb_buf.size());
         encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, read_size);
         self.queue.submit(std::iter::once(encoder.finish()));
 
         let slice = rb_buf.slice(0..read_size);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
-        if rx.recv().ok()?.is_err() { return None; }
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
         let data = slice.get_mapped_range();
         let result = bytemuck_cast_slice_to_f32(&data);
         drop(data);
@@ -710,42 +916,68 @@ impl GpuCompute {
     /// Compute ATR Projection on GPU. Needs custom [open, atr] interleaved buffer.
     /// Returns [upper, lower] × bar_count.
     pub fn compute_atr_projection_gpu(&self, opens: &[f32], atrs: &[f32]) -> Option<Vec<f32>> {
-        if self.bar_count == 0 || opens.len() != atrs.len() { return None; }
+        if self.bar_count == 0 || opens.len() != atrs.len() {
+            return None;
+        }
         let rb_buf = self.readback_buffer.as_ref()?;
         let n = opens.len() as u32;
 
         // Create interleaved [open, atr] buffer
         let mut interleaved = Vec::with_capacity(n as usize * 2);
-        for i in 0..n as usize { interleaved.push(opens[i]); interleaved.push(atrs[i]); }
+        for i in 0..n as usize {
+            interleaved.push(opens[i]);
+            interleaved.push(atrs[i]);
+        }
 
         let input_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("atr_proj_in"), size: (n as u64) * 8,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("atr_proj_in"),
+            size: (n as u64) * 8,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&input_buf, 0, bytemuck_cast_slice(&interleaved));
+        self.queue
+            .write_buffer(&input_buf, 0, bytemuck_cast_slice(&interleaved));
 
         let out_size = (n as u64) * 8; // 2 floats per bar
         let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("atr_proj_out"), size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            label: Some("atr_proj_out"),
+            size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
         });
         let params = [0u32, n];
         let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("atr_proj_params"), size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("atr_proj_params"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        self.queue
+            .write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("atr_proj_bg"), layout: &self.bind_group_layout,
+            label: Some("atr_proj_bg"),
+            layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: input_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: out_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("atr_proj_pass"), timestamp_writes: None });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("atr_proj_pass"),
+                timestamp_writes: None,
+            });
             pass.set_pipeline(&self.atr_proj_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups((n + 255) / 256, 1, 1);
@@ -755,9 +987,18 @@ impl GpuCompute {
         self.queue.submit(std::iter::once(encoder.finish()));
         let slice = rb_buf.slice(0..read_size);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
-        if rx.recv().ok()?.is_err() { return None; }
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
         let data = slice.get_mapped_range();
         let result = bytemuck_cast_slice_to_f32(&data);
         drop(data);
@@ -767,9 +1008,19 @@ impl GpuCompute {
 
     /// Full BetterVolume GPU dispatch with all OHLCV data.
     /// Accepts all 5 arrays directly from CPU to build proper interleaved buffer.
-    pub fn compute_better_volume_gpu_full(&self, opens: &[f32], highs: &[f32], lows: &[f32], closes: &[f32], volumes: &[f32], lookback: u32) -> Option<Vec<f32>> {
+    pub fn compute_better_volume_gpu_full(
+        &self,
+        opens: &[f32],
+        highs: &[f32],
+        lows: &[f32],
+        closes: &[f32],
+        volumes: &[f32],
+        lookback: u32,
+    ) -> Option<Vec<f32>> {
         let n = self.bar_count;
-        if n == 0 || opens.len() != n as usize { return None; }
+        if n == 0 || opens.len() != n as usize {
+            return None;
+        }
         let rb_buf = self.readback_buffer.as_ref()?;
 
         // Build OHLCV interleaved: [O,H,L,C,V] × 5 per bar
@@ -783,39 +1034,57 @@ impl GpuCompute {
         }
 
         let input_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bvol_ohlcv"), size: (n as u64) * 20, // 5 × f32 per bar
+            label: Some("bvol_ohlcv"),
+            size: (n as u64) * 20, // 5 × f32 per bar
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        self.queue.write_buffer(&input_buf, 0, bytemuck_cast_slice(&ohlcv));
+        self.queue
+            .write_buffer(&input_buf, 0, bytemuck_cast_slice(&ohlcv));
 
         let out_size = (n as u64) * 4;
         let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bvol_out"), size: out_size,
+            label: Some("bvol_out"),
+            size: out_size,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let params = [lookback, n];
         let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bvol_params"), size: 8,
+            label: Some("bvol_params"),
+            size: 8,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        self.queue.write_buffer(&params_buf, 0, bytemuck_cast_slice(&params));
+        self.queue
+            .write_buffer(&params_buf, 0, bytemuck_cast_slice(&params));
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("bvol_bg"), layout: &self.bind_group_layout,
+            label: Some("bvol_bg"),
+            layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: input_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: out_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buf.as_entire_binding(),
+                },
             ],
         });
 
         let workgroups = (n + 255) / 256;
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("bvol_pass"), timestamp_writes: None });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("bvol_pass"),
+                timestamp_writes: None,
+            });
             pass.set_pipeline(&self.better_vol_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(workgroups, 1, 1);
@@ -826,9 +1095,18 @@ impl GpuCompute {
 
         let slice = rb_buf.slice(0..read_size);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
-        if rx.recv().ok()?.is_err() { return None; }
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
         let data = slice.get_mapped_range();
         let result = bytemuck_cast_slice_to_f32(&data);
         drop(data);
@@ -875,31 +1153,51 @@ impl GpuCompute {
     /// Compute Ehlers MAMA/FAMA on GPU. Returns [mama, fama] × bar_count.
     pub fn compute_ehlers_mama_gpu(&self) -> Option<Vec<f32>> {
         // MAMA outputs 2 values per bar — need larger readback buffer
-        if self.bar_count == 0 { return None; }
+        if self.bar_count == 0 {
+            return None;
+        }
         let bar_buf = self.bar_buffer.as_ref()?;
         let rb_buf = self.readback_buffer.as_ref()?;
         let out_size = (self.bar_count as u64) * 2 * 4;
         let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("mama_out"), size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            label: Some("mama_out"),
+            size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
         });
         let params = [0u32, self.bar_count];
         let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("mama_params"), size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("mama_params"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        self.queue
+            .write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("mama_bg"), layout: &self.bind_group_layout,
+            label: Some("mama_bg"),
+            layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: bar_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: bar_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: out_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("mama_pass"), timestamp_writes: None });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("mama_pass"),
+                timestamp_writes: None,
+            });
             pass.set_pipeline(&self.ehlers_mama_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(1, 1, 1);
@@ -909,9 +1207,18 @@ impl GpuCompute {
         self.queue.submit(std::iter::once(encoder.finish()));
         let slice = rb_buf.slice(0..read_size);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
-        if rx.recv().ok()?.is_err() { return None; }
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
         let data = slice.get_mapped_range();
         let result = bytemuck_cast_slice_to_f32(&data);
         drop(data);
@@ -953,32 +1260,52 @@ impl GpuCompute {
 
     /// Compute Fisher Transform on GPU. Returns [fisher, trigger] × bar_count.
     pub fn compute_fisher_gpu(&self, period: u32) -> Option<Vec<f32>> {
-        if self.bar_count == 0 { return None; }
+        if self.bar_count == 0 {
+            return None;
+        }
         let mid_buf = self.mid_buffer.as_ref()?;
         let rb_buf = self.readback_buffer.as_ref()?;
 
         let out_size = (self.bar_count as u64) * 2 * 4;
         let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("fisher_out"), size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            label: Some("fisher_out"),
+            size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
         });
         let params = [period, self.bar_count];
         let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("fisher_params"), size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("fisher_params"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        self.queue
+            .write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("fisher_bg"), layout: &self.bind_group_layout,
+            label: Some("fisher_bg"),
+            layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: mid_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: mid_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: out_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fisher_pass"), timestamp_writes: None });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("fisher_pass"),
+                timestamp_writes: None,
+            });
             pass.set_pipeline(&self.fisher_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(1, 1, 1);
@@ -988,9 +1315,18 @@ impl GpuCompute {
         self.queue.submit(std::iter::once(encoder.finish()));
         let slice = rb_buf.slice(0..read_size);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
-        if rx.recv().ok()?.is_err() { return None; }
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
         let data = slice.get_mapped_range();
         let result = bytemuck_cast_slice_to_f32(&data);
         drop(data);
@@ -1010,7 +1346,9 @@ impl GpuCompute {
 
     /// Dispatch SMA compute shader. Results stay in VRAM.
     pub fn compute_sma(&self, period: u32) {
-        if self.bar_count == 0 { return; }
+        if self.bar_count == 0 {
+            return;
+        }
         let (bar_buf, out_buf) = match (&self.bar_buffer, &self.sma_buffer) {
             (Some(b), Some(o)) => (b, o),
             _ => return,
@@ -1024,21 +1362,33 @@ impl GpuCompute {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        self.queue
+            .write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sma_bg"),
             layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: bar_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: bar_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: out_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("sma_encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("sma_encoder"),
+            });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("sma_pass"),
@@ -1053,7 +1403,9 @@ impl GpuCompute {
 
     /// Dispatch EMA compute shader. Results stay in VRAM.
     pub fn compute_ema(&self, period: u32) {
-        if self.bar_count == 0 { return; }
+        if self.bar_count == 0 {
+            return;
+        }
         let (bar_buf, out_buf) = match (&self.bar_buffer, &self.ema_buffer) {
             (Some(b), Some(o)) => (b, o),
             _ => return,
@@ -1066,21 +1418,33 @@ impl GpuCompute {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        self.queue
+            .write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ema_bg"),
             layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: bar_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: bar_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: out_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("ema_encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("ema_encoder"),
+            });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("ema_pass"),
@@ -1109,8 +1473,15 @@ impl GpuCompute {
         // Synchronous readback (blocking — use sparingly)
         let slice = rb_buf.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| { let _ = tx.send(result); });
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
 
         if rx.recv().ok()?.is_ok() {
             let data = slice.get_mapped_range();
@@ -1123,7 +1494,9 @@ impl GpuCompute {
         }
     }
 
-    pub fn bar_count(&self) -> u32 { self.bar_count }
+    pub fn bar_count(&self) -> u32 {
+        self.bar_count
+    }
 }
 
 // Safe byte casting via bytemuck crate — eliminates all unsafe pointer casts
@@ -1223,10 +1596,46 @@ impl GpuDarwinAnalytics {
         let stats_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("darwin_stats_bgl"),
             entries: &[
-                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -1234,41 +1643,102 @@ impl GpuDarwinAnalytics {
         let corr_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("darwin_corr_bgl"),
             entries: &[
-                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
         let stats_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("darwin_stats_layout"), bind_group_layouts: &[Some(&stats_bgl)], immediate_size: 0,
+            label: Some("darwin_stats_layout"),
+            bind_group_layouts: &[Some(&stats_bgl)],
+            immediate_size: 0,
         });
         let corr_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("darwin_corr_layout"), bind_group_layouts: &[Some(&corr_bgl)], immediate_size: 0,
+            label: Some("darwin_corr_layout"),
+            bind_group_layouts: &[Some(&corr_bgl)],
+            immediate_size: 0,
         });
 
         let stats_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("darwin_stats_shader"), source: wgpu::ShaderSource::Wgsl(DARWIN_STATS_SHADER.into()),
+            label: Some("darwin_stats_shader"),
+            source: wgpu::ShaderSource::Wgsl(DARWIN_STATS_SHADER.into()),
         });
         let corr_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("darwin_corr_shader"), source: wgpu::ShaderSource::Wgsl(DARWIN_CORR_SHADER.into()),
+            label: Some("darwin_corr_shader"),
+            source: wgpu::ShaderSource::Wgsl(DARWIN_CORR_SHADER.into()),
         });
 
         let stats_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("darwin_stats_pipeline"), layout: Some(&stats_layout), module: &stats_shader,
-            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+            label: Some("darwin_stats_pipeline"),
+            layout: Some(&stats_layout),
+            module: &stats_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
         });
         let corr_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("darwin_corr_pipeline"), layout: Some(&corr_layout), module: &corr_shader,
-            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+            label: Some("darwin_corr_pipeline"),
+            layout: Some(&corr_layout),
+            module: &corr_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
         });
 
         Self {
-            device, queue, returns_buffer: None, lengths_buffer: None,
-            stats_buffer: None, corr_buffer: None, staging_buffer: None,
-            darwin_count: 0, max_days: 0, chunk_size: 0, all_returns: Vec::new(),
-            stats_pipeline, corr_pipeline, stats_bgl, corr_bgl,
+            device,
+            queue,
+            returns_buffer: None,
+            lengths_buffer: None,
+            stats_buffer: None,
+            corr_buffer: None,
+            staging_buffer: None,
+            darwin_count: 0,
+            max_days: 0,
+            chunk_size: 0,
+            all_returns: Vec::new(),
+            stats_pipeline,
+            corr_pipeline,
+            stats_bgl,
+            corr_bgl,
         }
     }
 
@@ -1287,9 +1757,14 @@ impl GpuDarwinAnalytics {
         if (count as usize) > max_darwins_per_batch {
             // Need to chunk — store batch info for multi-pass compute
             self.chunk_size = max_darwins_per_batch as u32;
-            tracing::info!("GPU: {}MB needed for {} DARWINs × {} days — chunking into batches of {} (limit {}MB)",
-                count as usize * per_darwin_bytes / 1024 / 1024, count, max_days,
-                max_darwins_per_batch, max_buffer / 1024 / 1024);
+            tracing::info!(
+                "GPU: {}MB needed for {} DARWINs × {} days — chunking into batches of {} (limit {}MB)",
+                count as usize * per_darwin_bytes / 1024 / 1024,
+                count,
+                max_days,
+                max_darwins_per_batch,
+                max_buffer / 1024 / 1024
+            );
         } else {
             self.chunk_size = count; // single batch
         }
@@ -1301,7 +1776,10 @@ impl GpuDarwinAnalytics {
         let batch_count = (count as usize).min(self.chunk_size as usize);
         let total_floats = match batch_count.checked_mul(max_days as usize) {
             Some(n) => n,
-            None => { tracing::error!("GPU Darwin: overflow in batch_count * max_days"); return; }
+            None => {
+                tracing::error!("GPU Darwin: overflow in batch_count * max_days");
+                return;
+            }
         };
         let mut flat = vec![0.0_f32; total_floats];
         let mut lengths = vec![0_u32; batch_count];
@@ -1317,8 +1795,10 @@ impl GpuDarwinAnalytics {
         // Upload returns
         let returns_bytes: &[u8] = bytemuck_cast_slice(&flat);
         let returns_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("darwin_returns"), size: returns_bytes.len() as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("darwin_returns"),
+            size: returns_bytes.len() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         self.queue.write_buffer(&returns_buf, 0, returns_bytes);
         self.returns_buffer = Some(returns_buf);
@@ -1326,8 +1806,10 @@ impl GpuDarwinAnalytics {
         // Upload lengths
         let lengths_bytes: &[u8] = bytemuck_cast_slice(&lengths);
         let lengths_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("darwin_lengths"), size: lengths_bytes.len() as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("darwin_lengths"),
+            size: lengths_bytes.len() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         self.queue.write_buffer(&lengths_buf, 0, lengths_bytes);
         self.lengths_buffer = Some(lengths_buf);
@@ -1335,53 +1817,86 @@ impl GpuDarwinAnalytics {
         // Allocate stats output: 10 floats per batch
         let stats_size = batch_count as u64 * 10 * 4;
         self.stats_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("darwin_stats_out"), size: stats_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            label: Some("darwin_stats_out"),
+            size: stats_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
         }));
 
         // Staging buffer for readback (max of stats or correlation tile)
         let staging_size = stats_size.max(1024 * 1024 * 4); // at least 1M floats for corr tiles
         self.staging_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("darwin_staging"), size: staging_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("darwin_staging"),
+            size: staging_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         }));
 
-        let num_batches = (count as usize + self.chunk_size as usize - 1) / self.chunk_size as usize;
-        tracing::info!("GPU: uploaded batch 1/{} ({} DARWINs × {} days, {:.1}MB VRAM)",
-            num_batches, batch_count, max_days, total_floats as f64 * 4.0 / 1024.0 / 1024.0);
+        let num_batches =
+            (count as usize + self.chunk_size as usize - 1) / self.chunk_size as usize;
+        tracing::info!(
+            "GPU: uploaded batch 1/{} ({} DARWINs × {} days, {:.1}MB VRAM)",
+            num_batches,
+            batch_count,
+            max_days,
+            total_floats as f64 * 4.0 / 1024.0 / 1024.0
+        );
     }
 
     /// Dispatch batch statistics shader for currently uploaded batch.
     pub fn compute_stats(&self) {
-        let (Some(ret_buf), Some(len_buf), Some(stats_buf)) =
-            (&self.returns_buffer, &self.lengths_buffer, &self.stats_buffer) else { return; };
+        let (Some(ret_buf), Some(len_buf), Some(stats_buf)) = (
+            &self.returns_buffer,
+            &self.lengths_buffer,
+            &self.stats_buffer,
+        ) else {
+            return;
+        };
 
         // Params: [batch_darwin_count, max_days]
         let batch_count = (self.darwin_count as usize).min(self.chunk_size as usize) as u32;
         let params = [batch_count, self.max_days];
         let params_bytes: &[u8] = bytemuck_cast_slice(&params);
         let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("stats_params"), size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("stats_params"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         self.queue.write_buffer(&params_buffer, 0, params_bytes);
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("stats_bg"), layout: &self.stats_bgl,
+            label: Some("stats_bg"),
+            layout: &self.stats_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: ret_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: len_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: stats_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ret_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: len_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: stats_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("stats_encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("stats_encoder"),
+            });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("stats_pass"), timestamp_writes: None,
+                label: Some("stats_pass"),
+                timestamp_writes: None,
             });
             pass.set_pipeline(&self.stats_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
@@ -1392,22 +1907,35 @@ impl GpuDarwinAnalytics {
 
     /// Read back computed statistics from GPU (current batch).
     pub fn readback_stats(&self) -> Option<Vec<GpuDarwinStats>> {
-        let (Some(stats_buf), Some(staging)) = (&self.stats_buffer, &self.staging_buffer) else { return None; };
+        let (Some(stats_buf), Some(staging)) = (&self.stats_buffer, &self.staging_buffer) else {
+            return None;
+        };
 
         let batch_count = (self.darwin_count as usize).min(self.chunk_size as usize);
         let size = batch_count as u64 * 10 * 4;
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("stats_readback_encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("stats_readback_encoder"),
+            });
         encoder.copy_buffer_to_buffer(stats_buf, 0, staging, 0, size);
         self.queue.submit(std::iter::once(encoder.finish()));
 
         let buffer_slice = staging.slice(0..size);
         let (tx, rx) = std::sync::mpsc::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| { let _ = tx.send(result); });
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
 
-        if rx.recv().ok()?.is_err() { return None; }
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
 
         let results = {
             let data = buffer_slice.get_mapped_range();
@@ -1439,10 +1967,14 @@ impl GpuDarwinAnalytics {
     /// Process ALL batches and return merged stats for all DARWINs.
     /// Handles chunked GPU processing when dataset exceeds buffer limit.
     pub fn compute_all_batches(&mut self) -> Option<Vec<GpuDarwinStats>> {
-        if self.all_returns.is_empty() { return None; }
+        if self.all_returns.is_empty() {
+            return None;
+        }
         let total = self.all_returns.len();
         let chunk = self.chunk_size as usize;
-        if chunk == 0 { return None; }
+        if chunk == 0 {
+            return None;
+        }
         let num_batches = (total + chunk - 1) / chunk;
         let mut all_stats = Vec::with_capacity(total);
 
@@ -1455,7 +1987,10 @@ impl GpuDarwinAnalytics {
             // Flatten this batch
             let total_floats = match batch_count.checked_mul(self.max_days as usize) {
                 Some(n) => n,
-                None => { tracing::error!("GPU Darwin batch: overflow in batch_count * max_days"); continue; }
+                None => {
+                    tracing::error!("GPU Darwin batch: overflow in batch_count * max_days");
+                    continue;
+                }
             };
             let mut flat = vec![0.0_f32; total_floats];
             let mut lengths = vec![0_u32; batch_count];
@@ -1470,28 +2005,36 @@ impl GpuDarwinAnalytics {
             // Upload
             let returns_bytes: &[u8] = bytemuck_cast_slice(&flat);
             let returns_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("darwin_returns"), size: returns_bytes.len() as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+                label: Some("darwin_returns"),
+                size: returns_bytes.len() as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             });
             self.queue.write_buffer(&returns_buf, 0, returns_bytes);
             self.returns_buffer = Some(returns_buf);
 
             let lengths_bytes: &[u8] = bytemuck_cast_slice(&lengths);
             let lengths_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("darwin_lengths"), size: lengths_bytes.len() as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+                label: Some("darwin_lengths"),
+                size: lengths_bytes.len() as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             });
             self.queue.write_buffer(&lengths_buf, 0, lengths_bytes);
             self.lengths_buffer = Some(lengths_buf);
 
             let stats_size = batch_count as u64 * 10 * 4;
             self.stats_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("darwin_stats_out"), size: stats_size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+                label: Some("darwin_stats_out"),
+                size: stats_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
             }));
             self.staging_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("darwin_staging"), size: stats_size.max(1024 * 1024 * 4),
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+                label: Some("darwin_staging"),
+                size: stats_size.max(1024 * 1024 * 4),
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             }));
 
             // Temporarily set darwin_count to batch size for compute/readback
@@ -1505,10 +2048,16 @@ impl GpuDarwinAnalytics {
             }
 
             self.darwin_count = saved_count;
-            self.chunk_size = (self.device.limits().max_storage_buffer_binding_size as usize / (self.max_days as usize * 4)) as u32;
+            self.chunk_size = (self.device.limits().max_storage_buffer_binding_size as usize
+                / (self.max_days as usize * 4)) as u32;
 
             if num_batches > 1 {
-                tracing::info!("GPU: batch {}/{} complete ({} DARWINs)", batch_idx + 1, num_batches, batch_count);
+                tracing::info!(
+                    "GPU: batch {}/{} complete ({} DARWINs)",
+                    batch_idx + 1,
+                    num_batches,
+                    batch_count
+                );
             }
         }
 
@@ -1522,40 +2071,71 @@ impl GpuDarwinAnalytics {
     /// Dispatch correlation shader for a tile of DARWINs.
     /// Computes correlation between DARWINs [row_start..row_start+tile_size] and [col_start..col_start+tile_size].
     pub fn compute_correlation_tile(&self, row_start: u32, col_start: u32, tile_size: u32) {
-        let (Some(ret_buf), Some(len_buf)) = (&self.returns_buffer, &self.lengths_buffer) else { return; };
+        let (Some(ret_buf), Some(len_buf)) = (&self.returns_buffer, &self.lengths_buffer) else {
+            return;
+        };
 
         // Allocate tile output
         let tile_floats = tile_size * tile_size;
         let corr_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("corr_tile"), size: tile_floats as u64 * 4,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            label: Some("corr_tile"),
+            size: tile_floats as u64 * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
         });
 
         // Params: [darwin_count, max_days, row_start, col_start, tile_size, 0, 0, 0]
-        let params = [self.darwin_count, self.max_days, row_start, col_start, tile_size, 0u32, 0u32, 0u32];
+        let params = [
+            self.darwin_count,
+            self.max_days,
+            row_start,
+            col_start,
+            tile_size,
+            0u32,
+            0u32,
+            0u32,
+        ];
         let params_bytes: &[u8] = bytemuck_cast_slice(&params);
         let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("corr_params"), size: 32,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("corr_params"),
+            size: 32,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         self.queue.write_buffer(&params_buffer, 0, params_bytes);
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("corr_bg"), layout: &self.corr_bgl,
+            label: Some("corr_bg"),
+            layout: &self.corr_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: ret_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: len_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: corr_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ret_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: len_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: corr_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("corr_encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("corr_encoder"),
+            });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("corr_pass"), timestamp_writes: None,
+                label: Some("corr_pass"),
+                timestamp_writes: None,
             });
             pass.set_pipeline(&self.corr_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
@@ -1568,8 +2148,12 @@ impl GpuDarwinAnalytics {
         // (In a full implementation, we'd store corr_buf and read it back)
     }
 
-    pub fn darwin_count(&self) -> u32 { self.darwin_count }
-    pub fn max_days(&self) -> u32 { self.max_days }
+    pub fn darwin_count(&self) -> u32 {
+        self.darwin_count
+    }
+    pub fn max_days(&self) -> u32 {
+        self.max_days
+    }
 }
 
 // ─── WGSL Compute Shaders ────────────────────────────────────────────────────
@@ -2355,6 +2939,49 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (i >= params.bar_count) { output[i] = 0.0; return; }
     if (i < params.period) { output[i] = 0.0; return; }
     output[i] = bars[i] - bars[i - params.period];
+}
+"#;
+
+const VAR_OSCILLATOR_SHADER: &str = r#"
+// VaR oscillator — sequential rolling parametric VaR (95%) on close-to-close log returns.
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+const VAR_Z95: f32 = 1.6448536;
+const VAR_EPS: f32 = 1e-6;
+
+@compute @workgroup_size(1)
+fn main() {
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        output[i] = 0.0;
+    }
+    if (params.period == 0u || params.bar_count <= params.period) { return; }
+
+    for (var i: u32 = params.period; i < params.bar_count; i = i + 1u) {
+        var sum: f32 = 0.0;
+        var sum_sq: f32 = 0.0;
+        let start = i + 1u - params.period;
+        for (var j: u32 = start; j <= i; j = j + 1u) {
+            let prev_close = max(bars[j - 1u], VAR_EPS);
+            let close = max(bars[j], VAR_EPS);
+            let ret = log(close / prev_close);
+            sum = sum + ret;
+            sum_sq = sum_sq + ret * ret;
+        }
+
+        let count = f32(params.period);
+        let mean = sum / count;
+        let variance = max(sum_sq / count - mean * mean, 0.0);
+        let sigma = sqrt(variance);
+        let var95 = max(VAR_EPS, VAR_Z95 * sigma - mean);
+
+        let prev_close = max(bars[i - 1u], VAR_EPS);
+        let close = max(bars[i], VAR_EPS);
+        let current_ret = log(close / prev_close);
+        output[i] = -100.0 * current_ret / var95;
+    }
 }
 "#;
 
@@ -3279,70 +3906,150 @@ impl GpuBacktester {
             label: Some("backtest_eval_bgl"),
             entries: &[
                 // 0: close prices
-                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
                 // 1: OHLC data [h,l,c interleaved]
-                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
                 // 2: parameter combos
-                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
                 // 3: results output
-                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
                 // 4: uniforms [bar_count, combo_count]
-                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("backtest_layout"), bind_group_layouts: &[Some(&eval_bgl)], immediate_size: 0,
+            label: Some("backtest_layout"),
+            bind_group_layouts: &[Some(&eval_bgl)],
+            immediate_size: 0,
         });
 
         let eval_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("backtest_eval"), source: wgpu::ShaderSource::Wgsl(BACKTEST_EVAL_SHADER.into()),
+            label: Some("backtest_eval"),
+            source: wgpu::ShaderSource::Wgsl(BACKTEST_EVAL_SHADER.into()),
         });
         let robustness_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("robustness"), source: wgpu::ShaderSource::Wgsl(ROBUSTNESS_SHADER.into()),
+            label: Some("robustness"),
+            source: wgpu::ShaderSource::Wgsl(ROBUSTNESS_SHADER.into()),
         });
         let mc_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("monte_carlo"), source: wgpu::ShaderSource::Wgsl(MONTE_CARLO_SHADER.into()),
+            label: Some("monte_carlo"),
+            source: wgpu::ShaderSource::Wgsl(MONTE_CARLO_SHADER.into()),
         });
 
         let eval_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("eval_pipeline"), layout: Some(&layout), module: &eval_shader,
-            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+            label: Some("eval_pipeline"),
+            layout: Some(&layout),
+            module: &eval_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
         });
-        let robustness_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("robustness_pipeline"), layout: Some(&layout), module: &robustness_shader,
-            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
-        });
-        let monte_carlo_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("mc_pipeline"), layout: Some(&layout), module: &mc_shader,
-            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
-        });
+        let robustness_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("robustness_pipeline"),
+                layout: Some(&layout),
+                module: &robustness_shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+        let monte_carlo_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("mc_pipeline"),
+                layout: Some(&layout),
+                module: &mc_shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
         let nnfx_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("nnfx_eval"), source: wgpu::ShaderSource::Wgsl(NNFX_EVAL_SHADER.into()),
+            label: Some("nnfx_eval"),
+            source: wgpu::ShaderSource::Wgsl(NNFX_EVAL_SHADER.into()),
         });
         let nnfx_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("nnfx_pipeline"), layout: Some(&layout), module: &nnfx_shader,
-            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+            label: Some("nnfx_pipeline"),
+            layout: Some(&layout),
+            module: &nnfx_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
         });
         let wf_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("walk_forward"), source: wgpu::ShaderSource::Wgsl(WALK_FORWARD_SHADER.into()),
+            label: Some("walk_forward"),
+            source: wgpu::ShaderSource::Wgsl(WALK_FORWARD_SHADER.into()),
         });
-        let walk_forward_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("wf_pipeline"), layout: Some(&layout), module: &wf_shader,
-            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
-        });
+        let walk_forward_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("wf_pipeline"),
+                layout: Some(&layout),
+                module: &wf_shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
 
         Self {
-            device, queue, bar_buffer: None, ohlc_buffer: None,
-            indicator_buffer: None, params_buffer: None, results_buffer: None,
-            staging_buffer: None, bar_count: 0, combo_count: 0,
-            eval_pipeline, nnfx_pipeline, walk_forward_pipeline,
-            robustness_pipeline, monte_carlo_pipeline,
+            device,
+            queue,
+            bar_buffer: None,
+            ohlc_buffer: None,
+            indicator_buffer: None,
+            params_buffer: None,
+            results_buffer: None,
+            staging_buffer: None,
+            bar_count: 0,
+            combo_count: 0,
+            eval_pipeline,
+            nnfx_pipeline,
+            walk_forward_pipeline,
+            robustness_pipeline,
+            monte_carlo_pipeline,
             eval_bgl,
         }
     }
@@ -3356,22 +4063,30 @@ impl GpuBacktester {
 
         // Close prices
         let bar_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bt_closes"), size: (n as u64) * 4,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("bt_closes"),
+            size: (n as u64) * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&bar_buf, 0, bytemuck_cast_slice(closes));
+        self.queue
+            .write_buffer(&bar_buf, 0, bytemuck_cast_slice(closes));
         self.bar_buffer = Some(bar_buf);
 
         // OHLC interleaved
         let mut ohlc = Vec::with_capacity(n as usize * 3);
         for i in 0..n as usize {
-            ohlc.push(highs[i]); ohlc.push(lows[i]); ohlc.push(closes[i]);
+            ohlc.push(highs[i]);
+            ohlc.push(lows[i]);
+            ohlc.push(closes[i]);
         }
         let ohlc_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bt_ohlc"), size: (n as u64) * 12,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("bt_ohlc"),
+            size: (n as u64) * 12,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&ohlc_buf, 0, bytemuck_cast_slice(&ohlc));
+        self.queue
+            .write_buffer(&ohlc_buf, 0, bytemuck_cast_slice(&ohlc));
         self.ohlc_buffer = Some(ohlc_buf);
 
         // Pack param combos: 8 u32/f32 per combo
@@ -3387,52 +4102,85 @@ impl GpuBacktester {
             packed.push(c.atr_tp_mult);
         }
         let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bt_params"), size: (nc as u64) * 32,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("bt_params"),
+            size: (nc as u64) * 32,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&params_buf, 0, bytemuck_cast_slice(&packed));
+        self.queue
+            .write_buffer(&params_buf, 0, bytemuck_cast_slice(&packed));
         self.params_buffer = Some(params_buf);
 
         // Results: 9 floats per combo
         let results_size = (nc as u64) * 36;
         self.results_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bt_results"), size: results_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            label: Some("bt_results"),
+            size: results_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
         }));
         self.staging_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bt_staging"), size: results_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("bt_staging"),
+            size: results_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         }));
     }
 
     /// Run backtest evaluation: one GPU thread per parameter combination.
     pub fn evaluate(&self) -> Option<Vec<BacktestResult>> {
-        let (Some(bar_buf), Some(ohlc_buf), Some(params_buf), Some(results_buf), Some(staging)) =
-            (&self.bar_buffer, &self.ohlc_buffer, &self.params_buffer, &self.results_buffer, &self.staging_buffer)
-        else { return None; };
+        let (Some(bar_buf), Some(ohlc_buf), Some(params_buf), Some(results_buf), Some(staging)) = (
+            &self.bar_buffer,
+            &self.ohlc_buffer,
+            &self.params_buffer,
+            &self.results_buffer,
+            &self.staging_buffer,
+        ) else {
+            return None;
+        };
 
         let uniforms = [self.bar_count, self.combo_count];
         let uniform_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bt_uniforms"), size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("bt_uniforms"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&uniform_buf, 0, bytemuck_cast_slice(&uniforms));
+        self.queue
+            .write_buffer(&uniform_buf, 0, bytemuck_cast_slice(&uniforms));
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("bt_bg"), layout: &self.eval_bgl,
+            label: Some("bt_bg"),
+            layout: &self.eval_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: bar_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: ohlc_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: results_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: uniform_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: bar_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: ohlc_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: results_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: uniform_buf.as_entire_binding(),
+                },
             ],
         });
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("bt_eval_pass"), timestamp_writes: None,
+                label: Some("bt_eval_pass"),
+                timestamp_writes: None,
             });
             pass.set_pipeline(&self.eval_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
@@ -3445,9 +4193,18 @@ impl GpuBacktester {
         // Readback
         let slice = staging.slice(0..result_size);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
-        if rx.recv().ok()?.is_err() { return None; }
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
         let data = slice.get_mapped_range();
         let floats = bytemuck_cast_slice_to_f32(&data);
         drop(data);
@@ -3474,7 +4231,13 @@ impl GpuBacktester {
     }
 
     /// Upload NNFX parameter combos and run evaluation.
-    pub fn evaluate_nnfx(&mut self, closes: &[f32], highs: &[f32], lows: &[f32], combos: &[NnfxParamCombo]) -> Option<Vec<BacktestResult>> {
+    pub fn evaluate_nnfx(
+        &mut self,
+        closes: &[f32],
+        highs: &[f32],
+        lows: &[f32],
+        combos: &[NnfxParamCombo],
+    ) -> Option<Vec<BacktestResult>> {
         let n = closes.len() as u32;
         let nc = combos.len() as u32;
         self.bar_count = n;
@@ -3482,19 +4245,29 @@ impl GpuBacktester {
 
         // Upload bar data
         let bar_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("nnfx_closes"), size: (n as u64) * 4,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("nnfx_closes"),
+            size: (n as u64) * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&bar_buf, 0, bytemuck_cast_slice(closes));
+        self.queue
+            .write_buffer(&bar_buf, 0, bytemuck_cast_slice(closes));
         self.bar_buffer = Some(bar_buf);
 
         let mut ohlc = Vec::with_capacity(n as usize * 3);
-        for i in 0..n as usize { ohlc.push(highs[i]); ohlc.push(lows[i]); ohlc.push(closes[i]); }
+        for i in 0..n as usize {
+            ohlc.push(highs[i]);
+            ohlc.push(lows[i]);
+            ohlc.push(closes[i]);
+        }
         let ohlc_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("nnfx_ohlc"), size: (n as u64) * 12,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("nnfx_ohlc"),
+            size: (n as u64) * 12,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&ohlc_buf, 0, bytemuck_cast_slice(&ohlc));
+        self.queue
+            .write_buffer(&ohlc_buf, 0, bytemuck_cast_slice(&ohlc));
         self.ohlc_buffer = Some(ohlc_buf);
 
         // Pack NNFX params: 8 floats per combo [kama_p, fisher_p, atr_p, adx_p, adx_thresh, sl_mult, tp_mult, 0]
@@ -3510,48 +4283,83 @@ impl GpuBacktester {
             packed.push(0.0);
         }
         let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("nnfx_params"), size: (nc as u64) * 32,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("nnfx_params"),
+            size: (nc as u64) * 32,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&params_buf, 0, bytemuck_cast_slice(&packed));
+        self.queue
+            .write_buffer(&params_buf, 0, bytemuck_cast_slice(&packed));
         self.params_buffer = Some(params_buf);
 
         let results_size = (nc as u64) * 36;
         self.results_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("nnfx_results"), size: results_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            label: Some("nnfx_results"),
+            size: results_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
         }));
         self.staging_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("nnfx_staging"), size: results_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("nnfx_staging"),
+            size: results_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         }));
 
         // Dispatch NNFX eval
-        let (Some(bar_buf), Some(ohlc_buf), Some(params_buf), Some(results_buf), Some(staging)) =
-            (&self.bar_buffer, &self.ohlc_buffer, &self.params_buffer, &self.results_buffer, &self.staging_buffer)
-        else { return None; };
+        let (Some(bar_buf), Some(ohlc_buf), Some(params_buf), Some(results_buf), Some(staging)) = (
+            &self.bar_buffer,
+            &self.ohlc_buffer,
+            &self.params_buffer,
+            &self.results_buffer,
+            &self.staging_buffer,
+        ) else {
+            return None;
+        };
 
         let uniforms = [self.bar_count, self.combo_count];
         let uniform_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("nnfx_uniforms"), size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("nnfx_uniforms"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&uniform_buf, 0, bytemuck_cast_slice(&uniforms));
+        self.queue
+            .write_buffer(&uniform_buf, 0, bytemuck_cast_slice(&uniforms));
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("nnfx_bg"), layout: &self.eval_bgl,
+            label: Some("nnfx_bg"),
+            layout: &self.eval_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: bar_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: ohlc_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: results_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: uniform_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: bar_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: ohlc_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: results_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: uniform_buf.as_entire_binding(),
+                },
             ],
         });
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("nnfx_pass"), timestamp_writes: None });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("nnfx_pass"),
+                timestamp_writes: None,
+            });
             pass.set_pipeline(&self.nnfx_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups((nc + 255) / 256, 1, 1);
@@ -3562,9 +4370,18 @@ impl GpuBacktester {
         // Readback
         let slice = staging.slice(0..results_size);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
-        if rx.recv().ok()?.is_err() { return None; }
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
         let data = slice.get_mapped_range();
         let floats = bytemuck_cast_slice_to_f32(&data);
         drop(data);
@@ -3575,10 +4392,14 @@ impl GpuBacktester {
             let b = i * 9;
             if b + 8 < floats.len() {
                 results.push(BacktestResult {
-                    net_pnl: floats[b], max_drawdown: floats[b + 1],
-                    sharpe: floats[b + 2], sortino: floats[b + 3],
-                    win_rate: floats[b + 4], profit_factor: floats[b + 5],
-                    trade_count: floats[b + 6] as u32, avg_hold_bars: floats[b + 7],
+                    net_pnl: floats[b],
+                    max_drawdown: floats[b + 1],
+                    sharpe: floats[b + 2],
+                    sortino: floats[b + 3],
+                    win_rate: floats[b + 4],
+                    profit_factor: floats[b + 5],
+                    trade_count: floats[b + 6] as u32,
+                    avg_hold_bars: floats[b + 7],
                     robustness_score: floats[b + 8],
                 });
             }
@@ -3592,64 +4413,104 @@ impl GpuBacktester {
     /// `days_forward`: simulation horizon (e.g., 252 for 1 year)
     /// `starting_equity`: initial portfolio value
     /// Returns: Vec of final equity values (one per simulation), sorted ascending.
-    pub fn run_monte_carlo_gpu(&self, daily_returns: &[f32], simulations: u32, days_forward: u32, starting_equity: f32) -> Option<Vec<f32>> {
-        if daily_returns.is_empty() || simulations == 0 { return None; }
+    pub fn run_monte_carlo_gpu(
+        &self,
+        daily_returns: &[f32],
+        simulations: u32,
+        days_forward: u32,
+        starting_equity: f32,
+    ) -> Option<Vec<f32>> {
+        if daily_returns.is_empty() || simulations == 0 {
+            return None;
+        }
 
         // Upload daily returns as "closes" buffer (repurposed)
         let returns_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("mc_returns"), size: (daily_returns.len() * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("mc_returns"),
+            size: (daily_returns.len() * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&returns_buf, 0, bytemuck_cast_slice(daily_returns));
+        self.queue
+            .write_buffer(&returns_buf, 0, bytemuck_cast_slice(daily_returns));
 
         // Empty OHLC buffer (unused by MC shader)
         let empty_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("mc_empty"), size: 4,
-            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            label: Some("mc_empty"),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
         });
 
         // Params: [days_forward as f32 bits, starting_equity, 0, 0...]
         let mc_params: Vec<f32> = vec![f32::from_bits(days_forward), starting_equity, 0.0, 0.0];
         let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("mc_params"), size: (mc_params.len() * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("mc_params"),
+            size: (mc_params.len() * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&params_buf, 0, bytemuck_cast_slice(&mc_params));
+        self.queue
+            .write_buffer(&params_buf, 0, bytemuck_cast_slice(&mc_params));
 
         // Results: 1 f32 per simulation (final equity)
         let result_size = (simulations as u64) * 4;
         let results_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("mc_results"), size: result_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            label: Some("mc_results"),
+            size: result_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
         });
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("mc_staging"), size: result_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("mc_staging"),
+            size: result_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
         // Uniforms: [bar_count (= n_returns), combo_count (= simulations)]
         let uniforms = [daily_returns.len() as u32, simulations];
         let uniform_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("mc_uniforms"), size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("mc_uniforms"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.queue.write_buffer(&uniform_buf, 0, bytemuck_cast_slice(&uniforms));
+        self.queue
+            .write_buffer(&uniform_buf, 0, bytemuck_cast_slice(&uniforms));
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("mc_bg"), layout: &self.eval_bgl,
+            label: Some("mc_bg"),
+            layout: &self.eval_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: returns_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: empty_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: results_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: uniform_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: returns_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: empty_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: results_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: uniform_buf.as_entire_binding(),
+                },
             ],
         });
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("mc_pass"), timestamp_writes: None,
+                label: Some("mc_pass"),
+                timestamp_writes: None,
             });
             pass.set_pipeline(&self.monte_carlo_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
@@ -3661,9 +4522,18 @@ impl GpuBacktester {
         // Readback
         let slice = staging.slice(0..result_size);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
-        if rx.recv().ok()?.is_err() { return None; }
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
         let data = slice.get_mapped_range();
         let mut equities: Vec<f32> = bytemuck_cast_slice_to_f32(&data).to_vec();
         drop(data);
