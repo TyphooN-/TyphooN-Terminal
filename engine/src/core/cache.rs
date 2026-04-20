@@ -1145,14 +1145,34 @@ impl SqliteCache {
         let mut stmt = conn.prepare_cached(
             "SELECT data FROM bar_cache WHERE key = ?1"
         ).ok()?;
-        let blob: Vec<u8> = stmt.query_row(params![key], |r| r.get(0)).ok()?;
+        let blob: Vec<u8> = stmt.query_row(params![key], |row| {
+            match row.get_ref(0)? {
+                rusqlite::types::ValueRef::Blob(b) => Ok(b.to_vec()),
+                rusqlite::types::ValueRef::Text(t) => Ok(t.to_vec()),
+                _ => Err(rusqlite::Error::InvalidColumnType(
+                    0, "data".into(), rusqlite::types::Type::Blob
+                )),
+            }
+        }).ok()?;
         let decompressed = maybe_decompress(blob).ok()?;
-        if decompressed.len() < 8 || &decompressed[0..4] != BAR_BINARY_MAGIC { return None; }
-        let count = u32::from_le_bytes(decompressed[4..8].try_into().ok()?) as usize;
-        if count == 0 || decompressed.len() < 8 + count * 48 { return None; }
-        let first_ts = i64::from_le_bytes(decompressed[8..16].try_into().ok()?);
-        let last_off = 8 + (count - 1) * 48;
-        let last_ts = i64::from_le_bytes(decompressed[last_off..last_off + 8].try_into().ok()?);
+        if decompressed.len() >= 8 && &decompressed[0..4] == BAR_BINARY_MAGIC {
+            let count = u32::from_le_bytes(decompressed[4..8].try_into().ok()?) as usize;
+            if count == 0 || decompressed.len() < 8 + count * BYTES_PER_BAR { return None; }
+            let first_ts = i64::from_le_bytes(decompressed[8..16].try_into().ok()?);
+            let last_off = 8 + (count - 1) * BYTES_PER_BAR;
+            let last_ts = i64::from_le_bytes(decompressed[last_off..last_off + 8].try_into().ok()?);
+            return Some((first_ts, last_ts));
+        }
+
+        // Legacy JSON rows can still exist in upgraded caches. Preserve first/last
+        // bar visibility instead of treating them as timestamp-less blobs.
+        let bars: Vec<serde_json::Value> = serde_json::from_slice(&decompressed).ok()?;
+        let first_ts = chrono::DateTime::parse_from_rfc3339(
+            bars.first()?.get("timestamp")?.as_str()?
+        ).ok()?.timestamp_millis();
+        let last_ts = chrono::DateTime::parse_from_rfc3339(
+            bars.last()?.get("timestamp")?.as_str()?
+        ).ok()?.timestamp_millis();
         Some((first_ts, last_ts))
     }
 
@@ -2226,6 +2246,69 @@ mod tests {
         cache.put_bars("CNT:1D", json).unwrap();
         assert_eq!(cache.get_bar_count("CNT:1D").unwrap(), Some(2));
         assert_eq!(cache.get_bar_count("MISSING").unwrap(), None);
+    }
+
+    #[test]
+    fn sqlite_cache_timestamp_range_binary_blob() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let json = r#"[
+            {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0},
+            {"timestamp":"2024-01-02T00:00:00+00:00","open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":200.0}
+        ]"#;
+        cache.put_bars("RANGE:1D", json).unwrap();
+
+        let conn = cache.read_connection().unwrap();
+        let range = SqliteCache::get_bar_timestamp_range_with_conn(&conn, "RANGE:1D");
+        assert_eq!(range, Some((1_704_067_200_000, 1_704_153_600_000)));
+    }
+
+    #[test]
+    fn sqlite_cache_timestamp_range_text_typed_ttbr_blob() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let bars = vec![
+            (1_704_067_200_000, 1.0, 2.0, 0.5, 1.5, 100.0),
+            (1_704_153_600_000, 2.0, 3.0, 1.5, 2.5, 200.0),
+        ];
+        let raw = make_binary_bars(&bars);
+
+        let conn = cache.connection().unwrap();
+        conn.execute(
+            "INSERT INTO bar_cache (key, data, timestamp, bar_count, zstd_level)
+             VALUES (?1, CAST(?2 AS TEXT), ?3, ?4, ?5)",
+            params!["TEXTTTBR:1D", raw, 1_704_153_600i64, bars.len() as i64, 3],
+        ).unwrap();
+        let ty: String = conn.query_row(
+            "SELECT typeof(data) FROM bar_cache WHERE key = ?1",
+            params!["TEXTTTBR:1D"],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(ty, "text");
+
+        let range = SqliteCache::get_bar_timestamp_range_with_conn(&conn, "TEXTTTBR:1D");
+        assert_eq!(range, Some((1_704_067_200_000, 1_704_153_600_000)));
+    }
+
+    #[test]
+    fn sqlite_cache_timestamp_range_legacy_json_blob() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let json = r#"[
+            {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0},
+            {"timestamp":"2024-01-02T00:00:00+00:00","open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":200.0}
+        ]"#;
+        let compressed = zstd::encode_all(json.as_bytes(), 9).unwrap();
+
+        let conn = cache.connection().unwrap();
+        conn.execute(
+            "INSERT INTO bar_cache (key, data, timestamp, bar_count, zstd_level)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params!["LEGACY:1D", compressed, 1_704_153_600i64, 2i64, 3],
+        ).unwrap();
+
+        let range = SqliteCache::get_bar_timestamp_range_with_conn(&conn, "LEGACY:1D");
+        assert_eq!(range, Some((1_704_067_200_000, 1_704_153_600_000)));
     }
 
     #[test]
