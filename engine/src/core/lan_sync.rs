@@ -580,6 +580,18 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_cdl_evening_doji_star",
     "research_cdl_abandoned_baby",
     "research_cdl_three_inside",
+    // ── ADR-192 Round 77 ────────────────────────────
+    "research_cdl_belt_hold",
+    "research_cdl_closing_marubozu",
+    "research_cdl_high_wave",
+    "research_cdl_long_line",
+    "research_cdl_short_line",
+    // ── ADR-193 Round 78 ────────────────────────────
+    "research_cdl_counterattack",
+    "research_cdl_homing_pigeon",
+    "research_cdl_in_neck",
+    "research_cdl_on_neck",
+    "research_cdl_thrusting",
     // ── ADR-189 Round 76 ────────────────────────────
     "research_modsharpe",
     "research_hsiehtest",
@@ -3418,6 +3430,76 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_cdl_belt_hold" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_belt_hold (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_closing_marubozu" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_closing_marubozu (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_high_wave" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_high_wave (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_long_line" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_long_line (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_short_line" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_short_line (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_counterattack" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_counterattack (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_homing_pigeon" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_homing_pigeon (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_in_neck" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_in_neck (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_on_neck" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_on_neck (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_thrusting" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_thrusting (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         "research_modsharpe" => Some(
             "CREATE TABLE IF NOT EXISTS research_modsharpe (
                 symbol TEXT PRIMARY KEY,
@@ -3931,6 +4013,18 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_cdl_evening_doji_star" => Some("updated_at"),
         "research_cdl_abandoned_baby" => Some("updated_at"),
         "research_cdl_three_inside" => Some("updated_at"),
+        // ── ADR-192 Round 77 ──
+        "research_cdl_belt_hold" => Some("updated_at"),
+        "research_cdl_closing_marubozu" => Some("updated_at"),
+        "research_cdl_high_wave" => Some("updated_at"),
+        "research_cdl_long_line" => Some("updated_at"),
+        "research_cdl_short_line" => Some("updated_at"),
+        // ── ADR-193 Round 78 ──
+        "research_cdl_counterattack" => Some("updated_at"),
+        "research_cdl_homing_pigeon" => Some("updated_at"),
+        "research_cdl_in_neck" => Some("updated_at"),
+        "research_cdl_on_neck" => Some("updated_at"),
+        "research_cdl_thrusting" => Some("updated_at"),
         // ── ADR-189 Round 76 ──
         "research_modsharpe" => Some("updated_at"),
         "research_hsiehtest" => Some("updated_at"),
