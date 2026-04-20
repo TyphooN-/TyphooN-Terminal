@@ -592,6 +592,16 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_cdl_in_neck",
     "research_cdl_on_neck",
     "research_cdl_thrusting",
+    // ── ADR-190 Round 79 ────────────────────────────
+    "research_cdl_two_crows",
+    "research_cdl_three_line_strike",
+    "research_cdl_three_outside",
+    "research_cdl_matching_low",
+    // ── ADR-190 Round 80 ────────────────────────────
+    "research_cdl_separating_lines",
+    "research_cdl_stick_sandwich",
+    "research_cdl_rickshaw_man",
+    "research_cdl_takuri",
     // ── ADR-189 Round 76 ────────────────────────────
     "research_modsharpe",
     "research_hsiehtest",
@@ -3500,6 +3510,62 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_cdl_two_crows" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_two_crows (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_three_line_strike" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_three_line_strike (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_three_outside" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_three_outside (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_matching_low" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_matching_low (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_separating_lines" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_separating_lines (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_stick_sandwich" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_stick_sandwich (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_rickshaw_man" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_rickshaw_man (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_takuri" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_takuri (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         "research_modsharpe" => Some(
             "CREATE TABLE IF NOT EXISTS research_modsharpe (
                 symbol TEXT PRIMARY KEY,
@@ -4025,6 +4091,16 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_cdl_in_neck" => Some("updated_at"),
         "research_cdl_on_neck" => Some("updated_at"),
         "research_cdl_thrusting" => Some("updated_at"),
+        // ── ADR-190 Round 79 ──
+        "research_cdl_two_crows" => Some("updated_at"),
+        "research_cdl_three_line_strike" => Some("updated_at"),
+        "research_cdl_three_outside" => Some("updated_at"),
+        "research_cdl_matching_low" => Some("updated_at"),
+        // ── ADR-190 Round 80 ──
+        "research_cdl_separating_lines" => Some("updated_at"),
+        "research_cdl_stick_sandwich" => Some("updated_at"),
+        "research_cdl_rickshaw_man" => Some("updated_at"),
+        "research_cdl_takuri" => Some("updated_at"),
         // ── ADR-189 Round 76 ──
         "research_modsharpe" => Some("updated_at"),
         "research_hsiehtest" => Some("updated_at"),
