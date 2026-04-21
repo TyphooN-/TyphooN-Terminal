@@ -677,6 +677,11 @@ const SYNCABLE_TABLES: &[&str] = &[
     // ── ADR-196 Round 91/92 ────────────────────────
     "research_tlrank",
     "research_corrrank",
+    // ── ADR-197 Round 93/94 ────────────────────────
+    "research_operank_delta",
+    "research_divacc",
+    "research_epsacc",
+    "research_vrp",
     // ── ADR-189 Round 76 ────────────────────────────
     "research_modsharpe",
     "research_hsiehtest",
@@ -3795,6 +3800,34 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
+        "research_operank_delta" => Some(
+            "CREATE TABLE IF NOT EXISTS research_operank_delta (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )",
+        ),
+        "research_divacc" => Some(
+            "CREATE TABLE IF NOT EXISTS research_divacc (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )",
+        ),
+        "research_epsacc" => Some(
+            "CREATE TABLE IF NOT EXISTS research_epsacc (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )",
+        ),
+        "research_vrp" => Some(
+            "CREATE TABLE IF NOT EXISTS research_vrp (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )",
+        ),
         "research_modsharpe" => Some(
             "CREATE TABLE IF NOT EXISTS research_modsharpe (
                 symbol TEXT PRIMARY KEY,
@@ -4358,6 +4391,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         // ── ADR-196 Round 91/92 ──
         "research_tlrank" => Some("updated_at"),
         "research_corrrank" => Some("updated_at"),
+        // ── ADR-197 Round 93/94 ──
+        "research_operank_delta" => Some("updated_at"),
+        "research_divacc" => Some("updated_at"),
+        "research_epsacc" => Some("updated_at"),
+        "research_vrp" => Some("updated_at"),
         // ── ADR-189 Round 76 ──
         "research_modsharpe" => Some("updated_at"),
         "research_hsiehtest" => Some("updated_at"),

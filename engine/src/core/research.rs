@@ -2417,6 +2417,103 @@ pub struct CorrelationRankSnapshot {
     pub note: String,
 }
 
+// ── ADR-197 Round 93/94 — remaining cache-backed Godel parity surfaces ──
+
+/// OPERANK_DELTA — operating margin trend rank vs sector peers.
+/// Percentile rank of `MarginsSnapshot.operating_margin_change_pct`
+/// within the same sector. Higher expansion in operating margin earns a
+/// higher rank.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OperatingMarginDeltaRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub basis: String, // copied from MARGINS: "annual" | "quarterly"
+    pub latest_period: String,
+    pub operating_margin_pct: f64,
+    pub operating_margin_change_pct: f64,
+    pub operating_trend_label: String, // copied from MARGINS
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_change_pct: f64,
+    pub sector_p25_change_pct: f64,
+    pub sector_p75_change_pct: f64,
+    pub percentile_rank: f64,
+    pub rank_position: usize,
+    pub rank_label: String, // TOP_DECILE .. BOTTOM_DECILE | INSUFFICIENT_DATA | NO_DATA
+    pub note: String,
+}
+
+/// DIVACC — dividend growth acceleration.
+/// Tracks the latest annual dividend-growth delta vs the prior year's
+/// growth rate using cached dividend-payment history.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DividendAccelerationSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub total_payments: usize,
+    pub years_covered: usize,
+    pub latest_year: i32,
+    pub latest_annual_dividend: f64,
+    pub latest_yoy_growth_pct: f64,
+    pub prior_yoy_growth_pct: f64,
+    pub acceleration_pct_pts: f64, // latest_yoy - prior_yoy
+    pub recent_3y_avg_growth_pct: f64,
+    pub prior_3y_avg_growth_pct: f64,
+    pub acceleration_3y_avg_pct_pts: f64,
+    pub consecutive_growth_years: usize,
+    pub consistency_score_pct: f64,
+    pub annual_rows: Vec<DivgAnnualRow>,
+    pub divacc_label: String, // ACCELERATING | REACCELERATING | STABLE | DECELERATING | CUTTING | NO_HISTORY
+    pub note: String,
+}
+
+/// EPSACC — EPS acceleration from cached quarterly financials.
+/// Compares the latest quarterly EPS y/y growth rate against the prior
+/// quarter's y/y growth rate to identify acceleration or deceleration in
+/// the earnings trajectory.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EpsAccelerationSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub quarters_used: usize,
+    pub latest_period: String,
+    pub latest_eps: f64,
+    pub prior_year_eps: f64,
+    pub latest_yoy_growth_pct: f64,
+    pub prior_yoy_growth_pct: f64,
+    pub acceleration_pct_pts: f64,
+    pub recent_2q_avg_yoy_growth_pct: f64,
+    pub prior_2q_avg_yoy_growth_pct: f64,
+    pub positive_yoy_quarters: usize,
+    pub epsacc_label: String, // ACCELERATING | TURNAROUND | STABLE | DECELERATING | EARNINGS_PRESSURE | INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// VRP — volatility risk premium snapshot using cached IVOL + RVCONE.
+/// Pairs the current ATM implied volatility against realized-vol cone
+/// levels to flag cheap/rich implied-vol regimes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VolRiskPremiumSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub current_atm_iv_pct: f64,
+    pub iv_rank: f64,
+    pub iv_percentile: f64,
+    pub iv_observation_count: usize,
+    pub rv20_pct: f64,
+    pub rv60_pct: f64,
+    pub rv252_pct: f64,
+    pub rv20_percentile: f64,
+    pub rv_cone_label: String,
+    pub iv_minus_rv20_pct: f64,
+    pub iv_to_rv20_ratio: f64,
+    pub iv_minus_rv252_pct: f64,
+    pub iv_to_rv252_ratio: f64,
+    pub premium_label: String, // CHEAP_IV | FAIR_IV | RICH_IV | EXTREME_RICH | INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── ADR-128 Round 21 — beta/peg rank + HP 52wk/rvcone/calendar ──
 
 /// BETARANK — Sector percentile rank of Fundamentals.beta, risk-inverted.
@@ -21444,11 +21541,8 @@ fn trailing_avg_dollar_volume_window(
 ) -> Option<(f64, usize)> {
     let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
     sorted.sort_by(|a, b| a.date.cmp(&b.date));
-    let window: Vec<&HistoricalPriceRow> = sorted
-        .into_iter()
-        .rev()
-        .take(window_days.max(20))
-        .collect();
+    let window: Vec<&HistoricalPriceRow> =
+        sorted.into_iter().rev().take(window_days.max(20)).collect();
     let dollar_vols: Vec<f64> = window
         .iter()
         .filter_map(|b| {
@@ -21569,7 +21663,11 @@ fn corrrank_metric_for_snapshot(
         && snap.overlaps_spy_252d >= 20
         && snap.corr_spy_252d.is_finite()
     {
-        Some((snap.corr_spy_252d, snap.beta_spy_252d, snap.r_squared_spy_252d))
+        Some((
+            snap.corr_spy_252d,
+            snap.beta_spy_252d,
+            snap.r_squared_spy_252d,
+        ))
     } else {
         None
     }
@@ -21605,7 +21703,9 @@ pub fn compute_corrrank_snapshot(
 
     let (benchmark_name, benchmark_kind, use_sector_benchmark) =
         if !subj.sector_benchmark.is_empty()
-            && subj.dominant_benchmark.eq_ignore_ascii_case(&subj.sector_benchmark)
+            && subj
+                .dominant_benchmark
+                .eq_ignore_ascii_case(&subj.sector_benchmark)
             && subj.overlaps_sector_252d >= 20
         {
             (
@@ -21651,7 +21751,8 @@ pub fn compute_corrrank_snapshot(
                     benchmark_name,
                     benchmark_kind,
                     rank_label: "NO_DATA".into(),
-                    note: "Subject CORRSTK snapshot is missing the selected benchmark series".into(),
+                    note: "Subject CORRSTK snapshot is missing the selected benchmark series"
+                        .into(),
                     ..Default::default()
                 };
             }
@@ -21733,6 +21834,472 @@ pub fn compute_corrrank_snapshot(
         rank_position,
         rank_label: rank_label_for_percentile(pct).into(),
         note: String::new(),
+    }
+}
+
+/// OPERANK_DELTA — rank one symbol's operating-margin expansion/contraction
+/// vs same-sector peers using cached MARGINS snapshots.
+pub fn compute_operank_delta_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject: Option<&MarginsSnapshot>,
+    peers: &[&MarginsSnapshot],
+) -> OperatingMarginDeltaRankSnapshot {
+    let sym = symbol.to_uppercase();
+    let subj = match subject {
+        Some(s) if s.periods_used >= 2 => s,
+        _ => {
+            return OperatingMarginDeltaRankSnapshot {
+                symbol: sym,
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "No cached MARGINS trend snapshot for subject".into(),
+                ..Default::default()
+            };
+        }
+    };
+
+    let peer_deltas: Vec<f64> = peers
+        .iter()
+        .filter(|p| p.periods_used >= 2)
+        .map(|p| p.operating_margin_change_pct)
+        .collect();
+    let peers_considered = peers.len();
+    let peers_with_data = peer_deltas.len();
+    if peers_with_data < 3 {
+        return OperatingMarginDeltaRankSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            basis: subj.basis.clone(),
+            latest_period: subj.latest_period.clone(),
+            operating_margin_pct: subj.latest_operating_margin_pct,
+            operating_margin_change_pct: subj.operating_margin_change_pct,
+            operating_trend_label: subj.operating_trend_label.clone(),
+            peers_considered,
+            peers_with_data,
+            rank_label: "INSUFFICIENT_DATA".into(),
+            note: format!(
+                "Only {} sector peers have usable MARGINS trend data (need ≥3)",
+                peers_with_data
+            ),
+            ..Default::default()
+        };
+    }
+
+    let mut sorted = peer_deltas.clone();
+    sorted.push(subj.operating_margin_change_pct);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let pct = percentile_rank_score(subj.operating_margin_change_pct, &peer_deltas, true);
+    let rank_position = peer_deltas
+        .iter()
+        .filter(|&&delta| delta > subj.operating_margin_change_pct)
+        .count()
+        + 1;
+
+    OperatingMarginDeltaRankSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        basis: subj.basis.clone(),
+        latest_period: subj.latest_period.clone(),
+        operating_margin_pct: subj.latest_operating_margin_pct,
+        operating_margin_change_pct: subj.operating_margin_change_pct,
+        operating_trend_label: subj.operating_trend_label.clone(),
+        peers_considered,
+        peers_with_data,
+        sector_median_change_pct: quantile_f64(&sorted, 0.5),
+        sector_p25_change_pct: quantile_f64(&sorted, 0.25),
+        sector_p75_change_pct: quantile_f64(&sorted, 0.75),
+        percentile_rank: pct,
+        rank_position,
+        rank_label: rank_label_for_percentile(pct).into(),
+        note: String::new(),
+    }
+}
+
+/// DIVACC — dividend growth acceleration using annualized dividend buckets.
+pub fn compute_divacc_snapshot(
+    symbol: &str,
+    as_of: &str,
+    dividends: &[DividendRecord],
+) -> DividendAccelerationSnapshot {
+    let sym = symbol.to_uppercase();
+    if dividends.is_empty() {
+        return DividendAccelerationSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            divacc_label: "NO_HISTORY".into(),
+            note: "no dividend history cached — run DVD first".into(),
+            ..Default::default()
+        };
+    }
+
+    let mut sorted: Vec<&DividendRecord> = dividends
+        .iter()
+        .filter(|d| d.amount > 0.0 && !d.ex_date.is_empty())
+        .collect();
+    sorted.sort_by(|a, b| a.ex_date.cmp(&b.ex_date));
+    if sorted.is_empty() {
+        return DividendAccelerationSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            divacc_label: "NO_HISTORY".into(),
+            note: "dividend rows all zero or missing ex_date".into(),
+            ..Default::default()
+        };
+    }
+
+    let mut by_year: std::collections::BTreeMap<i32, (f64, usize)> =
+        std::collections::BTreeMap::new();
+    for d in &sorted {
+        let year: i32 = match d.ex_date.splitn(2, '-').next().and_then(|y| y.parse().ok()) {
+            Some(y) => y,
+            None => continue,
+        };
+        let entry = by_year.entry(year).or_insert((0.0, 0));
+        entry.0 += d.amount;
+        entry.1 += 1;
+    }
+
+    let as_of_year: Option<i32> = as_of.splitn(2, '-').next().and_then(|y| y.parse().ok());
+    let mut years: Vec<(i32, f64, usize)> =
+        by_year.iter().map(|(y, (a, c))| (*y, *a, *c)).collect();
+    if let Some(cur) = as_of_year {
+        if let Some(last) = years.last() {
+            if last.0 == cur {
+                let prior_avg_count = if years.len() >= 2 {
+                    years[..years.len() - 1]
+                        .iter()
+                        .rev()
+                        .take(3)
+                        .map(|row| row.2)
+                        .sum::<usize>() as f64
+                        / years.len().min(3) as f64
+                } else {
+                    0.0
+                };
+                if (last.2 as f64) < prior_avg_count.max(1.0) * 0.75 {
+                    years.pop();
+                }
+            }
+        }
+    }
+
+    let mut annual_rows: Vec<DivgAnnualRow> = Vec::with_capacity(years.len());
+    for (i, (year, total, count)) in years.iter().enumerate() {
+        let growth_pct = if i == 0 {
+            0.0
+        } else {
+            let prior = years[i - 1].1;
+            if prior > 0.0 {
+                ((total - prior) / prior) * 100.0
+            } else {
+                0.0
+            }
+        };
+        annual_rows.push(DivgAnnualRow {
+            year: *year,
+            total_amount: *total,
+            payment_count: *count,
+            growth_pct,
+        });
+    }
+
+    let years_covered = annual_rows.len();
+    let total_payments = sorted.len();
+    let latest_year = annual_rows.last().map(|r| r.year).unwrap_or_default();
+    let latest_annual_dividend = annual_rows
+        .last()
+        .map(|r| r.total_amount)
+        .unwrap_or_default();
+
+    let mut consecutive_growth_years = 0usize;
+    for row in annual_rows.iter().rev() {
+        if row.growth_pct > 0.0 {
+            consecutive_growth_years += 1;
+        } else {
+            break;
+        }
+    }
+    let deltas = annual_rows.iter().skip(1).count();
+    let non_neg = annual_rows
+        .iter()
+        .skip(1)
+        .filter(|r| r.growth_pct >= 0.0)
+        .count();
+    let consistency_score_pct = if deltas == 0 {
+        0.0
+    } else {
+        non_neg as f64 / deltas as f64 * 100.0
+    };
+
+    if years_covered < 3 {
+        return DividendAccelerationSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            total_payments,
+            years_covered,
+            latest_year,
+            latest_annual_dividend,
+            consecutive_growth_years,
+            consistency_score_pct,
+            annual_rows,
+            divacc_label: "NO_HISTORY".into(),
+            note: "need at least 3 full dividend years to compute acceleration".into(),
+            ..Default::default()
+        };
+    }
+
+    let latest_yoy_growth_pct = annual_rows[years_covered - 1].growth_pct;
+    let prior_yoy_growth_pct = annual_rows[years_covered - 2].growth_pct;
+    let acceleration_pct_pts = latest_yoy_growth_pct - prior_yoy_growth_pct;
+
+    let recent_growth_slice = &annual_rows[years_covered.saturating_sub(3)..years_covered];
+    let recent_3y_avg_growth_pct = recent_growth_slice
+        .iter()
+        .map(|r| r.growth_pct)
+        .sum::<f64>()
+        / recent_growth_slice.len() as f64;
+    let prior_3y_avg_growth_pct = if years_covered >= 6 {
+        let slice = &annual_rows[years_covered - 6..years_covered - 3];
+        slice.iter().map(|r| r.growth_pct).sum::<f64>() / slice.len() as f64
+    } else {
+        0.0
+    };
+    let acceleration_3y_avg_pct_pts = if years_covered >= 6 {
+        recent_3y_avg_growth_pct - prior_3y_avg_growth_pct
+    } else {
+        0.0
+    };
+
+    let divacc_label = if latest_yoy_growth_pct <= -5.0 && acceleration_pct_pts <= -3.0 {
+        "CUTTING"
+    } else if prior_yoy_growth_pct < 0.0
+        && latest_yoy_growth_pct > 0.0
+        && acceleration_pct_pts >= 5.0
+    {
+        "REACCELERATING"
+    } else if latest_yoy_growth_pct >= 3.0 && acceleration_pct_pts >= 5.0 {
+        "ACCELERATING"
+    } else if acceleration_pct_pts <= -5.0 {
+        "DECELERATING"
+    } else {
+        "STABLE"
+    };
+
+    DividendAccelerationSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        total_payments,
+        years_covered,
+        latest_year,
+        latest_annual_dividend,
+        latest_yoy_growth_pct,
+        prior_yoy_growth_pct,
+        acceleration_pct_pts,
+        recent_3y_avg_growth_pct,
+        prior_3y_avg_growth_pct,
+        acceleration_3y_avg_pct_pts,
+        consecutive_growth_years,
+        consistency_score_pct,
+        annual_rows,
+        divacc_label: divacc_label.into(),
+        note: String::new(),
+    }
+}
+
+fn eps_growth_pct(curr_eps: f64, prior_eps: f64) -> f64 {
+    if !curr_eps.is_finite() || !prior_eps.is_finite() || prior_eps.abs() < 1e-9 {
+        0.0
+    } else {
+        (((curr_eps - prior_eps) / prior_eps.abs()) * 100.0).clamp(-500.0, 500.0)
+    }
+}
+
+fn statement_eps(stmt: &IncomeStatement) -> f64 {
+    if stmt.eps_diluted.is_finite() && stmt.eps_diluted.abs() > 1e-9 {
+        stmt.eps_diluted
+    } else {
+        stmt.eps
+    }
+}
+
+/// EPSACC — EPS acceleration using cached quarterly financial statements.
+pub fn compute_epsacc_snapshot(
+    symbol: &str,
+    as_of: &str,
+    statements: &FinancialStatements,
+) -> EpsAccelerationSnapshot {
+    let sym = symbol.to_uppercase();
+    let quarters: Vec<&IncomeStatement> = statements.income_quarterly.iter().take(12).collect();
+    if quarters.len() < 6 {
+        return EpsAccelerationSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            quarters_used: quarters.len(),
+            epsacc_label: "INSUFFICIENT_DATA".into(),
+            note: "need at least 6 quarterly statements — run FA first".into(),
+            ..Default::default()
+        };
+    }
+
+    let mut yoy_growths: Vec<f64> = Vec::new();
+    for i in 0..quarters.len().saturating_sub(4) {
+        yoy_growths.push(eps_growth_pct(
+            statement_eps(quarters[i]),
+            statement_eps(quarters[i + 4]),
+        ));
+    }
+    if yoy_growths.len() < 2 {
+        return EpsAccelerationSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            quarters_used: quarters.len(),
+            epsacc_label: "INSUFFICIENT_DATA".into(),
+            note: "need at least two quarterly y/y EPS comparisons".into(),
+            ..Default::default()
+        };
+    }
+
+    let latest_yoy_growth_pct = yoy_growths[0];
+    let prior_yoy_growth_pct = yoy_growths[1];
+    let acceleration_pct_pts = latest_yoy_growth_pct - prior_yoy_growth_pct;
+    let recent_2q_avg_yoy_growth_pct =
+        yoy_growths.iter().take(2).sum::<f64>() / yoy_growths.iter().take(2).count() as f64;
+    let prior_2q_avg_yoy_growth_pct = if yoy_growths.len() >= 4 {
+        yoy_growths[2..4].iter().sum::<f64>() / 2.0
+    } else {
+        0.0
+    };
+    let positive_yoy_quarters = yoy_growths.iter().filter(|&&v| v > 0.0).count();
+    let latest_eps = statement_eps(quarters[0]);
+    let prior_year_eps = statement_eps(quarters[4]);
+
+    let epsacc_label =
+        if prior_yoy_growth_pct < 0.0 && latest_yoy_growth_pct >= 0.0 && acceleration_pct_pts > 0.0
+        {
+            "TURNAROUND"
+        } else if latest_yoy_growth_pct >= 10.0 && acceleration_pct_pts >= 5.0 {
+            "ACCELERATING"
+        } else if latest_yoy_growth_pct <= -10.0 && acceleration_pct_pts <= -5.0 {
+            "EARNINGS_PRESSURE"
+        } else if acceleration_pct_pts <= -5.0 {
+            "DECELERATING"
+        } else {
+            "STABLE"
+        };
+
+    EpsAccelerationSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        quarters_used: quarters.len(),
+        latest_period: quarters[0].date.clone(),
+        latest_eps,
+        prior_year_eps,
+        latest_yoy_growth_pct,
+        prior_yoy_growth_pct,
+        acceleration_pct_pts,
+        recent_2q_avg_yoy_growth_pct,
+        prior_2q_avg_yoy_growth_pct,
+        positive_yoy_quarters,
+        epsacc_label: epsacc_label.into(),
+        note: String::new(),
+    }
+}
+
+/// VRP — combine IVOL and RVCONE into a focused implied-vs-realized-vol
+/// premium view.
+pub fn compute_vrp_snapshot(
+    symbol: &str,
+    as_of: &str,
+    ivol: Option<&IvolSnapshot>,
+    rvcone: Option<&RealizedVolConeSnapshot>,
+) -> VolRiskPremiumSnapshot {
+    let sym = symbol.to_uppercase();
+    let iv = match ivol {
+        Some(s) if s.current_atm_iv_pct > 0.0 => s,
+        _ => {
+            return VolRiskPremiumSnapshot {
+                symbol: sym,
+                as_of: as_of.to_string(),
+                premium_label: "INSUFFICIENT_DATA".into(),
+                note: "Need a cached IVOL snapshot with a current ATM IV reading".into(),
+                ..Default::default()
+            };
+        }
+    };
+    let rv = match rvcone {
+        Some(s) if s.rv20_pct > 0.0 && s.rv252_pct > 0.0 => s,
+        _ => {
+            return VolRiskPremiumSnapshot {
+                symbol: sym,
+                as_of: as_of.to_string(),
+                current_atm_iv_pct: iv.current_atm_iv_pct,
+                iv_rank: iv.iv_rank,
+                iv_percentile: iv.iv_percentile,
+                iv_observation_count: iv.observation_count,
+                premium_label: "INSUFFICIENT_DATA".into(),
+                note: "Need a cached RVCONE snapshot with usable realized-vol levels".into(),
+                ..Default::default()
+            };
+        }
+    };
+
+    let iv_minus_rv20_pct = iv.current_atm_iv_pct - rv.rv20_pct;
+    let iv_to_rv20_ratio = if rv.rv20_pct > 0.0 {
+        iv.current_atm_iv_pct / rv.rv20_pct
+    } else {
+        0.0
+    };
+    let iv_minus_rv252_pct = iv.current_atm_iv_pct - rv.rv252_pct;
+    let iv_to_rv252_ratio = if rv.rv252_pct > 0.0 {
+        iv.current_atm_iv_pct / rv.rv252_pct
+    } else {
+        0.0
+    };
+
+    let premium_label = if iv_to_rv20_ratio >= 1.50
+        || iv_minus_rv20_pct >= 15.0
+        || (iv.iv_rank >= 80.0 && rv.rv20_percentile <= 40.0 && iv_to_rv20_ratio >= 1.25)
+    {
+        "EXTREME_RICH"
+    } else if iv_to_rv20_ratio >= 1.15 || iv_minus_rv20_pct >= 5.0 {
+        "RICH_IV"
+    } else if iv_to_rv20_ratio <= 0.85 || iv_minus_rv20_pct <= -5.0 {
+        "CHEAP_IV"
+    } else {
+        "FAIR_IV"
+    };
+
+    let mut note_parts: Vec<String> = Vec::new();
+    if iv.observation_count < 20 && !iv.note.is_empty() {
+        note_parts.push(iv.note.clone());
+    }
+    if !rv.note.is_empty() {
+        note_parts.push(rv.note.clone());
+    }
+
+    VolRiskPremiumSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        current_atm_iv_pct: iv.current_atm_iv_pct,
+        iv_rank: iv.iv_rank,
+        iv_percentile: iv.iv_percentile,
+        iv_observation_count: iv.observation_count,
+        rv20_pct: rv.rv20_pct,
+        rv60_pct: rv.rv60_pct,
+        rv252_pct: rv.rv252_pct,
+        rv20_percentile: rv.rv20_percentile,
+        rv_cone_label: rv.cone_label.clone(),
+        iv_minus_rv20_pct,
+        iv_to_rv20_ratio,
+        iv_minus_rv252_pct,
+        iv_to_rv252_ratio,
+        premium_label: premium_label.into(),
+        note: note_parts.join(" | "),
     }
 }
 
@@ -65961,6 +66528,189 @@ pub fn get_corrrank(
     }
 }
 
+// ── ADR-197 Round 93/94 schema v91 (remaining cache-backed parity) ──────
+//    OPERANK_DELTA / DIVACC / EPSACC / VRP
+
+pub fn create_research_tables_v91(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v90(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_operank_delta (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_operank_delta_updated ON research_operank_delta(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_divacc (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_divacc_updated ON research_divacc(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_epsacc (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_epsacc_updated ON research_epsacc(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_vrp (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_vrp_updated ON research_vrp(updated_at);",
+    )
+    .map_err(|e| format!("create v91 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_operank_delta(
+    conn: &Connection,
+    symbol: &str,
+    snap: &OperatingMarginDeltaRankSnapshot,
+) -> Result<(), String> {
+    let _ = create_research_tables_v91(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("operank_delta json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_operank_delta (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    )
+    .map_err(|e| format!("upsert operank_delta: {e}"))?;
+    Ok(())
+}
+
+pub fn get_operank_delta(
+    conn: &Connection,
+    symbol: &str,
+) -> Result<Option<OperatingMarginDeltaRankSnapshot>, String> {
+    let _ = create_research_tables_v91(conn);
+    let mut stmt = conn
+        .prepare("SELECT snapshot_json FROM research_operank_delta WHERE symbol = ?1")
+        .map_err(|e| format!("prep operank_delta: {e}"))?;
+    let mut rows = stmt
+        .query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query operank_delta: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row operank_delta: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get operank_delta: {e}"))?;
+        let snap: OperatingMarginDeltaRankSnapshot =
+            serde_json::from_str(&j).map_err(|e| format!("parse operank_delta: {e}"))?;
+        Ok(Some(snap))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_divacc(
+    conn: &Connection,
+    symbol: &str,
+    snap: &DividendAccelerationSnapshot,
+) -> Result<(), String> {
+    let _ = create_research_tables_v91(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("divacc json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_divacc (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    )
+    .map_err(|e| format!("upsert divacc: {e}"))?;
+    Ok(())
+}
+
+pub fn get_divacc(
+    conn: &Connection,
+    symbol: &str,
+) -> Result<Option<DividendAccelerationSnapshot>, String> {
+    let _ = create_research_tables_v91(conn);
+    let mut stmt = conn
+        .prepare("SELECT snapshot_json FROM research_divacc WHERE symbol = ?1")
+        .map_err(|e| format!("prep divacc: {e}"))?;
+    let mut rows = stmt
+        .query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query divacc: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row divacc: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get divacc: {e}"))?;
+        let snap: DividendAccelerationSnapshot =
+            serde_json::from_str(&j).map_err(|e| format!("parse divacc: {e}"))?;
+        Ok(Some(snap))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_epsacc(
+    conn: &Connection,
+    symbol: &str,
+    snap: &EpsAccelerationSnapshot,
+) -> Result<(), String> {
+    let _ = create_research_tables_v91(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("epsacc json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_epsacc (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    )
+    .map_err(|e| format!("upsert epsacc: {e}"))?;
+    Ok(())
+}
+
+pub fn get_epsacc(
+    conn: &Connection,
+    symbol: &str,
+) -> Result<Option<EpsAccelerationSnapshot>, String> {
+    let _ = create_research_tables_v91(conn);
+    let mut stmt = conn
+        .prepare("SELECT snapshot_json FROM research_epsacc WHERE symbol = ?1")
+        .map_err(|e| format!("prep epsacc: {e}"))?;
+    let mut rows = stmt
+        .query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query epsacc: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row epsacc: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get epsacc: {e}"))?;
+        let snap: EpsAccelerationSnapshot =
+            serde_json::from_str(&j).map_err(|e| format!("parse epsacc: {e}"))?;
+        Ok(Some(snap))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_vrp(
+    conn: &Connection,
+    symbol: &str,
+    snap: &VolRiskPremiumSnapshot,
+) -> Result<(), String> {
+    let _ = create_research_tables_v91(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("vrp json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_vrp (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    )
+    .map_err(|e| format!("upsert vrp: {e}"))?;
+    Ok(())
+}
+
+pub fn get_vrp(conn: &Connection, symbol: &str) -> Result<Option<VolRiskPremiumSnapshot>, String> {
+    let _ = create_research_tables_v91(conn);
+    let mut stmt = conn
+        .prepare("SELECT snapshot_json FROM research_vrp WHERE symbol = ?1")
+        .map_err(|e| format!("prep vrp: {e}"))?;
+    let mut rows = stmt
+        .query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query vrp: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row vrp: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get vrp: {e}"))?;
+        let snap: VolRiskPremiumSnapshot =
+            serde_json::from_str(&j).map_err(|e| format!("parse vrp: {e}"))?;
+        Ok(Some(snap))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn upsert_mass_index(
     conn: &Connection,
     symbol: &str,
@@ -87524,25 +88274,26 @@ Trailing text.
 
     #[test]
     fn compute_tlrank_top_decile() {
-        let mk_bars = |start: chrono::NaiveDate, close: f64, volume: f64| -> Vec<HistoricalPriceRow> {
-            (0..30)
-                .map(|i| {
-                    let d = start + chrono::Days::new(i as u64);
-                    let px = close + i as f64 * 0.25;
-                    HistoricalPriceRow {
-                        date: d.format("%Y-%m-%d").to_string(),
-                        open: px * 0.99,
-                        high: px * 1.01,
-                        low: px * 0.98,
-                        close: px,
-                        adj_close: px,
-                        volume,
-                        change: 0.0,
-                        change_pct: 0.0,
-                    }
-                })
-                .collect()
-        };
+        let mk_bars =
+            |start: chrono::NaiveDate, close: f64, volume: f64| -> Vec<HistoricalPriceRow> {
+                (0..30)
+                    .map(|i| {
+                        let d = start + chrono::Days::new(i as u64);
+                        let px = close + i as f64 * 0.25;
+                        HistoricalPriceRow {
+                            date: d.format("%Y-%m-%d").to_string(),
+                            open: px * 0.99,
+                            high: px * 1.01,
+                            low: px * 0.98,
+                            close: px,
+                            adj_close: px,
+                            volume,
+                            change: 0.0,
+                            change_pct: 0.0,
+                        }
+                    })
+                    .collect()
+            };
         let base = chrono::NaiveDate::from_ymd_opt(2026, 1, 2).unwrap();
         let subject = mk_bars(base, 120.0, 3_000_000.0);
         let peers = vec![
@@ -87657,5 +88408,278 @@ Trailing text.
         assert_eq!(snap.rank_label, "TOP_DECILE");
         assert_eq!(snap.rank_position, 1);
         assert!(snap.subject_abs_corr_252d > snap.sector_p75_abs_corr_252d);
+    }
+
+    #[test]
+    fn operank_delta_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = OperatingMarginDeltaRankSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-21".into(),
+            sector: "Technology".into(),
+            basis: "quarterly".into(),
+            latest_period: "2025-12-31".into(),
+            operating_margin_pct: 24.0,
+            operating_margin_change_pct: 5.5,
+            operating_trend_label: "EXPANDING".into(),
+            peers_considered: 7,
+            peers_with_data: 5,
+            sector_median_change_pct: 1.4,
+            sector_p25_change_pct: -0.5,
+            sector_p75_change_pct: 3.2,
+            percentile_rank: 92.0,
+            rank_position: 1,
+            rank_label: "TOP_DECILE".into(),
+            note: String::new(),
+        };
+        upsert_operank_delta(&conn, "TEST", &snap).unwrap();
+        let got = get_operank_delta(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.rank_label, "TOP_DECILE");
+        assert_eq!(got.latest_period, "2025-12-31");
+        assert!((got.operating_margin_change_pct - 5.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_operank_delta_top_decile() {
+        let subject = MarginsSnapshot {
+            symbol: "AAA".into(),
+            as_of: "2026-04-21".into(),
+            basis: "quarterly".into(),
+            latest_period: "2025-12-31".into(),
+            latest_operating_margin_pct: 22.0,
+            prior_operating_margin_pct: 15.0,
+            operating_margin_change_pct: 7.0,
+            periods_used: 4,
+            operating_trend_label: "EXPANDING".into(),
+            ..Default::default()
+        };
+        let peers_owned = [
+            MarginsSnapshot {
+                symbol: "BBB".into(),
+                operating_margin_change_pct: 2.0,
+                periods_used: 4,
+                ..Default::default()
+            },
+            MarginsSnapshot {
+                symbol: "CCC".into(),
+                operating_margin_change_pct: 1.0,
+                periods_used: 4,
+                ..Default::default()
+            },
+            MarginsSnapshot {
+                symbol: "DDD".into(),
+                operating_margin_change_pct: -1.0,
+                periods_used: 4,
+                ..Default::default()
+            },
+            MarginsSnapshot {
+                symbol: "EEE".into(),
+                operating_margin_change_pct: 3.5,
+                periods_used: 4,
+                ..Default::default()
+            },
+        ];
+        let peers: Vec<&MarginsSnapshot> = peers_owned.iter().collect();
+        let snap = compute_operank_delta_snapshot(
+            "AAA",
+            "2026-04-21",
+            "Technology",
+            Some(&subject),
+            &peers,
+        );
+        assert_eq!(snap.rank_label, "TOP_DECILE");
+        assert_eq!(snap.rank_position, 1);
+        assert!(snap.operating_margin_change_pct > snap.sector_p75_change_pct);
+    }
+
+    #[test]
+    fn divacc_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = DividendAccelerationSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-21".into(),
+            total_payments: 12,
+            years_covered: 4,
+            latest_year: 2025,
+            latest_annual_dividend: 2.4,
+            latest_yoy_growth_pct: 20.0,
+            prior_yoy_growth_pct: 10.0,
+            acceleration_pct_pts: 10.0,
+            recent_3y_avg_growth_pct: 11.0,
+            prior_3y_avg_growth_pct: 0.0,
+            acceleration_3y_avg_pct_pts: 0.0,
+            consecutive_growth_years: 3,
+            consistency_score_pct: 100.0,
+            annual_rows: vec![DivgAnnualRow {
+                year: 2025,
+                total_amount: 2.4,
+                payment_count: 4,
+                growth_pct: 20.0,
+            }],
+            divacc_label: "ACCELERATING".into(),
+            note: String::new(),
+        };
+        upsert_divacc(&conn, "TEST", &snap).unwrap();
+        let got = get_divacc(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.divacc_label, "ACCELERATING");
+        assert_eq!(got.latest_year, 2025);
+        assert!((got.acceleration_pct_pts - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_divacc_accelerating() {
+        let rows = vec![
+            DividendRecord {
+                ex_date: "2021-03-15".into(),
+                amount: 1.00,
+                ..Default::default()
+            },
+            DividendRecord {
+                ex_date: "2022-03-15".into(),
+                amount: 1.10,
+                ..Default::default()
+            },
+            DividendRecord {
+                ex_date: "2023-03-15".into(),
+                amount: 1.35,
+                ..Default::default()
+            },
+            DividendRecord {
+                ex_date: "2024-03-15".into(),
+                amount: 1.90,
+                ..Default::default()
+            },
+        ];
+        let snap = compute_divacc_snapshot("KO", "2026-04-21", &rows);
+        assert_eq!(snap.divacc_label, "ACCELERATING");
+        assert_eq!(snap.years_covered, 4);
+        assert!(snap.acceleration_pct_pts > 0.0);
+        assert!(snap.latest_yoy_growth_pct > snap.prior_yoy_growth_pct);
+    }
+
+    #[test]
+    fn epsacc_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = EpsAccelerationSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-21".into(),
+            quarters_used: 8,
+            latest_period: "2026-03-31".into(),
+            latest_eps: 1.42,
+            prior_year_eps: 0.88,
+            latest_yoy_growth_pct: 61.4,
+            prior_yoy_growth_pct: -12.0,
+            acceleration_pct_pts: 73.4,
+            recent_2q_avg_yoy_growth_pct: 42.0,
+            prior_2q_avg_yoy_growth_pct: 8.0,
+            positive_yoy_quarters: 3,
+            epsacc_label: "TURNAROUND".into(),
+            note: String::new(),
+        };
+        upsert_epsacc(&conn, "TEST", &snap).unwrap();
+        let got = get_epsacc(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.epsacc_label, "TURNAROUND");
+        assert_eq!(got.latest_period, "2026-03-31");
+        assert!((got.latest_eps - 1.42).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_epsacc_turnaround() {
+        let statements = FinancialStatements {
+            income_quarterly: vec![
+                IncomeStatement {
+                    date: "2026-03-31".into(),
+                    eps: 1.20,
+                    ..Default::default()
+                },
+                IncomeStatement {
+                    date: "2025-12-31".into(),
+                    eps: 0.50,
+                    ..Default::default()
+                },
+                IncomeStatement {
+                    date: "2025-09-30".into(),
+                    eps: 0.40,
+                    ..Default::default()
+                },
+                IncomeStatement {
+                    date: "2025-06-30".into(),
+                    eps: 0.35,
+                    ..Default::default()
+                },
+                IncomeStatement {
+                    date: "2025-03-31".into(),
+                    eps: 0.60,
+                    ..Default::default()
+                },
+                IncomeStatement {
+                    date: "2024-12-31".into(),
+                    eps: 0.80,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let snap = compute_epsacc_snapshot("NVDA", "2026-04-21", &statements);
+        assert_eq!(snap.epsacc_label, "TURNAROUND");
+        assert!(snap.latest_yoy_growth_pct > 0.0);
+        assert!(snap.prior_yoy_growth_pct < 0.0);
+        assert!(snap.acceleration_pct_pts > 0.0);
+    }
+
+    #[test]
+    fn vrp_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = VolRiskPremiumSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-21".into(),
+            current_atm_iv_pct: 44.0,
+            iv_rank: 82.0,
+            iv_percentile: 79.0,
+            iv_observation_count: 52,
+            rv20_pct: 27.0,
+            rv60_pct: 24.0,
+            rv252_pct: 22.0,
+            rv20_percentile: 36.0,
+            rv_cone_label: "BELOW_AVG".into(),
+            iv_minus_rv20_pct: 17.0,
+            iv_to_rv20_ratio: 1.63,
+            iv_minus_rv252_pct: 22.0,
+            iv_to_rv252_ratio: 2.0,
+            premium_label: "EXTREME_RICH".into(),
+            note: String::new(),
+        };
+        upsert_vrp(&conn, "TEST", &snap).unwrap();
+        let got = get_vrp(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.premium_label, "EXTREME_RICH");
+        assert_eq!(got.rv_cone_label, "BELOW_AVG");
+        assert!((got.iv_to_rv20_ratio - 1.63).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_vrp_extreme_rich() {
+        let iv = IvolSnapshot {
+            symbol: "TSLA".into(),
+            as_of: "2026-04-21".into(),
+            current_atm_iv_pct: 48.0,
+            iv_rank: 85.0,
+            iv_percentile: 88.0,
+            observation_count: 48,
+            ..Default::default()
+        };
+        let rv = RealizedVolConeSnapshot {
+            symbol: "TSLA".into(),
+            as_of: "2026-04-21".into(),
+            rv20_pct: 28.0,
+            rv60_pct: 25.0,
+            rv252_pct: 23.0,
+            rv20_percentile: 35.0,
+            cone_label: "BELOW_AVG".into(),
+            ..Default::default()
+        };
+        let snap = compute_vrp_snapshot("TSLA", "2026-04-21", Some(&iv), Some(&rv));
+        assert_eq!(snap.premium_label, "EXTREME_RICH");
+        assert!(snap.iv_to_rv20_ratio > 1.5);
+        assert!(snap.iv_minus_rv20_pct > 15.0);
     }
 }
