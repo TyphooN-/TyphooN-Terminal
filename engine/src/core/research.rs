@@ -8446,6 +8446,396 @@ pub struct CdlTakuriSnapshot {
     pub note: String,
 }
 
+// ── ADR-191 Round 81/82 — harder TA-Lib CDL parity pack ──────────────────
+
+/// TA-Lib CDL3STARSINSOUTH — Three Stars in the South. A 3-bar bullish
+/// reversal made of three descending red candles where downside pressure
+/// progressively contracts: a long black candle with a long lower shadow,
+/// then a smaller black candle with a higher low, then a small black bar
+/// nested inside the second bar.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlThreeStarsInSouthSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, 0 none
+    pub pattern_value_prev: i32,
+    pub first_body_pct_range: f64,
+    pub first_lower_shadow_pct: f64,
+    pub second_body_pct_range: f64,
+    pub third_body_pct_range: f64,
+    pub third_inside_pct_range: f64,   // how deeply bar 3 sits inside bar 2 range
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_three_stars_in_south_label: String, // BULLISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLIDENTICAL3CROWS — Identical Three Crows. Bearish 3-bar
+/// continuation: three long red candles with each new candle opening
+/// near the prior close and extending the decline.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlIdenticalThreeCrowsSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // -100 bearish, 0 none
+    pub pattern_value_prev: i32,
+    pub avg_body_pct_range: f64,
+    pub open1_vs_close0_pct_body: f64, // abs(open2-close1) as % of body1
+    pub open2_vs_close1_pct_body: f64, // abs(open3-close2) as % of body2
+    pub total_close_decline_pct: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_identical_three_crows_label: String, // BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLKICKING — Kicking. Two opposite-colour marubozu candles
+/// separated by a clean gap between their full ranges.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlKickingSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, -100 bearish, 0 none
+    pub pattern_value_prev: i32,
+    pub first_body_pct_range: f64,
+    pub second_body_pct_range: f64,
+    pub gap_pct_range: f64,            // gap magnitude as % of first bar range
+    pub second_to_first_body_ratio: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_kicking_label: String,     // BULLISH_PATTERN / BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLKICKINGBYLENGTH — Kicking where bull/bear direction is
+/// assigned from the longer of the two marubozu bodies.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlKickingByLengthSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, -100 bearish, 0 none
+    pub pattern_value_prev: i32,
+    pub first_body_pct_range: f64,
+    pub second_body_pct_range: f64,
+    pub gap_pct_range: f64,
+    pub dominant_body_ratio: f64,      // larger body / smaller body
+    pub dominant_side: String,         // FIRST_BAR / SECOND_BAR / NONE
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_kicking_by_length_label: String, // BULLISH_PATTERN / BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLLADDERBOTTOM — Ladder Bottom. Five-bar bullish reversal:
+/// three descending red candles, a fourth red "rung" with an upper
+/// shadow, then a strong green breakout candle.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlLadderBottomSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, 0 none
+    pub pattern_value_prev: i32,
+    pub avg_first_three_body_pct_range: f64,
+    pub fourth_body_pct_range: f64,
+    pub fourth_upper_shadow_pct: f64,
+    pub fifth_body_pct_range: f64,
+    pub breakout_pct_vs_fourth_high: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_ladder_bottom_label: String, // BULLISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLUNIQUE3RIVER — Unique 3 River. Three-bar bullish reversal:
+/// long red candle, then a smaller red candle with an extended lower
+/// shadow, followed by a small green candle tucked inside the second.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlUniqueThreeRiverSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, 0 none
+    pub pattern_value_prev: i32,
+    pub first_body_pct_range: f64,
+    pub second_body_pct_range: f64,
+    pub second_lower_shadow_pct: f64,
+    pub third_body_pct_range: f64,
+    pub third_close_vs_second_close_pct: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_unique_three_river_label: String, // BULLISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+// ── ADR-192 Round 83/84 — next TA-Lib CDL parity pack ────────────────────
+
+/// TA-Lib CDLADVANCEBLOCK — Advance Block. Three rising green candles
+/// whose progress weakens as bodies shrink and upper shadows lengthen.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlAdvanceBlockSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // -100 bearish, 0 none
+    pub pattern_value_prev: i32,
+    pub first_body_pct_range: f64,
+    pub second_body_pct_range: f64,
+    pub third_body_pct_range: f64,
+    pub third_upper_shadow_pct: f64,
+    pub total_close_gain_pct: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_advance_block_label: String, // BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLBREAKAWAY — Breakaway. Five-bar reversal pattern with an
+/// initial gap in trend direction and a final candle that closes back
+/// into that gap.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlBreakawaySnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, -100 bearish, 0 none
+    pub pattern_value_prev: i32,
+    pub first_body_pct_range: f64,
+    pub initial_gap_pct_range: f64,
+    pub fifth_body_pct_range: f64,
+    pub gap_retracement_pct: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_breakaway_label: String,   // BULLISH_PATTERN / BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLGAPSIDESIDEWHITE — Up/Down-gap side-by-side white lines.
+/// Two similar green candles that hold a gap versus the prior candle.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlGapSideSideWhiteSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish continuation, -100 bearish continuation, 0 none
+    pub pattern_value_prev: i32,
+    pub gap_pct_range: f64,
+    pub second_body_pct_range: f64,
+    pub third_body_pct_range: f64,
+    pub open_similarity_pct_body: f64,
+    pub close_similarity_pct_body: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_gap_side_side_white_label: String, // BULLISH_CONTINUATION / BEARISH_CONTINUATION / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLUPSIDEGAP2CROWS — Upside Gap Two Crows. Long green candle,
+/// gap-up red candle, then another red candle that opens higher and
+/// closes back into the gap.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlUpsideGapTwoCrowsSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // -100 bearish, 0 none
+    pub pattern_value_prev: i32,
+    pub first_body_pct_range: f64,
+    pub upside_gap_pct_range: f64,
+    pub third_open_above_second_pct_body: f64,
+    pub third_close_into_gap_pct: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_upside_gap_two_crows_label: String, // BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLXSIDEGAP3METHODS — Upside/Downside Gap Three Methods.
+/// Two same-direction candles gap away from the first, then an
+/// opposite-colour candle closes into that gap without fully reversing it.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlXSideGapThreeMethodsSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish continuation, -100 bearish continuation, 0 none
+    pub pattern_value_prev: i32,
+    pub gap_pct_range: f64,
+    pub second_body_pct_range: f64,
+    pub third_body_pct_range: f64,
+    pub gap_fill_pct: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_xside_gap_three_methods_label: String, // BULLISH_CONTINUATION / BEARISH_CONTINUATION / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLCONCEALBABYSWALL — Concealing Baby Swallow. Four black
+/// candles where the first two are marubozu-like, the third gaps down,
+/// and the fourth engulfs the third candle's range.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlConcealBabySwallowSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish reversal, 0 none
+    pub pattern_value_prev: i32,
+    pub first_body_pct_range: f64,
+    pub second_body_pct_range: f64,
+    pub third_upper_shadow_pct: f64,
+    pub fourth_range_engulf_pct: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_conceal_baby_swallow_label: String, // BULLISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+// ── ADR-193 Round 85/86 — stateful TA-Lib CDL parity pack ────────────────
+
+/// TA-Lib CDLHIKKAKE — Hikkake. Inside-bar setup followed by a false
+/// break to one side of the inside bar.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlHikkakeSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, -100 bearish, 0 none
+    pub pattern_value_prev: i32,
+    pub inside_width_pct_mother: f64,
+    pub false_break_extension_pct: f64,
+    pub trigger_body_pct_range: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_hikkake_label: String,     // BULLISH_PATTERN / BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLHIKKAKEMOD — Modified Hikkake. Hikkake-like inside-bar
+/// trap followed by an explicit confirmation bar.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlHikkakeModSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish, -100 bearish, 0 none
+    pub pattern_value_prev: i32,
+    pub inside_width_pct_mother: f64,
+    pub false_break_extension_pct: f64,
+    pub confirmation_extension_pct: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_hikkake_mod_label: String, // BULLISH_PATTERN / BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLMATHOLD — Mat Hold. A strong trend candle, a gapped pause,
+/// two holding candles, then a continuation breakout.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlMatHoldSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish continuation, -100 bearish continuation, 0 none
+    pub pattern_value_prev: i32,
+    pub first_body_pct_range: f64,
+    pub middle_avg_body_pct_range: f64,
+    pub initial_gap_pct_range: f64,
+    pub hold_depth_pct_body: f64,
+    pub final_body_pct_range: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_mat_hold_label: String,    // BULLISH_CONTINUATION / BEARISH_CONTINUATION / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLRISEFALL3METHODS — Rising/Falling Three Methods. Long
+/// trend candle, three small counter-trend candles inside it, then a
+/// continuation candle in the original direction.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlRiseFallThreeMethodsSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish continuation, -100 bearish continuation, 0 none
+    pub pattern_value_prev: i32,
+    pub first_body_pct_range: f64,
+    pub middle_avg_body_pct_range: f64,
+    pub containment_pct_body: f64,
+    pub final_body_pct_range: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_rise_fall_three_methods_label: String, // BULLISH_CONTINUATION / BEARISH_CONTINUATION / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+// ── ADR-194 Round 87/88 — remaining TA-Lib CDL parity pack ───────────────
+
+/// TA-Lib CDLSTALLEDPATTERN — Stalled Pattern. Three advancing white
+/// candles where the third gaps up but loses momentum with a small real
+/// body and meaningful upper shadow.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlStalledPatternSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // -100 bearish reversal, 0 none
+    pub pattern_value_prev: i32,
+    pub first_body_pct_range: f64,
+    pub second_body_pct_range: f64,
+    pub third_body_pct_range: f64,
+    pub third_open_gap_pct_range: f64,
+    pub third_upper_shadow_pct: f64,
+    pub close_progress_pct_prev_leg: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_stalled_pattern_label: String, // BEARISH_PATTERN / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
+/// TA-Lib CDLTASUKIGAP — Tasuki Gap. Two same-direction candles with a
+/// trend gap, followed by an opposite-colour candle that retraces into
+/// the gap without fully closing it.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CdlTasukiGapSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub bars_used: usize,
+    pub pattern_value: i32,            // +100 bullish continuation, -100 bearish continuation, 0 none
+    pub pattern_value_prev: i32,
+    pub first_body_pct_range: f64,
+    pub second_body_pct_range: f64,
+    pub third_body_pct_range: f64,
+    pub gap_pct_range: f64,
+    pub gap_fill_pct: f64,
+    pub third_open_pct_second_body: f64,
+    pub last_bar_match: bool,
+    pub days_since_pattern: usize,
+    pub last_close: f64,
+    pub cdl_tasuki_gap_label: String,  // BULLISH_CONTINUATION / BEARISH_CONTINUATION / NO_PATTERN / INSUFFICIENT_DATA
+    pub note: String,
+}
+
 // ── ADR-189 Round 76 (Quant Stats) surfaces ───────────────────────────────
 
 /// MODSHARPE — Pezier-White Adjusted Sharpe Ratio.
@@ -35282,6 +35672,1275 @@ pub fn compute_cdl_takuri_snapshot(
     }
 }
 
+// ── ADR-191 Round 81/82 compute fns — CDL3STARSINSOUTH /
+//    CDLIDENTICAL3CROWS / CDLKICKING / CDLKICKINGBYLENGTH /
+//    CDLLADDERBOTTOM / CDLUNIQUE3RIVER ──
+
+pub fn compute_cdl_three_stars_in_south_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlThreeStarsInSouthSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 4 {
+        return CdlThreeStarsInSouthSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_three_stars_in_south_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥4 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 2 { return 0; }
+        let b0 = s[i - 2];
+        let b1 = s[i - 1];
+        let b2 = s[i];
+        let (body0, _range0, _upper0, lower0, body0_pct, bull0) = candle_metrics(b0);
+        let (body1, _range1, _upper1, lower1, body1_pct, bull1) = candle_metrics(b1);
+        let (body2, _range2, _upper2, _lower2, body2_pct, bull2) = candle_metrics(b2);
+        if body0 < 1e-12 || body1 < 1e-12 || body2 < 1e-12 { return 0; }
+        if bull0 || bull1 || bull2 { return 0; }
+        if body0_pct < 30.0 || body1_pct > body0_pct || body1_pct < 10.0 || body2_pct > 20.0 { return 0; }
+        if lower0 < body0 || lower1 < body1 { return 0; }
+        if b1.low <= b0.low { return 0; }
+        if !(b1.open <= b0.open && b1.open >= b0.close) { return 0; }
+        if b2.high >= b1.high || b2.low <= b1.low { return 0; }
+        100
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 2, detect);
+    let b0 = sorted[n - 3];
+    let b1 = sorted[n - 2];
+    let b2 = sorted[n - 1];
+    let (_body0, range0, _upper0, lower0, first_body_pct_range, _) = candle_metrics(b0);
+    let (_, _, _, _, second_body_pct_range, _) = candle_metrics(b1);
+    let (_, _, _, _, third_body_pct_range, _) = candle_metrics(b2);
+    let first_lower_shadow_pct = if range0 > 1e-12 { 100.0 * lower0 / range0 } else { 0.0 };
+    let second_range = (b1.high - b1.low).abs();
+    let third_inside_pct_range = if second_range > 1e-12
+        && b2.high < b1.high
+        && b2.low > b1.low
+    {
+        100.0 * (((b1.high - b2.high) + (b2.low - b1.low)) / 2.0) / second_range
+    } else { 0.0 };
+    let label = if last_val == 100 { "BULLISH_PATTERN" } else { "NO_PATTERN" };
+    CdlThreeStarsInSouthSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        first_body_pct_range, first_lower_shadow_pct, second_body_pct_range,
+        third_body_pct_range, third_inside_pct_range,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b2.close,
+        cdl_three_stars_in_south_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_identical_three_crows_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlIdenticalThreeCrowsSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 4 {
+        return CdlIdenticalThreeCrowsSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_identical_three_crows_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥4 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 2 { return 0; }
+        let b0 = s[i - 2];
+        let b1 = s[i - 1];
+        let b2 = s[i];
+        let (body0, _, _, _, body0_pct, bull0) = candle_metrics(b0);
+        let (body1, _, _, _, body1_pct, bull1) = candle_metrics(b1);
+        let (body2, _, _, _, body2_pct, bull2) = candle_metrics(b2);
+        if body0 < 1e-12 || body1 < 1e-12 || body2 < 1e-12 { return 0; }
+        if bull0 || bull1 || bull2 { return 0; }
+        if body0_pct < 30.0 || body1_pct < 30.0 || body2_pct < 30.0 { return 0; }
+        if !(b1.close < b0.close && b2.close < b1.close) { return 0; }
+        if !(b1.open <= b0.open && b1.open >= b0.close) { return 0; }
+        if !(b2.open <= b1.open && b2.open >= b1.close) { return 0; }
+        if 100.0 * (b1.open - b0.close).abs() / body0 > 10.0 { return 0; }
+        if 100.0 * (b2.open - b1.close).abs() / body1 > 10.0 { return 0; }
+        -100
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 2, detect);
+    let b0 = sorted[n - 3];
+    let b1 = sorted[n - 2];
+    let b2 = sorted[n - 1];
+    let (body0, _, _, _, body0_pct, _) = candle_metrics(b0);
+    let (body1, _, _, _, body1_pct, _) = candle_metrics(b1);
+    let (_, _, _, _, body2_pct, _) = candle_metrics(b2);
+    let avg_body_pct_range = (body0_pct + body1_pct + body2_pct) / 3.0;
+    let open1_vs_close0_pct_body = if body0 > 1e-12 {
+        100.0 * (b1.open - b0.close).abs() / body0
+    } else { 0.0 };
+    let open2_vs_close1_pct_body = if body1 > 1e-12 {
+        100.0 * (b2.open - b1.close).abs() / body1
+    } else { 0.0 };
+    let total_close_decline_pct = if b0.open.abs() > 1e-12 {
+        100.0 * (b2.close - b0.open) / b0.open
+    } else { 0.0 };
+    let label = if last_val == -100 { "BEARISH_PATTERN" } else { "NO_PATTERN" };
+    CdlIdenticalThreeCrowsSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        avg_body_pct_range, open1_vs_close0_pct_body, open2_vs_close1_pct_body,
+        total_close_decline_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b2.close,
+        cdl_identical_three_crows_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_kicking_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlKickingSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 3 {
+        return CdlKickingSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_kicking_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥3 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 1 { return 0; }
+        let b0 = s[i - 1];
+        let b1 = s[i];
+        let (_, range0, upper0, lower0, body0_pct, bull0) = candle_metrics(b0);
+        let (_, range1, upper1, lower1, body1_pct, bull1) = candle_metrics(b1);
+        if range0 < 1e-12 || range1 < 1e-12 { return 0; }
+        let upper0_pct = 100.0 * upper0 / range0;
+        let lower0_pct = 100.0 * lower0 / range0;
+        let upper1_pct = 100.0 * upper1 / range1;
+        let lower1_pct = 100.0 * lower1 / range1;
+        if body0_pct < 90.0 || body1_pct < 90.0 { return 0; }
+        if upper0_pct > 5.0 || lower0_pct > 5.0 || upper1_pct > 5.0 || lower1_pct > 5.0 { return 0; }
+        if bull0 == bull1 { return 0; }
+        if !bull0 && bull1 && b1.low > b0.high {
+            100
+        } else if bull0 && !bull1 && b1.high < b0.low {
+            -100
+        } else {
+            0
+        }
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 1, detect);
+    let b0 = sorted[n - 2];
+    let b1 = sorted[n - 1];
+    let (body0, range0, _, _, first_body_pct_range, _) = candle_metrics(b0);
+    let (body1, _, _, _, second_body_pct_range, _) = candle_metrics(b1);
+    let gap_raw = if b1.low > b0.high {
+        b1.low - b0.high
+    } else if b1.high < b0.low {
+        b0.low - b1.high
+    } else {
+        0.0
+    };
+    let gap_pct_range = if range0 > 1e-12 { 100.0 * gap_raw / range0 } else { 0.0 };
+    let second_to_first_body_ratio = if body0 > 1e-12 { body1 / body0 } else { 0.0 };
+    let label = match last_val {
+        100 => "BULLISH_PATTERN",
+        -100 => "BEARISH_PATTERN",
+        _ => "NO_PATTERN",
+    };
+    CdlKickingSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        first_body_pct_range, second_body_pct_range, gap_pct_range, second_to_first_body_ratio,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b1.close,
+        cdl_kicking_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_kicking_by_length_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlKickingByLengthSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 3 {
+        return CdlKickingByLengthSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_kicking_by_length_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥3 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 1 { return 0; }
+        let b0 = s[i - 1];
+        let b1 = s[i];
+        let (body0, range0, upper0, lower0, body0_pct, bull0) = candle_metrics(b0);
+        let (body1, range1, upper1, lower1, body1_pct, bull1) = candle_metrics(b1);
+        if body0 < 1e-12 || body1 < 1e-12 || range0 < 1e-12 || range1 < 1e-12 { return 0; }
+        let upper0_pct = 100.0 * upper0 / range0;
+        let lower0_pct = 100.0 * lower0 / range0;
+        let upper1_pct = 100.0 * upper1 / range1;
+        let lower1_pct = 100.0 * lower1 / range1;
+        if body0_pct < 90.0 || body1_pct < 90.0 { return 0; }
+        if upper0_pct > 5.0 || lower0_pct > 5.0 || upper1_pct > 5.0 || lower1_pct > 5.0 { return 0; }
+        if bull0 == bull1 { return 0; }
+        let has_gap = (!bull0 && bull1 && b1.low > b0.high) || (bull0 && !bull1 && b1.high < b0.low);
+        if !has_gap { return 0; }
+        if body1 > body0 {
+            if bull1 { 100 } else { -100 }
+        } else if body0 > body1 {
+            if bull0 { 100 } else { -100 }
+        } else {
+            0
+        }
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 1, detect);
+    let b0 = sorted[n - 2];
+    let b1 = sorted[n - 1];
+    let (body0, range0, _, _, first_body_pct_range, _bull0) = candle_metrics(b0);
+    let (body1, _, _, _, second_body_pct_range, _bull1) = candle_metrics(b1);
+    let gap_raw = if b1.low > b0.high {
+        b1.low - b0.high
+    } else if b1.high < b0.low {
+        b0.low - b1.high
+    } else {
+        0.0
+    };
+    let gap_pct_range = if range0 > 1e-12 { 100.0 * gap_raw / range0 } else { 0.0 };
+    let (dominant_body_ratio, dominant_side) = if body0 > 1e-12 && body1 > 1e-12 {
+        if body1 > body0 {
+            (body1 / body0, "SECOND_BAR")
+        } else if body0 > body1 {
+            (body0 / body1, "FIRST_BAR")
+        } else {
+            (1.0, "NONE")
+        }
+    } else { (0.0, "NONE") };
+    let label = match last_val {
+        100 => "BULLISH_PATTERN",
+        -100 => "BEARISH_PATTERN",
+        _ => "NO_PATTERN",
+    };
+    CdlKickingByLengthSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        first_body_pct_range, second_body_pct_range, gap_pct_range,
+        dominant_body_ratio, dominant_side: dominant_side.into(),
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b1.close,
+        cdl_kicking_by_length_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_ladder_bottom_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlLadderBottomSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 6 {
+        return CdlLadderBottomSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_ladder_bottom_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥6 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 4 { return 0; }
+        let b0 = s[i - 4];
+        let b1 = s[i - 3];
+        let b2 = s[i - 2];
+        let b3 = s[i - 1];
+        let b4 = s[i];
+        let (body0, _, _, _, body0_pct, bull0) = candle_metrics(b0);
+        let (body1, _, _, _, body1_pct, bull1) = candle_metrics(b1);
+        let (body2, _, _, _, body2_pct, bull2) = candle_metrics(b2);
+        let (body3, _, upper3, _, body3_pct, bull3) = candle_metrics(b3);
+        let (_, _, _, _, body4_pct, bull4) = candle_metrics(b4);
+        if body0 < 1e-12 || body1 < 1e-12 || body2 < 1e-12 || body3 < 1e-12 { return 0; }
+        if bull0 || bull1 || bull2 || bull3 || !bull4 { return 0; }
+        if body0_pct < 30.0 || body1_pct < 30.0 || body2_pct < 30.0 || body4_pct < 30.0 { return 0; }
+        if !(b1.close < b0.close && b2.close < b1.close) { return 0; }
+        if !(b1.open <= b0.open && b1.open >= b0.close) { return 0; }
+        if !(b2.open <= b1.open && b2.open >= b1.close) { return 0; }
+        if body3_pct > 25.0 || upper3 < body3 || b3.low >= b2.low { return 0; }
+        if b4.close <= b3.high || b4.close <= b2.open { return 0; }
+        100
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 4, detect);
+    let b0 = sorted[n - 5];
+    let b1 = sorted[n - 4];
+    let b2 = sorted[n - 3];
+    let b3 = sorted[n - 2];
+    let b4 = sorted[n - 1];
+    let (_, _, _, _, body0_pct, _) = candle_metrics(b0);
+    let (_, _, _, _, body1_pct, _) = candle_metrics(b1);
+    let (_, _, _, _, body2_pct, _) = candle_metrics(b2);
+    let (_, range3, upper3, _, fourth_body_pct_range, _) = candle_metrics(b3);
+    let (_, _, _, _, fifth_body_pct_range, _) = candle_metrics(b4);
+    let avg_first_three_body_pct_range = (body0_pct + body1_pct + body2_pct) / 3.0;
+    let fourth_upper_shadow_pct = if range3 > 1e-12 { 100.0 * upper3 / range3 } else { 0.0 };
+    let breakout_pct_vs_fourth_high = if b3.high.abs() > 1e-12 {
+        100.0 * (b4.close - b3.high) / b3.high
+    } else { 0.0 };
+    let label = if last_val == 100 { "BULLISH_PATTERN" } else { "NO_PATTERN" };
+    CdlLadderBottomSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        avg_first_three_body_pct_range, fourth_body_pct_range, fourth_upper_shadow_pct,
+        fifth_body_pct_range, breakout_pct_vs_fourth_high,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b4.close,
+        cdl_ladder_bottom_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_unique_three_river_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlUniqueThreeRiverSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 4 {
+        return CdlUniqueThreeRiverSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_unique_three_river_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥4 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 2 { return 0; }
+        let b0 = s[i - 2];
+        let b1 = s[i - 1];
+        let b2 = s[i];
+        let (body0, _, _, _, body0_pct, bull0) = candle_metrics(b0);
+        let (body1, _, _, lower1, body1_pct, bull1) = candle_metrics(b1);
+        let (_, _, _, _, body2_pct, bull2) = candle_metrics(b2);
+        if body0 < 1e-12 || body1 < 1e-12 { return 0; }
+        if bull0 || bull1 || !bull2 { return 0; }
+        if body0_pct < 30.0 || body1_pct > 30.0 || body2_pct > 25.0 { return 0; }
+        if lower1 < 2.0 * body1 { return 0; }
+        if b1.low >= b0.low { return 0; }
+        if b1.close <= b0.close { return 0; }
+        if b2.close >= b1.close { return 0; }
+        if b2.high > b1.high || b2.low < b1.low { return 0; }
+        100
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 2, detect);
+    let b0 = sorted[n - 3];
+    let b1 = sorted[n - 2];
+    let b2 = sorted[n - 1];
+    let (_, _, _, _, first_body_pct_range, _) = candle_metrics(b0);
+    let (body1, range1, _, lower1, second_body_pct_range, _) = candle_metrics(b1);
+    let (_, _, _, _, third_body_pct_range, _) = candle_metrics(b2);
+    let second_lower_shadow_pct = if range1 > 1e-12 { 100.0 * lower1 / range1 } else { 0.0 };
+    let third_close_vs_second_close_pct = if body1 > 1e-12 {
+        100.0 * (b2.close - b1.close) / body1
+    } else { 0.0 };
+    let label = if last_val == 100 { "BULLISH_PATTERN" } else { "NO_PATTERN" };
+    CdlUniqueThreeRiverSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        first_body_pct_range, second_body_pct_range, second_lower_shadow_pct,
+        third_body_pct_range, third_close_vs_second_close_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b2.close,
+        cdl_unique_three_river_label: label.into(), note: String::new(),
+    }
+}
+
+// ── ADR-192 Round 83/84 compute fns — CDLADVANCEBLOCK /
+//    CDLBREAKAWAY / CDLGAPSIDESIDEWHITE / CDLUPSIDEGAP2CROWS /
+//    CDLXSIDEGAP3METHODS / CDLCONCEALBABYSWALL ──
+
+pub fn compute_cdl_advance_block_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlAdvanceBlockSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 4 {
+        return CdlAdvanceBlockSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_advance_block_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥4 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 2 { return 0; }
+        let b0 = s[i - 2];
+        let b1 = s[i - 1];
+        let b2 = s[i];
+        let (body0, range0, upper0, _, body0_pct, bull0) = candle_metrics(b0);
+        let (body1, _range1, upper1, _, body1_pct, bull1) = candle_metrics(b1);
+        let (body2, range2, upper2, _, body2_pct, bull2) = candle_metrics(b2);
+        if body0 < 1e-12 || body1 < 1e-12 || body2 < 1e-12 { return 0; }
+        if !(bull0 && bull1 && bull2) { return 0; }
+        if body0_pct < 30.0 || body1_pct < 25.0 || body2_pct < 20.0 { return 0; }
+        if !(b1.close > b0.close && b2.close > b1.close) { return 0; }
+        if !(b1.open >= b0.open && b1.open <= b0.close) { return 0; }
+        if !(b2.open >= b1.open && b2.open <= b1.close) { return 0; }
+        let upper0_pct = if range0 > 1e-12 { 100.0 * upper0 / range0 } else { 0.0 };
+        let upper1_pct = if (b1.high - b1.low).abs() > 1e-12 { 100.0 * upper1 / (b1.high - b1.low).abs() } else { 0.0 };
+        let upper2_pct = if range2 > 1e-12 { 100.0 * upper2 / range2 } else { 0.0 };
+        let shrinking = body2 < body1 && body1 <= body0 * 1.05;
+        let rising_shadows = upper2_pct >= upper1_pct && upper1_pct >= upper0_pct;
+        if !shrinking || !rising_shadows || upper2_pct < 15.0 { return 0; }
+        -100
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 2, detect);
+    let b0 = sorted[n - 3];
+    let b1 = sorted[n - 2];
+    let b2 = sorted[n - 1];
+    let (_, _, _, _, first_body_pct_range, _) = candle_metrics(b0);
+    let (_, _, _, _, second_body_pct_range, _) = candle_metrics(b1);
+    let (_, range2, upper2, _, third_body_pct_range, _) = candle_metrics(b2);
+    let third_upper_shadow_pct = if range2 > 1e-12 { 100.0 * upper2 / range2 } else { 0.0 };
+    let total_close_gain_pct = if b0.close.abs() > 1e-12 {
+        100.0 * (b2.close - b0.close) / b0.close
+    } else { 0.0 };
+    let label = if last_val == -100 { "BEARISH_PATTERN" } else { "NO_PATTERN" };
+    CdlAdvanceBlockSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        first_body_pct_range, second_body_pct_range, third_body_pct_range,
+        third_upper_shadow_pct, total_close_gain_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b2.close,
+        cdl_advance_block_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_breakaway_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlBreakawaySnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 6 {
+        return CdlBreakawaySnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_breakaway_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥6 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 4 { return 0; }
+        let b0 = s[i - 4];
+        let b1 = s[i - 3];
+        let b2 = s[i - 2];
+        let b3 = s[i - 1];
+        let b4 = s[i];
+        let (body0, _, _, _, body0_pct, bull0) = candle_metrics(b0);
+        let (_, _, _, _, _, bull1) = candle_metrics(b1);
+        let (_, _, _, _, _, bull2) = candle_metrics(b2);
+        let (_, _, _, _, _, bull3) = candle_metrics(b3);
+        let (_, _, _, _, body4_pct, bull4) = candle_metrics(b4);
+        if body0 < 1e-12 { return 0; }
+        if body0_pct < 30.0 || body4_pct < 30.0 { return 0; }
+        if !bull0 && !bull1 && !bull2 && !bull3 && bull4 {
+            if b1.high >= b0.low { return 0; }
+            if !(b2.low < b1.low && b3.low <= b2.low) { return 0; }
+            if !(b4.close > b1.high && b4.close < b0.low) { return 0; }
+            100
+        } else if bull0 && bull1 && bull2 && bull3 && !bull4 {
+            if b1.low <= b0.high { return 0; }
+            if !(b2.high > b1.high && b3.high >= b2.high) { return 0; }
+            if !(b4.close < b1.low && b4.close > b0.high) { return 0; }
+            -100
+        } else {
+            0
+        }
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 4, detect);
+    let b0 = sorted[n - 5];
+    let b1 = sorted[n - 4];
+    let b4 = sorted[n - 1];
+    let (_, range0, _, _, first_body_pct_range, bull0) = candle_metrics(b0);
+    let (_, _, _, _, fifth_body_pct_range, _) = candle_metrics(b4);
+    let initial_gap = if !bull0 && b1.high < b0.low {
+        b0.low - b1.high
+    } else if bull0 && b1.low > b0.high {
+        b1.low - b0.high
+    } else {
+        0.0
+    };
+    let initial_gap_pct_range = if range0 > 1e-12 { 100.0 * initial_gap / range0 } else { 0.0 };
+    let gap_retracement_pct = if initial_gap > 1e-12 {
+        if !bull0 {
+            100.0 * (b4.close - b1.high) / initial_gap
+        } else {
+            100.0 * (b1.low - b4.close) / initial_gap
+        }
+    } else { 0.0 };
+    let label = match last_val {
+        100 => "BULLISH_PATTERN",
+        -100 => "BEARISH_PATTERN",
+        _ => "NO_PATTERN",
+    };
+    CdlBreakawaySnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        first_body_pct_range, initial_gap_pct_range, fifth_body_pct_range, gap_retracement_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b4.close,
+        cdl_breakaway_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_gap_side_side_white_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlGapSideSideWhiteSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 4 {
+        return CdlGapSideSideWhiteSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_gap_side_side_white_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥4 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 2 { return 0; }
+        let b0 = s[i - 2];
+        let b1 = s[i - 1];
+        let b2 = s[i];
+        let (body1, _range1, _, _, body1_pct, bull1) = candle_metrics(b1);
+        let (body2, _, _, _, body2_pct, bull2) = candle_metrics(b2);
+        if body1 < 1e-12 || body2 < 1e-12 { return 0; }
+        if !(bull1 && bull2) { return 0; }
+        if body1_pct < 25.0 || body2_pct < 25.0 { return 0; }
+        let open_diff = 100.0 * (b2.open - b1.open).abs() / body1;
+        let close_diff = 100.0 * (b2.close - b1.close).abs() / body1;
+        if open_diff > 25.0 || close_diff > 35.0 { return 0; }
+        if b1.low > b0.high && b2.low > b0.high {
+            100
+        } else if b1.high < b0.low && b2.high < b0.low {
+            -100
+        } else {
+            0
+        }
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 2, detect);
+    let b0 = sorted[n - 3];
+    let b1 = sorted[n - 2];
+    let b2 = sorted[n - 1];
+    let (body1, range1, _, _, second_body_pct_range, _) = candle_metrics(b1);
+    let (_, _, _, _, third_body_pct_range, _) = candle_metrics(b2);
+    let gap_raw = if b1.low > b0.high {
+        b1.low - b0.high
+    } else if b1.high < b0.low {
+        b0.low - b1.high
+    } else {
+        0.0
+    };
+    let gap_pct_range = if range1 > 1e-12 { 100.0 * gap_raw / range1 } else { 0.0 };
+    let open_similarity_pct_body = if body1 > 1e-12 {
+        100.0 * (b2.open - b1.open).abs() / body1
+    } else { 0.0 };
+    let close_similarity_pct_body = if body1 > 1e-12 {
+        100.0 * (b2.close - b1.close).abs() / body1
+    } else { 0.0 };
+    let label = match last_val {
+        100 => "BULLISH_CONTINUATION",
+        -100 => "BEARISH_CONTINUATION",
+        _ => "NO_PATTERN",
+    };
+    CdlGapSideSideWhiteSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        gap_pct_range, second_body_pct_range, third_body_pct_range,
+        open_similarity_pct_body, close_similarity_pct_body,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b2.close,
+        cdl_gap_side_side_white_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_upside_gap_two_crows_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlUpsideGapTwoCrowsSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 4 {
+        return CdlUpsideGapTwoCrowsSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_upside_gap_two_crows_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥4 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 2 { return 0; }
+        let b0 = s[i - 2];
+        let b1 = s[i - 1];
+        let b2 = s[i];
+        let (body0, _, _, _, body0_pct, bull0) = candle_metrics(b0);
+        let (body1, _, _, _, _, bull1) = candle_metrics(b1);
+        let (_, _, _, _, _, bull2) = candle_metrics(b2);
+        if body0 < 1e-12 || body1 < 1e-12 { return 0; }
+        if !bull0 || bull1 || bull2 { return 0; }
+        if body0_pct < 30.0 { return 0; }
+        if b1.low <= b0.high { return 0; }
+        if b2.open <= b1.open { return 0; }
+        if !(b2.close < b1.close && b2.close > b0.high && b2.close < b1.low) { return 0; }
+        -100
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 2, detect);
+    let b0 = sorted[n - 3];
+    let b1 = sorted[n - 2];
+    let b2 = sorted[n - 1];
+    let (body0, range0, _, _, first_body_pct_range, _) = candle_metrics(b0);
+    let (body1, _, _, _, _, _) = candle_metrics(b1);
+    let upside_gap = if b1.low > b0.high { b1.low - b0.high } else { 0.0 };
+    let upside_gap_pct_range = if range0 > 1e-12 { 100.0 * upside_gap / range0 } else { 0.0 };
+    let third_open_above_second_pct_body = if body1 > 1e-12 {
+        100.0 * (b2.open - b1.open) / body1
+    } else { 0.0 };
+    let third_close_into_gap_pct = if upside_gap > 1e-12 {
+        100.0 * (b1.low - b2.close) / upside_gap
+    } else { 0.0 };
+    let _ = body0;
+    let label = if last_val == -100 { "BEARISH_PATTERN" } else { "NO_PATTERN" };
+    CdlUpsideGapTwoCrowsSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        first_body_pct_range, upside_gap_pct_range,
+        third_open_above_second_pct_body, third_close_into_gap_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b2.close,
+        cdl_upside_gap_two_crows_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_xside_gap_three_methods_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlXSideGapThreeMethodsSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 4 {
+        return CdlXSideGapThreeMethodsSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_xside_gap_three_methods_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥4 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 2 { return 0; }
+        let b0 = s[i - 2];
+        let b1 = s[i - 1];
+        let b2 = s[i];
+        let (_, _, _, _, body1_pct, bull1) = candle_metrics(b1);
+        let (_, _, _, _, body2_pct, bull2) = candle_metrics(b2);
+        if body1_pct < 25.0 || body2_pct < 20.0 { return 0; }
+        if b1.low > b0.high && bull1 && !bull2 {
+            if !(b2.open < b1.close && b2.open > b1.open) { return 0; }
+            if !(b2.close < b1.open && b2.close > b0.high) { return 0; }
+            100
+        } else if b1.high < b0.low && !bull1 && bull2 {
+            if !(b2.open > b1.close && b2.open < b1.open) { return 0; }
+            if !(b2.close > b1.open && b2.close < b0.low) { return 0; }
+            -100
+        } else {
+            0
+        }
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 2, detect);
+    let b0 = sorted[n - 3];
+    let b1 = sorted[n - 2];
+    let b2 = sorted[n - 1];
+    let (_, range1, _, _, second_body_pct_range, bull1) = candle_metrics(b1);
+    let (_, _, _, _, third_body_pct_range, _) = candle_metrics(b2);
+    let gap_raw = if b1.low > b0.high {
+        b1.low - b0.high
+    } else if b1.high < b0.low {
+        b0.low - b1.high
+    } else {
+        0.0
+    };
+    let gap_pct_range = if range1 > 1e-12 { 100.0 * gap_raw / range1 } else { 0.0 };
+    let gap_fill_pct = if gap_raw > 1e-12 {
+        if bull1 {
+            100.0 * (b1.low - b2.close) / gap_raw
+        } else {
+            100.0 * (b2.close - b1.high) / gap_raw
+        }
+    } else { 0.0 };
+    let label = match last_val {
+        100 => "BULLISH_CONTINUATION",
+        -100 => "BEARISH_CONTINUATION",
+        _ => "NO_PATTERN",
+    };
+    CdlXSideGapThreeMethodsSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        gap_pct_range, second_body_pct_range, third_body_pct_range, gap_fill_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b2.close,
+        cdl_xside_gap_three_methods_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_conceal_baby_swallow_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlConcealBabySwallowSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 5 {
+        return CdlConcealBabySwallowSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_conceal_baby_swallow_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥5 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 3 { return 0; }
+        let b0 = s[i - 3];
+        let b1 = s[i - 2];
+        let b2 = s[i - 1];
+        let b3 = s[i];
+        let (_, range0, upper0, lower0, body0_pct, bull0) = candle_metrics(b0);
+        let (_, range1, upper1, lower1, body1_pct, bull1) = candle_metrics(b1);
+        let (_, range2, upper2, _, body2_pct, bull2) = candle_metrics(b2);
+        let (_, _, _, _, _, bull3) = candle_metrics(b3);
+        if bull0 || bull1 || bull2 || bull3 { return 0; }
+        let marubozu0 = body0_pct >= 90.0
+            && range0 > 1e-12
+            && 100.0 * upper0 / range0 <= 5.0
+            && 100.0 * lower0 / range0 <= 5.0;
+        let marubozu1 = body1_pct >= 90.0
+            && range1 > 1e-12
+            && 100.0 * upper1 / range1 <= 5.0
+            && 100.0 * lower1 / range1 <= 5.0;
+        if !marubozu0 || !marubozu1 || body2_pct > 50.0 { return 0; }
+        if b2.high >= b1.low { return 0; }
+        if range2 <= 1e-12 || 100.0 * upper2 / range2 < 20.0 { return 0; }
+        if !(b3.high > b2.high && b3.low < b2.low) { return 0; }
+        100
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 3, detect);
+    let b0 = sorted[n - 4];
+    let b1 = sorted[n - 3];
+    let b2 = sorted[n - 2];
+    let b3 = sorted[n - 1];
+    let (_, _, _, _, first_body_pct_range, _) = candle_metrics(b0);
+    let (_, _, _, _, second_body_pct_range, _) = candle_metrics(b1);
+    let (_, range2, upper2, _, _, _) = candle_metrics(b2);
+    let third_upper_shadow_pct = if range2 > 1e-12 { 100.0 * upper2 / range2 } else { 0.0 };
+    let third_range = (b2.high - b2.low).abs();
+    let fourth_range_engulf_pct = if third_range > 1e-12
+        && b3.high > b2.high
+        && b3.low < b2.low
+    {
+        100.0 * ((b3.high - b3.low) - third_range) / third_range
+    } else { 0.0 };
+    let label = if last_val == 100 { "BULLISH_PATTERN" } else { "NO_PATTERN" };
+    CdlConcealBabySwallowSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        first_body_pct_range, second_body_pct_range, third_upper_shadow_pct, fourth_range_engulf_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b3.close,
+        cdl_conceal_baby_swallow_label: label.into(), note: String::new(),
+    }
+}
+
+// ── ADR-193 Round 85/86 compute fns — CDLHIKKAKE / CDLHIKKAKEMOD /
+//    CDLMATHOLD / CDLRISEFALL3METHODS ──
+
+pub fn compute_cdl_hikkake_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlHikkakeSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 4 {
+        return CdlHikkakeSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_hikkake_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥4 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 2 { return 0; }
+        let b0 = s[i - 2];
+        let b1 = s[i - 1];
+        let b2 = s[i];
+        if !(b1.high < b0.high && b1.low > b0.low) { return 0; }
+        if b2.low < b1.low && b2.high <= b1.high && b2.close > b1.low {
+            100
+        } else if b2.high > b1.high && b2.low >= b1.low && b2.close < b1.high {
+            -100
+        } else {
+            0
+        }
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 2, detect);
+    let b0 = sorted[n - 3];
+    let b1 = sorted[n - 2];
+    let b2 = sorted[n - 1];
+    let mother_range = (b0.high - b0.low).abs();
+    let inside_range = (b1.high - b1.low).abs();
+    let (_, trigger_range, _, _, trigger_body_pct_range, _) = candle_metrics(b2);
+    let inside_width_pct_mother = if mother_range > 1e-12 {
+        100.0 * inside_range / mother_range
+    } else { 0.0 };
+    let false_break_extension_pct = if inside_range > 1e-12 {
+        if b2.low < b1.low {
+            100.0 * (b1.low - b2.low) / inside_range
+        } else if b2.high > b1.high {
+            100.0 * (b2.high - b1.high) / inside_range
+        } else {
+            0.0
+        }
+    } else { 0.0 };
+    let _ = trigger_range;
+    let label = match last_val {
+        100 => "BULLISH_PATTERN",
+        -100 => "BEARISH_PATTERN",
+        _ => "NO_PATTERN",
+    };
+    CdlHikkakeSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        inside_width_pct_mother, false_break_extension_pct, trigger_body_pct_range,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b2.close,
+        cdl_hikkake_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_hikkake_mod_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlHikkakeModSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 5 {
+        return CdlHikkakeModSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_hikkake_mod_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥5 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 3 { return 0; }
+        let b0 = s[i - 3];
+        let b1 = s[i - 2];
+        let b2 = s[i - 1];
+        let b3 = s[i];
+        if !(b1.high < b0.high && b1.low > b0.low) { return 0; }
+        if b2.low < b1.low && b2.high <= b1.high && b2.close > b1.low
+            && b3.close > b1.high && b3.close > b2.high
+        {
+            100
+        } else if b2.high > b1.high && b2.low >= b1.low && b2.close < b1.high
+            && b3.close < b1.low && b3.close < b2.low
+        {
+            -100
+        } else {
+            0
+        }
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 3, detect);
+    let b0 = sorted[n - 4];
+    let b1 = sorted[n - 3];
+    let b2 = sorted[n - 2];
+    let b3 = sorted[n - 1];
+    let mother_range = (b0.high - b0.low).abs();
+    let inside_range = (b1.high - b1.low).abs();
+    let inside_width_pct_mother = if mother_range > 1e-12 {
+        100.0 * inside_range / mother_range
+    } else { 0.0 };
+    let false_break_extension_pct = if inside_range > 1e-12 {
+        if b2.low < b1.low {
+            100.0 * (b1.low - b2.low) / inside_range
+        } else if b2.high > b1.high {
+            100.0 * (b2.high - b1.high) / inside_range
+        } else {
+            0.0
+        }
+    } else { 0.0 };
+    let confirmation_extension_pct = if inside_range > 1e-12 {
+        if b2.low < b1.low {
+            100.0 * (b3.close - b1.high) / inside_range
+        } else if b2.high > b1.high {
+            100.0 * (b1.low - b3.close) / inside_range
+        } else {
+            0.0
+        }
+    } else { 0.0 };
+    let label = match last_val {
+        100 => "BULLISH_PATTERN",
+        -100 => "BEARISH_PATTERN",
+        _ => "NO_PATTERN",
+    };
+    CdlHikkakeModSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        inside_width_pct_mother, false_break_extension_pct, confirmation_extension_pct,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b3.close,
+        cdl_hikkake_mod_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_mat_hold_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlMatHoldSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 5 {
+        return CdlMatHoldSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_mat_hold_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥5 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 4 { return 0; }
+        let b0 = s[i - 4];
+        let b1 = s[i - 3];
+        let b2 = s[i - 2];
+        let b3 = s[i - 1];
+        let b4 = s[i];
+        let (body0, _, _, _, body0_pct, bull0) = candle_metrics(b0);
+        let (_, _, _, _, body1_pct, bull1) = candle_metrics(b1);
+        let (_, _, _, _, body2_pct, bull2) = candle_metrics(b2);
+        let (_, _, _, _, body3_pct, bull3) = candle_metrics(b3);
+        let (_, _, _, _, body4_pct, bull4) = candle_metrics(b4);
+        if body0 < 1e-12 { return 0; }
+        let middle_small = body1_pct <= 35.0 && body2_pct <= 35.0 && body3_pct <= 35.0;
+        if !middle_small || body0_pct < 30.0 || body4_pct < 30.0 { return 0; }
+        if bull0 && bull4 {
+            if b1.low <= b0.high { return 0; }
+            if !(b2.low > b0.open && b3.low > b0.open) { return 0; }
+            if !(b2.high < b1.high && b3.high < b1.high) { return 0; }
+            if !(b4.close > b1.high) { return 0; }
+            100
+        } else if !bull0 && !bull4 {
+            if b1.high >= b0.low { return 0; }
+            if !(b2.high < b0.open && b3.high < b0.open) { return 0; }
+            if !(b2.low > b1.low && b3.low > b1.low) { return 0; }
+            if !(b4.close < b1.low) { return 0; }
+            -100
+        } else {
+            let _ = (bull1, bull2, bull3);
+            0
+        }
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 4, detect);
+    let b0 = sorted[n - 5];
+    let b1 = sorted[n - 4];
+    let b2 = sorted[n - 3];
+    let b3 = sorted[n - 2];
+    let b4 = sorted[n - 1];
+    let (body0, range0, _, _, first_body_pct_range, bull0) = candle_metrics(b0);
+    let (_, _, _, _, body1_pct, _) = candle_metrics(b1);
+    let (_, _, _, _, body2_pct, _) = candle_metrics(b2);
+    let (_, _, _, _, body3_pct, _) = candle_metrics(b3);
+    let (_, _, _, _, final_body_pct_range, _) = candle_metrics(b4);
+    let middle_avg_body_pct_range = (body1_pct + body2_pct + body3_pct) / 3.0;
+    let initial_gap_raw = if bull0 && b1.low > b0.high {
+        b1.low - b0.high
+    } else if !bull0 && b1.high < b0.low {
+        b0.low - b1.high
+    } else {
+        0.0
+    };
+    let initial_gap_pct_range = if range0 > 1e-12 { 100.0 * initial_gap_raw / range0 } else { 0.0 };
+    let hold_depth_pct_body = if body0 > 1e-12 {
+        if bull0 {
+            let min_low = b1.low.min(b2.low.min(b3.low));
+            100.0 * (min_low - b0.open) / body0
+        } else {
+            let max_high = b1.high.max(b2.high.max(b3.high));
+            100.0 * (b0.open - max_high) / body0
+        }
+    } else { 0.0 };
+    let label = match last_val {
+        100 => "BULLISH_CONTINUATION",
+        -100 => "BEARISH_CONTINUATION",
+        _ => "NO_PATTERN",
+    };
+    CdlMatHoldSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        first_body_pct_range, middle_avg_body_pct_range, initial_gap_pct_range,
+        hold_depth_pct_body, final_body_pct_range,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b4.close,
+        cdl_mat_hold_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_rise_fall_three_methods_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlRiseFallThreeMethodsSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 5 {
+        return CdlRiseFallThreeMethodsSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_rise_fall_three_methods_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥5 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 4 { return 0; }
+        let b0 = s[i - 4];
+        let b1 = s[i - 3];
+        let b2 = s[i - 2];
+        let b3 = s[i - 1];
+        let b4 = s[i];
+        let (_, _, _, _, body0_pct, bull0) = candle_metrics(b0);
+        let (_, _, _, _, body1_pct, bull1) = candle_metrics(b1);
+        let (_, _, _, _, body2_pct, bull2) = candle_metrics(b2);
+        let (_, _, _, _, body3_pct, bull3) = candle_metrics(b3);
+        let (_, _, _, _, body4_pct, bull4) = candle_metrics(b4);
+        if body0_pct < 30.0 || body4_pct < 30.0 { return 0; }
+        if !(body1_pct <= 35.0 && body2_pct <= 35.0 && body3_pct <= 35.0) { return 0; }
+        if bull0 && !bull1 && !bull2 && !bull3 && bull4 {
+            if !(b1.high < b0.close && b2.high < b0.close && b3.high < b0.close) { return 0; }
+            if !(b1.low > b0.open && b2.low > b0.open && b3.low > b0.open) { return 0; }
+            if b4.close <= b0.close { return 0; }
+            100
+        } else if !bull0 && bull1 && bull2 && bull3 && !bull4 {
+            if !(b1.low > b0.close && b2.low > b0.close && b3.low > b0.close) { return 0; }
+            if !(b1.high < b0.open && b2.high < b0.open && b3.high < b0.open) { return 0; }
+            if b4.close >= b0.close { return 0; }
+            -100
+        } else {
+            0
+        }
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 4, detect);
+    let b0 = sorted[n - 5];
+    let b1 = sorted[n - 4];
+    let b2 = sorted[n - 3];
+    let b3 = sorted[n - 2];
+    let b4 = sorted[n - 1];
+    let (body0, _, _, _, first_body_pct_range, bull0) = candle_metrics(b0);
+    let (_, _, _, _, body1_pct, _) = candle_metrics(b1);
+    let (_, _, _, _, body2_pct, _) = candle_metrics(b2);
+    let (_, _, _, _, body3_pct, _) = candle_metrics(b3);
+    let (_, _, _, _, final_body_pct_range, _) = candle_metrics(b4);
+    let middle_avg_body_pct_range = (body1_pct + body2_pct + body3_pct) / 3.0;
+    let containment_pct_body = if body0 > 1e-12 {
+        if bull0 {
+            let min_low = b1.low.min(b2.low.min(b3.low));
+            100.0 * (min_low - b0.open) / body0
+        } else {
+            let max_high = b1.high.max(b2.high.max(b3.high));
+            100.0 * (b0.open - max_high) / body0
+        }
+    } else { 0.0 };
+    let label = match last_val {
+        100 => "BULLISH_CONTINUATION",
+        -100 => "BEARISH_CONTINUATION",
+        _ => "NO_PATTERN",
+    };
+    CdlRiseFallThreeMethodsSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        first_body_pct_range, middle_avg_body_pct_range, containment_pct_body, final_body_pct_range,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b4.close,
+        cdl_rise_fall_three_methods_label: label.into(), note: String::new(),
+    }
+}
+
+// ── ADR-194 Round 87/88 compute fns — CDLSTALLEDPATTERN /
+//    CDLTASUKIGAP ──
+
+pub fn compute_cdl_stalled_pattern_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlStalledPatternSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 3 {
+        return CdlStalledPatternSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_stalled_pattern_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥3 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 2 { return 0; }
+        let b0 = s[i - 2];
+        let b1 = s[i - 1];
+        let b2 = s[i];
+        let (_body0, _, _, _, body0_pct, bull0) = candle_metrics(b0);
+        let (body1, _, _, _, body1_pct, bull1) = candle_metrics(b1);
+        let (body2, range2, upper2, _, body2_pct, bull2) = candle_metrics(b2);
+        let upper2_pct = if range2 > 1e-12 { 100.0 * upper2 / range2 } else { 0.0 };
+        if !(bull0 && bull1 && bull2) { return 0; }
+        if body0_pct < 30.0 || body1_pct < 30.0 || body2_pct < 12.0 { return 0; }
+        if body2 >= body1 * 0.8 { return 0; }
+        let advance1 = b1.close - b0.close;
+        let advance2 = b2.close - b1.close;
+        if advance1 <= 0.0 || advance2 <= 0.0 { return 0; }
+        if advance2 > advance1 * 0.6 { return 0; }
+        if upper2_pct < 15.0 { return 0; }
+        -100
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 2, detect);
+    let b0 = sorted[n - 3];
+    let b1 = sorted[n - 2];
+    let b2 = sorted[n - 1];
+    let (_, _, _, _, first_body_pct_range, _) = candle_metrics(b0);
+    let (_, range1, _, _, second_body_pct_range, _) = candle_metrics(b1);
+    let (_, range2, upper2, _, third_body_pct_range, _) = candle_metrics(b2);
+    let third_upper_shadow_pct = if range2 > 1e-12 { 100.0 * upper2 / range2 } else { 0.0 };
+    let third_open_gap_pct_range = if range1 > 1e-12 {
+        100.0 * (b2.open - b1.close).max(0.0) / range1
+    } else { 0.0 };
+    let advance1 = b1.close - b0.close;
+    let advance2 = b2.close - b1.close;
+    let close_progress_pct_prev_leg = if advance1.abs() > 1e-12 {
+        100.0 * advance2 / advance1
+    } else { 0.0 };
+    let label = match last_val {
+        -100 => "BEARISH_PATTERN",
+        _ => "NO_PATTERN",
+    };
+    CdlStalledPatternSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        first_body_pct_range, second_body_pct_range, third_body_pct_range,
+        third_open_gap_pct_range, third_upper_shadow_pct, close_progress_pct_prev_leg,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b2.close,
+        cdl_stalled_pattern_label: label.into(), note: String::new(),
+    }
+}
+
+pub fn compute_cdl_tasuki_gap_snapshot(
+    symbol: &str, as_of: &str, bars: &[HistoricalPriceRow],
+) -> CdlTasukiGapSnapshot {
+    let sym = symbol.to_uppercase();
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let n = sorted.len();
+    if n < 3 {
+        return CdlTasukiGapSnapshot {
+            symbol: sym, as_of: as_of.into(),
+            cdl_tasuki_gap_label: "INSUFFICIENT_DATA".into(),
+            note: format!("need ≥3 bars, got {}", n),
+            ..Default::default()
+        };
+    }
+    let detect = |s: &[&HistoricalPriceRow], i: usize| -> i32 {
+        if i < 2 { return 0; }
+        let b0 = s[i - 2];
+        let b1 = s[i - 1];
+        let b2 = s[i];
+        let (_, _, _, _, body0_pct, bull0) = candle_metrics(b0);
+        let (_, _, _, _, body1_pct, bull1) = candle_metrics(b1);
+        let (_, _, _, _, body2_pct, bull2) = candle_metrics(b2);
+        if body0_pct < 30.0 || body1_pct < 30.0 || body2_pct < 20.0 { return 0; }
+        if bull0 && bull1 && !bull2 {
+            if !(b1.low > b0.high) { return 0; }
+            if !(b2.open > b1.open && b2.open < b1.close) { return 0; }
+            if !(b2.close < b1.low && b2.close > b0.high) { return 0; }
+            100
+        } else if !bull0 && !bull1 && bull2 {
+            if !(b1.high < b0.low) { return 0; }
+            if !(b2.open > b1.close && b2.open < b1.open) { return 0; }
+            if !(b2.close > b1.high && b2.close < b0.low) { return 0; }
+            -100
+        } else {
+            0
+        }
+    };
+    let (last_match, days_since, last_val, prev_val) = cdl_scan(&sorted, 2, detect);
+    let b0 = sorted[n - 3];
+    let b1 = sorted[n - 2];
+    let b2 = sorted[n - 1];
+    let (_, range0, _, _, first_body_pct_range, bull0) = candle_metrics(b0);
+    let (_, _, _, _, second_body_pct_range, _) = candle_metrics(b1);
+    let (_, _, _, _, third_body_pct_range, _) = candle_metrics(b2);
+    let gap_raw = if bull0 && b1.low > b0.high {
+        b1.low - b0.high
+    } else if !bull0 && b1.high < b0.low {
+        b0.low - b1.high
+    } else {
+        0.0
+    };
+    let gap_pct_range = if range0 > 1e-12 { 100.0 * gap_raw / range0 } else { 0.0 };
+    let gap_fill_pct = if gap_raw > 1e-12 {
+        if bull0 && b1.low > b0.high {
+            100.0 * (b1.low - b2.close).clamp(0.0, gap_raw) / gap_raw
+        } else if !bull0 && b1.high < b0.low {
+            100.0 * (b2.close - b1.high).clamp(0.0, gap_raw) / gap_raw
+        } else {
+            0.0
+        }
+    } else { 0.0 };
+    let body1 = (b1.close - b1.open).abs();
+    let third_open_pct_second_body = if body1 > 1e-12 {
+        if bull0 {
+            100.0 * (b2.open - b1.open) / body1
+        } else {
+            100.0 * (b1.open - b2.open) / body1
+        }
+    } else { 0.0 };
+    let label = match last_val {
+        100 => "BULLISH_CONTINUATION",
+        -100 => "BEARISH_CONTINUATION",
+        _ => "NO_PATTERN",
+    };
+    CdlTasukiGapSnapshot {
+        symbol: sym, as_of: as_of.into(), bars_used: n,
+        pattern_value: last_val, pattern_value_prev: prev_val,
+        first_body_pct_range, second_body_pct_range, third_body_pct_range,
+        gap_pct_range, gap_fill_pct, third_open_pct_second_body,
+        last_bar_match: last_match, days_since_pattern: days_since,
+        last_close: b2.close,
+        cdl_tasuki_gap_label: label.into(), note: String::new(),
+    }
+}
+
 // ── ADR-189 Round 76 (Quant Stats) compute fns ────────────────────────────
 
 /// MODSHARPE compute: Pezier-White Adjusted Sharpe Ratio.
@@ -48419,6 +50078,603 @@ pub fn get_cdl_takuri(conn: &Connection, symbol: &str) -> Result<Option<CdlTakur
     if let Some(r) = rows.next().map_err(|e| format!("row cdl_takuri: {e}"))? {
         let j: String = r.get(0).map_err(|e| format!("get cdl_takuri: {e}"))?;
         let snap: CdlTakuriSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_takuri: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── ADR-191 Round 81/82 schema v85 (TA-Lib CDL) ──────────────────────────
+//    CDL3STARSINSOUTH / CDLIDENTICAL3CROWS / CDLKICKING /
+//    CDLKICKINGBYLENGTH / CDLLADDERBOTTOM / CDLUNIQUE3RIVER
+
+pub fn create_research_tables_v85(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v84(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_cdl_three_stars_in_south (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_three_stars_in_south_updated ON research_cdl_three_stars_in_south(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_identical_three_crows (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_identical_three_crows_updated ON research_cdl_identical_three_crows(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_kicking (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_kicking_updated ON research_cdl_kicking(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_kicking_by_length (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_kicking_by_length_updated ON research_cdl_kicking_by_length(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_ladder_bottom (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_ladder_bottom_updated ON research_cdl_ladder_bottom(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_unique_three_river (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_unique_three_river_updated ON research_cdl_unique_three_river(updated_at);",
+    ).map_err(|e| format!("create v85 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_cdl_three_stars_in_south(conn: &Connection, symbol: &str, snap: &CdlThreeStarsInSouthSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v85(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_three_stars_in_south json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_three_stars_in_south (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_three_stars_in_south: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_three_stars_in_south(conn: &Connection, symbol: &str) -> Result<Option<CdlThreeStarsInSouthSnapshot>, String> {
+    let _ = create_research_tables_v85(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_three_stars_in_south WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_three_stars_in_south: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_three_stars_in_south: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_three_stars_in_south: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_three_stars_in_south: {e}"))?;
+        let snap: CdlThreeStarsInSouthSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_three_stars_in_south: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_identical_three_crows(conn: &Connection, symbol: &str, snap: &CdlIdenticalThreeCrowsSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v85(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_identical_three_crows json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_identical_three_crows (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_identical_three_crows: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_identical_three_crows(conn: &Connection, symbol: &str) -> Result<Option<CdlIdenticalThreeCrowsSnapshot>, String> {
+    let _ = create_research_tables_v85(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_identical_three_crows WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_identical_three_crows: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_identical_three_crows: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_identical_three_crows: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_identical_three_crows: {e}"))?;
+        let snap: CdlIdenticalThreeCrowsSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_identical_three_crows: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_kicking(conn: &Connection, symbol: &str, snap: &CdlKickingSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v85(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_kicking json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_kicking (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_kicking: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_kicking(conn: &Connection, symbol: &str) -> Result<Option<CdlKickingSnapshot>, String> {
+    let _ = create_research_tables_v85(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_kicking WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_kicking: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_kicking: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_kicking: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_kicking: {e}"))?;
+        let snap: CdlKickingSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_kicking: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_kicking_by_length(conn: &Connection, symbol: &str, snap: &CdlKickingByLengthSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v85(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_kicking_by_length json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_kicking_by_length (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_kicking_by_length: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_kicking_by_length(conn: &Connection, symbol: &str) -> Result<Option<CdlKickingByLengthSnapshot>, String> {
+    let _ = create_research_tables_v85(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_kicking_by_length WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_kicking_by_length: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_kicking_by_length: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_kicking_by_length: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_kicking_by_length: {e}"))?;
+        let snap: CdlKickingByLengthSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_kicking_by_length: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_ladder_bottom(conn: &Connection, symbol: &str, snap: &CdlLadderBottomSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v85(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_ladder_bottom json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_ladder_bottom (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_ladder_bottom: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_ladder_bottom(conn: &Connection, symbol: &str) -> Result<Option<CdlLadderBottomSnapshot>, String> {
+    let _ = create_research_tables_v85(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_ladder_bottom WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_ladder_bottom: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_ladder_bottom: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_ladder_bottom: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_ladder_bottom: {e}"))?;
+        let snap: CdlLadderBottomSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_ladder_bottom: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_unique_three_river(conn: &Connection, symbol: &str, snap: &CdlUniqueThreeRiverSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v85(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_unique_three_river json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_unique_three_river (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_unique_three_river: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_unique_three_river(conn: &Connection, symbol: &str) -> Result<Option<CdlUniqueThreeRiverSnapshot>, String> {
+    let _ = create_research_tables_v85(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_unique_three_river WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_unique_three_river: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_unique_three_river: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_unique_three_river: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_unique_three_river: {e}"))?;
+        let snap: CdlUniqueThreeRiverSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_unique_three_river: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── ADR-192 Round 83/84 schema v86 (TA-Lib CDL) ──────────────────────────
+//    CDLADVANCEBLOCK / CDLBREAKAWAY / CDLGAPSIDESIDEWHITE /
+//    CDLUPSIDEGAP2CROWS / CDLXSIDEGAP3METHODS / CDLCONCEALBABYSWALL
+
+pub fn create_research_tables_v86(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v85(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_cdl_advance_block (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_advance_block_updated ON research_cdl_advance_block(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_breakaway (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_breakaway_updated ON research_cdl_breakaway(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_gap_side_side_white (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_gap_side_side_white_updated ON research_cdl_gap_side_side_white(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_upside_gap_two_crows (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_upside_gap_two_crows_updated ON research_cdl_upside_gap_two_crows(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_xside_gap_three_methods (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_xside_gap_three_methods_updated ON research_cdl_xside_gap_three_methods(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_conceal_baby_swallow (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_conceal_baby_swallow_updated ON research_cdl_conceal_baby_swallow(updated_at);",
+    ).map_err(|e| format!("create v86 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_cdl_advance_block(conn: &Connection, symbol: &str, snap: &CdlAdvanceBlockSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v86(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_advance_block json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_advance_block (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_advance_block: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_advance_block(conn: &Connection, symbol: &str) -> Result<Option<CdlAdvanceBlockSnapshot>, String> {
+    let _ = create_research_tables_v86(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_advance_block WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_advance_block: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_advance_block: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_advance_block: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_advance_block: {e}"))?;
+        let snap: CdlAdvanceBlockSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_advance_block: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_breakaway(conn: &Connection, symbol: &str, snap: &CdlBreakawaySnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v86(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_breakaway json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_breakaway (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_breakaway: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_breakaway(conn: &Connection, symbol: &str) -> Result<Option<CdlBreakawaySnapshot>, String> {
+    let _ = create_research_tables_v86(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_breakaway WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_breakaway: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_breakaway: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_breakaway: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_breakaway: {e}"))?;
+        let snap: CdlBreakawaySnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_breakaway: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_gap_side_side_white(conn: &Connection, symbol: &str, snap: &CdlGapSideSideWhiteSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v86(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_gap_side_side_white json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_gap_side_side_white (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_gap_side_side_white: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_gap_side_side_white(conn: &Connection, symbol: &str) -> Result<Option<CdlGapSideSideWhiteSnapshot>, String> {
+    let _ = create_research_tables_v86(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_gap_side_side_white WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_gap_side_side_white: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_gap_side_side_white: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_gap_side_side_white: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_gap_side_side_white: {e}"))?;
+        let snap: CdlGapSideSideWhiteSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_gap_side_side_white: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_upside_gap_two_crows(conn: &Connection, symbol: &str, snap: &CdlUpsideGapTwoCrowsSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v86(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_upside_gap_two_crows json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_upside_gap_two_crows (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_upside_gap_two_crows: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_upside_gap_two_crows(conn: &Connection, symbol: &str) -> Result<Option<CdlUpsideGapTwoCrowsSnapshot>, String> {
+    let _ = create_research_tables_v86(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_upside_gap_two_crows WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_upside_gap_two_crows: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_upside_gap_two_crows: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_upside_gap_two_crows: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_upside_gap_two_crows: {e}"))?;
+        let snap: CdlUpsideGapTwoCrowsSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_upside_gap_two_crows: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_xside_gap_three_methods(conn: &Connection, symbol: &str, snap: &CdlXSideGapThreeMethodsSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v86(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_xside_gap_three_methods json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_xside_gap_three_methods (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_xside_gap_three_methods: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_xside_gap_three_methods(conn: &Connection, symbol: &str) -> Result<Option<CdlXSideGapThreeMethodsSnapshot>, String> {
+    let _ = create_research_tables_v86(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_xside_gap_three_methods WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_xside_gap_three_methods: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_xside_gap_three_methods: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_xside_gap_three_methods: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_xside_gap_three_methods: {e}"))?;
+        let snap: CdlXSideGapThreeMethodsSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_xside_gap_three_methods: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_conceal_baby_swallow(conn: &Connection, symbol: &str, snap: &CdlConcealBabySwallowSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v86(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_conceal_baby_swallow json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_conceal_baby_swallow (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_conceal_baby_swallow: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_conceal_baby_swallow(conn: &Connection, symbol: &str) -> Result<Option<CdlConcealBabySwallowSnapshot>, String> {
+    let _ = create_research_tables_v86(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_conceal_baby_swallow WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_conceal_baby_swallow: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_conceal_baby_swallow: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_conceal_baby_swallow: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_conceal_baby_swallow: {e}"))?;
+        let snap: CdlConcealBabySwallowSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_conceal_baby_swallow: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── ADR-193 Round 85/86 schema v87 (TA-Lib CDL) ──────────────────────────
+//    CDLHIKKAKE / CDLHIKKAKEMOD / CDLMATHOLD /
+//    CDLRISEFALL3METHODS
+
+pub fn create_research_tables_v87(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v86(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_cdl_hikkake (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_hikkake_updated ON research_cdl_hikkake(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_hikkake_mod (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_hikkake_mod_updated ON research_cdl_hikkake_mod(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_mat_hold (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_mat_hold_updated ON research_cdl_mat_hold(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_rise_fall_three_methods (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_rise_fall_three_methods_updated ON research_cdl_rise_fall_three_methods(updated_at);",
+    ).map_err(|e| format!("create v87 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_cdl_hikkake(conn: &Connection, symbol: &str, snap: &CdlHikkakeSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v87(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_hikkake json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_hikkake (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_hikkake: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_hikkake(conn: &Connection, symbol: &str) -> Result<Option<CdlHikkakeSnapshot>, String> {
+    let _ = create_research_tables_v87(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_hikkake WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_hikkake: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_hikkake: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_hikkake: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_hikkake: {e}"))?;
+        let snap: CdlHikkakeSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_hikkake: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_hikkake_mod(conn: &Connection, symbol: &str, snap: &CdlHikkakeModSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v87(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_hikkake_mod json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_hikkake_mod (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_hikkake_mod: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_hikkake_mod(conn: &Connection, symbol: &str) -> Result<Option<CdlHikkakeModSnapshot>, String> {
+    let _ = create_research_tables_v87(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_hikkake_mod WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_hikkake_mod: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_hikkake_mod: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_hikkake_mod: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_hikkake_mod: {e}"))?;
+        let snap: CdlHikkakeModSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_hikkake_mod: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_mat_hold(conn: &Connection, symbol: &str, snap: &CdlMatHoldSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v87(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_mat_hold json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_mat_hold (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_mat_hold: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_mat_hold(conn: &Connection, symbol: &str) -> Result<Option<CdlMatHoldSnapshot>, String> {
+    let _ = create_research_tables_v87(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_mat_hold WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_mat_hold: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_mat_hold: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_mat_hold: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_mat_hold: {e}"))?;
+        let snap: CdlMatHoldSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_mat_hold: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_rise_fall_three_methods(conn: &Connection, symbol: &str, snap: &CdlRiseFallThreeMethodsSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v87(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_rise_fall_three_methods json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_rise_fall_three_methods (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_rise_fall_three_methods: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_rise_fall_three_methods(conn: &Connection, symbol: &str) -> Result<Option<CdlRiseFallThreeMethodsSnapshot>, String> {
+    let _ = create_research_tables_v87(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_rise_fall_three_methods WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_rise_fall_three_methods: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_rise_fall_three_methods: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_rise_fall_three_methods: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_rise_fall_three_methods: {e}"))?;
+        let snap: CdlRiseFallThreeMethodsSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_rise_fall_three_methods: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+// ── ADR-194 Round 87/88 schema v88 (TA-Lib CDL) ──────────────────────────
+//    CDLSTALLEDPATTERN / CDLTASUKIGAP
+
+pub fn create_research_tables_v88(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v87(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_cdl_stalled_pattern (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_stalled_pattern_updated ON research_cdl_stalled_pattern(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_cdl_tasuki_gap (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_cdl_tasuki_gap_updated ON research_cdl_tasuki_gap(updated_at);",
+    ).map_err(|e| format!("create v88 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_cdl_stalled_pattern(conn: &Connection, symbol: &str, snap: &CdlStalledPatternSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v88(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_stalled_pattern json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_stalled_pattern (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_stalled_pattern: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_stalled_pattern(conn: &Connection, symbol: &str) -> Result<Option<CdlStalledPatternSnapshot>, String> {
+    let _ = create_research_tables_v88(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_stalled_pattern WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_stalled_pattern: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_stalled_pattern: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_stalled_pattern: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_stalled_pattern: {e}"))?;
+        let snap: CdlStalledPatternSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_stalled_pattern: {e}"))?;
+        Ok(Some(snap))
+    } else { Ok(None) }
+}
+
+pub fn upsert_cdl_tasuki_gap(conn: &Connection, symbol: &str, snap: &CdlTasukiGapSnapshot) -> Result<(), String> {
+    let _ = create_research_tables_v88(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("cdl_tasuki_gap json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_cdl_tasuki_gap (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert cdl_tasuki_gap: {e}"))?;
+    Ok(())
+}
+
+pub fn get_cdl_tasuki_gap(conn: &Connection, symbol: &str) -> Result<Option<CdlTasukiGapSnapshot>, String> {
+    let _ = create_research_tables_v88(conn);
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM research_cdl_tasuki_gap WHERE symbol = ?1")
+        .map_err(|e| format!("prep cdl_tasuki_gap: {e}"))?;
+    let mut rows = stmt.query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query cdl_tasuki_gap: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row cdl_tasuki_gap: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get cdl_tasuki_gap: {e}"))?;
+        let snap: CdlTasukiGapSnapshot = serde_json::from_str(&j).map_err(|e| format!("parse cdl_tasuki_gap: {e}"))?;
         Ok(Some(snap))
     } else { Ok(None) }
 }
@@ -63827,6 +66083,823 @@ Trailing text.
         assert_eq!(snap.pattern_value, 100);
         assert!(snap.upper_shadow_pct <= 10.0);
         assert!(snap.lower_shadow_pct >= 70.0);
+    }
+
+    // ── ADR-191 Round 81/82 tests — CDL3STARSINSOUTH /
+    //    CDLIDENTICAL3CROWS / CDLKICKING / CDLKICKINGBYLENGTH /
+    //    CDLLADDERBOTTOM / CDLUNIQUE3RIVER ──
+
+    #[test]
+    fn cdl_three_stars_in_south_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlThreeStarsInSouthSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-20".into(), bars_used: 36,
+            pattern_value: 100, pattern_value_prev: 0,
+            first_body_pct_range: 47.6, first_lower_shadow_pct: 47.6,
+            second_body_pct_range: 47.1, third_body_pct_range: 18.9,
+            third_inside_pct_range: 25.0,
+            last_bar_match: true, days_since_pattern: 0, last_close: 102.8,
+            cdl_three_stars_in_south_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_three_stars_in_south(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_three_stars_in_south(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_three_stars_in_south_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+        assert!(got.third_body_pct_range <= 20.0);
+    }
+
+    #[test]
+    fn cdl_three_stars_in_south_compute_detects() {
+        let mut bars = boring_green_bars(5, 10);
+        bars.push(HistoricalPriceRow {
+            date: "2024-10-06".into(),
+            open: 110.0, high: 111.0, low: 90.0, close: 100.0,
+            adj_close: 100.0, volume: 1_000_000.0, change: -10.0, change_pct: -9.09,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-10-07".into(),
+            open: 106.0, high: 106.5, low: 98.0, close: 102.0,
+            adj_close: 102.0, volume: 1_050_000.0, change: 2.0, change_pct: 2.0,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-10-08".into(),
+            open: 103.5, high: 104.2, low: 100.5, close: 102.8,
+            adj_close: 102.8, volume: 1_100_000.0, change: 0.8, change_pct: 0.78,
+        });
+        let snap = compute_cdl_three_stars_in_south_snapshot("T", "2026-04-20", &bars);
+        assert_eq!(snap.cdl_three_stars_in_south_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.third_body_pct_range <= 20.0);
+        assert!(snap.first_lower_shadow_pct >= 40.0);
+    }
+
+    #[test]
+    fn cdl_identical_three_crows_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlIdenticalThreeCrowsSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-20".into(), bars_used: 40,
+            pattern_value: -100, pattern_value_prev: 0,
+            avg_body_pct_range: 87.0, open1_vs_close0_pct_body: 5.0,
+            open2_vs_close1_pct_body: 3.8, total_close_decline_pct: -27.3,
+            last_bar_match: true, days_since_pattern: 0, last_close: 80.0,
+            cdl_identical_three_crows_label: "BEARISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_identical_three_crows(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_identical_three_crows(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_identical_three_crows_label, "BEARISH_PATTERN");
+        assert_eq!(got.pattern_value, -100);
+        assert!(got.open1_vs_close0_pct_body <= 10.0);
+    }
+
+    #[test]
+    fn cdl_identical_three_crows_compute_detects() {
+        let mut bars = boring_green_bars(5, 10);
+        bars.push(HistoricalPriceRow {
+            date: "2024-10-06".into(),
+            open: 110.0, high: 110.5, low: 99.0, close: 100.0,
+            adj_close: 100.0, volume: 1_000_000.0, change: -10.0, change_pct: -9.09,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-10-07".into(),
+            open: 100.5, high: 101.0, low: 89.0, close: 90.0,
+            adj_close: 90.0, volume: 1_050_000.0, change: -10.0, change_pct: -10.0,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-10-08".into(),
+            open: 90.4, high: 90.9, low: 79.0, close: 80.0,
+            adj_close: 80.0, volume: 1_100_000.0, change: -10.0, change_pct: -11.11,
+        });
+        let snap = compute_cdl_identical_three_crows_snapshot("T", "2026-04-20", &bars);
+        assert_eq!(snap.cdl_identical_three_crows_label, "BEARISH_PATTERN");
+        assert_eq!(snap.pattern_value, -100);
+        assert!(snap.open1_vs_close0_pct_body <= 10.0);
+        assert!(snap.open2_vs_close1_pct_body <= 10.0);
+    }
+
+    #[test]
+    fn cdl_kicking_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlKickingSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-20".into(), bars_used: 24,
+            pattern_value: 100, pattern_value_prev: 0,
+            first_body_pct_range: 93.8, second_body_pct_range: 95.2,
+            gap_pct_range: 25.0, second_to_first_body_ratio: 1.33,
+            last_bar_match: true, days_since_pattern: 0, last_close: 120.0,
+            cdl_kicking_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_kicking(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_kicking(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_kicking_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+        assert!(got.gap_pct_range > 0.0);
+    }
+
+    #[test]
+    fn cdl_kicking_compute_detects() {
+        let mut bars = boring_green_bars(5, 11);
+        bars.push(HistoricalPriceRow {
+            date: "2024-11-06".into(),
+            open: 110.0, high: 110.2, low: 103.8, close: 104.0,
+            adj_close: 104.0, volume: 1_000_000.0, change: -6.0, change_pct: -5.45,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-11-07".into(),
+            open: 112.0, high: 120.2, low: 111.8, close: 120.0,
+            adj_close: 120.0, volume: 1_100_000.0, change: 16.0, change_pct: 15.38,
+        });
+        let snap = compute_cdl_kicking_snapshot("T", "2026-04-20", &bars);
+        assert_eq!(snap.cdl_kicking_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.gap_pct_range > 0.0);
+        assert!(snap.second_to_first_body_ratio > 1.0);
+    }
+
+    #[test]
+    fn cdl_kicking_by_length_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlKickingByLengthSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-20".into(), bars_used: 24,
+            pattern_value: 100, pattern_value_prev: 0,
+            first_body_pct_range: 92.6, second_body_pct_range: 95.7,
+            gap_pct_range: 29.6, dominant_body_ratio: 1.8, dominant_side: "SECOND_BAR".into(),
+            last_bar_match: true, days_since_pattern: 0, last_close: 121.0,
+            cdl_kicking_by_length_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_kicking_by_length(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_kicking_by_length(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_kicking_by_length_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+        assert_eq!(got.dominant_side, "SECOND_BAR");
+    }
+
+    #[test]
+    fn cdl_kicking_by_length_compute_detects() {
+        let mut bars = boring_green_bars(5, 11);
+        bars.push(HistoricalPriceRow {
+            date: "2024-11-06".into(),
+            open: 110.0, high: 110.2, low: 104.8, close: 105.0,
+            adj_close: 105.0, volume: 1_000_000.0, change: -5.0, change_pct: -4.55,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-11-07".into(),
+            open: 112.0, high: 121.2, low: 111.8, close: 121.0,
+            adj_close: 121.0, volume: 1_100_000.0, change: 16.0, change_pct: 15.24,
+        });
+        let snap = compute_cdl_kicking_by_length_snapshot("T", "2026-04-20", &bars);
+        assert_eq!(snap.cdl_kicking_by_length_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert_eq!(snap.dominant_side, "SECOND_BAR");
+        assert!(snap.dominant_body_ratio > 1.0);
+    }
+
+    #[test]
+    fn cdl_ladder_bottom_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlLadderBottomSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-20".into(), bars_used: 50,
+            pattern_value: 100, pattern_value_prev: 0,
+            avg_first_three_body_pct_range: 90.6, fourth_body_pct_range: 20.0,
+            fourth_upper_shadow_pct: 60.0, fifth_body_pct_range: 92.3,
+            breakout_pct_vs_fourth_high: 7.0,
+            last_bar_match: true, days_since_pattern: 0, last_close: 107.0,
+            cdl_ladder_bottom_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_ladder_bottom(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_ladder_bottom(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_ladder_bottom_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+        assert!(got.fourth_upper_shadow_pct > 0.0);
+    }
+
+    #[test]
+    fn cdl_ladder_bottom_compute_detects() {
+        let mut bars = boring_green_bars(5, 12);
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-06".into(),
+            open: 120.0, high: 120.5, low: 109.5, close: 110.0,
+            adj_close: 110.0, volume: 1_000_000.0, change: -10.0, change_pct: -8.33,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-07".into(),
+            open: 110.0, high: 110.4, low: 101.6, close: 102.0,
+            adj_close: 102.0, volume: 1_050_000.0, change: -8.0, change_pct: -7.27,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-08".into(),
+            open: 102.0, high: 102.3, low: 95.7, close: 96.0,
+            adj_close: 96.0, volume: 1_100_000.0, change: -6.0, change_pct: -5.88,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-09".into(),
+            open: 97.0, high: 100.0, low: 95.0, close: 96.0,
+            adj_close: 96.0, volume: 1_080_000.0, change: 0.0, change_pct: 0.0,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-10".into(),
+            open: 96.2, high: 107.5, low: 95.8, close: 107.0,
+            adj_close: 107.0, volume: 1_150_000.0, change: 11.0, change_pct: 11.43,
+        });
+        let snap = compute_cdl_ladder_bottom_snapshot("T", "2026-04-20", &bars);
+        assert_eq!(snap.cdl_ladder_bottom_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.fourth_upper_shadow_pct > 0.0);
+        assert!(snap.breakout_pct_vs_fourth_high > 0.0);
+    }
+
+    #[test]
+    fn cdl_unique_three_river_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlUniqueThreeRiverSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-20".into(), bars_used: 32,
+            pattern_value: 100, pattern_value_prev: 0,
+            first_body_pct_range: 90.9, second_body_pct_range: 15.0,
+            second_lower_shadow_pct: 75.0, third_body_pct_range: 20.0,
+            third_close_vs_second_close_pct: -33.3,
+            last_bar_match: true, days_since_pattern: 0, last_close: 102.0,
+            cdl_unique_three_river_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_unique_three_river(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_unique_three_river(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_unique_three_river_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+        assert!(got.second_lower_shadow_pct >= 50.0);
+    }
+
+    #[test]
+    fn cdl_unique_three_river_compute_detects() {
+        let mut bars = boring_green_bars(5, 12);
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-06".into(),
+            open: 110.0, high: 110.5, low: 99.5, close: 100.0,
+            adj_close: 100.0, volume: 1_000_000.0, change: -10.0, change_pct: -9.09,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-07".into(),
+            open: 104.0, high: 105.0, low: 95.0, close: 102.5,
+            adj_close: 102.5, volume: 1_050_000.0, change: 2.5, change_pct: 2.5,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-08".into(),
+            open: 101.5, high: 103.0, low: 100.5, close: 102.0,
+            adj_close: 102.0, volume: 1_100_000.0, change: -0.5, change_pct: -0.49,
+        });
+        let snap = compute_cdl_unique_three_river_snapshot("T", "2026-04-20", &bars);
+        assert_eq!(snap.cdl_unique_three_river_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.second_lower_shadow_pct >= 50.0);
+        assert!(snap.third_close_vs_second_close_pct < 0.0);
+    }
+
+    // ── ADR-192 Round 83/84 tests — CDLADVANCEBLOCK / CDLBREAKAWAY /
+    //    CDLGAPSIDESIDEWHITE / CDLUPSIDEGAP2CROWS /
+    //    CDLXSIDEGAP3METHODS / CDLCONCEALBABYSWALL ──
+
+    #[test]
+    fn cdl_advance_block_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlAdvanceBlockSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-20".into(), bars_used: 36,
+            pattern_value: -100, pattern_value_prev: 0,
+            first_body_pct_range: 81.8, second_body_pct_range: 77.8, third_body_pct_range: 61.5,
+            third_upper_shadow_pct: 30.8, total_close_gain_pct: 6.4,
+            last_bar_match: true, days_since_pattern: 0, last_close: 116.0,
+            cdl_advance_block_label: "BEARISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_advance_block(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_advance_block(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_advance_block_label, "BEARISH_PATTERN");
+        assert_eq!(got.pattern_value, -100);
+        assert!(got.third_upper_shadow_pct > 15.0);
+    }
+
+    #[test]
+    fn cdl_advance_block_compute_detects() {
+        let mut bars = boring_green_bars(5, 10);
+        bars.push(HistoricalPriceRow {
+            date: "2024-10-06".into(),
+            open: 100.0, high: 110.0, low: 99.0, close: 109.0,
+            adj_close: 109.0, volume: 1_000_000.0, change: 9.0, change_pct: 9.0,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-10-07".into(),
+            open: 107.0, high: 115.0, low: 106.0, close: 114.0,
+            adj_close: 114.0, volume: 1_050_000.0, change: 5.0, change_pct: 4.59,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-10-08".into(),
+            open: 112.0, high: 118.0, low: 111.5, close: 116.0,
+            adj_close: 116.0, volume: 1_100_000.0, change: 2.0, change_pct: 1.75,
+        });
+        let snap = compute_cdl_advance_block_snapshot("T", "2026-04-20", &bars);
+        assert_eq!(snap.cdl_advance_block_label, "BEARISH_PATTERN");
+        assert_eq!(snap.pattern_value, -100);
+        assert!(snap.third_upper_shadow_pct > 15.0);
+    }
+
+    #[test]
+    fn cdl_breakaway_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlBreakawaySnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-20".into(), bars_used: 40,
+            pattern_value: 100, pattern_value_prev: 0,
+            first_body_pct_range: 83.3, initial_gap_pct_range: 25.0,
+            fifth_body_pct_range: 88.0, gap_retracement_pct: 33.3,
+            last_bar_match: true, days_since_pattern: 0, last_close: 97.0,
+            cdl_breakaway_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_breakaway(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_breakaway(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_breakaway_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+        assert!(got.initial_gap_pct_range > 0.0);
+    }
+
+    #[test]
+    fn cdl_breakaway_compute_detects() {
+        let mut bars = boring_green_bars(5, 10);
+        bars.push(HistoricalPriceRow {
+            date: "2024-10-06".into(),
+            open: 110.0, high: 111.0, low: 99.0, close: 100.0,
+            adj_close: 100.0, volume: 1_000_000.0, change: -10.0, change_pct: -9.09,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-10-07".into(),
+            open: 95.0, high: 96.0, low: 90.0, close: 91.0,
+            adj_close: 91.0, volume: 1_050_000.0, change: -9.0, change_pct: -9.0,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-10-08".into(),
+            open: 91.0, high: 92.0, low: 87.0, close: 88.0,
+            adj_close: 88.0, volume: 1_060_000.0, change: -3.0, change_pct: -3.3,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-10-09".into(),
+            open: 88.0, high: 89.0, low: 85.0, close: 86.0,
+            adj_close: 86.0, volume: 1_070_000.0, change: -2.0, change_pct: -2.27,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-10-10".into(),
+            open: 86.0, high: 98.0, low: 85.5, close: 97.0,
+            adj_close: 97.0, volume: 1_100_000.0, change: 11.0, change_pct: 12.79,
+        });
+        let snap = compute_cdl_breakaway_snapshot("T", "2026-04-20", &bars);
+        assert_eq!(snap.cdl_breakaway_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.gap_retracement_pct > 0.0);
+    }
+
+    #[test]
+    fn cdl_gap_side_side_white_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlGapSideSideWhiteSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-20".into(), bars_used: 30,
+            pattern_value: 100, pattern_value_prev: 0,
+            gap_pct_range: 38.5, second_body_pct_range: 72.7, third_body_pct_range: 68.3,
+            open_similarity_pct_body: 11.1, close_similarity_pct_body: 2.2,
+            last_bar_match: true, days_since_pattern: 0, last_close: 108.8,
+            cdl_gap_side_side_white_label: "BULLISH_CONTINUATION".into(), note: String::new(),
+        };
+        upsert_cdl_gap_side_side_white(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_gap_side_side_white(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_gap_side_side_white_label, "BULLISH_CONTINUATION");
+        assert_eq!(got.pattern_value, 100);
+        assert!(got.open_similarity_pct_body <= 25.0);
+    }
+
+    #[test]
+    fn cdl_gap_side_side_white_compute_detects() {
+        let mut bars = boring_green_bars(5, 11);
+        bars.push(HistoricalPriceRow {
+            date: "2024-11-06".into(),
+            open: 100.0, high: 101.0, low: 99.0, close: 100.5,
+            adj_close: 100.5, volume: 1_000_000.0, change: 0.5, change_pct: 0.5,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-11-07".into(),
+            open: 105.0, high: 110.0, low: 104.5, close: 109.0,
+            adj_close: 109.0, volume: 1_050_000.0, change: 8.5, change_pct: 8.46,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-11-08".into(),
+            open: 105.5, high: 110.5, low: 104.8, close: 108.8,
+            adj_close: 108.8, volume: 1_060_000.0, change: -0.2, change_pct: -0.18,
+        });
+        let snap = compute_cdl_gap_side_side_white_snapshot("T", "2026-04-20", &bars);
+        assert_eq!(snap.cdl_gap_side_side_white_label, "BULLISH_CONTINUATION");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.close_similarity_pct_body <= 35.0);
+    }
+
+    #[test]
+    fn cdl_upside_gap_two_crows_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlUpsideGapTwoCrowsSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-20".into(), bars_used: 28,
+            pattern_value: -100, pattern_value_prev: 0,
+            first_body_pct_range: 81.8, upside_gap_pct_range: 9.1,
+            third_open_above_second_pct_body: 50.0, third_close_into_gap_pct: 16.7,
+            last_bar_match: true, days_since_pattern: 0, last_close: 110.5,
+            cdl_upside_gap_two_crows_label: "BEARISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_upside_gap_two_crows(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_upside_gap_two_crows(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_upside_gap_two_crows_label, "BEARISH_PATTERN");
+        assert_eq!(got.pattern_value, -100);
+        assert!(got.third_close_into_gap_pct > 0.0);
+    }
+
+    #[test]
+    fn cdl_upside_gap_two_crows_compute_detects() {
+        let mut bars = boring_green_bars(5, 11);
+        bars.push(HistoricalPriceRow {
+            date: "2024-11-06".into(),
+            open: 100.0, high: 110.0, low: 99.0, close: 109.0,
+            adj_close: 109.0, volume: 1_000_000.0, change: 9.0, change_pct: 9.0,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-11-07".into(),
+            open: 114.0, high: 115.0, low: 111.0, close: 112.0,
+            adj_close: 112.0, volume: 1_050_000.0, change: 3.0, change_pct: 2.75,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-11-08".into(),
+            open: 116.0, high: 116.5, low: 107.5, close: 110.5,
+            adj_close: 110.5, volume: 1_060_000.0, change: -1.5, change_pct: -1.34,
+        });
+        let snap = compute_cdl_upside_gap_two_crows_snapshot("T", "2026-04-20", &bars);
+        assert_eq!(snap.cdl_upside_gap_two_crows_label, "BEARISH_PATTERN");
+        assert_eq!(snap.pattern_value, -100);
+        assert!(snap.upside_gap_pct_range > 0.0);
+    }
+
+    #[test]
+    fn cdl_xside_gap_three_methods_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlXSideGapThreeMethodsSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-20".into(), bars_used: 28,
+            pattern_value: 100, pattern_value_prev: 0,
+            gap_pct_range: 22.2, second_body_pct_range: 71.4, third_body_pct_range: 68.8,
+            gap_fill_pct: 33.3,
+            last_bar_match: true, days_since_pattern: 0, last_close: 110.5,
+            cdl_xside_gap_three_methods_label: "BULLISH_CONTINUATION".into(), note: String::new(),
+        };
+        upsert_cdl_xside_gap_three_methods(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_xside_gap_three_methods(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_xside_gap_three_methods_label, "BULLISH_CONTINUATION");
+        assert_eq!(got.pattern_value, 100);
+        assert!(got.gap_fill_pct > 0.0);
+    }
+
+    #[test]
+    fn cdl_xside_gap_three_methods_compute_detects() {
+        let mut bars = boring_green_bars(5, 12);
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-06".into(),
+            open: 100.0, high: 109.0, low: 99.0, close: 108.5,
+            adj_close: 108.5, volume: 1_000_000.0, change: 8.5, change_pct: 8.5,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-07".into(),
+            open: 112.0, high: 118.0, low: 111.5, close: 117.0,
+            adj_close: 117.0, volume: 1_050_000.0, change: 8.5, change_pct: 7.83,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-08".into(),
+            open: 116.0, high: 116.5, low: 109.5, close: 110.5,
+            adj_close: 110.5, volume: 1_060_000.0, change: -6.5, change_pct: -5.56,
+        });
+        let snap = compute_cdl_xside_gap_three_methods_snapshot("T", "2026-04-20", &bars);
+        assert_eq!(snap.cdl_xside_gap_three_methods_label, "BULLISH_CONTINUATION");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.gap_fill_pct > 0.0);
+    }
+
+    #[test]
+    fn cdl_conceal_baby_swallow_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlConcealBabySwallowSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-20".into(), bars_used: 26,
+            pattern_value: 100, pattern_value_prev: 0,
+            first_body_pct_range: 96.2, second_body_pct_range: 98.0,
+            third_upper_shadow_pct: 23.1, fourth_range_engulf_pct: 34.6,
+            last_bar_match: true, days_since_pattern: 0, last_close: 84.5,
+            cdl_conceal_baby_swallow_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_conceal_baby_swallow(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_conceal_baby_swallow(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_conceal_baby_swallow_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+        assert!(got.third_upper_shadow_pct >= 20.0);
+    }
+
+    #[test]
+    fn cdl_conceal_baby_swallow_compute_detects() {
+        let mut bars = boring_green_bars(5, 12);
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-06".into(),
+            open: 110.0, high: 110.2, low: 99.8, close: 100.0,
+            adj_close: 100.0, volume: 1_000_000.0, change: -10.0, change_pct: -9.09,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-07".into(),
+            open: 100.0, high: 100.1, low: 89.9, close: 90.0,
+            adj_close: 90.0, volume: 1_050_000.0, change: -10.0, change_pct: -10.0,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-08".into(),
+            open: 88.0, high: 89.2, low: 84.0, close: 86.0,
+            adj_close: 86.0, volume: 1_060_000.0, change: -4.0, change_pct: -4.44,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2024-12-09".into(),
+            open: 89.5, high: 90.0, low: 83.0, close: 84.5,
+            adj_close: 84.5, volume: 1_070_000.0, change: -1.5, change_pct: -1.74,
+        });
+        let snap = compute_cdl_conceal_baby_swallow_snapshot("T", "2026-04-20", &bars);
+        assert_eq!(snap.cdl_conceal_baby_swallow_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.fourth_range_engulf_pct > 0.0);
+    }
+
+    // ── ADR-193 Round 85/86 tests — CDLHIKKAKE / CDLHIKKAKEMOD /
+    //    CDLMATHOLD / CDLRISEFALL3METHODS ──
+
+    #[test]
+    fn cdl_hikkake_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlHikkakeSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-21".into(), bars_used: 24,
+            pattern_value: 100, pattern_value_prev: 0,
+            inside_width_pct_mother: 45.0, false_break_extension_pct: 18.2, trigger_body_pct_range: 54.5,
+            last_bar_match: true, days_since_pattern: 0, last_close: 104.5,
+            cdl_hikkake_label: "BULLISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_hikkake(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_hikkake(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_hikkake_label, "BULLISH_PATTERN");
+        assert_eq!(got.pattern_value, 100);
+        assert!(got.false_break_extension_pct > 0.0);
+    }
+
+    #[test]
+    fn cdl_hikkake_compute_detects() {
+        let mut bars = boring_green_bars(5, 13);
+        bars.push(HistoricalPriceRow {
+            date: "2025-01-06".into(),
+            open: 100.0, high: 110.0, low: 95.0, close: 108.0,
+            adj_close: 108.0, volume: 1_000_000.0, change: 8.0, change_pct: 8.0,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-01-07".into(),
+            open: 103.0, high: 107.0, low: 99.0, close: 104.0,
+            adj_close: 104.0, volume: 1_050_000.0, change: -4.0, change_pct: -3.7,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-01-08".into(),
+            open: 98.0, high: 106.0, low: 96.0, close: 100.0,
+            adj_close: 100.0, volume: 1_060_000.0, change: -4.0, change_pct: -3.85,
+        });
+        let snap = compute_cdl_hikkake_snapshot("T", "2026-04-21", &bars);
+        assert_eq!(snap.cdl_hikkake_label, "BULLISH_PATTERN");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.false_break_extension_pct > 0.0);
+    }
+
+    #[test]
+    fn cdl_hikkake_mod_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlHikkakeModSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-21".into(), bars_used: 25,
+            pattern_value: -100, pattern_value_prev: 0,
+            inside_width_pct_mother: 40.0, false_break_extension_pct: 22.0, confirmation_extension_pct: 18.5,
+            last_bar_match: true, days_since_pattern: 0, last_close: 96.5,
+            cdl_hikkake_mod_label: "BEARISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_hikkake_mod(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_hikkake_mod(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_hikkake_mod_label, "BEARISH_PATTERN");
+        assert_eq!(got.pattern_value, -100);
+        assert!(got.confirmation_extension_pct > 0.0);
+    }
+
+    #[test]
+    fn cdl_hikkake_mod_compute_detects() {
+        let mut bars = boring_green_bars(5, 14);
+        bars.push(HistoricalPriceRow {
+            date: "2025-01-06".into(),
+            open: 100.0, high: 110.0, low: 96.0, close: 108.0,
+            adj_close: 108.0, volume: 1_000_000.0, change: 8.0, change_pct: 8.0,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-01-07".into(),
+            open: 104.0, high: 108.0, low: 100.0, close: 103.0,
+            adj_close: 103.0, volume: 1_050_000.0, change: -5.0, change_pct: -4.63,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-01-08".into(),
+            open: 109.0, high: 112.0, low: 101.0, close: 102.0,
+            adj_close: 102.0, volume: 1_060_000.0, change: -1.0, change_pct: -0.97,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-01-09".into(),
+            open: 101.0, high: 102.0, low: 94.0, close: 98.0,
+            adj_close: 98.0, volume: 1_080_000.0, change: -4.0, change_pct: -3.92,
+        });
+        let snap = compute_cdl_hikkake_mod_snapshot("T", "2026-04-21", &bars);
+        assert_eq!(snap.cdl_hikkake_mod_label, "BEARISH_PATTERN");
+        assert_eq!(snap.pattern_value, -100);
+        assert!(snap.confirmation_extension_pct > 0.0);
+    }
+
+    #[test]
+    fn cdl_mat_hold_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlMatHoldSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-21".into(), bars_used: 32,
+            pattern_value: 100, pattern_value_prev: 0,
+            first_body_pct_range: 81.8, middle_avg_body_pct_range: 19.4, initial_gap_pct_range: 13.6,
+            hold_depth_pct_body: 26.3, final_body_pct_range: 83.3,
+            last_bar_match: true, days_since_pattern: 0, last_close: 122.0,
+            cdl_mat_hold_label: "BULLISH_CONTINUATION".into(), note: String::new(),
+        };
+        upsert_cdl_mat_hold(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_mat_hold(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_mat_hold_label, "BULLISH_CONTINUATION");
+        assert_eq!(got.pattern_value, 100);
+        assert!(got.initial_gap_pct_range > 0.0);
+    }
+
+    #[test]
+    fn cdl_mat_hold_compute_detects() {
+        let mut bars = boring_green_bars(5, 14);
+        bars.push(HistoricalPriceRow {
+            date: "2025-02-03".into(),
+            open: 100.0, high: 111.0, low: 99.0, close: 110.0,
+            adj_close: 110.0, volume: 1_000_000.0, change: 10.0, change_pct: 10.0,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-02-04".into(),
+            open: 113.0, high: 116.0, low: 112.5, close: 114.0,
+            adj_close: 114.0, volume: 1_050_000.0, change: 4.0, change_pct: 3.64,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-02-05".into(),
+            open: 113.2, high: 114.5, low: 108.5, close: 112.2,
+            adj_close: 112.2, volume: 1_060_000.0, change: -1.8, change_pct: -1.58,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-02-06".into(),
+            open: 112.0, high: 114.2, low: 109.0, close: 111.2,
+            adj_close: 111.2, volume: 1_070_000.0, change: -1.0, change_pct: -0.89,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-02-07".into(),
+            open: 113.5, high: 123.0, low: 113.2, close: 122.0,
+            adj_close: 122.0, volume: 1_100_000.0, change: 10.8, change_pct: 9.71,
+        });
+        let snap = compute_cdl_mat_hold_snapshot("T", "2026-04-21", &bars);
+        assert_eq!(snap.cdl_mat_hold_label, "BULLISH_CONTINUATION");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.middle_avg_body_pct_range <= 35.0);
+    }
+
+    #[test]
+    fn cdl_rise_fall_three_methods_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlRiseFallThreeMethodsSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-21".into(), bars_used: 34,
+            pattern_value: -100, pattern_value_prev: 0,
+            first_body_pct_range: 83.3, middle_avg_body_pct_range: 21.0, containment_pct_body: 28.0,
+            final_body_pct_range: 78.6,
+            last_bar_match: true, days_since_pattern: 0, last_close: 96.0,
+            cdl_rise_fall_three_methods_label: "BEARISH_CONTINUATION".into(), note: String::new(),
+        };
+        upsert_cdl_rise_fall_three_methods(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_rise_fall_three_methods(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_rise_fall_three_methods_label, "BEARISH_CONTINUATION");
+        assert_eq!(got.pattern_value, -100);
+        assert!(got.containment_pct_body > 0.0);
+    }
+
+    #[test]
+    fn cdl_rise_fall_three_methods_compute_detects() {
+        let mut bars = boring_green_bars(5, 15);
+        bars.push(HistoricalPriceRow {
+            date: "2025-03-03".into(),
+            open: 110.0, high: 111.0, low: 99.0, close: 100.0,
+            adj_close: 100.0, volume: 1_000_000.0, change: -10.0, change_pct: -9.09,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-03-04".into(),
+            open: 101.2, high: 104.0, low: 100.8, close: 102.0,
+            adj_close: 102.0, volume: 1_050_000.0, change: 2.0, change_pct: 2.0,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-03-05".into(),
+            open: 102.2, high: 104.8, low: 101.8, close: 103.0,
+            adj_close: 103.0, volume: 1_060_000.0, change: 1.0, change_pct: 0.98,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-03-06".into(),
+            open: 101.8, high: 103.8, low: 101.4, close: 102.4,
+            adj_close: 102.4, volume: 1_070_000.0, change: -0.6, change_pct: -0.58,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-03-07".into(),
+            open: 101.0, high: 101.5, low: 95.0, close: 96.0,
+            adj_close: 96.0, volume: 1_100_000.0, change: -6.5, change_pct: -6.34,
+        });
+        let snap = compute_cdl_rise_fall_three_methods_snapshot("T", "2026-04-21", &bars);
+        assert_eq!(snap.cdl_rise_fall_three_methods_label, "BEARISH_CONTINUATION");
+        assert_eq!(snap.pattern_value, -100);
+        assert!(snap.middle_avg_body_pct_range <= 35.0);
+    }
+
+    // ── ADR-194 Round 87/88 tests — CDLSTALLEDPATTERN /
+    //    CDLTASUKIGAP ──
+
+    #[test]
+    fn cdl_stalled_pattern_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlStalledPatternSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-21".into(), bars_used: 22,
+            pattern_value: -100, pattern_value_prev: 0,
+            first_body_pct_range: 81.8, second_body_pct_range: 77.8, third_body_pct_range: 22.5,
+            third_open_gap_pct_range: 11.1, third_upper_shadow_pct: 48.6, close_progress_pct_prev_leg: 28.6,
+            last_bar_match: true, days_since_pattern: 0, last_close: 118.0,
+            cdl_stalled_pattern_label: "BEARISH_PATTERN".into(), note: String::new(),
+        };
+        upsert_cdl_stalled_pattern(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_stalled_pattern(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_stalled_pattern_label, "BEARISH_PATTERN");
+        assert_eq!(got.pattern_value, -100);
+        assert!(got.third_upper_shadow_pct > 15.0);
+    }
+
+    #[test]
+    fn cdl_stalled_pattern_compute_detects() {
+        let mut bars = boring_green_bars(5, 16);
+        bars.push(HistoricalPriceRow {
+            date: "2025-04-01".into(),
+            open: 100.0, high: 110.0, low: 99.0, close: 109.0,
+            adj_close: 109.0, volume: 1_000_000.0, change: 9.0, change_pct: 9.0,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-04-02".into(),
+            open: 108.0, high: 117.0, low: 107.5, close: 116.0,
+            adj_close: 116.0, volume: 1_050_000.0, change: 7.0, change_pct: 6.42,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-04-03".into(),
+            open: 117.0, high: 120.5, low: 116.8, close: 118.0,
+            adj_close: 118.0, volume: 1_060_000.0, change: 2.0, change_pct: 1.72,
+        });
+        let snap = compute_cdl_stalled_pattern_snapshot("T", "2026-04-21", &bars);
+        assert_eq!(snap.cdl_stalled_pattern_label, "BEARISH_PATTERN");
+        assert_eq!(snap.pattern_value, -100);
+        assert!(snap.close_progress_pct_prev_leg < 60.0);
+    }
+
+    #[test]
+    fn cdl_tasuki_gap_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CdlTasukiGapSnapshot {
+            symbol: "TEST".into(), as_of: "2026-04-21".into(), bars_used: 24,
+            pattern_value: 100, pattern_value_prev: 0,
+            first_body_pct_range: 81.8, second_body_pct_range: 66.7, third_body_pct_range: 66.7,
+            gap_pct_range: 27.3, gap_fill_pct: 66.7, third_open_pct_second_body: 75.0,
+            last_bar_match: true, days_since_pattern: 0, last_close: 111.0,
+            cdl_tasuki_gap_label: "BULLISH_CONTINUATION".into(), note: String::new(),
+        };
+        upsert_cdl_tasuki_gap(&conn, "TEST", &snap).unwrap();
+        let got = get_cdl_tasuki_gap(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.cdl_tasuki_gap_label, "BULLISH_CONTINUATION");
+        assert_eq!(got.pattern_value, 100);
+        assert!(got.gap_fill_pct > 0.0);
+    }
+
+    #[test]
+    fn cdl_tasuki_gap_compute_detects() {
+        let mut bars = boring_green_bars(5, 16);
+        bars.push(HistoricalPriceRow {
+            date: "2025-04-01".into(),
+            open: 100.0, high: 110.0, low: 99.0, close: 109.0,
+            adj_close: 109.0, volume: 1_000_000.0, change: 9.0, change_pct: 9.0,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-04-02".into(),
+            open: 114.0, high: 119.0, low: 113.0, close: 118.0,
+            adj_close: 118.0, volume: 1_050_000.0, change: 9.0, change_pct: 8.26,
+        });
+        bars.push(HistoricalPriceRow {
+            date: "2025-04-03".into(),
+            open: 117.0, high: 117.5, low: 110.5, close: 111.0,
+            adj_close: 111.0, volume: 1_060_000.0, change: -7.0, change_pct: -5.93,
+        });
+        let snap = compute_cdl_tasuki_gap_snapshot("T", "2026-04-21", &bars);
+        assert_eq!(snap.cdl_tasuki_gap_label, "BULLISH_CONTINUATION");
+        assert_eq!(snap.pattern_value, 100);
+        assert!(snap.gap_fill_pct > 0.0 && snap.gap_fill_pct < 100.0);
     }
 
     // ── ADR-189 Round 76 (Quant Stats) tests ──

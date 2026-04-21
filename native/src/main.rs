@@ -28,11 +28,17 @@ fn dirs_home() -> std::path::PathBuf {
 fn main() -> eframe::Result {
     // Initialize logging — suppress noisy wgpu/egl/vulkan adapter probing
     tracing_subscriber::fmt()
-        .with_env_filter("typhoon=info,wgpu_hal=error,wgpu_core=error,wgpu=error,eframe=warn,naga=error")
+        .with_env_filter(
+            "typhoon=info,wgpu_hal=error,wgpu_core=error,wgpu=error,eframe=warn,naga=error",
+        )
         .init();
 
     tracing::info!("TyphooN Terminal v0.1.0 — Pure Rust GPU (egui + wgpu)");
-    tracing::info!("Platform: {} {}", std::env::consts::OS, std::env::consts::ARCH);
+    tracing::info!(
+        "Platform: {} {}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
     tracing::info!("Renderer: wgpu (Vulkan/Metal/DX12)");
 
     // Resolve custom cache dir (user may have moved it to a NAS / faster drive).
@@ -58,7 +64,11 @@ fn main() -> eframe::Result {
     let cache_path = app::cache_db_path();
     if cache_path.exists() {
         if let Ok(meta) = std::fs::metadata(&cache_path) {
-            tracing::info!("Cache: {} ({:.1} MB)", cache_path.display(), meta.len() as f64 / 1024.0 / 1024.0);
+            tracing::info!(
+                "Cache: {} ({:.1} MB)",
+                cache_path.display(),
+                meta.len() as f64 / 1024.0 / 1024.0
+            );
         }
     } else {
         tracing::warn!("Cache not found: {}", cache_path.display());

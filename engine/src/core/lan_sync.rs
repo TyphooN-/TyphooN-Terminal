@@ -602,6 +602,28 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_cdl_stick_sandwich",
     "research_cdl_rickshaw_man",
     "research_cdl_takuri",
+    // ── ADR-191 Round 81/82 ────────────────────────
+    "research_cdl_three_stars_in_south",
+    "research_cdl_identical_three_crows",
+    "research_cdl_kicking",
+    "research_cdl_kicking_by_length",
+    "research_cdl_ladder_bottom",
+    "research_cdl_unique_three_river",
+    // ── ADR-192 Round 83/84 ────────────────────────
+    "research_cdl_advance_block",
+    "research_cdl_breakaway",
+    "research_cdl_gap_side_side_white",
+    "research_cdl_upside_gap_two_crows",
+    "research_cdl_xside_gap_three_methods",
+    "research_cdl_conceal_baby_swallow",
+    // ── ADR-193 Round 85/86 ────────────────────────
+    "research_cdl_hikkake",
+    "research_cdl_hikkake_mod",
+    "research_cdl_mat_hold",
+    "research_cdl_rise_fall_three_methods",
+    // ── ADR-194 Round 87/88 ────────────────────────
+    "research_cdl_stalled_pattern",
+    "research_cdl_tasuki_gap",
     // ── ADR-189 Round 76 ────────────────────────────
     "research_modsharpe",
     "research_hsiehtest",
@@ -3566,6 +3588,132 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
+        "research_cdl_three_stars_in_south" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_three_stars_in_south (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_identical_three_crows" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_identical_three_crows (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_kicking" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_kicking (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_kicking_by_length" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_kicking_by_length (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_ladder_bottom" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_ladder_bottom (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_unique_three_river" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_unique_three_river (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_advance_block" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_advance_block (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_breakaway" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_breakaway (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_gap_side_side_white" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_gap_side_side_white (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_upside_gap_two_crows" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_upside_gap_two_crows (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_xside_gap_three_methods" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_xside_gap_three_methods (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_conceal_baby_swallow" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_conceal_baby_swallow (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_hikkake" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_hikkake (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_hikkake_mod" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_hikkake_mod (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_mat_hold" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_mat_hold (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_rise_fall_three_methods" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_rise_fall_three_methods (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_stalled_pattern" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_stalled_pattern (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "research_cdl_tasuki_gap" => Some(
+            "CREATE TABLE IF NOT EXISTS research_cdl_tasuki_gap (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
         "research_modsharpe" => Some(
             "CREATE TABLE IF NOT EXISTS research_modsharpe (
                 symbol TEXT PRIMARY KEY,
@@ -4101,6 +4249,28 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_cdl_stick_sandwich" => Some("updated_at"),
         "research_cdl_rickshaw_man" => Some("updated_at"),
         "research_cdl_takuri" => Some("updated_at"),
+        // ── ADR-191 Round 81/82 ──
+        "research_cdl_three_stars_in_south" => Some("updated_at"),
+        "research_cdl_identical_three_crows" => Some("updated_at"),
+        "research_cdl_kicking" => Some("updated_at"),
+        "research_cdl_kicking_by_length" => Some("updated_at"),
+        "research_cdl_ladder_bottom" => Some("updated_at"),
+        "research_cdl_unique_three_river" => Some("updated_at"),
+        // ── ADR-192 Round 83/84 ──
+        "research_cdl_advance_block" => Some("updated_at"),
+        "research_cdl_breakaway" => Some("updated_at"),
+        "research_cdl_gap_side_side_white" => Some("updated_at"),
+        "research_cdl_upside_gap_two_crows" => Some("updated_at"),
+        "research_cdl_xside_gap_three_methods" => Some("updated_at"),
+        "research_cdl_conceal_baby_swallow" => Some("updated_at"),
+        // ── ADR-193 Round 85/86 ──
+        "research_cdl_hikkake" => Some("updated_at"),
+        "research_cdl_hikkake_mod" => Some("updated_at"),
+        "research_cdl_mat_hold" => Some("updated_at"),
+        "research_cdl_rise_fall_three_methods" => Some("updated_at"),
+        // ── ADR-194 Round 87/88 ──
+        "research_cdl_stalled_pattern" => Some("updated_at"),
+        "research_cdl_tasuki_gap" => Some("updated_at"),
         // ── ADR-189 Round 76 ──
         "research_modsharpe" => Some("updated_at"),
         "research_hsiehtest" => Some("updated_at"),

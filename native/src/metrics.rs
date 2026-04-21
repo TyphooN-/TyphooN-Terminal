@@ -3,9 +3,7 @@
 //! Exposes application metrics on an HTTP `/metrics` endpoint (default port 9090)
 //! for scraping by Prometheus, Grafana Agent, or compatible collectors.
 
-use prometheus::{
-    Encoder, GaugeVec, Gauge, Opts, Registry, TextEncoder,
-};
+use prometheus::{Encoder, Gauge, GaugeVec, Opts, Registry, TextEncoder};
 use std::sync::Arc;
 
 /// Snapshot of application state used to update metric gauges.
@@ -61,40 +59,55 @@ impl MetricsRegistry {
         let equity = GaugeVec::new(
             Opts::new("typhoon_equity_total", "Total equity per DARWIN account"),
             &["account"],
-        ).map_err(|e| format!("equity metric: {e}"))?;
+        )
+        .map_err(|e| format!("equity metric: {e}"))?;
 
         let positions = GaugeVec::new(
             Opts::new("typhoon_positions_open", "Count of open positions"),
             &["account"],
-        ).map_err(|e| format!("positions metric: {e}"))?;
+        )
+        .map_err(|e| format!("positions metric: {e}"))?;
 
         let var = GaugeVec::new(
             Opts::new("typhoon_var_current", "Current VaR percentage"),
             &["account"],
-        ).map_err(|e| format!("var metric: {e}"))?;
+        )
+        .map_err(|e| format!("var metric: {e}"))?;
 
         let drawdown = GaugeVec::new(
             Opts::new("typhoon_drawdown_current", "Current drawdown percentage"),
             &["account"],
-        ).map_err(|e| format!("drawdown metric: {e}"))?;
+        )
+        .map_err(|e| format!("drawdown metric: {e}"))?;
 
-        let cache_size = Gauge::new("typhoon_cache_size_bytes", "SQLite cache file size in bytes")
-            .map_err(|e| format!("cache_size metric: {e}"))?;
+        let cache_size = Gauge::new(
+            "typhoon_cache_size_bytes",
+            "SQLite cache file size in bytes",
+        )
+        .map_err(|e| format!("cache_size metric: {e}"))?;
         let cache_symbols = Gauge::new("typhoon_cache_symbols_total", "Number of symbols in cache")
             .map_err(|e| format!("cache_symbols metric: {e}"))?;
 
         let bars = GaugeVec::new(
             Opts::new("typhoon_bars_total", "Bar count per symbol and timeframe"),
             &["symbol", "timeframe"],
-        ).map_err(|e| format!("bars metric: {e}"))?;
+        )
+        .map_err(|e| format!("bars metric: {e}"))?;
 
-        let sync_ts = Gauge::new("typhoon_sync_last_timestamp", "Unix timestamp of last MT5 sync")
-            .map_err(|e| format!("sync_ts metric: {e}"))?;
+        let sync_ts = Gauge::new(
+            "typhoon_sync_last_timestamp",
+            "Unix timestamp of last MT5 sync",
+        )
+        .map_err(|e| format!("sync_ts metric: {e}"))?;
 
         let broker = GaugeVec::new(
-            Opts::new("typhoon_broker_connected", "1 if broker connected, 0 if not"),
+            Opts::new(
+                "typhoon_broker_connected",
+                "1 if broker connected, 0 if not",
+            ),
             &["broker"],
-        ).map_err(|e| format!("broker metric: {e}"))?;
+        )
+        .map_err(|e| format!("broker metric: {e}"))?;
 
         let alerts = Gauge::new("typhoon_alerts_active", "Number of active price alerts")
             .map_err(|e| format!("alerts metric: {e}"))?;
@@ -166,7 +179,11 @@ impl MetricsRegistry {
 ///
 /// Spawns an axum server as a background tokio task. The server serves
 /// `/metrics` in Prometheus text exposition format.
-pub fn start_metrics_server(rt: &tokio::runtime::Handle, registry: Arc<MetricsRegistry>, port: u16) {
+pub fn start_metrics_server(
+    rt: &tokio::runtime::Handle,
+    registry: Arc<MetricsRegistry>,
+    port: u16,
+) {
     let reg = registry.clone();
     rt.spawn(async move {
         let app = axum::Router::new().route(
@@ -190,7 +207,10 @@ pub fn start_metrics_server(rt: &tokio::runtime::Handle, registry: Arc<MetricsRe
         );
 
         let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-        tracing::info!("Prometheus metrics server listening on http://{}/metrics", addr);
+        tracing::info!(
+            "Prometheus metrics server listening on http://{}/metrics",
+            addr
+        );
         let listener = match tokio::net::TcpListener::bind(addr).await {
             Ok(l) => l,
             Err(e) => {

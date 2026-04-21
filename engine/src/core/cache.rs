@@ -810,6 +810,21 @@ impl SqliteCache {
         Ok(deleted > 0)
     }
 
+    fn normalize_timeframe_suffix(tf: &str) -> Option<&'static str> {
+        match tf {
+            "M1" | "1Min" => Some("1Min"),
+            "M5" | "5Min" => Some("5Min"),
+            "M15" | "15Min" => Some("15Min"),
+            "M30" | "30Min" => Some("30Min"),
+            "H1" | "1Hour" => Some("1Hour"),
+            "H4" | "4Hour" => Some("4Hour"),
+            "D1" | "1Day" => Some("1Day"),
+            "W1" | "1Week" => Some("1Week"),
+            "MN1" | "1Month" => Some("1Month"),
+            _ => None,
+        }
+    }
+
     /// Get the second-to-last bar's RFC3339 timestamp from a cached entry.
     /// Returns second-to-last (not last) because the last candle is still forming —
     /// its high/low/close/volume update until the period closes. We must always
@@ -1506,6 +1521,24 @@ impl SqliteCache {
         let deleted = conn.execute(
             "DELETE FROM bar_cache WHERE key LIKE ?1 ESCAPE '\\'", params![pattern]
         ).map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
+        Ok(deleted)
+    }
+
+    /// Delete all bar entries matching a timeframe suffix across every broker.
+    /// Example: `1Min` removes `mt5:EURUSD:1Min`, `alpaca:AAPL:1Min`, etc.
+    pub fn delete_timeframe(&self, timeframe_suffix: &str) -> Result<u64, String> {
+        let Some(tf) = Self::normalize_timeframe_suffix(timeframe_suffix) else {
+            return Err(format!("Unknown timeframe: {}", timeframe_suffix));
+        };
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let pattern = format!("%:{}", tf);
+        let deleted = conn.execute(
+            "DELETE FROM bar_cache WHERE key LIKE ?1 ESCAPE '\\'", params![pattern]
+        ).map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
+        let _ = conn.execute(
+            "DELETE FROM bar_track WHERE key LIKE ?1 ESCAPE '\\'", params![pattern]
+        );
+        let _ = conn.execute_batch("VACUUM");
         Ok(deleted)
     }
 
@@ -2401,6 +2434,25 @@ mod tests {
         assert_eq!(deleted, 2);
         assert!(cache.get_bars("AAPL:1Hour").unwrap().is_none());
         assert!(cache.get_bars("MSFT:1Hour").unwrap().is_some());
+    }
+
+    #[test]
+    fn sqlite_cache_delete_timeframe_across_brokers() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+
+        let json = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
+        cache.put_bars("mt5:EURUSD:1Min", json).unwrap();
+        cache.put_bars("alpaca:AAPL:1Min", json).unwrap();
+        cache.put_bars("kraken:BTCUSD:1Min", json).unwrap();
+        cache.put_bars("mt5:EURUSD:1Hour", json).unwrap();
+
+        let deleted = cache.delete_timeframe("M1").unwrap();
+        assert_eq!(deleted, 3);
+        assert!(cache.get_bars("mt5:EURUSD:1Min").unwrap().is_none());
+        assert!(cache.get_bars("alpaca:AAPL:1Min").unwrap().is_none());
+        assert!(cache.get_bars("kraken:BTCUSD:1Min").unwrap().is_none());
+        assert!(cache.get_bars("mt5:EURUSD:1Hour").unwrap().is_some());
     }
 
     #[test]
