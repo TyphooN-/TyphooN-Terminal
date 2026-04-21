@@ -674,6 +674,9 @@ const SYNCABLE_TABLES: &[&str] = &[
     // ── ADR-195 Round 89/90 ────────────────────────
     "research_momrank_multi",
     "research_corrstk",
+    // ── ADR-196 Round 91/92 ────────────────────────
+    "research_tlrank",
+    "research_corrrank",
     // ── ADR-189 Round 76 ────────────────────────────
     "research_modsharpe",
     "research_hsiehtest",
@@ -3778,6 +3781,20 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
+        "research_tlrank" => Some(
+            "CREATE TABLE IF NOT EXISTS research_tlrank (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )",
+        ),
+        "research_corrrank" => Some(
+            "CREATE TABLE IF NOT EXISTS research_corrrank (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )",
+        ),
         "research_modsharpe" => Some(
             "CREATE TABLE IF NOT EXISTS research_modsharpe (
                 symbol TEXT PRIMARY KEY,
@@ -4338,6 +4355,9 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         // ── ADR-195 Round 89/90 ──
         "research_momrank_multi" => Some("updated_at"),
         "research_corrstk" => Some("updated_at"),
+        // ── ADR-196 Round 91/92 ──
+        "research_tlrank" => Some("updated_at"),
+        "research_corrrank" => Some("updated_at"),
         // ── ADR-189 Round 76 ──
         "research_modsharpe" => Some("updated_at"),
         "research_hsiehtest" => Some("updated_at"),

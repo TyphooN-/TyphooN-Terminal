@@ -2368,6 +2368,55 @@ pub struct CorrStkSnapshot {
     pub note: String,
 }
 
+/// TLRANK — 30-day trading-liquidity rank vs sector peers.
+/// Percentile rank of trailing 30-session average dollar volume within the
+/// same sector. Higher ADV$ = deeper near-term liquidity = higher rank.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ThirtyDayLiquidityRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub window_days: i32,
+    pub bars_used: usize,
+    pub avg_30d_dollar_volume: f64,
+    pub tier_label: String, // DEEP / LIQUID / MODERATE / THIN / ILLIQUID
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_dollar_volume: f64,
+    pub sector_p25_dollar_volume: f64,
+    pub sector_p75_dollar_volume: f64,
+    pub percentile_rank: f64, // 0..100 (higher = deeper recent liquidity)
+    pub rank_position: usize, // 1-based (1 = deepest recent liquidity)
+    pub rank_label: String,   // standard decile ladder
+    pub note: String,
+}
+
+/// CORRRANK — sector rank of benchmark linkage.
+/// Percentile rank of 252d absolute correlation to one benchmark basis
+/// (SPY or the mapped sector ETF) across same-sector peers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CorrelationRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub benchmark_name: String, // "SPY" or sector ETF
+    pub benchmark_kind: String, // "MARKET" | "SECTOR_ETF"
+    pub subject_corr_252d: f64,
+    pub subject_abs_corr_252d: f64,
+    pub subject_beta_252d: f64,
+    pub subject_r_squared_252d: f64,
+    pub subject_correlation_label: String, // copied from CORRSTK
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_abs_corr_252d: f64,
+    pub sector_p25_abs_corr_252d: f64,
+    pub sector_p75_abs_corr_252d: f64,
+    pub percentile_rank: f64, // 0..100 (higher = tighter benchmark linkage)
+    pub rank_position: usize, // 1-based (1 = most benchmark-linked)
+    pub rank_label: String,   // standard decile ladder
+    pub note: String,
+}
+
 // ── ADR-128 Round 21 — beta/peg rank + HP 52wk/rvcone/calendar ──
 
 /// BETARANK — Sector percentile rank of Fundamentals.beta, risk-inverted.
@@ -21372,6 +21421,318 @@ pub fn compute_corrstk_snapshot(
         dominant_benchmark,
         correlation_label,
         note,
+    }
+}
+
+fn liquidity_tier_for_avg_dollar_volume(avg_dollar: f64) -> &'static str {
+    if avg_dollar >= 5.0e8 {
+        "DEEP"
+    } else if avg_dollar >= 5.0e7 {
+        "LIQUID"
+    } else if avg_dollar >= 5.0e6 {
+        "MODERATE"
+    } else if avg_dollar >= 5.0e5 {
+        "THIN"
+    } else {
+        "ILLIQUID"
+    }
+}
+
+fn trailing_avg_dollar_volume_window(
+    bars: &[HistoricalPriceRow],
+    window_days: usize,
+) -> Option<(f64, usize)> {
+    let mut sorted: Vec<&HistoricalPriceRow> = bars.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date));
+    let window: Vec<&HistoricalPriceRow> = sorted
+        .into_iter()
+        .rev()
+        .take(window_days.max(20))
+        .collect();
+    let dollar_vols: Vec<f64> = window
+        .iter()
+        .filter_map(|b| {
+            if b.close > 0.0 && b.volume > 0.0 {
+                Some(b.close * b.volume)
+            } else {
+                None
+            }
+        })
+        .collect();
+    if dollar_vols.len() < 20 {
+        None
+    } else {
+        Some((
+            dollar_vols.iter().sum::<f64>() / dollar_vols.len() as f64,
+            dollar_vols.len(),
+        ))
+    }
+}
+
+/// TLRANK — rank trailing 30-session average dollar volume vs sector peers.
+pub fn compute_tlrank_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject_bars: &[HistoricalPriceRow],
+    peers: &[(String, Vec<HistoricalPriceRow>)],
+) -> ThirtyDayLiquidityRankSnapshot {
+    let sym = symbol.to_uppercase();
+    let (subject_adv, bars_used) = match trailing_avg_dollar_volume_window(subject_bars, 30) {
+        Some(v) => v,
+        None => {
+            return ThirtyDayLiquidityRankSnapshot {
+                symbol: sym,
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                window_days: 30,
+                rank_label: "NO_DATA".into(),
+                note: "Need ≥20 valid historical-price bars for the subject".into(),
+                ..Default::default()
+            };
+        }
+    };
+
+    let peer_advs: Vec<f64> = peers
+        .iter()
+        .filter_map(|(_, bars)| trailing_avg_dollar_volume_window(bars, 30).map(|(adv, _)| adv))
+        .collect();
+    let peers_considered = peers.len();
+    let peers_with_data = peer_advs.len();
+    if peer_advs.len() < 3 {
+        return ThirtyDayLiquidityRankSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            window_days: 30,
+            bars_used,
+            avg_30d_dollar_volume: subject_adv,
+            tier_label: liquidity_tier_for_avg_dollar_volume(subject_adv).into(),
+            peers_considered,
+            peers_with_data,
+            rank_label: "NO_DATA".into(),
+            note: format!(
+                "Only {} sector peers have ≥20 valid bars for trailing ADV$ (need ≥3)",
+                peer_advs.len()
+            ),
+            ..Default::default()
+        };
+    }
+
+    let mut sorted = peer_advs.clone();
+    sorted.push(subject_adv);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let pct = percentile_rank_score(subject_adv, &peer_advs, true);
+    let rank_position = peer_advs.iter().filter(|&&adv| adv > subject_adv).count() + 1;
+
+    ThirtyDayLiquidityRankSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        window_days: 30,
+        bars_used,
+        avg_30d_dollar_volume: subject_adv,
+        tier_label: liquidity_tier_for_avg_dollar_volume(subject_adv).into(),
+        peers_considered,
+        peers_with_data,
+        sector_median_dollar_volume: quantile_f64(&sorted, 0.5),
+        sector_p25_dollar_volume: quantile_f64(&sorted, 0.25),
+        sector_p75_dollar_volume: quantile_f64(&sorted, 0.75),
+        percentile_rank: pct,
+        rank_position,
+        rank_label: rank_label_for_percentile(pct).into(),
+        note: String::new(),
+    }
+}
+
+fn corrrank_metric_for_snapshot(
+    snap: &CorrStkSnapshot,
+    use_sector_benchmark: bool,
+    benchmark_name: &str,
+) -> Option<(f64, f64, f64)> {
+    if use_sector_benchmark {
+        if benchmark_name.is_empty()
+            || snap.sector_benchmark.is_empty()
+            || !snap.sector_benchmark.eq_ignore_ascii_case(benchmark_name)
+            || snap.overlaps_sector_252d < 20
+            || !snap.corr_sector_252d.is_finite()
+        {
+            None
+        } else {
+            Some((
+                snap.corr_sector_252d,
+                snap.beta_sector_252d,
+                snap.r_squared_sector_252d,
+            ))
+        }
+    } else if snap.market_benchmark.eq_ignore_ascii_case(benchmark_name)
+        && snap.overlaps_spy_252d >= 20
+        && snap.corr_spy_252d.is_finite()
+    {
+        Some((snap.corr_spy_252d, snap.beta_spy_252d, snap.r_squared_spy_252d))
+    } else {
+        None
+    }
+}
+
+/// CORRRANK — rank one symbol's benchmark linkage vs same-sector peers.
+///
+/// The subject chooses one benchmark basis from its cached CORRSTK row:
+/// dominant sector ETF when available and valid, otherwise the market
+/// benchmark (usually SPY). Peers are then ranked on the same 252d absolute
+/// correlation basis.
+pub fn compute_corrrank_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject: Option<&CorrStkSnapshot>,
+    peers: &[&CorrStkSnapshot],
+) -> CorrelationRankSnapshot {
+    let sym = symbol.to_uppercase();
+    let subj = match subject {
+        Some(s) if s.correlation_label != "INSUFFICIENT_DATA" => s,
+        _ => {
+            return CorrelationRankSnapshot {
+                symbol: sym,
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                rank_label: "NO_DATA".into(),
+                note: "No cached CORRSTK snapshot for subject".into(),
+                ..Default::default()
+            };
+        }
+    };
+
+    let (benchmark_name, benchmark_kind, use_sector_benchmark) =
+        if !subj.sector_benchmark.is_empty()
+            && subj.dominant_benchmark.eq_ignore_ascii_case(&subj.sector_benchmark)
+            && subj.overlaps_sector_252d >= 20
+        {
+            (
+                subj.sector_benchmark.clone(),
+                "SECTOR_ETF".to_string(),
+                true,
+            )
+        } else if subj.overlaps_spy_252d >= 20 && !subj.market_benchmark.is_empty() {
+            (subj.market_benchmark.clone(), "MARKET".to_string(), false)
+        } else if subj.overlaps_sector_252d >= 20 && !subj.sector_benchmark.is_empty() {
+            (
+                subj.sector_benchmark.clone(),
+                "SECTOR_ETF".to_string(),
+                true,
+            )
+        } else {
+            return CorrelationRankSnapshot {
+                symbol: sym,
+                as_of: as_of.to_string(),
+                sector: if !sector.is_empty() {
+                    sector.to_string()
+                } else {
+                    subj.symbol_sector.clone()
+                },
+                rank_label: "NO_DATA".into(),
+                note: "Subject CORRSTK snapshot lacks a usable 252d benchmark overlap".into(),
+                ..Default::default()
+            };
+        };
+
+    let (subject_corr, subject_beta, subject_r_squared) =
+        match corrrank_metric_for_snapshot(subj, use_sector_benchmark, &benchmark_name) {
+            Some(v) => v,
+            None => {
+                return CorrelationRankSnapshot {
+                    symbol: sym,
+                    as_of: as_of.to_string(),
+                    sector: if !sector.is_empty() {
+                        sector.to_string()
+                    } else {
+                        subj.symbol_sector.clone()
+                    },
+                    benchmark_name,
+                    benchmark_kind,
+                    rank_label: "NO_DATA".into(),
+                    note: "Subject CORRSTK snapshot is missing the selected benchmark series".into(),
+                    ..Default::default()
+                };
+            }
+        };
+    let subject_abs = subject_corr.abs();
+
+    let peer_abs_corrs: Vec<f64> = peers
+        .iter()
+        .filter_map(|p| {
+            corrrank_metric_for_snapshot(p, use_sector_benchmark, &benchmark_name)
+                .map(|(corr, _, _)| corr.abs())
+        })
+        .collect();
+    let peers_considered = peers.len();
+    let peers_with_data = peer_abs_corrs.len();
+    if peer_abs_corrs.len() < 3 {
+        return CorrelationRankSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            sector: if !sector.is_empty() {
+                sector.to_string()
+            } else {
+                subj.symbol_sector.clone()
+            },
+            benchmark_name,
+            benchmark_kind,
+            subject_corr_252d: subject_corr,
+            subject_abs_corr_252d: subject_abs,
+            subject_beta_252d: subject_beta,
+            subject_r_squared_252d: subject_r_squared,
+            subject_correlation_label: subj.correlation_label.clone(),
+            peers_considered,
+            peers_with_data,
+            rank_label: "NO_DATA".into(),
+            note: format!(
+                "Only {} sector peers have cached {} correlation data (need ≥3)",
+                peer_abs_corrs.len(),
+                if use_sector_benchmark {
+                    "sector-ETF"
+                } else {
+                    "market"
+                }
+            ),
+            ..Default::default()
+        };
+    }
+
+    let mut sorted = peer_abs_corrs.clone();
+    sorted.push(subject_abs);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let pct = percentile_rank_score(subject_abs, &peer_abs_corrs, true);
+    let rank_position = peer_abs_corrs
+        .iter()
+        .filter(|&&corr_abs| corr_abs > subject_abs)
+        .count()
+        + 1;
+
+    CorrelationRankSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        sector: if !sector.is_empty() {
+            sector.to_string()
+        } else {
+            subj.symbol_sector.clone()
+        },
+        benchmark_name,
+        benchmark_kind,
+        subject_corr_252d: subject_corr,
+        subject_abs_corr_252d: subject_abs,
+        subject_beta_252d: subject_beta,
+        subject_r_squared_252d: subject_r_squared,
+        subject_correlation_label: subj.correlation_label.clone(),
+        peers_considered,
+        peers_with_data,
+        sector_median_abs_corr_252d: quantile_f64(&sorted, 0.5),
+        sector_p25_abs_corr_252d: quantile_f64(&sorted, 0.25),
+        sector_p75_abs_corr_252d: quantile_f64(&sorted, 0.75),
+        percentile_rank: pct,
+        rank_position,
+        rank_label: rank_label_for_percentile(pct).into(),
+        note: String::new(),
     }
 }
 
@@ -65487,6 +65848,119 @@ pub fn get_corrstk(conn: &Connection, symbol: &str) -> Result<Option<CorrStkSnap
     }
 }
 
+/// Whole-table scan of `research_corrstk`. Used by CORRRANK.
+pub fn get_all_corrstk(conn: &Connection) -> Result<Vec<CorrStkSnapshot>, String> {
+    let _ = create_research_tables_v89(conn);
+    let mut stmt = conn
+        .prepare("SELECT snapshot_json FROM research_corrstk")
+        .map_err(|e| format!("prepare get_all_corrstk: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query_map get_all_corrstk: {e}"))?
+        .filter_map(|r| r.ok())
+        .filter_map(|j| serde_json::from_str::<CorrStkSnapshot>(&j).ok())
+        .collect();
+    Ok(rows)
+}
+
+// ── ADR-196 Round 91/92 schema v90 (deferred peer-rank follow-through) ──
+//    TLRANK / CORRRANK
+
+pub fn create_research_tables_v90(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v89(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_tlrank (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_tlrank_updated ON research_tlrank(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_corrrank (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_corrrank_updated ON research_corrrank(updated_at);",
+    )
+    .map_err(|e| format!("create v90 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_tlrank(
+    conn: &Connection,
+    symbol: &str,
+    snap: &ThirtyDayLiquidityRankSnapshot,
+) -> Result<(), String> {
+    let _ = create_research_tables_v90(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("tlrank json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_tlrank (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    )
+    .map_err(|e| format!("upsert tlrank: {e}"))?;
+    Ok(())
+}
+
+pub fn get_tlrank(
+    conn: &Connection,
+    symbol: &str,
+) -> Result<Option<ThirtyDayLiquidityRankSnapshot>, String> {
+    let _ = create_research_tables_v90(conn);
+    let mut stmt = conn
+        .prepare("SELECT snapshot_json FROM research_tlrank WHERE symbol = ?1")
+        .map_err(|e| format!("prep tlrank: {e}"))?;
+    let mut rows = stmt
+        .query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query tlrank: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row tlrank: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get tlrank: {e}"))?;
+        let snap: ThirtyDayLiquidityRankSnapshot =
+            serde_json::from_str(&j).map_err(|e| format!("parse tlrank: {e}"))?;
+        Ok(Some(snap))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_corrrank(
+    conn: &Connection,
+    symbol: &str,
+    snap: &CorrelationRankSnapshot,
+) -> Result<(), String> {
+    let _ = create_research_tables_v90(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("corrrank json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_corrrank (symbol, snapshot_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    )
+    .map_err(|e| format!("upsert corrrank: {e}"))?;
+    Ok(())
+}
+
+pub fn get_corrrank(
+    conn: &Connection,
+    symbol: &str,
+) -> Result<Option<CorrelationRankSnapshot>, String> {
+    let _ = create_research_tables_v90(conn);
+    let mut stmt = conn
+        .prepare("SELECT snapshot_json FROM research_corrrank WHERE symbol = ?1")
+        .map_err(|e| format!("prep corrrank: {e}"))?;
+    let mut rows = stmt
+        .query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query corrrank: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row corrrank: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get corrrank: {e}"))?;
+        let snap: CorrelationRankSnapshot =
+            serde_json::from_str(&j).map_err(|e| format!("parse corrrank: {e}"))?;
+        Ok(Some(snap))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn upsert_mass_index(
     conn: &Connection,
     symbol: &str,
@@ -87018,5 +87492,170 @@ Trailing text.
         assert!(snap.overlaps_spy_252d >= 20);
         assert!(snap.corr_spy_252d > 0.65);
         assert!(snap.beta_spy_252d.is_finite());
+    }
+
+    #[test]
+    fn tlrank_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ThirtyDayLiquidityRankSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-21".into(),
+            sector: "Technology".into(),
+            window_days: 30,
+            bars_used: 30,
+            avg_30d_dollar_volume: 245_000_000.0,
+            tier_label: "LIQUID".into(),
+            peers_considered: 7,
+            peers_with_data: 5,
+            sector_median_dollar_volume: 180_000_000.0,
+            sector_p25_dollar_volume: 90_000_000.0,
+            sector_p75_dollar_volume: 260_000_000.0,
+            percentile_rank: 82.5,
+            rank_position: 2,
+            rank_label: "TOP_QUARTILE".into(),
+            note: String::new(),
+        };
+        upsert_tlrank(&conn, "TEST", &snap).unwrap();
+        let got = get_tlrank(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.rank_label, "TOP_QUARTILE");
+        assert_eq!(got.rank_position, 2);
+        assert!((got.avg_30d_dollar_volume - 245_000_000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_tlrank_top_decile() {
+        let mk_bars = |start: chrono::NaiveDate, close: f64, volume: f64| -> Vec<HistoricalPriceRow> {
+            (0..30)
+                .map(|i| {
+                    let d = start + chrono::Days::new(i as u64);
+                    let px = close + i as f64 * 0.25;
+                    HistoricalPriceRow {
+                        date: d.format("%Y-%m-%d").to_string(),
+                        open: px * 0.99,
+                        high: px * 1.01,
+                        low: px * 0.98,
+                        close: px,
+                        adj_close: px,
+                        volume,
+                        change: 0.0,
+                        change_pct: 0.0,
+                    }
+                })
+                .collect()
+        };
+        let base = chrono::NaiveDate::from_ymd_opt(2026, 1, 2).unwrap();
+        let subject = mk_bars(base, 120.0, 3_000_000.0);
+        let peers = vec![
+            ("BBB".into(), mk_bars(base, 45.0, 900_000.0)),
+            ("CCC".into(), mk_bars(base, 75.0, 1_100_000.0)),
+            ("DDD".into(), mk_bars(base, 32.0, 700_000.0)),
+            ("EEE".into(), mk_bars(base, 55.0, 850_000.0)),
+        ];
+        let snap = compute_tlrank_snapshot("AAA", "2026-04-21", "Technology", &subject, &peers);
+        assert_eq!(snap.rank_label, "TOP_DECILE");
+        assert_eq!(snap.rank_position, 1);
+        assert_eq!(snap.bars_used, 30);
+        assert!(snap.avg_30d_dollar_volume > snap.sector_p75_dollar_volume);
+    }
+
+    #[test]
+    fn corrrank_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = CorrelationRankSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-21".into(),
+            sector: "Technology".into(),
+            benchmark_name: "XLK".into(),
+            benchmark_kind: "SECTOR_ETF".into(),
+            subject_corr_252d: 0.88,
+            subject_abs_corr_252d: 0.88,
+            subject_beta_252d: 1.08,
+            subject_r_squared_252d: 0.77,
+            subject_correlation_label: "SECTOR_LOCKSTEP".into(),
+            peers_considered: 6,
+            peers_with_data: 4,
+            sector_median_abs_corr_252d: 0.74,
+            sector_p25_abs_corr_252d: 0.61,
+            sector_p75_abs_corr_252d: 0.86,
+            percentile_rank: 90.0,
+            rank_position: 1,
+            rank_label: "TOP_DECILE".into(),
+            note: String::new(),
+        };
+        upsert_corrrank(&conn, "TEST", &snap).unwrap();
+        let got = get_corrrank(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.rank_label, "TOP_DECILE");
+        assert_eq!(got.benchmark_name, "XLK");
+        assert!((got.subject_abs_corr_252d - 0.88).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_corrrank_top_decile() {
+        let subject = CorrStkSnapshot {
+            symbol: "AAA".into(),
+            as_of: "2026-04-21".into(),
+            symbol_sector: "Technology".into(),
+            market_benchmark: "SPY".into(),
+            sector_benchmark: "XLK".into(),
+            overlaps_spy_20d: 20,
+            overlaps_spy_60d: 60,
+            overlaps_spy_252d: 252,
+            overlaps_sector_20d: 20,
+            overlaps_sector_60d: 60,
+            overlaps_sector_252d: 252,
+            corr_spy_20d: 0.71,
+            corr_spy_60d: 0.76,
+            corr_spy_252d: 0.79,
+            beta_spy_252d: 1.10,
+            r_squared_spy_252d: 0.62,
+            corr_sector_20d: 0.88,
+            corr_sector_60d: 0.90,
+            corr_sector_252d: 0.92,
+            beta_sector_252d: 1.05,
+            r_squared_sector_252d: 0.81,
+            dominant_benchmark: "XLK".into(),
+            correlation_label: "SECTOR_LOCKSTEP".into(),
+            note: String::new(),
+        };
+        let mk_peer = |sym: &str, corr: f64| CorrStkSnapshot {
+            symbol: sym.into(),
+            as_of: "2026-04-21".into(),
+            symbol_sector: "Technology".into(),
+            market_benchmark: "SPY".into(),
+            sector_benchmark: "XLK".into(),
+            overlaps_spy_20d: 20,
+            overlaps_spy_60d: 60,
+            overlaps_spy_252d: 252,
+            overlaps_sector_20d: 20,
+            overlaps_sector_60d: 60,
+            overlaps_sector_252d: 252,
+            corr_spy_20d: corr - 0.10,
+            corr_spy_60d: corr - 0.08,
+            corr_spy_252d: corr - 0.06,
+            beta_spy_252d: 1.0,
+            r_squared_spy_252d: 0.5,
+            corr_sector_20d: corr - 0.03,
+            corr_sector_60d: corr - 0.02,
+            corr_sector_252d: corr,
+            beta_sector_252d: 1.0,
+            r_squared_sector_252d: corr * corr,
+            dominant_benchmark: "XLK".into(),
+            correlation_label: "MIXED".into(),
+            note: String::new(),
+        };
+        let peers_owned = [
+            mk_peer("BBB", 0.84),
+            mk_peer("CCC", 0.76),
+            mk_peer("DDD", 0.63),
+            mk_peer("EEE", 0.55),
+        ];
+        let peers: Vec<&CorrStkSnapshot> = peers_owned.iter().collect();
+        let snap =
+            compute_corrrank_snapshot("AAA", "2026-04-21", "Technology", Some(&subject), &peers);
+        assert_eq!(snap.benchmark_kind, "SECTOR_ETF");
+        assert_eq!(snap.benchmark_name, "XLK");
+        assert_eq!(snap.rank_label, "TOP_DECILE");
+        assert_eq!(snap.rank_position, 1);
+        assert!(snap.subject_abs_corr_252d > snap.sector_p75_abs_corr_252d);
     }
 }
