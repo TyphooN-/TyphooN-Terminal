@@ -5,10 +5,10 @@
 //! Transport: wss:// (TLS encrypted) with ephemeral self-signed certificate.
 //! Auth: PBKDF2-derived shared secret + HMAC-SHA256 challenge-response.
 
-use serde::{Serialize, Deserialize};
+use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
-use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::core::cache::SqliteCache;
@@ -32,8 +32,9 @@ fn ws_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
 /// Generate an ephemeral self-signed TLS certificate for LAN sync server.
 /// Returns (PEM certificate, PEM private key, SHA-256 fingerprint hex) for native-tls.
 pub fn generate_self_signed_cert() -> Result<(Vec<u8>, Vec<u8>, String), String> {
-    let certified_key = rcgen::generate_simple_self_signed(vec!["typhoon-lan-sync".into(), "localhost".into()])
-        .map_err(|e| format!("Certificate generation failed: {e}"))?;
+    let certified_key =
+        rcgen::generate_simple_self_signed(vec!["typhoon-lan-sync".into(), "localhost".into()])
+            .map_err(|e| format!("Certificate generation failed: {e}"))?;
     let cert_pem = certified_key.cert.pem().into_bytes();
     let key_pem = certified_key.signing_key.serialize_pem().into_bytes();
     let fingerprint = compute_sha256_fingerprint(&certified_key.cert.der().to_vec());
@@ -42,7 +43,7 @@ pub fn generate_self_signed_cert() -> Result<(Vec<u8>, Vec<u8>, String), String>
 
 /// Compute SHA-256 fingerprint of DER-encoded certificate bytes. Returns lowercase hex string.
 fn compute_sha256_fingerprint(der_bytes: &[u8]) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let hash = Sha256::digest(der_bytes);
     hex_encode(&hash)
 }
@@ -51,8 +52,7 @@ fn compute_sha256_fingerprint(der_bytes: &[u8]) -> String {
 fn build_tls_acceptor(cert_pem: &[u8], key_pem: &[u8]) -> Result<native_tls::TlsAcceptor, String> {
     let identity = native_tls::Identity::from_pkcs8(cert_pem, key_pem)
         .map_err(|e| format!("TLS identity failed: {e}"))?;
-    native_tls::TlsAcceptor::new(identity)
-        .map_err(|e| format!("TLS acceptor build failed: {e}"))
+    native_tls::TlsAcceptor::new(identity).map_err(|e| format!("TLS acceptor build failed: {e}"))
 }
 
 /// Build a native-tls TLS connector that accepts any certificate (for LAN self-signed).
@@ -69,44 +69,91 @@ fn build_tls_connector() -> Result<native_tls::TlsConnector, String> {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 pub enum SyncMessage {
-    AuthChallenge { challenge: String },
-    Auth { response: String },
+    AuthChallenge {
+        challenge: String,
+    },
+    Auth {
+        response: String,
+    },
     AuthOk,
-    AuthFail { reason: String },
+    AuthFail {
+        reason: String,
+    },
     RequestMeta,
     /// Incremental metadata request — only entries updated since since_ts.
-    RequestMetaSince { since_ts: i64 },
-    Metadata { entries: Vec<CacheMeta> },
-    RequestEntries { keys: Vec<String> },
-    EntryData { key: String, data: String, timestamp: i64 },
-    BatchComplete { count: usize },
-    IncrementalUpdate { key: String, data: String, timestamp: i64 },
+    RequestMetaSince {
+        since_ts: i64,
+    },
+    Metadata {
+        entries: Vec<CacheMeta>,
+    },
+    RequestEntries {
+        keys: Vec<String>,
+    },
+    EntryData {
+        key: String,
+        data: String,
+        timestamp: i64,
+    },
+    BatchComplete {
+        count: usize,
+    },
+    IncrementalUpdate {
+        key: String,
+        data: String,
+        timestamp: i64,
+    },
     Ping,
     Pong,
     // ── DARWIN data sync (opt-in) ──
     /// Request DARWIN snapshot (deals, positions, equity) for all accounts.
     RequestDarwinData,
     /// Server response: serialized DARWIN data (JSON blob, zstd + base64 encoded).
-    DarwinData { data: String, accounts: usize, deals: usize, positions: usize },
+    DarwinData {
+        data: String,
+        accounts: usize,
+        deals: usize,
+        positions: usize,
+    },
     /// Server stats pushed to client on connect and periodically.
-    SyncStats { bytes_sent: u64, bytes_received: u64, entries_synced: usize, uptime_secs: u64 },
+    SyncStats {
+        bytes_sent: u64,
+        bytes_received: u64,
+        entries_synced: usize,
+        uptime_secs: u64,
+    },
     /// Request KV cache entries (fundamentals, news, SEC, FRED, etc.)
     /// since_ts: only return entries with timestamp > since_ts (0 = full sync).
-    RequestKvData { since_ts: i64 },
+    RequestKvData {
+        since_ts: i64,
+    },
     /// KV batch complete marker
-    KvBatchComplete { count: usize },
+    KvBatchComplete {
+        count: usize,
+    },
     /// Client requests server to execute a data fetch and return results.
     /// cmd: command name (e.g. "SEC_SCRAPE", "FUNDAMENTALS", "FINNHUB_NEWS", "KRAKEN_BACKFILL")
     /// args: JSON-encoded arguments
-    RemoteRequest { cmd: String, args: String },
+    RemoteRequest {
+        cmd: String,
+        args: String,
+    },
     /// Server response to RemoteRequest — triggers a re-sync of affected data.
-    RemoteRequestDone { cmd: String, message: String },
+    RemoteRequestDone {
+        cmd: String,
+        message: String,
+    },
     // ── Generic table sync ──
     /// Client requests bulk sync of SQLite tables (by whitelist name).
     /// Each entry is (table_name, since_ts). since_ts=0 means full sync.
-    RequestTableSync { tables: Vec<(String, i64)> },
+    RequestTableSync {
+        tables: Vec<(String, i64)>,
+    },
     /// Server sends one table's rows as zstd-compressed + base64-encoded JSON.
-    TableSyncData { table: String, rows_json: String },
+    TableSyncData {
+        table: String,
+        rows_json: String,
+    },
     /// Server signals all requested tables have been sent.
     TableSyncDone,
 }
@@ -624,6 +671,9 @@ const SYNCABLE_TABLES: &[&str] = &[
     // ── ADR-194 Round 87/88 ────────────────────────
     "research_cdl_stalled_pattern",
     "research_cdl_tasuki_gap",
+    // ── ADR-195 Round 89/90 ────────────────────────
+    "research_momrank_multi",
+    "research_corrstk",
     // ── ADR-189 Round 76 ────────────────────────────
     "research_modsharpe",
     "research_hsiehtest",
@@ -650,7 +700,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 unrealized_pnl REAL NOT NULL DEFAULT 0,
                 floating_equity REAL NOT NULL DEFAULT 0,
                 open_position_count INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "sec_filings" => Some(
             "CREATE TABLE IF NOT EXISTS sec_filings (
@@ -666,7 +716,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 summary TEXT DEFAULT '',
                 insider_flag BOOLEAN DEFAULT FALSE,
                 created_at INTEGER NOT NULL
-            )"
+            )",
         ),
         "sec_insider_trades" => Some(
             "CREATE TABLE IF NOT EXISTS sec_insider_trades (
@@ -683,7 +733,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 is_officer BOOLEAN DEFAULT FALSE,
                 is_director BOOLEAN DEFAULT FALSE,
                 created_at INTEGER NOT NULL
-            )"
+            )",
         ),
         "sec_filing_alerts" => Some(
             "CREATE TABLE IF NOT EXISTS sec_filing_alerts (
@@ -696,7 +746,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 created_at INTEGER NOT NULL,
                 dismissed BOOLEAN DEFAULT FALSE,
                 dismissed_reason TEXT
-            )"
+            )",
         ),
         "sec_scrape_index" => Some(
             "CREATE TABLE IF NOT EXISTS sec_scrape_index (
@@ -705,7 +755,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 filing_count INTEGER DEFAULT 0,
                 cik TEXT,
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "sec_filing_content" => Some(
             "CREATE TABLE IF NOT EXISTS sec_filing_content (
@@ -713,7 +763,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 content_plain TEXT NOT NULL,
                 content_size INTEGER DEFAULT 0,
                 fetched_at INTEGER NOT NULL
-            )"
+            )",
         ),
         "fundamentals" => Some(
             "CREATE TABLE IF NOT EXISTS fundamentals (
@@ -752,7 +802,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 short_percent_of_float REAL,
                 last_updated TEXT NOT NULL DEFAULT '',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "quarterly_financials" => Some(
             "CREATE TABLE IF NOT EXISTS quarterly_financials (
@@ -767,7 +817,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 eps REAL,
                 updated_at INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (symbol, period_end)
-            )"
+            )",
         ),
         "institutional_holders" => Some(
             "CREATE TABLE IF NOT EXISTS institutional_holders (
@@ -779,7 +829,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 date_reported TEXT NOT NULL DEFAULT '',
                 updated_at INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (symbol, holder_name)
-            )"
+            )",
         ),
         "research_news" => Some(
             "CREATE TABLE IF NOT EXISTS research_news (
@@ -797,119 +847,119 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 tickers_json TEXT NOT NULL DEFAULT '[]',
                 categories_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_dividends" => Some(
             "CREATE TABLE IF NOT EXISTS research_dividends (
                 symbol TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_earnings_estimates" => Some(
             "CREATE TABLE IF NOT EXISTS research_earnings_estimates (
                 symbol TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_rating_changes" => Some(
             "CREATE TABLE IF NOT EXISTS research_rating_changes (
                 symbol TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_financials" => Some(
             "CREATE TABLE IF NOT EXISTS research_financials (
                 symbol TEXT PRIMARY KEY,
                 bundle_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_executives" => Some(
             "CREATE TABLE IF NOT EXISTS research_executives (
                 symbol TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_stock_splits" => Some(
             "CREATE TABLE IF NOT EXISTS research_stock_splits (
                 symbol TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_etf_holdings" => Some(
             "CREATE TABLE IF NOT EXISTS research_etf_holdings (
                 symbol TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_analyst_recs" => Some(
             "CREATE TABLE IF NOT EXISTS research_analyst_recs (
                 symbol TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_price_target" => Some(
             "CREATE TABLE IF NOT EXISTS research_price_target (
                 symbol TEXT PRIMARY KEY,
                 target_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_esg" => Some(
             "CREATE TABLE IF NOT EXISTS research_esg (
                 symbol TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_index_members" => Some(
             "CREATE TABLE IF NOT EXISTS research_index_members (
                 index_code TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_insider_trades" => Some(
             "CREATE TABLE IF NOT EXISTS research_insider_trades (
                 symbol TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_institutional_holders" => Some(
             "CREATE TABLE IF NOT EXISTS research_institutional_holders (
                 symbol TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_shares_float" => Some(
             "CREATE TABLE IF NOT EXISTS research_shares_float (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_historical_price" => Some(
             "CREATE TABLE IF NOT EXISTS research_historical_price (
                 symbol TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_earnings_surprise" => Some(
             "CREATE TABLE IF NOT EXISTS research_earnings_surprise (
                 symbol TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-113 Round 6 ─────────────────────────────
         "research_world_indices" => Some(
@@ -917,28 +967,28 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 snapshot_key TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_market_movers" => Some(
             "CREATE TABLE IF NOT EXISTS research_market_movers (
                 snapshot_key TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_sector_performance" => Some(
             "CREATE TABLE IF NOT EXISTS research_sector_performance (
                 snapshot_key TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_wacc" => Some(
             "CREATE TABLE IF NOT EXISTS research_wacc (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-114 Round 7 ─────────────────────────────
         "research_currency_rates" => Some(
@@ -946,35 +996,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 snapshot_key TEXT PRIMARY KEY,
                 rows_json TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_beta" => Some(
             "CREATE TABLE IF NOT EXISTS research_beta (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ddm" => Some(
             "CREATE TABLE IF NOT EXISTS research_ddm (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_relative_valuation" => Some(
             "CREATE TABLE IF NOT EXISTS research_relative_valuation (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_figi" => Some(
             "CREATE TABLE IF NOT EXISTS research_figi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-115 Round 8 ─────────────────────────────
         "research_hra" => Some(
@@ -982,35 +1032,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_dcf" => Some(
             "CREATE TABLE IF NOT EXISTS research_dcf (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_svm" => Some(
             "CREATE TABLE IF NOT EXISTS research_svm (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_options_chain" => Some(
             "CREATE TABLE IF NOT EXISTS research_options_chain (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ivol" => Some(
             "CREATE TABLE IF NOT EXISTS research_ivol (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-116 Round 9 ─────────────────────────────
         "research_seasonality" => Some(
@@ -1018,490 +1068,490 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_correlation" => Some(
             "CREATE TABLE IF NOT EXISTS research_correlation (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_total_return" => Some(
             "CREATE TABLE IF NOT EXISTS research_total_return (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_technicals" => Some(
             "CREATE TABLE IF NOT EXISTS research_technicals (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_vol_skew" => Some(
             "CREATE TABLE IF NOT EXISTS research_vol_skew (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_leverage" => Some(
             "CREATE TABLE IF NOT EXISTS research_leverage (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_accruals" => Some(
             "CREATE TABLE IF NOT EXISTS research_accruals (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_realized_vol" => Some(
             "CREATE TABLE IF NOT EXISTS research_realized_vol (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_fcf_yield" => Some(
             "CREATE TABLE IF NOT EXISTS research_fcf_yield (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_short_interest" => Some(
             "CREATE TABLE IF NOT EXISTS research_short_interest (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_altman_z" => Some(
             "CREATE TABLE IF NOT EXISTS research_altman_z (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_piotroski" => Some(
             "CREATE TABLE IF NOT EXISTS research_piotroski (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ohlc_vol" => Some(
             "CREATE TABLE IF NOT EXISTS research_ohlc_vol (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_eps_beat" => Some(
             "CREATE TABLE IF NOT EXISTS research_eps_beat (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_price_target_dispersion" => Some(
             "CREATE TABLE IF NOT EXISTS research_price_target_dispersion (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_insider_activity" => Some(
             "CREATE TABLE IF NOT EXISTS research_insider_activity (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_divg" => Some(
             "CREATE TABLE IF NOT EXISTS research_divg (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_earm" => Some(
             "CREATE TABLE IF NOT EXISTS research_earm (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_sector_rotation" => Some(
             "CREATE TABLE IF NOT EXISTS research_sector_rotation (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_updm" => Some(
             "CREATE TABLE IF NOT EXISTS research_updm (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_momentum" => Some(
             "CREATE TABLE IF NOT EXISTS research_momentum (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_liquidity" => Some(
             "CREATE TABLE IF NOT EXISTS research_liquidity (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_breakout" => Some(
             "CREATE TABLE IF NOT EXISTS research_breakout (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cash_cycle" => Some(
             "CREATE TABLE IF NOT EXISTS research_cash_cycle (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_credit" => Some(
             "CREATE TABLE IF NOT EXISTS research_credit (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_growm" => Some(
             "CREATE TABLE IF NOT EXISTS research_growm (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_flow" => Some(
             "CREATE TABLE IF NOT EXISTS research_flow (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_regime" => Some(
             "CREATE TABLE IF NOT EXISTS research_regime (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_relvol" => Some(
             "CREATE TABLE IF NOT EXISTS research_relvol (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_margins" => Some(
             "CREATE TABLE IF NOT EXISTS research_margins (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_val" => Some(
             "CREATE TABLE IF NOT EXISTS research_val (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_qual" => Some(
             "CREATE TABLE IF NOT EXISTS research_qual (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_risk" => Some(
             "CREATE TABLE IF NOT EXISTS research_risk (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_insstrk" => Some(
             "CREATE TABLE IF NOT EXISTS research_insstrk (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_covg" => Some(
             "CREATE TABLE IF NOT EXISTS research_covg (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_vrk" => Some(
             "CREATE TABLE IF NOT EXISTS research_vrk (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_qrk" => Some(
             "CREATE TABLE IF NOT EXISTS research_qrk (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_rrk" => Some(
             "CREATE TABLE IF NOT EXISTS research_rrk (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_relepsgr" => Some(
             "CREATE TABLE IF NOT EXISTS research_relepsgr (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_pead" => Some(
             "CREATE TABLE IF NOT EXISTS research_pead (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_sizef" => Some(
             "CREATE TABLE IF NOT EXISTS research_sizef (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_momf" => Some(
             "CREATE TABLE IF NOT EXISTS research_momf (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_peadrank" => Some(
             "CREATE TABLE IF NOT EXISTS research_peadrank (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_fqm" => Some(
             "CREATE TABLE IF NOT EXISTS research_fqm (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_revrank" => Some(
             "CREATE TABLE IF NOT EXISTS research_revrank (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_levrank" => Some(
             "CREATE TABLE IF NOT EXISTS research_levrank (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_operank" => Some(
             "CREATE TABLE IF NOT EXISTS research_operank (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_fqmrank" => Some(
             "CREATE TABLE IF NOT EXISTS research_fqmrank (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_liqrank" => Some(
             "CREATE TABLE IF NOT EXISTS research_liqrank (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_surpstk" => Some(
             "CREATE TABLE IF NOT EXISTS research_surpstk (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_dvdrank" => Some(
             "CREATE TABLE IF NOT EXISTS research_dvdrank (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_earmrank" => Some(
             "CREATE TABLE IF NOT EXISTS research_earmrank (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_updgrank" => Some(
             "CREATE TABLE IF NOT EXISTS research_updgrank (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_gy" => Some(
             "CREATE TABLE IF NOT EXISTS research_gy (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_des" => Some(
             "CREATE TABLE IF NOT EXISTS research_des (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_dvdyieldrank" => Some(
             "CREATE TABLE IF NOT EXISTS research_dvdyieldrank (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_shrank" => Some(
             "CREATE TABLE IF NOT EXISTS research_shrank (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_atrann" => Some(
             "CREATE TABLE IF NOT EXISTS research_atrann (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ddhist" => Some(
             "CREATE TABLE IF NOT EXISTS research_ddhist (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_priceperf" => Some(
             "CREATE TABLE IF NOT EXISTS research_priceperf (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_betarank" => Some(
             "CREATE TABLE IF NOT EXISTS research_betarank (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_pegrank" => Some(
             "CREATE TABLE IF NOT EXISTS research_pegrank (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_fhighlow" => Some(
             "CREATE TABLE IF NOT EXISTS research_fhighlow (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_rvcone" => Some(
             "CREATE TABLE IF NOT EXISTS research_rvcone (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_calpb" => Some(
             "CREATE TABLE IF NOT EXISTS research_calpb (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_retskew" => Some(
             "CREATE TABLE IF NOT EXISTS research_retskew (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_retkurt" => Some(
             "CREATE TABLE IF NOT EXISTS research_retkurt (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_tailr" => Some(
             "CREATE TABLE IF NOT EXISTS research_tailr (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_runlen" => Some(
             "CREATE TABLE IF NOT EXISTS research_runlen (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_dayrange" => Some(
             "CREATE TABLE IF NOT EXISTS research_dayrange (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-130 web article ingestion ──
         "research_web_articles" => Some(
@@ -1509,7 +1559,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-131 Round 23 ──
         "research_autocor" => Some(
@@ -1517,35 +1567,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_hurst" => Some(
             "CREATE TABLE IF NOT EXISTS research_hurst (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_hitrate" => Some(
             "CREATE TABLE IF NOT EXISTS research_hitrate (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_glasym" => Some(
             "CREATE TABLE IF NOT EXISTS research_glasym (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_volratio" => Some(
             "CREATE TABLE IF NOT EXISTS research_volratio (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-132 Round 24 ──
         "research_drawup" => Some(
@@ -1553,35 +1603,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_gapstats" => Some(
             "CREATE TABLE IF NOT EXISTS research_gapstats (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_volcluster" => Some(
             "CREATE TABLE IF NOT EXISTS research_volcluster (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_closeplc" => Some(
             "CREATE TABLE IF NOT EXISTS research_closeplc (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_mrhl" => Some(
             "CREATE TABLE IF NOT EXISTS research_mrhl (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-133 Round 25 ──
         "research_downvol" => Some(
@@ -1589,35 +1639,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_sharpr" => Some(
             "CREATE TABLE IF NOT EXISTS research_sharpr (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_effratio" => Some(
             "CREATE TABLE IF NOT EXISTS research_effratio (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_wickbias" => Some(
             "CREATE TABLE IF NOT EXISTS research_wickbias (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_volofvol" => Some(
             "CREATE TABLE IF NOT EXISTS research_volofvol (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-134 Round 26 ──
         "research_calmar" => Some(
@@ -1625,35 +1675,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ulcer" => Some(
             "CREATE TABLE IF NOT EXISTS research_ulcer (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_varratio" => Some(
             "CREATE TABLE IF NOT EXISTS research_varratio (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_amihud" => Some(
             "CREATE TABLE IF NOT EXISTS research_amihud (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_jbnorm" => Some(
             "CREATE TABLE IF NOT EXISTS research_jbnorm (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-135 Round 27 ──
         "research_omega" => Some(
@@ -1661,35 +1711,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_dfa" => Some(
             "CREATE TABLE IF NOT EXISTS research_dfa (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_burke" => Some(
             "CREATE TABLE IF NOT EXISTS research_burke (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_monthseas" => Some(
             "CREATE TABLE IF NOT EXISTS research_monthseas (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_rollsprd" => Some(
             "CREATE TABLE IF NOT EXISTS research_rollsprd (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-136 Round 28 ──
         "research_parkinson" => Some(
@@ -1697,35 +1747,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_gkvol" => Some(
             "CREATE TABLE IF NOT EXISTS research_gkvol (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_rsvol" => Some(
             "CREATE TABLE IF NOT EXISTS research_rsvol (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cvar" => Some(
             "CREATE TABLE IF NOT EXISTS research_cvar (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_doweffect" => Some(
             "CREATE TABLE IF NOT EXISTS research_doweffect (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-137 Round 29 ──
         "research_sterling" => Some(
@@ -1733,35 +1783,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_kellyf" => Some(
             "CREATE TABLE IF NOT EXISTS research_kellyf (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ljungb" => Some(
             "CREATE TABLE IF NOT EXISTS research_ljungb (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_runstest" => Some(
             "CREATE TABLE IF NOT EXISTS research_runstest (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_zeroret" => Some(
             "CREATE TABLE IF NOT EXISTS research_zeroret (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-138 Round 30 ──
         "research_psr" => Some(
@@ -1769,35 +1819,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_adf" => Some(
             "CREATE TABLE IF NOT EXISTS research_adf (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_mnkendall" => Some(
             "CREATE TABLE IF NOT EXISTS research_mnkendall (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_bipower" => Some(
             "CREATE TABLE IF NOT EXISTS research_bipower (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_dddur" => Some(
             "CREATE TABLE IF NOT EXISTS research_dddur (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-139 Round 31 ──
         "research_hilltail" => Some(
@@ -1805,35 +1855,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_archlm" => Some(
             "CREATE TABLE IF NOT EXISTS research_archlm (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_painratio" => Some(
             "CREATE TABLE IF NOT EXISTS research_painratio (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cusum" => Some(
             "CREATE TABLE IF NOT EXISTS research_cusum (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cfvar" => Some(
             "CREATE TABLE IF NOT EXISTS research_cfvar (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-140 Round 32 ──
         "research_entropy" => Some(
@@ -1841,35 +1891,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_rachev" => Some(
             "CREATE TABLE IF NOT EXISTS research_rachev (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_gpr" => Some(
             "CREATE TABLE IF NOT EXISTS research_gpr (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_pacf" => Some(
             "CREATE TABLE IF NOT EXISTS research_pacf (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_apen" => Some(
             "CREATE TABLE IF NOT EXISTS research_apen (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-141 Round 33 ──
         "research_upr" => Some(
@@ -1877,35 +1927,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_levereff" => Some(
             "CREATE TABLE IF NOT EXISTS research_levereff (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_drawdar" => Some(
             "CREATE TABLE IF NOT EXISTS research_drawdar (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_varhalf" => Some(
             "CREATE TABLE IF NOT EXISTS research_varhalf (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_gini" => Some(
             "CREATE TABLE IF NOT EXISTS research_gini (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-142 Round 34 ──
         "research_sampen" => Some(
@@ -1913,35 +1963,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_permen" => Some(
             "CREATE TABLE IF NOT EXISTS research_permen (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_recfact" => Some(
             "CREATE TABLE IF NOT EXISTS research_recfact (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_kpss" => Some(
             "CREATE TABLE IF NOT EXISTS research_kpss (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_specent" => Some(
             "CREATE TABLE IF NOT EXISTS research_specent (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-143 Round 35 ──
         "research_robvol" => Some(
@@ -1949,35 +1999,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_renyient" => Some(
             "CREATE TABLE IF NOT EXISTS research_renyient (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_retquant" => Some(
             "CREATE TABLE IF NOT EXISTS research_retquant (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_msent" => Some(
             "CREATE TABLE IF NOT EXISTS research_msent (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ewmavol" => Some(
             "CREATE TABLE IF NOT EXISTS research_ewmavol (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-144 Round 36 ──
         "research_ksnorm" => Some(
@@ -1985,35 +2035,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_adtest" => Some(
             "CREATE TABLE IF NOT EXISTS research_adtest (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_lmom" => Some(
             "CREATE TABLE IF NOT EXISTS research_lmom (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_kylelam" => Some(
             "CREATE TABLE IF NOT EXISTS research_kylelam (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_peakover" => Some(
             "CREATE TABLE IF NOT EXISTS research_peakover (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-145 Round 37 ──
         "research_higuchi" => Some(
@@ -2021,35 +2071,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_pickands" => Some(
             "CREATE TABLE IF NOT EXISTS research_pickands (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_kappa3" => Some(
             "CREATE TABLE IF NOT EXISTS research_kappa3 (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_lyapunov" => Some(
             "CREATE TABLE IF NOT EXISTS research_lyapunov (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_rankac" => Some(
             "CREATE TABLE IF NOT EXISTS research_rankac (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-146 Round 38 ──
         "research_bnsjump" => Some(
@@ -2057,35 +2107,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_pproot" => Some(
             "CREATE TABLE IF NOT EXISTS research_pproot (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_mfdfa" => Some(
             "CREATE TABLE IF NOT EXISTS research_mfdfa (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_hillks" => Some(
             "CREATE TABLE IF NOT EXISTS research_hillks (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_tsi" => Some(
             "CREATE TABLE IF NOT EXISTS research_tsi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-147 Round 39 ──
         "research_garch11" => Some(
@@ -2093,35 +2143,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_sadf" => Some(
             "CREATE TABLE IF NOT EXISTS research_sadf (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cordim" => Some(
             "CREATE TABLE IF NOT EXISTS research_cordim (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_skspec" => Some(
             "CREATE TABLE IF NOT EXISTS research_skspec (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_automi" => Some(
             "CREATE TABLE IF NOT EXISTS research_automi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-149 Round 40 ──
         "research_durbinwatson" => Some(
@@ -2129,35 +2179,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_bdstest" => Some(
             "CREATE TABLE IF NOT EXISTS research_bdstest (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_breuschpagan" => Some(
             "CREATE TABLE IF NOT EXISTS research_breuschpagan (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_turnpts" => Some(
             "CREATE TABLE IF NOT EXISTS research_turnpts (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_periodogram" => Some(
             "CREATE TABLE IF NOT EXISTS research_periodogram (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-150 Round 41 ──
         "research_mcleodli" => Some(
@@ -2165,35 +2215,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_oufit" => Some(
             "CREATE TABLE IF NOT EXISTS research_oufit (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_gph" => Some(
             "CREATE TABLE IF NOT EXISTS research_gph (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_burgspec" => Some(
             "CREATE TABLE IF NOT EXISTS research_burgspec (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_kendalltau" => Some(
             "CREATE TABLE IF NOT EXISTS research_kendalltau (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-151 Round 42 ──
         "research_squeeze" => Some(
@@ -2201,35 +2251,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_squeezerank" => Some(
             "CREATE TABLE IF NOT EXISTS research_squeezerank (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_bbsqueeze" => Some(
             "CREATE TABLE IF NOT EXISTS research_bbsqueeze (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_donchian" => Some(
             "CREATE TABLE IF NOT EXISTS research_donchian (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_kama" => Some(
             "CREATE TABLE IF NOT EXISTS research_kama (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-152 Round 43 ──
         "research_ichimoku" => Some(
@@ -2237,35 +2287,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_supertrend" => Some(
             "CREATE TABLE IF NOT EXISTS research_supertrend (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_keltner" => Some(
             "CREATE TABLE IF NOT EXISTS research_keltner (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_fisher" => Some(
             "CREATE TABLE IF NOT EXISTS research_fisher (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_aroon" => Some(
             "CREATE TABLE IF NOT EXISTS research_aroon (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-153 Round 44 ──
         "research_adx" => Some(
@@ -2273,35 +2323,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cci" => Some(
             "CREATE TABLE IF NOT EXISTS research_cci (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cmf" => Some(
             "CREATE TABLE IF NOT EXISTS research_cmf (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_mfi" => Some(
             "CREATE TABLE IF NOT EXISTS research_mfi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_psar" => Some(
             "CREATE TABLE IF NOT EXISTS research_psar (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-154 Round 45 ──
         "research_vortex" => Some(
@@ -2309,35 +2359,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_chop" => Some(
             "CREATE TABLE IF NOT EXISTS research_chop (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_obv" => Some(
             "CREATE TABLE IF NOT EXISTS research_obv (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_trix" => Some(
             "CREATE TABLE IF NOT EXISTS research_trix (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_hma" => Some(
             "CREATE TABLE IF NOT EXISTS research_hma (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-155 Round 46 ──
         "research_ppo" => Some(
@@ -2345,35 +2395,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_dpo" => Some(
             "CREATE TABLE IF NOT EXISTS research_dpo (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_kst" => Some(
             "CREATE TABLE IF NOT EXISTS research_kst (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ultosc" => Some(
             "CREATE TABLE IF NOT EXISTS research_ultosc (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_willr" => Some(
             "CREATE TABLE IF NOT EXISTS research_willr (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-156 Round 47 ──
         "research_mass" => Some(
@@ -2381,175 +2431,175 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_chaikosc" => Some(
             "CREATE TABLE IF NOT EXISTS research_chaikosc (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_klinger" => Some(
             "CREATE TABLE IF NOT EXISTS research_klinger (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_stochrsi" => Some(
             "CREATE TABLE IF NOT EXISTS research_stochrsi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_awesome" => Some(
             "CREATE TABLE IF NOT EXISTS research_awesome (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_efi" => Some(
             "CREATE TABLE IF NOT EXISTS research_efi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_emv" => Some(
             "CREATE TABLE IF NOT EXISTS research_emv (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_nvi" => Some(
             "CREATE TABLE IF NOT EXISTS research_nvi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_pvi" => Some(
             "CREATE TABLE IF NOT EXISTS research_pvi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_coppock" => Some(
             "CREATE TABLE IF NOT EXISTS research_coppock (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cmo" => Some(
             "CREATE TABLE IF NOT EXISTS research_cmo (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_qstick" => Some(
             "CREATE TABLE IF NOT EXISTS research_qstick (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_disparity" => Some(
             "CREATE TABLE IF NOT EXISTS research_disparity (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_bop" => Some(
             "CREATE TABLE IF NOT EXISTS research_bop (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_schaff" => Some(
             "CREATE TABLE IF NOT EXISTS research_schaff (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_stoch" => Some(
             "CREATE TABLE IF NOT EXISTS research_stoch (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_macd" => Some(
             "CREATE TABLE IF NOT EXISTS research_macd (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_vwap" => Some(
             "CREATE TABLE IF NOT EXISTS research_vwap (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_mcgd" => Some(
             "CREATE TABLE IF NOT EXISTS research_mcgd (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_rwi" => Some(
             "CREATE TABLE IF NOT EXISTS research_rwi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_dema" => Some(
             "CREATE TABLE IF NOT EXISTS research_dema (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_tema" => Some(
             "CREATE TABLE IF NOT EXISTS research_tema (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_linreg" => Some(
             "CREATE TABLE IF NOT EXISTS research_linreg (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_pivots" => Some(
             "CREATE TABLE IF NOT EXISTS research_pivots (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_heikin" => Some(
             "CREATE TABLE IF NOT EXISTS research_heikin (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-162 cross-client AI response cache ──
         "ai_response_cache" => Some(
@@ -2565,7 +2615,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL,
                 hit_count INTEGER NOT NULL DEFAULT 0,
                 source_client TEXT NOT NULL DEFAULT ''
-            )"
+            )",
         ),
         // ── ADR-163 Round 52 ────────────────────────
         "research_alma" => Some(
@@ -2573,35 +2623,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_zlema" => Some(
             "CREATE TABLE IF NOT EXISTS research_zlema (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_elderray" => Some(
             "CREATE TABLE IF NOT EXISTS research_elderray (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_tsf" => Some(
             "CREATE TABLE IF NOT EXISTS research_tsf (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_rvi" => Some(
             "CREATE TABLE IF NOT EXISTS research_rvi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-164 Round 53 ────────────────────────
         "research_trima" => Some(
@@ -2609,35 +2659,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_t3" => Some(
             "CREATE TABLE IF NOT EXISTS research_t3 (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_vidya" => Some(
             "CREATE TABLE IF NOT EXISTS research_vidya (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_smi" => Some(
             "CREATE TABLE IF NOT EXISTS research_smi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_pvt" => Some(
             "CREATE TABLE IF NOT EXISTS research_pvt (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-165 Round 54 ────────────────────────
         "research_ac" => Some(
@@ -2645,287 +2695,287 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_chvol" => Some(
             "CREATE TABLE IF NOT EXISTS research_chvol (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_bbwidth" => Some(
             "CREATE TABLE IF NOT EXISTS research_bbwidth (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_elderimp" => Some(
             "CREATE TABLE IF NOT EXISTS research_elderimp (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_rmi" => Some(
             "CREATE TABLE IF NOT EXISTS research_rmi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_symbol_expirations" => Some(
             "CREATE TABLE IF NOT EXISTS research_symbol_expirations (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_smma" => Some(
             "CREATE TABLE IF NOT EXISTS research_smma (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_alligator" => Some(
             "CREATE TABLE IF NOT EXISTS research_alligator (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_crsi" => Some(
             "CREATE TABLE IF NOT EXISTS research_crsi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_seb" => Some(
             "CREATE TABLE IF NOT EXISTS research_seb (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_imi" => Some(
             "CREATE TABLE IF NOT EXISTS research_imi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_gmma" => Some(
             "CREATE TABLE IF NOT EXISTS research_gmma (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_maenv" => Some(
             "CREATE TABLE IF NOT EXISTS research_maenv (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_adl" => Some(
             "CREATE TABLE IF NOT EXISTS research_adl (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_vhf" => Some(
             "CREATE TABLE IF NOT EXISTS research_vhf (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_vroc" => Some(
             "CREATE TABLE IF NOT EXISTS research_vroc (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_kdj" => Some(
             "CREATE TABLE IF NOT EXISTS research_kdj (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_qqe" => Some(
             "CREATE TABLE IF NOT EXISTS research_qqe (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_pmo" => Some(
             "CREATE TABLE IF NOT EXISTS research_pmo (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cfo" => Some(
             "CREATE TABLE IF NOT EXISTS research_cfo (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_tmf" => Some(
             "CREATE TABLE IF NOT EXISTS research_tmf (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_fractals" => Some(
             "CREATE TABLE IF NOT EXISTS research_fractals (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ift_rsi" => Some(
             "CREATE TABLE IF NOT EXISTS research_ift_rsi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_mama" => Some(
             "CREATE TABLE IF NOT EXISTS research_mama (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cog" => Some(
             "CREATE TABLE IF NOT EXISTS research_cog (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_didi" => Some(
             "CREATE TABLE IF NOT EXISTS research_didi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_demarker" => Some(
             "CREATE TABLE IF NOT EXISTS research_demarker (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_gator" => Some(
             "CREATE TABLE IF NOT EXISTS research_gator (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_bw_mfi" => Some(
             "CREATE TABLE IF NOT EXISTS research_bw_mfi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_vwma" => Some(
             "CREATE TABLE IF NOT EXISTS research_vwma (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_stddev" => Some(
             "CREATE TABLE IF NOT EXISTS research_stddev (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_wma" => Some(
             "CREATE TABLE IF NOT EXISTS research_wma (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_rainbow" => Some(
             "CREATE TABLE IF NOT EXISTS research_rainbow (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_mesa_sine" => Some(
             "CREATE TABLE IF NOT EXISTS research_mesa_sine (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_frama" => Some(
             "CREATE TABLE IF NOT EXISTS research_frama (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ibs" => Some(
             "CREATE TABLE IF NOT EXISTS research_ibs (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_laguerre_rsi" => Some(
             "CREATE TABLE IF NOT EXISTS research_laguerre_rsi (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_zigzag" => Some(
             "CREATE TABLE IF NOT EXISTS research_zigzag (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_pgo" => Some(
             "CREATE TABLE IF NOT EXISTS research_pgo (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ht_trendline" => Some(
             "CREATE TABLE IF NOT EXISTS research_ht_trendline (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_midpoint" => Some(
             "CREATE TABLE IF NOT EXISTS research_midpoint (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-174 Round 62 ──
         "research_mass_index" => Some(
@@ -2933,35 +2983,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_natr" => Some(
             "CREATE TABLE IF NOT EXISTS research_natr (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ttm_squeeze" => Some(
             "CREATE TABLE IF NOT EXISTS research_ttm_squeeze (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_force_index" => Some(
             "CREATE TABLE IF NOT EXISTS research_force_index (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_trange" => Some(
             "CREATE TABLE IF NOT EXISTS research_trange (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-175 Round 63 ──
         "research_linearreg_slope" => Some(
@@ -2969,35 +3019,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ht_dcperiod" => Some(
             "CREATE TABLE IF NOT EXISTS research_ht_dcperiod (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ht_trendmode" => Some(
             "CREATE TABLE IF NOT EXISTS research_ht_trendmode (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_accbands" => Some(
             "CREATE TABLE IF NOT EXISTS research_accbands (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_stochf" => Some(
             "CREATE TABLE IF NOT EXISTS research_stochf (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-176 Round 64 ──
         "research_linearreg" => Some(
@@ -3005,35 +3055,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_linearreg_angle" => Some(
             "CREATE TABLE IF NOT EXISTS research_linearreg_angle (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ht_dcphase" => Some(
             "CREATE TABLE IF NOT EXISTS research_ht_dcphase (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ht_sine" => Some(
             "CREATE TABLE IF NOT EXISTS research_ht_sine (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ht_phasor" => Some(
             "CREATE TABLE IF NOT EXISTS research_ht_phasor (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-177 Round 65 ──
         "research_midprice" => Some(
@@ -3041,35 +3091,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_apo" => Some(
             "CREATE TABLE IF NOT EXISTS research_apo (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_mom" => Some(
             "CREATE TABLE IF NOT EXISTS research_mom (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_sarext" => Some(
             "CREATE TABLE IF NOT EXISTS research_sarext (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_adxr" => Some(
             "CREATE TABLE IF NOT EXISTS research_adxr (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-178 Round 66 ──
         "research_avgprice" => Some(
@@ -3077,35 +3127,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_medprice" => Some(
             "CREATE TABLE IF NOT EXISTS research_medprice (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_typprice" => Some(
             "CREATE TABLE IF NOT EXISTS research_typprice (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_wclprice" => Some(
             "CREATE TABLE IF NOT EXISTS research_wclprice (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_variance" => Some(
             "CREATE TABLE IF NOT EXISTS research_variance (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-179 Round 67 ──
         "research_plus_di" => Some(
@@ -3113,35 +3163,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_minus_di" => Some(
             "CREATE TABLE IF NOT EXISTS research_minus_di (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_plus_dm" => Some(
             "CREATE TABLE IF NOT EXISTS research_plus_dm (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_minus_dm" => Some(
             "CREATE TABLE IF NOT EXISTS research_minus_dm (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_dx" => Some(
             "CREATE TABLE IF NOT EXISTS research_dx (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-180 Round 68 ──
         "research_roc" => Some(
@@ -3149,35 +3199,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_rocp" => Some(
             "CREATE TABLE IF NOT EXISTS research_rocp (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_rocr" => Some(
             "CREATE TABLE IF NOT EXISTS research_rocr (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_rocr100" => Some(
             "CREATE TABLE IF NOT EXISTS research_rocr100 (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_correl" => Some(
             "CREATE TABLE IF NOT EXISTS research_correl (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-181 Round 69 ──
         "research_min" => Some(
@@ -3185,35 +3235,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_max" => Some(
             "CREATE TABLE IF NOT EXISTS research_max (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_minmax" => Some(
             "CREATE TABLE IF NOT EXISTS research_minmax (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_minindex" => Some(
             "CREATE TABLE IF NOT EXISTS research_minindex (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_maxindex" => Some(
             "CREATE TABLE IF NOT EXISTS research_maxindex (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-182 Round 70 ──
         "research_bbands" => Some(
@@ -3221,35 +3271,35 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_ad" => Some(
             "CREATE TABLE IF NOT EXISTS research_ad (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_adosc" => Some(
             "CREATE TABLE IF NOT EXISTS research_adosc (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_sum" => Some(
             "CREATE TABLE IF NOT EXISTS research_sum (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_linreg_intercept" => Some(
             "CREATE TABLE IF NOT EXISTS research_linreg_intercept (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         // ── ADR-183 Round 71 ──
         "research_aroonosc" => Some(
@@ -3257,532 +3307,546 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_minmaxindex" => Some(
             "CREATE TABLE IF NOT EXISTS research_minmaxindex (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_macdext" => Some(
             "CREATE TABLE IF NOT EXISTS research_macdext (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_macdfix" => Some(
             "CREATE TABLE IF NOT EXISTS research_macdfix (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_mavp" => Some(
             "CREATE TABLE IF NOT EXISTS research_mavp (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_doji" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_doji (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_hammer" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_hammer (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_shooting_star" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_shooting_star (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_engulfing" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_engulfing (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_harami" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_harami (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_morning_star" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_morning_star (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_evening_star" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_evening_star (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_three_black_crows" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_three_black_crows (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_three_white_soldiers" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_three_white_soldiers (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_dark_cloud_cover" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_dark_cloud_cover (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_piercing" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_piercing (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_dragonfly_doji" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_dragonfly_doji (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_gravestone_doji" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_gravestone_doji (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_hanging_man" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_hanging_man (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_inverted_hammer" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_inverted_hammer (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_harami_cross" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_harami_cross (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_long_legged_doji" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_long_legged_doji (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_marubozu" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_marubozu (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_spinning_top" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_spinning_top (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_tristar" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_tristar (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_doji_star" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_doji_star (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_morning_doji_star" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_morning_doji_star (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_evening_doji_star" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_evening_doji_star (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_abandoned_baby" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_abandoned_baby (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_three_inside" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_three_inside (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_belt_hold" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_belt_hold (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_closing_marubozu" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_closing_marubozu (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_high_wave" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_high_wave (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_long_line" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_long_line (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_short_line" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_short_line (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_counterattack" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_counterattack (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_homing_pigeon" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_homing_pigeon (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_in_neck" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_in_neck (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_on_neck" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_on_neck (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_thrusting" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_thrusting (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_two_crows" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_two_crows (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_three_line_strike" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_three_line_strike (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_three_outside" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_three_outside (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_matching_low" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_matching_low (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_separating_lines" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_separating_lines (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_stick_sandwich" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_stick_sandwich (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_rickshaw_man" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_rickshaw_man (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_takuri" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_takuri (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_three_stars_in_south" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_three_stars_in_south (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_identical_three_crows" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_identical_three_crows (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_kicking" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_kicking (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_kicking_by_length" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_kicking_by_length (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_ladder_bottom" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_ladder_bottom (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_unique_three_river" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_unique_three_river (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_advance_block" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_advance_block (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_breakaway" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_breakaway (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_gap_side_side_white" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_gap_side_side_white (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_upside_gap_two_crows" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_upside_gap_two_crows (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_xside_gap_three_methods" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_xside_gap_three_methods (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_conceal_baby_swallow" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_conceal_baby_swallow (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_hikkake" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_hikkake (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_hikkake_mod" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_hikkake_mod (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_mat_hold" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_mat_hold (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_rise_fall_three_methods" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_rise_fall_three_methods (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_stalled_pattern" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_stalled_pattern (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_cdl_tasuki_gap" => Some(
             "CREATE TABLE IF NOT EXISTS research_cdl_tasuki_gap (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
+        ),
+        "research_momrank_multi" => Some(
+            "CREATE TABLE IF NOT EXISTS research_momrank_multi (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )",
+        ),
+        "research_corrstk" => Some(
+            "CREATE TABLE IF NOT EXISTS research_corrstk (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )",
         ),
         "research_modsharpe" => Some(
             "CREATE TABLE IF NOT EXISTS research_modsharpe (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_hsiehtest" => Some(
             "CREATE TABLE IF NOT EXISTS research_hsiehtest (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_chowbreak" => Some(
             "CREATE TABLE IF NOT EXISTS research_chowbreak (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_driftburst" => Some(
             "CREATE TABLE IF NOT EXISTS research_driftburst (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_hlvclust" => Some(
             "CREATE TABLE IF NOT EXISTS research_hlvclust (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_yangzhang" => Some(
             "CREATE TABLE IF NOT EXISTS research_yangzhang (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_kuiper" => Some(
             "CREATE TABLE IF NOT EXISTS research_kuiper (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_dagostino" => Some(
             "CREATE TABLE IF NOT EXISTS research_dagostino (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_baiperron" => Some(
             "CREATE TABLE IF NOT EXISTS research_baiperron (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         "research_kupiecpof" => Some(
             "CREATE TABLE IF NOT EXISTS research_kupiecpof (
                 symbol TEXT PRIMARY KEY,
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
                 updated_at INTEGER NOT NULL DEFAULT 0
-            )"
+            )",
         ),
         _ => None,
     }
@@ -4271,6 +4335,9 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         // ── ADR-194 Round 87/88 ──
         "research_cdl_stalled_pattern" => Some("updated_at"),
         "research_cdl_tasuki_gap" => Some("updated_at"),
+        // ── ADR-195 Round 89/90 ──
+        "research_momrank_multi" => Some("updated_at"),
+        "research_corrstk" => Some("updated_at"),
         // ── ADR-189 Round 76 ──
         "research_modsharpe" => Some("updated_at"),
         "research_hsiehtest" => Some("updated_at"),
@@ -4290,7 +4357,11 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
 /// Export rows from a table as JSON, optionally filtered by timestamp.
 /// If since_ts > 0 and the table has a timestamp column, only rows newer than since_ts are returned.
 /// Falls back to full export if since_ts == 0 or no timestamp column exists.
-fn export_table_as_json_since(conn: &rusqlite::Connection, table: &str, since_ts: i64) -> Result<(String, usize), String> {
+fn export_table_as_json_since(
+    conn: &rusqlite::Connection,
+    table: &str,
+    since_ts: i64,
+) -> Result<(String, usize), String> {
     if !SYNCABLE_TABLES.contains(&table) {
         return Err(format!("Table '{}' not in whitelist", table));
     }
@@ -4302,11 +4373,14 @@ fn export_table_as_json_since(conn: &rusqlite::Connection, table: &str, since_ts
     // server's cold-start window used to emit 300+ "no such table" WARN
     // lines per sync. Check sqlite_master once and treat a missing table
     // as "0 rows"; the caller already skips empty results.
-    let exists: bool = conn.query_row(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1 LIMIT 1",
-        rusqlite::params![table],
-        |r| r.get::<_, i64>(0),
-    ).map(|_| true).unwrap_or(false);
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1 LIMIT 1",
+            rusqlite::params![table],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|_| true)
+        .unwrap_or(false);
     if !exists {
         return Ok(("[]".to_string(), 0));
     }
@@ -4319,13 +4393,18 @@ fn export_table_as_json_since(conn: &rusqlite::Connection, table: &str, since_ts
         format!("SELECT * FROM {}", table)
     };
 
-    let mut stmt = conn.prepare(&sql).map_err(|e| format!("Prepare SELECT from {table}: {e}"))?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("Prepare SELECT from {table}: {e}"))?;
     let col_count = stmt.column_count();
-    let col_names: Vec<String> = (0..col_count).map(|i| stmt.column_name(i).unwrap_or("?").to_string()).collect();
+    let col_names: Vec<String> = (0..col_count)
+        .map(|i| stmt.column_name(i).unwrap_or("?").to_string())
+        .collect();
 
     // Use query() with manual row iteration to avoid closure type mismatch
     let mut rows = if use_filter {
-        stmt.query(rusqlite::params![since_ts]).map_err(|e| format!("Query {table}: {e}"))?
+        stmt.query(rusqlite::params![since_ts])
+            .map_err(|e| format!("Query {table}: {e}"))?
     } else {
         stmt.query([]).map_err(|e| format!("Query {table}: {e}"))?
     };
@@ -4334,16 +4413,17 @@ fn export_table_as_json_since(conn: &rusqlite::Connection, table: &str, since_ts
     while let Some(row) = rows.next().map_err(|e| format!("Row iter {table}: {e}"))? {
         let mut map = serde_json::Map::new();
         for (i, name) in col_names.iter().enumerate() {
-            let val: rusqlite::types::Value = row.get(i).map_err(|e| format!("Get col {name}: {e}"))?;
+            let val: rusqlite::types::Value =
+                row.get(i).map_err(|e| format!("Get col {name}: {e}"))?;
             let json_val = match val {
                 rusqlite::types::Value::Null => serde_json::Value::Null,
                 rusqlite::types::Value::Integer(n) => serde_json::Value::Number(n.into()),
                 rusqlite::types::Value::Real(f) => serde_json::Value::Number(
-                    serde_json::Number::from_f64(f).unwrap_or_else(|| 0.into())
+                    serde_json::Number::from_f64(f).unwrap_or_else(|| 0.into()),
                 ),
                 rusqlite::types::Value::Text(s) => serde_json::Value::String(s),
                 rusqlite::types::Value::Blob(b) => serde_json::Value::String(
-                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &b)
+                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &b),
                 ),
             };
             map.insert(name.clone(), json_val);
@@ -4358,21 +4438,29 @@ fn export_table_as_json_since(conn: &rusqlite::Connection, table: &str, since_ts
 
 /// Import JSON rows into a table. Creates the table if it doesn't exist.
 /// Uses INSERT OR REPLACE to handle duplicates.
-fn import_table_from_json(conn: &rusqlite::Connection, table: &str, json: &str) -> Result<usize, String> {
+fn import_table_from_json(
+    conn: &rusqlite::Connection,
+    table: &str,
+    json: &str,
+) -> Result<usize, String> {
     // Create table if needed
     let ddl = create_table_sql(table).ok_or_else(|| format!("No DDL for table '{}'", table))?;
-    conn.execute_batch(ddl).map_err(|e| format!("Create table {table}: {e}"))?;
+    conn.execute_batch(ddl)
+        .map_err(|e| format!("Create table {table}: {e}"))?;
 
-    let rows: Vec<serde_json::Value> = serde_json::from_str(json)
-        .map_err(|e| format!("Parse JSON for {table}: {e}"))?;
-    if rows.is_empty() { return Ok(0); }
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(json).map_err(|e| format!("Parse JSON for {table}: {e}"))?;
+    if rows.is_empty() {
+        return Ok(0);
+    }
 
     // Get column names from first row
     let first = rows[0].as_object().ok_or("Expected JSON object row")?;
     // Filter out AUTOINCREMENT 'id' column — let SQLite assign new IDs on import
     // to avoid UNIQUE constraint conflicts across different databases.
     let has_autoincrement_id = ddl.contains("id INTEGER PRIMARY KEY AUTOINCREMENT");
-    let col_names: Vec<String> = first.keys()
+    let col_names: Vec<String> = first
+        .keys()
         .filter(|k| !(has_autoincrement_id && *k == "id"))
         .cloned()
         .collect();
@@ -4389,9 +4477,13 @@ fn import_table_from_json(conn: &rusqlite::Connection, table: &str, json: &str) 
     // unchecked_transaction() fails with "cannot start a transaction within a transaction"
     // if a prior BEGIN didn't get committed or rolled back.
     let _ = conn.execute_batch("ROLLBACK");
-    let tx = conn.unchecked_transaction().map_err(|e| format!("Begin tx for {table}: {e}"))?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("Begin tx for {table}: {e}"))?;
     {
-        let mut stmt = tx.prepare(&sql).map_err(|e| format!("Prepare INSERT for {table}: {e}"))?;
+        let mut stmt = tx
+            .prepare(&sql)
+            .map_err(|e| format!("Prepare INSERT for {table}: {e}"))?;
         // PERF: reuse the param buffer across rows — was allocating two Vecs
         // (values + refs) for every row during multi-thousand-row imports.
         let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(col_names.len());
@@ -4410,8 +4502,12 @@ fn import_table_from_json(conn: &rusqlite::Connection, table: &str, json: &str) 
                                 rusqlite::types::Value::Null
                             }
                         }
-                        Some(serde_json::Value::String(s)) => rusqlite::types::Value::Text(s.clone()),
-                        Some(serde_json::Value::Bool(b)) => rusqlite::types::Value::Integer(if *b { 1 } else { 0 }),
+                        Some(serde_json::Value::String(s)) => {
+                            rusqlite::types::Value::Text(s.clone())
+                        }
+                        Some(serde_json::Value::Bool(b)) => {
+                            rusqlite::types::Value::Integer(if *b { 1 } else { 0 })
+                        }
                         Some(other) => rusqlite::types::Value::Text(other.to_string()),
                     };
                     params.push(v);
@@ -4434,7 +4530,12 @@ fn derive_secret(passphrase: &str) -> [u8; 32] {
     use pbkdf2::pbkdf2_hmac;
     use sha2::Sha256;
     let mut key = [0u8; 32];
-    pbkdf2_hmac::<Sha256>(passphrase.as_bytes(), b"typhoon-lan-sync", 100_000, &mut key);
+    pbkdf2_hmac::<Sha256>(
+        passphrase.as_bytes(),
+        b"typhoon-lan-sync",
+        100_000,
+        &mut key,
+    );
     key
 }
 
@@ -4457,7 +4558,9 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 { return None; }
+    if s.len() % 2 != 0 {
+        return None;
+    }
     (0..s.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
@@ -4482,29 +4585,37 @@ fn parse_msg(msg: &Message) -> Result<SyncMessage, String> {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SyncStatus {
-    pub mode: String,           // "server", "client", "idle"
+    pub mode: String, // "server", "client", "idle"
     pub connected: bool,
-    pub clients: usize,         // server: number of connected clients
-    pub host: String,           // client: server host
+    pub clients: usize, // server: number of connected clients
+    pub host: String,   // client: server host
     pub port: u16,
-    pub bytes_sent: u64,        // total bytes sent
-    pub bytes_received: u64,    // total bytes received
-    pub entries_synced: usize,  // bar entries synced
-    pub darwin_synced: bool,    // whether DARWIN data has been synced
-    pub uptime_secs: u64,       // seconds since start
-    pub send_darwin: bool,      // server: opt-in to send DARWIN data to clients
+    pub bytes_sent: u64,          // total bytes sent
+    pub bytes_received: u64,      // total bytes received
+    pub entries_synced: usize,    // bar entries synced
+    pub darwin_synced: bool,      // whether DARWIN data has been synced
+    pub uptime_secs: u64,         // seconds since start
+    pub send_darwin: bool,        // server: opt-in to send DARWIN data to clients
     pub cert_fingerprint: String, // SHA-256 fingerprint of the TLS certificate (hex)
-    pub client_ips: Vec<String>, // server: list of connected client IP addresses
+    pub client_ips: Vec<String>,  // server: list of connected client IP addresses
 }
 
 impl Default for SyncStatus {
     fn default() -> Self {
         Self {
-            mode: "idle".into(), connected: false, clients: 0,
-            host: String::new(), port: 0,
-            bytes_sent: 0, bytes_received: 0, entries_synced: 0,
-            darwin_synced: false, uptime_secs: 0, send_darwin: false,
-            cert_fingerprint: String::new(), client_ips: Vec::new(),
+            mode: "idle".into(),
+            connected: false,
+            clients: 0,
+            host: String::new(),
+            port: 0,
+            bytes_sent: 0,
+            bytes_received: 0,
+            entries_synced: 0,
+            darwin_synced: false,
+            uptime_secs: 0,
+            send_darwin: false,
+            cert_fingerprint: String::new(),
+            client_ips: Vec::new(),
         }
     }
 }
@@ -4545,7 +4656,9 @@ impl LanSyncServer {
 
         let status_clone = status.clone();
         let task = tokio::spawn(async move {
-            tracing::info!("LAN sync server listening on wss://0.0.0.0:{port} (TLS encrypted, fingerprint: {cert_fingerprint})");
+            tracing::info!(
+                "LAN sync server listening on wss://0.0.0.0:{port} (TLS encrypted, fingerprint: {cert_fingerprint})"
+            );
             loop {
                 match listener.accept().await {
                     Ok((stream, addr)) => {
@@ -4559,7 +4672,8 @@ impl LanSyncServer {
                             let tls_result = tokio::time::timeout(
                                 std::time::Duration::from_secs(30),
                                 tls_acc.accept(stream),
-                            ).await;
+                            )
+                            .await;
                             match tls_result {
                                 Ok(Ok(tls_stream)) => {
                                     // Update status under lock, then write KV outside lock to avoid I/O contention
@@ -4570,10 +4684,15 @@ impl LanSyncServer {
                                         serde_json::to_string(&s.client_ips).unwrap_or_default()
                                     }; // lock dropped here — before I/O
                                     let _ = cache.put_kv("lan:server:clients", &ips_json);
-                                    handle_client_tls(tls_stream, cache, secret, status, &client_ip).await;
+                                    handle_client_tls(
+                                        tls_stream, cache, secret, status, &client_ip,
+                                    )
+                                    .await;
                                 }
                                 Ok(Err(e)) => {
-                                    tracing::warn!("LAN sync: TLS handshake failed from {addr}: {e}");
+                                    tracing::warn!(
+                                        "LAN sync: TLS handshake failed from {addr}: {e}"
+                                    );
                                 }
                                 Err(_) => {
                                     tracing::warn!("LAN sync: TLS handshake timeout from {addr}");
@@ -4588,7 +4707,10 @@ impl LanSyncServer {
             }
         });
 
-        Ok(Self { task: Some(task), status })
+        Ok(Self {
+            task: Some(task),
+            status,
+        })
     }
 
     pub fn stop(&mut self) {
@@ -4612,23 +4734,25 @@ async fn handle_client_tls(
     client_ip: &str,
 ) {
     // Helper: clean up client count + IP on any early exit
-    let cleanup_client = |status: &Arc<TokioMutex<SyncStatus>>, cache: &Arc<SqliteCache>, ip: &str| {
-        let status = status.clone();
-        let cache = cache.clone();
-        let ip = ip.to_string();
-        async move {
-            // Update status under lock, write KV outside lock to avoid I/O contention
-            let ips_json = {
-                let mut s = status.lock().await;
-                s.clients = s.clients.saturating_sub(1);
-                s.client_ips.retain(|i| i != &ip);
-                serde_json::to_string(&s.client_ips).unwrap_or_default()
-            }; // lock dropped here
-            let _ = cache.put_kv("lan:server:clients", &ips_json);
-        }
-    };
+    let cleanup_client =
+        |status: &Arc<TokioMutex<SyncStatus>>, cache: &Arc<SqliteCache>, ip: &str| {
+            let status = status.clone();
+            let cache = cache.clone();
+            let ip = ip.to_string();
+            async move {
+                // Update status under lock, write KV outside lock to avoid I/O contention
+                let ips_json = {
+                    let mut s = status.lock().await;
+                    s.clients = s.clients.saturating_sub(1);
+                    s.client_ips.retain(|i| i != &ip);
+                    serde_json::to_string(&s.client_ips).unwrap_or_default()
+                }; // lock dropped here
+                let _ = cache.put_kv("lan:server:clients", &ips_json);
+            }
+        };
 
-    let ws = match tokio_tungstenite::accept_async_with_config(tls_stream, Some(ws_config())).await {
+    let ws = match tokio_tungstenite::accept_async_with_config(tls_stream, Some(ws_config())).await
+    {
         Ok(ws) => ws,
         Err(e) => {
             tracing::warn!("LAN sync WebSocket handshake failed: {e}");
@@ -4642,7 +4766,9 @@ async fn handle_client_tls(
     // 1. Send AuthChallenge
     let challenge_bytes: [u8; 32] = rand::random();
     let challenge_hex = hex_encode(&challenge_bytes);
-    let challenge_msg = match send_msg(&SyncMessage::AuthChallenge { challenge: challenge_hex.clone() }) {
+    let challenge_msg = match send_msg(&SyncMessage::AuthChallenge {
+        challenge: challenge_hex.clone(),
+    }) {
         Ok(m) => m,
         Err(e) => {
             tracing::warn!("LAN sync: failed to serialize AuthChallenge: {e}");
@@ -4656,22 +4782,31 @@ async fn handle_client_tls(
     }
 
     // 2. Wait for Auth response
-    let auth_ok = match tokio::time::timeout(std::time::Duration::from_secs(10), stream_rx.next()).await {
-        Ok(Some(Ok(msg))) => {
-            match parse_msg(&msg) {
-                Ok(SyncMessage::Auth { response }) => {
-                    let expected = hmac_hex(&challenge_bytes, &secret);
-                    // Constant-time comparison to prevent timing attacks
-                    response.len() == expected.len() && response.as_bytes().iter().zip(expected.as_bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+    let auth_ok =
+        match tokio::time::timeout(std::time::Duration::from_secs(10), stream_rx.next()).await {
+            Ok(Some(Ok(msg))) => {
+                match parse_msg(&msg) {
+                    Ok(SyncMessage::Auth { response }) => {
+                        let expected = hmac_hex(&challenge_bytes, &secret);
+                        // Constant-time comparison to prevent timing attacks
+                        response.len() == expected.len()
+                            && response
+                                .as_bytes()
+                                .iter()
+                                .zip(expected.as_bytes())
+                                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                                == 0
+                    }
+                    _ => false,
                 }
-                _ => false,
             }
-        }
-        _ => false,
-    };
+            _ => false,
+        };
 
     if !auth_ok {
-        if let Ok(msg) = send_msg(&SyncMessage::AuthFail { reason: "Invalid credentials".into() }) {
+        if let Ok(msg) = send_msg(&SyncMessage::AuthFail {
+            reason: "Invalid credentials".into(),
+        }) {
             let _ = sink.send(msg).await;
         }
         cleanup_client(&status, &cache, client_ip).await;
@@ -4684,7 +4819,9 @@ async fn handle_client_tls(
 
     // 3. Main message loop
     while let Some(Ok(msg)) = stream_rx.next().await {
-        if msg.is_close() { break; }
+        if msg.is_close() {
+            break;
+        }
         if msg.is_ping() {
             let _ = sink.send(Message::Pong(msg.into_data())).await;
             continue;
@@ -4704,13 +4841,21 @@ async fn handle_client_tls(
             SyncMessage::RequestMetaSince { since_ts } => {
                 // Delta metadata: only entries updated since since_ts
                 let entries = cache.get_cache_meta_since(since_ts).unwrap_or_default();
-                let meta: Vec<CacheMeta> = entries.into_iter().map(|(key, ts, bc)| {
-                    CacheMeta { key, timestamp: ts, bar_count: Some(bc) }
-                }).collect();
+                let meta: Vec<CacheMeta> = entries
+                    .into_iter()
+                    .map(|(key, ts, bc)| CacheMeta {
+                        key,
+                        timestamp: ts,
+                        bar_count: Some(bc),
+                    })
+                    .collect();
                 if meta.is_empty() {
                     tracing::trace!("LAN sync: meta delta — 0 changed entries since {since_ts}");
                 } else {
-                    tracing::debug!("LAN sync: meta delta — {} changed entries since {since_ts}", meta.len());
+                    tracing::debug!(
+                        "LAN sync: meta delta — {} changed entries since {since_ts}",
+                        meta.len()
+                    );
                 }
                 if let Ok(msg) = send_msg(&SyncMessage::Metadata { entries: meta }) {
                     let _ = sink.send(msg).await;
@@ -4737,7 +4882,10 @@ async fn handle_client_tls(
                         // Flush when batch is large enough (swap to avoid clone)
                         if batch_buf.len() >= flush_threshold {
                             bytes_total += batch_buf.len() as u64;
-                            let send_buf = std::mem::replace(&mut batch_buf, Vec::with_capacity(4 * 1024 * 1024));
+                            let send_buf = std::mem::replace(
+                                &mut batch_buf,
+                                Vec::with_capacity(4 * 1024 * 1024),
+                            );
                             let _ = sink.send(Message::Binary(send_buf.into())).await;
                         }
                     }
@@ -4748,7 +4896,9 @@ async fn handle_client_tls(
                     let _ = sink.send(Message::Binary(batch_buf.into())).await;
                 }
                 // Send completion marker as text
-                if let Ok(msg) = send_msg(&SyncMessage::BatchComplete { count: count as usize }) {
+                if let Ok(msg) = send_msg(&SyncMessage::BatchComplete {
+                    count: count as usize,
+                }) {
                     let _ = sink.send(msg).await;
                 }
                 {
@@ -4763,18 +4913,35 @@ async fn handle_client_tls(
                 let darwin_result = tokio::task::spawn_blocking(move || {
                     if let Ok(conn) = cache_clone.read_connection() {
                         crate::core::darwin::export_darwin_data(&conn).ok()
-                    } else { None }
-                }).await.ok().flatten();
+                    } else {
+                        None
+                    }
+                })
+                .await
+                .ok()
+                .flatten();
 
                 if let Some((json, n_acct, n_deals, n_pos)) = darwin_result {
-                    let compressed = zstd::encode_all(json.as_bytes(), 3).unwrap_or_else(|_| json.into_bytes());
-                    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &compressed);
+                    let compressed =
+                        zstd::encode_all(json.as_bytes(), 3).unwrap_or_else(|_| json.into_bytes());
+                    let encoded = base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &compressed,
+                    );
                     if let Ok(msg) = send_msg(&SyncMessage::DarwinData {
-                        data: encoded, accounts: n_acct, deals: n_deals, positions: n_pos,
+                        data: encoded,
+                        accounts: n_acct,
+                        deals: n_deals,
+                        positions: n_pos,
                     }) {
                         let _ = sink.send(msg).await;
                     }
-                    tracing::info!("LAN sync: sent DARWIN data ({} accounts, {} deals, {} positions)", n_acct, n_deals, n_pos);
+                    tracing::info!(
+                        "LAN sync: sent DARWIN data ({} accounts, {} deals, {} positions)",
+                        n_acct,
+                        n_deals,
+                        n_pos
+                    );
                 } else {
                     tracing::warn!("LAN sync: DARWIN export failed or cache unavailable");
                 }
@@ -4784,8 +4951,10 @@ async fn handle_client_tls(
                 // NEVER sync machine-local config keys: LAN topology and credentials are
                 // per-machine and must not overwrite client settings.
                 let kv_local_keys: &[&str] = &[
-                    "lan:server_enabled", "lan:client_enabled",
-                    "lan:server_ip", "lan:sync_port",
+                    "lan:server_enabled",
+                    "lan:client_enabled",
+                    "lan:server_ip",
+                    "lan:sync_port",
                 ];
                 let is_skip_key = |k: &str| {
                     kv_local_keys.iter().any(|&lk| k == lk)
@@ -4796,7 +4965,7 @@ async fn handle_client_tls(
                         || k.starts_with("darwin:exposure")       // client computes locally
                         || k == "darwin:insider_trades"            // large, client has SEC data via table sync
                         || k == "client:demand"                   // per-machine demand list
-                        || k.starts_with("lan:")                  // all LAN config is per-machine
+                        || k.starts_with("lan:") // all LAN config is per-machine
                 };
                 let cache_clone = cache.clone();
                 // Send KV values as compressed blobs (skip server-side decompression).
@@ -4805,12 +4974,11 @@ async fn handle_client_tls(
                 let kv_data: Vec<(String, Vec<u8>)> = tokio::task::spawn_blocking(move || {
                     if since_ts > 0 {
                         match cache_clone.list_kv_entries_since(since_ts) {
-                            Ok(entries) => {
-                                entries.into_iter()
-                                    .filter(|(key, _, _)| !is_skip_key(key))
-                                    .map(|(key, compressed, _ts)| (key, compressed))
-                                    .collect()
-                            }
+                            Ok(entries) => entries
+                                .into_iter()
+                                .filter(|(key, _, _)| !is_skip_key(key))
+                                .map(|(key, compressed, _ts)| (key, compressed))
+                                .collect(),
                             Err(e) => {
                                 tracing::warn!("LAN sync: list_kv_entries_since failed: {e}");
                                 Vec::new()
@@ -4821,13 +4989,17 @@ async fn handle_client_tls(
                         let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
                         if let Ok(all) = cache_clone.list_kv_entries_since(0) {
                             for (key, compressed, _ts) in all {
-                                if is_skip_key(&key) { continue; }
+                                if is_skip_key(&key) {
+                                    continue;
+                                }
                                 entries.push((key, compressed));
                             }
                         }
                         entries
                     }
-                }).await.unwrap_or_default();
+                })
+                .await
+                .unwrap_or_default();
 
                 // Send as binary batch: [u32 key_len][key][u32 blob_len][compressed_blob] repeated
                 let mut count = 0u32;
@@ -4841,39 +5013,66 @@ async fn handle_client_tls(
                     batch_buf.extend_from_slice(vb);
                     count += 1;
                     if batch_buf.len() >= 2 * 1024 * 1024 {
-                        let send_buf = std::mem::replace(&mut batch_buf, Vec::with_capacity(2 * 1024 * 1024));
+                        let send_buf =
+                            std::mem::replace(&mut batch_buf, Vec::with_capacity(2 * 1024 * 1024));
                         let _ = sink.send(Message::Binary(send_buf.into())).await;
                     }
                 }
                 if !batch_buf.is_empty() {
                     let _ = sink.send(Message::Binary(batch_buf.into())).await;
                 }
-                if let Ok(msg) = send_msg(&SyncMessage::KvBatchComplete { count: count as usize }) {
+                if let Ok(msg) = send_msg(&SyncMessage::KvBatchComplete {
+                    count: count as usize,
+                }) {
                     let _ = sink.send(msg).await;
                 }
                 if count > 0 {
-                    tracing::info!("LAN sync: sent {} KV entries to client (since_ts={})", count, since_ts);
+                    tracing::info!(
+                        "LAN sync: sent {} KV entries to client (since_ts={})",
+                        count,
+                        since_ts
+                    );
                 } else {
-                    tracing::debug!("LAN sync: KV sync — 0 entries changed since ts={}", since_ts);
+                    tracing::debug!(
+                        "LAN sync: KV sync — 0 entries changed since ts={}",
+                        since_ts
+                    );
                 }
             }
             SyncMessage::RemoteRequest { cmd, args } => {
                 // Whitelist allowed remote commands — reject unknown commands
                 const ALLOWED_REMOTE_CMDS: &[&str] = &[
-                    "SEC_SCRAPE", "FUNDAMENTALS", "FUNDAMENTALS_ONE",
-                    "KRAKEN_BACKFILL", "CRYPTOCOMPARE",
-                    "MT5_SYNC", "DARWIN_IMPORT", "FETCH_BARS",
-                    "FINNHUB_NEWS", "ECON_CALENDAR", "CONGRESS_TRADES", "FRED_DATA",
-                    "SEC_FILING", "EVSCRAPE", "INGEST_RESEARCH",
+                    "SEC_SCRAPE",
+                    "FUNDAMENTALS",
+                    "FUNDAMENTALS_ONE",
+                    "KRAKEN_BACKFILL",
+                    "CRYPTOCOMPARE",
+                    "MT5_SYNC",
+                    "DARWIN_IMPORT",
+                    "FETCH_BARS",
+                    "FINNHUB_NEWS",
+                    "ECON_CALENDAR",
+                    "CONGRESS_TRADES",
+                    "FRED_DATA",
+                    "SEC_FILING",
+                    "EVSCRAPE",
+                    "INGEST_RESEARCH",
                 ];
                 if !ALLOWED_REMOTE_CMDS.contains(&cmd.as_str()) {
                     tracing::warn!("LAN sync: rejected unknown remote command '{}'", cmd);
                     let msg_text = format!("Rejected: '{}' not in allowed command list", cmd);
-                    if let Ok(msg) = send_msg(&SyncMessage::RemoteRequestDone { cmd, message: msg_text }) {
+                    if let Ok(msg) = send_msg(&SyncMessage::RemoteRequestDone {
+                        cmd,
+                        message: msg_text,
+                    }) {
                         let _ = sink.send(msg).await;
                     }
                 } else {
-                    tracing::info!("LAN sync: client requested remote '{}' (args: {})", cmd, &args[..args.len().min(100)]);
+                    tracing::info!(
+                        "LAN sync: client requested remote '{}' (args: {})",
+                        cmd,
+                        &args[..args.len().min(100)]
+                    );
                     // Append to remote command queue. Multiple commands can arrive
                     // rapidly (e.g., FETCH_BARS for 9 timeframes). Use append_to_queue
                     // for O(1) inserts instead of the old read-decompress-append-recompress-write
@@ -4882,7 +5081,10 @@ async fn handle_client_tls(
                     let entry_json = serde_json::to_string(&new_entry).unwrap_or_default();
                     let _ = cache.append_to_queue("lan:remote_queue", &entry_json);
                     let msg_text = format!("Remote '{}' accepted — executing on server", cmd);
-                    if let Ok(msg) = send_msg(&SyncMessage::RemoteRequestDone { cmd, message: msg_text }) {
+                    if let Ok(msg) = send_msg(&SyncMessage::RemoteRequestDone {
+                        cmd,
+                        message: msg_text,
+                    }) {
                         let _ = sink.send(msg).await;
                     }
                 }
@@ -4896,7 +5098,10 @@ async fn handle_client_tls(
                     if let Ok(conn) = cache_clone.read_connection() {
                         for (tbl, since_ts) in &tables {
                             if !SYNCABLE_TABLES.contains(&tbl.as_str()) {
-                                tracing::warn!("LAN sync: table '{}' not in whitelist, skipping", tbl);
+                                tracing::warn!(
+                                    "LAN sync: table '{}' not in whitelist, skipping",
+                                    tbl
+                                );
                                 continue;
                             }
                             match export_table_as_json_since(&conn, tbl, *since_ts) {
@@ -4904,22 +5109,31 @@ async fn handle_client_tls(
                                     let compressed = zstd::encode_all(json.as_bytes(), 3)
                                         .unwrap_or_else(|_| json.into_bytes());
                                     let encoded = base64::Engine::encode(
-                                        &base64::engine::general_purpose::STANDARD, &compressed,
+                                        &base64::engine::general_purpose::STANDARD,
+                                        &compressed,
                                     );
                                     results.push((tbl.clone(), encoded, row_count));
                                 }
                                 Err(e) => {
-                                    tracing::warn!("LAN sync: export table '{}' failed: {}", tbl, e);
+                                    tracing::warn!(
+                                        "LAN sync: export table '{}' failed: {}",
+                                        tbl,
+                                        e
+                                    );
                                 }
                             }
                         }
                     }
                     results
-                }).await.unwrap_or_default();
+                })
+                .await
+                .unwrap_or_default();
 
                 let mut sent_count = 0usize;
                 for (tbl, encoded, row_count) in &table_results {
-                    if *row_count == 0 { continue; } // skip empty tables
+                    if *row_count == 0 {
+                        continue;
+                    } // skip empty tables
                     if let Ok(msg) = send_msg(&SyncMessage::TableSyncData {
                         table: tbl.clone(),
                         rows_json: encoded.clone(),
@@ -4958,13 +5172,15 @@ fn build_cache_meta(cache: &SqliteCache) -> Vec<CacheMeta> {
     match cache.get_all_cache_meta() {
         Ok(map) => {
             let now = chrono::Utc::now().timestamp();
-            map.into_iter().map(|(key, (age_secs, bar_count))| {
-                CacheMeta {
-                    key,
-                    timestamp: now - age_secs, // convert age back to absolute timestamp
-                    bar_count: Some(bar_count),
-                }
-            }).collect()
+            map.into_iter()
+                .map(|(key, (age_secs, bar_count))| {
+                    CacheMeta {
+                        key,
+                        timestamp: now - age_secs, // convert age back to absolute timestamp
+                        bar_count: Some(bar_count),
+                    }
+                })
+                .collect()
         }
         Err(e) => {
             tracing::warn!("LAN sync: failed to read cache meta: {e}");
@@ -4995,10 +5211,13 @@ impl LanSyncClient {
         let connector = tokio_tungstenite::Connector::NativeTls(tls_connector);
 
         let (ws, _) = tokio_tungstenite::connect_async_tls_with_config(
-            &url, Some(ws_config()), false, Some(connector),
+            &url,
+            Some(ws_config()),
+            false,
+            Some(connector),
         )
-            .await
-            .map_err(|e| format!("Connect to {url} failed: {e}"))?;
+        .await
+        .map_err(|e| format!("Connect to {url} failed: {e}"))?;
 
         // Log peer certificate fingerprint for diagnostics (no pinning).
         // The server generates a new ephemeral self-signed cert on every startup,
@@ -5008,7 +5227,10 @@ impl LanSyncClient {
         let peer_fingerprint = match ws.get_ref() {
             tokio_tungstenite::MaybeTlsStream::NativeTls(tls_stream) => {
                 match tls_stream.get_ref().peer_certificate() {
-                    Ok(Some(cert)) => cert.to_der().ok().map(|der| compute_sha256_fingerprint(&der)),
+                    Ok(Some(cert)) => cert
+                        .to_der()
+                        .ok()
+                        .map(|der| compute_sha256_fingerprint(&der)),
                     _ => None,
                 }
             }
@@ -5030,15 +5252,18 @@ impl LanSyncClient {
         let (mut sink, mut stream_rx) = ws.split();
 
         // 1. Wait for AuthChallenge
-        let challenge_bytes = match tokio::time::timeout(std::time::Duration::from_secs(10), stream_rx.next()).await {
-            Ok(Some(Ok(msg))) => {
-                match parse_msg(&msg) {
-                    Ok(SyncMessage::AuthChallenge { challenge }) => {
-                        hex_decode(&challenge).ok_or("Invalid challenge hex")?
-                    }
-                    _ => return Err("Expected AuthChallenge".into()),
+        let challenge_bytes = match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            stream_rx.next(),
+        )
+        .await
+        {
+            Ok(Some(Ok(msg))) => match parse_msg(&msg) {
+                Ok(SyncMessage::AuthChallenge { challenge }) => {
+                    hex_decode(&challenge).ok_or("Invalid challenge hex")?
                 }
-            }
+                _ => return Err("Expected AuthChallenge".into()),
+            },
             _ => return Err("Timeout waiting for AuthChallenge".into()),
         };
 
@@ -5050,15 +5275,13 @@ impl LanSyncClient {
 
         // 3. Wait for AuthOk
         match tokio::time::timeout(std::time::Duration::from_secs(10), stream_rx.next()).await {
-            Ok(Some(Ok(msg))) => {
-                match parse_msg(&msg) {
-                    Ok(SyncMessage::AuthOk) => {}
-                    Ok(SyncMessage::AuthFail { reason }) => {
-                        return Err(format!("Auth failed: {reason}"));
-                    }
-                    _ => return Err("Unexpected message after auth".into()),
+            Ok(Some(Ok(msg))) => match parse_msg(&msg) {
+                Ok(SyncMessage::AuthOk) => {}
+                Ok(SyncMessage::AuthFail { reason }) => {
+                    return Err(format!("Auth failed: {reason}"));
                 }
-            }
+                _ => return Err("Unexpected message after auth".into()),
+            },
             _ => return Err("Timeout waiting for auth result".into()),
         }
 
@@ -5077,7 +5300,13 @@ impl LanSyncClient {
             tracing::info!("LAN sync: client disconnected");
         });
 
-        Ok((Self { task: Some(task), status }, remote_tx))
+        Ok((
+            Self {
+                task: Some(task),
+                status,
+            },
+            remote_tx,
+        ))
     }
 
     /// Wait for the client sync task to finish (disconnect or error).
@@ -5137,12 +5366,15 @@ async fn client_sync_loop(
         let local_ts = local_meta.get(&entry.key).map(|(age, _)| now - age);
         match local_ts {
             Some(ts) if ts >= entry.timestamp => {} // local is same or newer
-            _ => needed.push(entry.key.clone()),     // missing or outdated
+            _ => needed.push(entry.key.clone()),    // missing or outdated
         }
     }
 
     if needed.is_empty() {
-        tracing::info!("LAN sync: local cache is up to date ({} entries checked)", remote_meta.len());
+        tracing::info!(
+            "LAN sync: local cache is up to date ({} entries checked)",
+            remote_meta.len()
+        );
     } else {
         tracing::info!("LAN sync: requesting {} entries from server", needed.len());
 
@@ -5164,19 +5396,33 @@ async fn client_sync_loop(
                     let mut pos = 0;
                     while pos + 4 <= buf.len() {
                         let prev_pos = pos;
-                        let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                        let key_len =
+                            u32::from_le_bytes(buf[pos..pos + 4].try_into().unwrap_or([0; 4]))
+                                as usize;
                         pos += 4;
-                        if key_len == 0 || key_len > MAX_KEY_LEN { tracing::warn!("LAN sync: key_len {key_len} invalid"); break; }
-                        if pos + key_len + 8 + 4 > buf.len() { break; }
-                        let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
+                        if key_len == 0 || key_len > MAX_KEY_LEN {
+                            tracing::warn!("LAN sync: key_len {key_len} invalid");
+                            break;
+                        }
+                        if pos + key_len + 8 + 4 > buf.len() {
+                            break;
+                        }
+                        let key = String::from_utf8_lossy(&buf[pos..pos + key_len]).to_string();
                         pos += key_len;
-                        let ts = i64::from_le_bytes(buf[pos..pos+8].try_into().unwrap_or([0;8]));
+                        let ts = i64::from_le_bytes(buf[pos..pos + 8].try_into().unwrap_or([0; 8]));
                         pos += 8;
-                        let data_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                        let data_len =
+                            u32::from_le_bytes(buf[pos..pos + 4].try_into().unwrap_or([0; 4]))
+                                as usize;
                         pos += 4;
-                        if data_len > MAX_DATA_LEN { tracing::warn!("LAN sync: data_len {data_len} exceeds limit"); break; }
-                        if pos + data_len > buf.len() { break; }
-                        let data = &buf[pos..pos+data_len];
+                        if data_len > MAX_DATA_LEN {
+                            tracing::warn!("LAN sync: data_len {data_len} exceeds limit");
+                            break;
+                        }
+                        if pos + data_len > buf.len() {
+                            break;
+                        }
+                        let data = &buf[pos..pos + data_len];
                         pos += data_len;
 
                         let bar_count = extract_bar_count(data);
@@ -5184,16 +5430,24 @@ async fn client_sync_loop(
                             tracing::warn!("LAN sync: failed to write {key}: {e}");
                         }
                         total_received += 1;
-                        if pos == prev_pos { tracing::warn!("LAN sync: binary parse stalled at pos {pos}"); break; }
+                        if pos == prev_pos {
+                            tracing::warn!("LAN sync: binary parse stalled at pos {pos}");
+                            break;
+                        }
                     }
                 }
                 Some(Ok(msg)) if msg.is_text() => {
                     // Check for BatchComplete
                     if let Ok(SyncMessage::BatchComplete { count }) = parse_msg(&msg) {
                         if total_received != count {
-                            tracing::warn!("LAN sync: batch count mismatch — server sent {count}, received {total_received}");
+                            tracing::warn!(
+                                "LAN sync: batch count mismatch — server sent {count}, received {total_received}"
+                            );
                         }
-                        tracing::info!("LAN sync: received {total_received} entries ({:.1} MB)", total_bytes as f64 / 1024.0 / 1024.0);
+                        tracing::info!(
+                            "LAN sync: received {total_received} entries ({:.1} MB)",
+                            total_bytes as f64 / 1024.0 / 1024.0
+                        );
                         break;
                     }
                 }
@@ -5206,13 +5460,20 @@ async fn client_sync_loop(
 
     // 8b. Request DARWIN data (accounts, deals, positions)
     sink.send(send_msg(&SyncMessage::RequestDarwinData)?)
-        .await.map_err(|e| format!("Send RequestDarwinData failed: {e}"))?;
+        .await
+        .map_err(|e| format!("Send RequestDarwinData failed: {e}"))?;
 
     match read_next(stream).await? {
-        SyncMessage::DarwinData { data, accounts, deals, positions } => {
+        SyncMessage::DarwinData {
+            data,
+            accounts,
+            deals,
+            positions,
+        } => {
             // Decompress and import
-            let compressed = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data)
-                .map_err(|e| format!("Base64 decode DARWIN data failed: {e}"))?;
+            let compressed =
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data)
+                    .map_err(|e| format!("Base64 decode DARWIN data failed: {e}"))?;
             let json_bytes = zstd::decode_all(std::io::Cursor::new(&compressed))
                 .unwrap_or_else(|_| compressed.clone());
             let json = String::from_utf8_lossy(&json_bytes);
@@ -5229,18 +5490,32 @@ async fn client_sync_loop(
                     }
                 }
             }).await;
-            tracing::info!("LAN sync: DARWIN data received ({} accounts, {} deals, {} positions)", accounts, deals, positions);
+            tracing::info!(
+                "LAN sync: DARWIN data received ({} accounts, {} deals, {} positions)",
+                accounts,
+                deals,
+                positions
+            );
         }
-        other => { tracing::warn!("LAN sync: expected DarwinData, got {:?}", other); }
+        other => {
+            tracing::warn!("LAN sync: expected DarwinData, got {:?}", other);
+        }
     }
 
     // 8c. Request KV cache entries (fundamentals, news, SEC filings, FRED, etc.)
     // Incremental: send last known KV sync timestamp; 0 = full sync
     let kv_since_ts = cache.get_sync_ts("kv_cache");
     let kv_local_count = cache.kv_count();
-    tracing::info!("LAN sync: requesting KV data (since_ts={}, local_count={})", kv_since_ts, kv_local_count);
-    sink.send(send_msg(&SyncMessage::RequestKvData { since_ts: kv_since_ts })?)
-        .await.map_err(|e| format!("Send RequestKvData failed: {e}"))?;
+    tracing::info!(
+        "LAN sync: requesting KV data (since_ts={}, local_count={})",
+        kv_since_ts,
+        kv_local_count
+    );
+    sink.send(send_msg(&SyncMessage::RequestKvData {
+        since_ts: kv_since_ts,
+    })?)
+    .await
+    .map_err(|e| format!("Send RequestKvData failed: {e}"))?;
 
     let mut kv_count = 0usize;
     loop {
@@ -5251,26 +5526,44 @@ async fn client_sync_loop(
                 let mut pos = 0;
                 while pos + 4 <= buf.len() {
                     let prev_pos = pos;
-                    let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                    let key_len =
+                        u32::from_le_bytes(buf[pos..pos + 4].try_into().unwrap_or([0; 4])) as usize;
                     pos += 4;
-                    if key_len == 0 || key_len > MAX_KEY_LEN { tracing::warn!("LAN sync: KV key_len {key_len} invalid"); break; }
-                    if pos + key_len + 4 > buf.len() { break; }
-                    let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
+                    if key_len == 0 || key_len > MAX_KEY_LEN {
+                        tracing::warn!("LAN sync: KV key_len {key_len} invalid");
+                        break;
+                    }
+                    if pos + key_len + 4 > buf.len() {
+                        break;
+                    }
+                    let key = String::from_utf8_lossy(&buf[pos..pos + key_len]).to_string();
                     pos += key_len;
-                    let val_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                    let val_len =
+                        u32::from_le_bytes(buf[pos..pos + 4].try_into().unwrap_or([0; 4])) as usize;
                     pos += 4;
-                    if val_len > MAX_DATA_LEN { tracing::warn!("LAN sync: KV val_len {val_len} exceeds limit"); break; }
-                    if pos + val_len > buf.len() { break; }
-                    let blob = &buf[pos..pos+val_len];
+                    if val_len > MAX_DATA_LEN {
+                        tracing::warn!("LAN sync: KV val_len {val_len} exceeds limit");
+                        break;
+                    }
+                    if pos + val_len > buf.len() {
+                        break;
+                    }
+                    let blob = &buf[pos..pos + val_len];
                     pos += val_len;
                     let _ = cache.put_kv_compressed(&key, blob);
                     kv_count += 1;
-                    if pos == prev_pos { break; }
+                    if pos == prev_pos {
+                        break;
+                    }
                 }
             }
             Some(Ok(msg)) if msg.is_text() => {
                 if let Ok(SyncMessage::KvBatchComplete { count }) = parse_msg(&msg) {
-                    tracing::info!("LAN sync: received {} KV entries (incremental since_ts={})", count, kv_since_ts);
+                    tracing::info!(
+                        "LAN sync: received {} KV entries (incremental since_ts={})",
+                        count,
+                        kv_since_ts
+                    );
                     break;
                 }
             }
@@ -5281,9 +5574,12 @@ async fn client_sync_loop(
     }
     // Safety: if incremental returned 0 but client table is empty, do full re-sync
     if kv_count == 0 && kv_since_ts > 0 && kv_local_count == 0 {
-        tracing::warn!("LAN sync: KV incremental returned 0 rows but local is empty — triggering full sync");
+        tracing::warn!(
+            "LAN sync: KV incremental returned 0 rows but local is empty — triggering full sync"
+        );
         sink.send(send_msg(&SyncMessage::RequestKvData { since_ts: 0 })?)
-            .await.map_err(|e| format!("Send RequestKvData (full) failed: {e}"))?;
+            .await
+            .map_err(|e| format!("Send RequestKvData (full) failed: {e}"))?;
         loop {
             match stream.next().await {
                 Some(Ok(msg)) if msg.is_binary() => {
@@ -5291,21 +5587,35 @@ async fn client_sync_loop(
                     let mut pos = 0;
                     while pos + 4 <= buf.len() {
                         let prev_pos = pos;
-                        let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                        let key_len =
+                            u32::from_le_bytes(buf[pos..pos + 4].try_into().unwrap_or([0; 4]))
+                                as usize;
                         pos += 4;
-                        if key_len == 0 || key_len > MAX_KEY_LEN { break; }
-                        if pos + key_len + 4 > buf.len() { break; }
-                        let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
+                        if key_len == 0 || key_len > MAX_KEY_LEN {
+                            break;
+                        }
+                        if pos + key_len + 4 > buf.len() {
+                            break;
+                        }
+                        let key = String::from_utf8_lossy(&buf[pos..pos + key_len]).to_string();
                         pos += key_len;
-                        let val_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                        let val_len =
+                            u32::from_le_bytes(buf[pos..pos + 4].try_into().unwrap_or([0; 4]))
+                                as usize;
                         pos += 4;
-                        if val_len > MAX_DATA_LEN { break; }
-                        if pos + val_len > buf.len() { break; }
-                        let blob = &buf[pos..pos+val_len];
+                        if val_len > MAX_DATA_LEN {
+                            break;
+                        }
+                        if pos + val_len > buf.len() {
+                            break;
+                        }
+                        let blob = &buf[pos..pos + val_len];
                         pos += val_len;
                         let _ = cache.put_kv_compressed(&key, blob);
                         kv_count += 1;
-                        if pos == prev_pos { break; }
+                        if pos == prev_pos {
+                            break;
+                        }
                     }
                 }
                 Some(Ok(msg)) if msg.is_text() => {
@@ -5323,19 +5633,26 @@ async fn client_sync_loop(
     // Update sync_state timestamp after successful KV import
     let new_kv_ts = chrono::Utc::now().timestamp();
     let _ = cache.set_sync_ts("kv_cache", new_kv_ts);
-    tracing::info!("LAN sync: imported {} KV cache entries (fundamentals, news, SEC, FRED, etc.)", kv_count);
+    tracing::info!(
+        "LAN sync: imported {} KV cache entries (fundamentals, news, SEC, FRED, etc.)",
+        kv_count
+    );
 
     // 8d. Request generic table sync (SEC, fundamentals, equity snapshots, etc.)
     // Build incremental request: each table gets its last sync timestamp
-    let table_requests: Vec<(String, i64)> = SYNCABLE_TABLES.iter().map(|tbl| {
-        let since_ts = cache.get_sync_ts(&format!("table:{}", tbl));
-        tracing::info!("LAN sync: table '{}' since_ts={}", tbl, since_ts);
-        (tbl.to_string(), since_ts)
-    }).collect();
+    let table_requests: Vec<(String, i64)> = SYNCABLE_TABLES
+        .iter()
+        .map(|tbl| {
+            let since_ts = cache.get_sync_ts(&format!("table:{}", tbl));
+            tracing::info!("LAN sync: table '{}' since_ts={}", tbl, since_ts);
+            (tbl.to_string(), since_ts)
+        })
+        .collect();
     sink.send(send_msg(&SyncMessage::RequestTableSync {
         tables: table_requests,
     })?)
-        .await.map_err(|e| format!("Send RequestTableSync failed: {e}"))?;
+    .await
+    .map_err(|e| format!("Send RequestTableSync failed: {e}"))?;
 
     // Track which tables need full re-sync (incremental returned 0 but local is empty)
     let mut tables_needing_full_sync: Vec<String> = Vec::new();
@@ -5345,13 +5662,17 @@ async fn client_sync_loop(
             SyncMessage::TableSyncData { table, rows_json } => {
                 // Validate table name against whitelist (defense in depth — server is trusted but verify)
                 if !SYNCABLE_TABLES.contains(&table.as_str()) {
-                    tracing::warn!("LAN sync client: server sent non-whitelisted table '{}', skipping", table);
+                    tracing::warn!(
+                        "LAN sync client: server sent non-whitelisted table '{}', skipping",
+                        table
+                    );
                     table_count += 1;
                     continue;
                 }
                 // Decompress zstd + base64
-                let compressed = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &rows_json)
-                    .map_err(|e| format!("Base64 decode table '{}': {e}", table))?;
+                let compressed =
+                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &rows_json)
+                        .map_err(|e| format!("Base64 decode table '{}': {e}", table))?;
                 let json_bytes = zstd::decode_all(std::io::Cursor::new(&compressed))
                     .unwrap_or_else(|_| compressed.clone());
                 let json = String::from_utf8_lossy(&json_bytes).to_string();
@@ -5368,18 +5689,29 @@ async fn client_sync_loop(
                         let tbl = table.clone();
                         tokio::task::spawn_blocking(move || {
                             if let Ok(conn) = cache_clone.connection() {
-                                conn.query_row(
-                                    &format!("SELECT COUNT(*) FROM {}", tbl),
-                                    [], |r| r.get::<_, i64>(0)
-                                ).unwrap_or(-1) // -1 means table doesn't exist
-                            } else { 0 }
-                        }).await.unwrap_or(0)
+                                conn.query_row(&format!("SELECT COUNT(*) FROM {}", tbl), [], |r| {
+                                    r.get::<_, i64>(0)
+                                })
+                                .unwrap_or(-1) // -1 means table doesn't exist
+                            } else {
+                                0
+                            }
+                        })
+                        .await
+                        .unwrap_or(0)
                     };
                     if local_count <= 0 {
-                        tracing::warn!("LAN sync: table '{}' incremental returned 0 but local is empty — will full sync", table);
+                        tracing::warn!(
+                            "LAN sync: table '{}' incremental returned 0 but local is empty — will full sync",
+                            table
+                        );
                         tables_needing_full_sync.push(table.clone());
                     } else {
-                        tracing::info!("LAN sync: table '{}' up to date ({} local rows)", table, local_count);
+                        tracing::info!(
+                            "LAN sync: table '{}' up to date ({} local rows)",
+                            table,
+                            local_count
+                        );
                     }
                 } else {
                     let cache_clone = cache.clone();
@@ -5387,11 +5719,16 @@ async fn client_sync_loop(
                     let _ = tokio::task::spawn_blocking(move || {
                         if let Ok(conn) = cache_clone.connection() {
                             match import_table_from_json(&conn, &tbl, &json) {
-                                Ok(n) => tracing::info!("LAN sync: imported {} rows into '{}'", n, tbl),
-                                Err(e) => tracing::warn!("LAN sync: import '{}' failed: {}", tbl, e),
+                                Ok(n) => {
+                                    tracing::info!("LAN sync: imported {} rows into '{}'", n, tbl)
+                                }
+                                Err(e) => {
+                                    tracing::warn!("LAN sync: import '{}' failed: {}", tbl, e)
+                                }
                             }
                         }
-                    }).await;
+                    })
+                    .await;
                 }
                 // Update sync_state for this table
                 let new_ts = chrono::Utc::now().timestamp();
@@ -5403,7 +5740,10 @@ async fn client_sync_loop(
                 break;
             }
             other => {
-                tracing::warn!("LAN sync: expected TableSyncData/TableSyncDone, got {:?}", other);
+                tracing::warn!(
+                    "LAN sync: expected TableSyncData/TableSyncDone, got {:?}",
+                    other
+                );
                 break;
             }
         }
@@ -5411,20 +5751,29 @@ async fn client_sync_loop(
 
     // Full re-sync for tables that returned 0 rows but have empty local data
     if !tables_needing_full_sync.is_empty() {
-        tracing::info!("LAN sync: triggering full sync for {} table(s): {:?}", tables_needing_full_sync.len(), tables_needing_full_sync);
-        let full_sync_requests: Vec<(String, i64)> = tables_needing_full_sync.iter()
+        tracing::info!(
+            "LAN sync: triggering full sync for {} table(s): {:?}",
+            tables_needing_full_sync.len(),
+            tables_needing_full_sync
+        );
+        let full_sync_requests: Vec<(String, i64)> = tables_needing_full_sync
+            .iter()
             .map(|tbl| (tbl.clone(), 0i64))
             .collect();
         sink.send(send_msg(&SyncMessage::RequestTableSync {
             tables: full_sync_requests,
         })?)
-            .await.map_err(|e| format!("Send RequestTableSync (full) failed: {e}"))?;
+        .await
+        .map_err(|e| format!("Send RequestTableSync (full) failed: {e}"))?;
 
         loop {
             match read_next(stream).await? {
                 SyncMessage::TableSyncData { table, rows_json } => {
-                    let compressed = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &rows_json)
-                        .map_err(|e| format!("Base64 decode table '{}': {e}", table))?;
+                    let compressed = base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &rows_json,
+                    )
+                    .map_err(|e| format!("Base64 decode table '{}': {e}", table))?;
                     let json_bytes = zstd::decode_all(std::io::Cursor::new(&compressed))
                         .unwrap_or_else(|_| compressed.clone());
                     let json = String::from_utf8_lossy(&json_bytes).to_string();
@@ -5434,12 +5783,21 @@ async fn client_sync_loop(
                     let _ = tokio::task::spawn_blocking(move || {
                         if let Ok(conn) = cache_clone.connection() {
                             match import_table_from_json(&conn, &tbl, &json) {
-                                Ok(n) if n > 0 => tracing::info!("LAN sync: full re-sync imported {} rows into '{}'", n, tbl),
+                                Ok(n) if n > 0 => tracing::info!(
+                                    "LAN sync: full re-sync imported {} rows into '{}'",
+                                    n,
+                                    tbl
+                                ),
                                 Ok(_) => {}
-                                Err(e) => tracing::warn!("LAN sync: full re-sync import '{}' failed: {}", tbl, e),
+                                Err(e) => tracing::warn!(
+                                    "LAN sync: full re-sync import '{}' failed: {}",
+                                    tbl,
+                                    e
+                                ),
                             }
                         }
-                    }).await;
+                    })
+                    .await;
                     let new_ts = chrono::Utc::now().timestamp();
                     let _ = cache.set_sync_ts(&format!("table:{}", table), new_ts);
                 }
@@ -5685,9 +6043,7 @@ fn extract_bar_count(compressed: &[u8]) -> i64 {
     match zstd::decode_all(std::io::Cursor::new(compressed)) {
         Ok(decompressed) => {
             if decompressed.len() >= 8 && &decompressed[0..4] == b"TTBR" {
-                u32::from_le_bytes(
-                    decompressed[4..8].try_into().unwrap_or([0; 4])
-                ) as i64
+                u32::from_le_bytes(decompressed[4..8].try_into().unwrap_or([0; 4])) as i64
             } else {
                 0
             }
