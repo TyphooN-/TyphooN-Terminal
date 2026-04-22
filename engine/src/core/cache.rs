@@ -6,7 +6,7 @@
 //! Binary format: [u32 bar_count][per bar: i64 timestamp_ms, f64 OHLCV]
 
 use rusqlite::{Connection, OpenFlags, params};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Re-export rusqlite::Connection so callers can use BG connections without depending on rusqlite directly.
@@ -34,8 +34,8 @@ fn maybe_decompress(data: Vec<u8>) -> Result<Vec<u8>, String> {
 /// silently dropped — corrupt rows that previously defaulted to epoch 0 polluted charts
 /// with a phantom flat line at the far left.
 fn pack_bars(json_data: &str) -> Result<Vec<u8>, String> {
-    let bars: Vec<serde_json::Value> = serde_json::from_str(json_data)
-        .map_err(|e| format!("JSON parse failed: {e}"))?;
+    let bars: Vec<serde_json::Value> =
+        serde_json::from_str(json_data).map_err(|e| format!("JSON parse failed: {e}"))?;
     let mut buf = Vec::with_capacity(4 + 4 + bars.len() * BYTES_PER_BAR);
     buf.extend_from_slice(BAR_BINARY_MAGIC);
     // Reserve the count slot; overwrite once we know how many bars survived.
@@ -47,15 +47,23 @@ fn pack_bars(json_data: &str) -> Result<Vec<u8>, String> {
             Ok(dt) => dt.timestamp_millis(),
             Err(_) => continue,
         };
-        if ts_ms <= 0 { continue; }
+        if ts_ms <= 0 {
+            continue;
+        }
         let o = bar["open"].as_f64().unwrap_or(0.0);
         let h = bar["high"].as_f64().unwrap_or(0.0);
         let l = bar["low"].as_f64().unwrap_or(0.0);
         let c = bar["close"].as_f64().unwrap_or(0.0);
         let v = bar["volume"].as_f64().unwrap_or(0.0);
-        if !(o > 0.0 && h > 0.0 && l > 0.0 && c > 0.0) { continue; }
-        if !(o.is_finite() && h.is_finite() && l.is_finite() && c.is_finite() && v.is_finite()) { continue; }
-        if h < l { continue; }
+        if !(o > 0.0 && h > 0.0 && l > 0.0 && c > 0.0) {
+            continue;
+        }
+        if !(o.is_finite() && h.is_finite() && l.is_finite() && c.is_finite() && v.is_finite()) {
+            continue;
+        }
+        if h < l {
+            continue;
+        }
         buf.extend_from_slice(&ts_ms.to_le_bytes());
         buf.extend_from_slice(&o.to_le_bytes());
         buf.extend_from_slice(&h.to_le_bytes());
@@ -74,40 +82,57 @@ fn unpack_bars(data: &[u8]) -> Result<String, String> {
         return Err("Not binary bar format".into());
     }
     let count = u32::from_le_bytes(
-        data[4..8].try_into().map_err(|_| "Failed to read bar_count from binary header")?
+        data[4..8]
+            .try_into()
+            .map_err(|_| "Failed to read bar_count from binary header")?,
     ) as usize;
-    let expected = count.checked_mul(BYTES_PER_BAR)
+    let expected = count
+        .checked_mul(BYTES_PER_BAR)
         .and_then(|n| n.checked_add(8))
         .ok_or("Integer overflow computing bar data size")?;
     if data.len() < expected {
-        return Err(format!("Binary data truncated: expected {expected}, got {}", data.len()));
+        return Err(format!(
+            "Binary data truncated: expected {expected}, got {}",
+            data.len()
+        ));
     }
 
     let mut bars = Vec::with_capacity(count);
     for i in 0..count {
         let offset = 8 + i * BYTES_PER_BAR;
         let ts_ms = i64::from_le_bytes(
-            data[offset..offset+8].try_into().map_err(|_| format!("Bad timestamp at bar {i}"))?
+            data[offset..offset + 8]
+                .try_into()
+                .map_err(|_| format!("Bad timestamp at bar {i}"))?,
         );
         let open = f64::from_le_bytes(
-            data[offset+8..offset+16].try_into().map_err(|_| format!("Bad open at bar {i}"))?
+            data[offset + 8..offset + 16]
+                .try_into()
+                .map_err(|_| format!("Bad open at bar {i}"))?,
         );
         let high = f64::from_le_bytes(
-            data[offset+16..offset+24].try_into().map_err(|_| format!("Bad high at bar {i}"))?
+            data[offset + 16..offset + 24]
+                .try_into()
+                .map_err(|_| format!("Bad high at bar {i}"))?,
         );
         let low = f64::from_le_bytes(
-            data[offset+24..offset+32].try_into().map_err(|_| format!("Bad low at bar {i}"))?
+            data[offset + 24..offset + 32]
+                .try_into()
+                .map_err(|_| format!("Bad low at bar {i}"))?,
         );
         let close = f64::from_le_bytes(
-            data[offset+32..offset+40].try_into().map_err(|_| format!("Bad close at bar {i}"))?
+            data[offset + 32..offset + 40]
+                .try_into()
+                .map_err(|_| format!("Bad close at bar {i}"))?,
         );
         let volume = f64::from_le_bytes(
-            data[offset+40..offset+48].try_into().map_err(|_| format!("Bad volume at bar {i}"))?
+            data[offset + 40..offset + 48]
+                .try_into()
+                .map_err(|_| format!("Bad volume at bar {i}"))?,
         );
 
         // Convert epoch ms back to RFC3339 timestamp
-        let dt = chrono::DateTime::from_timestamp_millis(ts_ms)
-            .unwrap_or_default();
+        let dt = chrono::DateTime::from_timestamp_millis(ts_ms).unwrap_or_default();
         bars.push(serde_json::json!({
             "timestamp": dt.to_rfc3339(),
             "open": open, "high": high, "low": low, "close": close, "volume": volume,
@@ -125,19 +150,27 @@ pub fn unpack_bars_raw(data: &[u8]) -> Result<Vec<(i64, f64, f64, f64, f64, f64)
         return Err("Not binary bar format".into());
     }
     let count = u32::from_le_bytes(
-        data[4..8].try_into().map_err(|_| "Failed to read bar_count")?
+        data[4..8]
+            .try_into()
+            .map_err(|_| "Failed to read bar_count")?,
     ) as usize;
-    let expected = count.checked_mul(BYTES_PER_BAR)
+    let expected = count
+        .checked_mul(BYTES_PER_BAR)
         .and_then(|n| n.checked_add(8))
         .ok_or("Integer overflow computing bar data size")?;
     if data.len() < expected {
-        return Err(format!("Binary data truncated: expected {expected}, got {}", data.len()));
+        return Err(format!(
+            "Binary data truncated: expected {expected}, got {}",
+            data.len()
+        ));
     }
     let mut bars = Vec::with_capacity(count);
     for i in 0..count {
         let off = 8 + i * BYTES_PER_BAR;
         // Bounds already validated above (data.len() >= expected), but use get() for defense in depth.
-        let sl = data.get(off..off + BYTES_PER_BAR).ok_or("Bar data slice out of bounds")?;
+        let sl = data
+            .get(off..off + BYTES_PER_BAR)
+            .ok_or("Bar data slice out of bounds")?;
         let ts = i64::from_le_bytes(sl[0..8].try_into().map_err(|_| "Bad bar timestamp")?);
         let o = f64::from_le_bytes(sl[8..16].try_into().map_err(|_| "Bad bar open")?);
         let h = f64::from_le_bytes(sl[16..24].try_into().map_err(|_| "Bad bar high")?);
@@ -152,7 +185,10 @@ pub fn unpack_bars_raw(data: &[u8]) -> Result<Vec<(i64, f64, f64, f64, f64, f64)
 /// Extract last and second-to-last bar timestamps from binary data (for metadata columns).
 /// Returns (second_last_ts_rfc3339, last_ts_rfc3339) or empty strings if not enough bars.
 fn get_last_two_bar_timestamps(binary: &[u8], count: usize) -> (Option<String>, Option<String>) {
-    let required = match count.checked_mul(BYTES_PER_BAR).and_then(|n| n.checked_add(8)) {
+    let required = match count
+        .checked_mul(BYTES_PER_BAR)
+        .and_then(|n| n.checked_add(8))
+    {
         Some(n) => n,
         None => return (None, None),
     };
@@ -161,8 +197,16 @@ fn get_last_two_bar_timestamps(binary: &[u8], count: usize) -> (Option<String>, 
     }
     let last_offset = 8 + (count - 1) * BYTES_PER_BAR;
     let second_offset = 8 + (count - 2) * BYTES_PER_BAR;
-    let last_ts = i64::from_le_bytes(binary[last_offset..last_offset+8].try_into().unwrap_or([0;8]));
-    let second_ts = i64::from_le_bytes(binary[second_offset..second_offset+8].try_into().unwrap_or([0;8]));
+    let last_ts = i64::from_le_bytes(
+        binary[last_offset..last_offset + 8]
+            .try_into()
+            .unwrap_or([0; 8]),
+    );
+    let second_ts = i64::from_le_bytes(
+        binary[second_offset..second_offset + 8]
+            .try_into()
+            .unwrap_or([0; 8]),
+    );
     let fmt = |ms: i64| -> Option<String> {
         chrono::DateTime::from_timestamp_millis(ms).map(|dt| dt.to_rfc3339())
     };
@@ -176,13 +220,19 @@ fn unpack_bars_tail(data: &[u8], tail: usize) -> Result<String, String> {
         return Err("Not binary bar format".into());
     }
     let count = u32::from_le_bytes(
-        data[4..8].try_into().map_err(|_| "Failed to read bar_count from binary header")?
+        data[4..8]
+            .try_into()
+            .map_err(|_| "Failed to read bar_count from binary header")?,
     ) as usize;
-    let expected = count.checked_mul(BYTES_PER_BAR)
+    let expected = count
+        .checked_mul(BYTES_PER_BAR)
         .and_then(|n| n.checked_add(8))
         .ok_or("Integer overflow computing bar data size")?;
     if data.len() < expected {
-        return Err(format!("Binary data truncated: expected {expected}, got {}", data.len()));
+        return Err(format!(
+            "Binary data truncated: expected {expected}, got {}",
+            data.len()
+        ));
     }
     if tail == 0 || tail >= count {
         return unpack_bars(data); // no trimming needed
@@ -193,13 +243,35 @@ fn unpack_bars_tail(data: &[u8], tail: usize) -> Result<String, String> {
     for i in start_bar..count {
         let offset = 8 + i * BYTES_PER_BAR;
         let ts_ms = i64::from_le_bytes(
-            data[offset..offset+8].try_into().map_err(|_| format!("Bad timestamp at bar {i}"))?
+            data[offset..offset + 8]
+                .try_into()
+                .map_err(|_| format!("Bad timestamp at bar {i}"))?,
         );
-        let open = f64::from_le_bytes(data[offset+8..offset+16].try_into().map_err(|_| format!("Bad open at bar {i}"))?);
-        let high = f64::from_le_bytes(data[offset+16..offset+24].try_into().map_err(|_| format!("Bad high at bar {i}"))?);
-        let low = f64::from_le_bytes(data[offset+24..offset+32].try_into().map_err(|_| format!("Bad low at bar {i}"))?);
-        let close = f64::from_le_bytes(data[offset+32..offset+40].try_into().map_err(|_| format!("Bad close at bar {i}"))?);
-        let volume = f64::from_le_bytes(data[offset+40..offset+48].try_into().map_err(|_| format!("Bad volume at bar {i}"))?);
+        let open = f64::from_le_bytes(
+            data[offset + 8..offset + 16]
+                .try_into()
+                .map_err(|_| format!("Bad open at bar {i}"))?,
+        );
+        let high = f64::from_le_bytes(
+            data[offset + 16..offset + 24]
+                .try_into()
+                .map_err(|_| format!("Bad high at bar {i}"))?,
+        );
+        let low = f64::from_le_bytes(
+            data[offset + 24..offset + 32]
+                .try_into()
+                .map_err(|_| format!("Bad low at bar {i}"))?,
+        );
+        let close = f64::from_le_bytes(
+            data[offset + 32..offset + 40]
+                .try_into()
+                .map_err(|_| format!("Bad close at bar {i}"))?,
+        );
+        let volume = f64::from_le_bytes(
+            data[offset + 40..offset + 48]
+                .try_into()
+                .map_err(|_| format!("Bad volume at bar {i}"))?,
+        );
         let dt = chrono::DateTime::from_timestamp_millis(ts_ms).unwrap_or_default();
         bars.push(serde_json::json!({
             "timestamp": dt.to_rfc3339(),
@@ -227,10 +299,34 @@ pub struct SqliteCache {
 }
 
 impl SqliteCache {
+    fn total_disk_usage_bytes(db_path: &Path) -> i64 {
+        let mut total = std::fs::metadata(db_path)
+            .map(|m| m.len() as i64)
+            .unwrap_or(0);
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = PathBuf::from(format!("{}{}", db_path.to_string_lossy(), suffix));
+            total += std::fs::metadata(sidecar)
+                .map(|m| m.len() as i64)
+                .unwrap_or(0);
+        }
+        total
+    }
+
+    fn reclaim_space_locked(conn: &Connection, db_path: &Path) -> Result<(i64, i64), String> {
+        let before = Self::total_disk_usage_bytes(db_path);
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|e| format!("WAL checkpoint failed: {e}"))?;
+        conn.execute_batch("VACUUM")
+            .map_err(|e| format!("VACUUM failed: {e}"))?;
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|e| format!("post-VACUUM checkpoint failed: {e}"))?;
+        let after = Self::total_disk_usage_bytes(db_path);
+        Ok((before, after))
+    }
+
     /// Open or create a SQLite database at the given path.
     pub fn open(path: &PathBuf) -> Result<Self, String> {
-        let conn = Connection::open(path)
-            .map_err(|e| format!("SQLite open failed: {e}"))?;
+        let conn = Connection::open(path).map_err(|e| format!("SQLite open failed: {e}"))?;
 
         // WAL mode for concurrent reads + single writer performance.
         // This is used for the main typhoon_cache.db which is accessed only by
@@ -238,7 +334,8 @@ impl SqliteCache {
         // busy_timeout=5000ms: retry for 5s on SQLITE_BUSY instead of failing
         // immediately. Critical when compact_storage() holds the write lock in
         // batches and other threads (e.g. Mt5Sync) need to write concurrently.
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=NORMAL;
             PRAGMA cache_size=-64000;
@@ -247,10 +344,13 @@ impl SqliteCache {
             PRAGMA auto_vacuum=INCREMENTAL;
             PRAGMA wal_autocheckpoint=2000;
             PRAGMA busy_timeout=5000;
-        ").map_err(|e| format!("SQLite pragma failed: {e}"))?;
+        ",
+        )
+        .map_err(|e| format!("SQLite pragma failed: {e}"))?;
 
         // Create tables
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS bar_cache (
                 key TEXT PRIMARY KEY,
                 data BLOB NOT NULL,
@@ -270,14 +370,19 @@ impl SqliteCache {
                 key TEXT PRIMARY KEY,
                 last_sync_ts INTEGER NOT NULL DEFAULT 0
             );
-        ").map_err(|e| format!("SQLite create tables failed: {e}"))?;
+        ",
+        )
+        .map_err(|e| format!("SQLite create tables failed: {e}"))?;
 
         // Schema migration: add last_ts column for fast incremental start lookup
         // (avoids decompressing full binary blob just to read 2 timestamps)
         let _ = conn.execute("ALTER TABLE bar_cache ADD COLUMN last_ts TEXT", []);
         let _ = conn.execute("ALTER TABLE bar_cache ADD COLUMN second_last_ts TEXT", []);
         // Schema migration: track zstd compression level per entry (compact skips already-compacted)
-        let _ = conn.execute("ALTER TABLE bar_cache ADD COLUMN zstd_level INTEGER NOT NULL DEFAULT 3", []);
+        let _ = conn.execute(
+            "ALTER TABLE bar_cache ADD COLUMN zstd_level INTEGER NOT NULL DEFAULT 3",
+            [],
+        );
 
         // One-shot migration: purge existing Alpaca stock bar entries. Prior builds never
         // requested adjustment=all, so every cached stock series is split-unadjusted and
@@ -292,10 +397,12 @@ impl SqliteCache {
             )
             .unwrap_or(false);
         if !already_migrated {
-            let purged = conn.execute(
-                "DELETE FROM bar_cache WHERE key LIKE 'alpaca:%' AND key NOT LIKE 'alpaca:%/%'",
-                [],
-            ).unwrap_or(0);
+            let purged = conn
+                .execute(
+                    "DELETE FROM bar_cache WHERE key LIKE 'alpaca:%' AND key NOT LIKE 'alpaca:%/%'",
+                    [],
+                )
+                .unwrap_or(0);
             tracing::info!(
                 "cache migration: purged {} alpaca stock bar entries (re-fetch with adjustment=all)",
                 purged
@@ -312,21 +419,30 @@ impl SqliteCache {
 
         // Open a second read-only connection for the read path.
         // WAL mode allows this to read concurrently while conn writes.
-        let read_conn = Connection::open_with_flags(path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-            .map_err(|e| format!("SQLite read conn open failed: {e}"))?;
-        read_conn.busy_timeout(std::time::Duration::from_secs(5))
+        let read_conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| format!("SQLite read conn open failed: {e}"))?;
+        read_conn
+            .busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| format!("SQLite read conn busy_timeout failed: {e}"))?;
         // Align read_conn cache_size with write conn (-64000 = 64MB) so the
         // shared page cache is effective on hot reads. Previously -32000 (32MB)
         // which undersized the buffer pool for mixed read/write workloads.
-        let _ = read_conn.execute_batch("
+        let _ = read_conn.execute_batch(
+            "
             PRAGMA cache_size=-64000;
             PRAGMA temp_store=MEMORY;
             PRAGMA mmap_size=268435456;
-        ");
+        ",
+        );
 
-        Ok(Self { conn: Mutex::new(conn), read_conn: Mutex::new(read_conn), db_path: path.clone() })
+        Ok(Self {
+            conn: Mutex::new(conn),
+            read_conn: Mutex::new(read_conn),
+            db_path: path.clone(),
+        })
     }
 
     /// Open an existing database read-only — for reading source MT5 cache files.
@@ -336,8 +452,11 @@ impl SqliteCache {
     /// a write lock, so BarCacheWriter can continue writing concurrently without
     /// any "database is locked" errors.
     pub fn open_readonly(path: &PathBuf) -> Result<Self, String> {
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-            .map_err(|e| format!("SQLite read-only open failed: {e}"))?;
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| format!("SQLite read-only open failed: {e}"))?;
         // busy_timeout MUST be set first — BarCacheWriter uses DELETE journal mode
         // (WAL doesn't work across Wine/Linux boundary) which takes an exclusive lock
         // during write transactions. Without busy_timeout, all reads fail instantly
@@ -346,20 +465,33 @@ impl SqliteCache {
         conn.busy_timeout(std::time::Duration::from_secs(10))
             .map_err(|e| format!("SQLite busy_timeout failed: {e}"))?;
         // Non-critical optimizations — ignore failures (DB may be locked briefly)
-        let _ = conn.execute_batch("
+        let _ = conn.execute_batch(
+            "
             PRAGMA cache_size=-16000;
             PRAGMA temp_store=MEMORY;
-        ");
+        ",
+        );
         // Read-only source: use the same connection for both read and write paths
         // (open_readonly is only used for reading MT5 source files, no concurrent access)
-        let read_conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-            .map_err(|e| format!("SQLite read conn open failed: {e}"))?;
-        read_conn.execute_batch("
+        let read_conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| format!("SQLite read conn open failed: {e}"))?;
+        read_conn
+            .execute_batch(
+                "
             PRAGMA cache_size=-16000;
             PRAGMA temp_store=MEMORY;
             PRAGMA busy_timeout=5000;
-        ").map_err(|e| format!("SQLite read conn pragma failed: {e}"))?;
-        Ok(Self { conn: Mutex::new(conn), read_conn: Mutex::new(read_conn), db_path: path.clone() })
+        ",
+            )
+            .map_err(|e| format!("SQLite read conn pragma failed: {e}"))?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+            read_conn: Mutex::new(read_conn),
+            db_path: path.clone(),
+        })
     }
 
     /// Open an existing MT5 source DB in read-write mode — exclusively for
@@ -375,20 +507,29 @@ impl SqliteCache {
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        ).map_err(|e| format!("SQLite RW open failed: {e}"))?;
+        )
+        .map_err(|e| format!("SQLite RW open failed: {e}"))?;
         conn.busy_timeout(std::time::Duration::from_secs(10))
             .map_err(|e| format!("SQLite busy_timeout failed: {e}"))?;
-        let _ = conn.execute_batch("
+        let _ = conn.execute_batch(
+            "
             PRAGMA cache_size=-16000;
             PRAGMA temp_store=MEMORY;
-        ");
+        ",
+        );
         let read_conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        ).map_err(|e| format!("SQLite RW-read conn failed: {e}"))?;
-        read_conn.busy_timeout(std::time::Duration::from_secs(5))
+        )
+        .map_err(|e| format!("SQLite RW-read conn failed: {e}"))?;
+        read_conn
+            .busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| format!("SQLite RW-read busy_timeout failed: {e}"))?;
-        Ok(Self { conn: Mutex::new(conn), read_conn: Mutex::new(read_conn), db_path: path.clone() })
+        Ok(Self {
+            conn: Mutex::new(conn),
+            read_conn: Mutex::new(read_conn),
+            db_path: path.clone(),
+        })
     }
 
     /// Delete a batch of bar_cache rows by `(key, expected_ts)`. Used by
@@ -410,19 +551,23 @@ impl SqliteCache {
     /// don't need to pre-partition the key list. Runs inside a single
     /// transaction — one fsync regardless of batch size.
     pub fn delete_bar_keys(&self, keys: &[(String, i64)]) -> Result<u64, String> {
-        if keys.is_empty() { return Ok(0); }
+        if keys.is_empty() {
+            return Ok(0);
+        }
         let mut conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let tx = conn.transaction().map_err(|e| format!("begin tx failed: {e}"))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("begin tx failed: {e}"))?;
         let mut deleted = 0u64;
         {
-            let mut stmt = tx.prepare_cached(
-                "DELETE FROM bar_cache WHERE key = ?1 AND timestamp = ?2 \
+            let mut stmt = tx
+                .prepare_cached(
+                    "DELETE FROM bar_cache WHERE key = ?1 AND timestamp = ?2 \
                  AND key NOT LIKE 'mt5:\\_\\_%' ESCAPE '\\'",
-            ).map_err(|e| format!("prepare failed: {e}"))?;
+                )
+                .map_err(|e| format!("prepare failed: {e}"))?;
             for (k, ts) in keys {
-                deleted = deleted.saturating_add(
-                    stmt.execute(params![k, ts]).unwrap_or(0) as u64
-                );
+                deleted = deleted.saturating_add(stmt.execute(params![k, ts]).unwrap_or(0) as u64);
             }
         }
         tx.commit().map_err(|e| format!("commit failed: {e}"))?;
@@ -450,7 +595,9 @@ impl SqliteCache {
     pub fn put_bars(&self, key: &str, json_data: &str) -> Result<(), String> {
         let binary = pack_bars(json_data)?;
         let bar_count = u32::from_le_bytes(
-            binary[4..8].try_into().map_err(|_| "bar_count header slice failed")?
+            binary[4..8]
+                .try_into()
+                .map_err(|_| "bar_count header slice failed")?,
         ) as i64;
         let (second_last_ts, last_ts) = get_last_two_bar_timestamps(&binary, bar_count as usize);
         let zstd_level = 3i32;
@@ -468,10 +615,13 @@ impl SqliteCache {
 
     /// Load bar data — handles both binary (new) and JSON (legacy) formats.
     pub fn get_bars(&self, key: &str) -> Result<Option<(String, i64)>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT data, timestamp FROM bar_cache WHERE key = ?1"
-        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached("SELECT data, timestamp FROM bar_cache WHERE key = ?1")
+            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
 
         let result = stmt.query_row(params![key], |row| {
             let data: Vec<u8> = row.get(0)?;
@@ -498,9 +648,16 @@ impl SqliteCache {
 
     /// Get bars as raw OHLCV tuples (no JSON serialization).
     /// Zero-serialization hot path for native GPU renderer: cache → f64 → GPU vertex buffer.
-    pub fn get_bars_raw(&self, key: &str) -> Result<Option<Vec<(i64, f64, f64, f64, f64, f64)>>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn.prepare_cached("SELECT data FROM bar_cache WHERE key = ?1")
+    pub fn get_bars_raw(
+        &self,
+        key: &str,
+    ) -> Result<Option<Vec<(i64, f64, f64, f64, f64, f64)>>, String> {
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached("SELECT data FROM bar_cache WHERE key = ?1")
             .map_err(|e| format!("Prepare failed: {e}"))?;
         let row: Option<Vec<u8>> = stmt.query_row(rusqlite::params![key], |r| r.get(0)).ok();
         match row {
@@ -513,13 +670,21 @@ impl SqliteCache {
                     let text = String::from_utf8_lossy(&bytes);
                     let bars: Vec<serde_json::Value> = serde_json::from_str(&text)
                         .map_err(|e| format!("JSON parse failed: {e}"))?;
-                    let result = bars.iter().filter_map(|b| {
-                        Some((
-                            chrono::DateTime::parse_from_rfc3339(b["timestamp"].as_str()?).ok()?.timestamp_millis(),
-                            b["open"].as_f64()?, b["high"].as_f64()?, b["low"].as_f64()?,
-                            b["close"].as_f64()?, b["volume"].as_f64().unwrap_or(0.0),
-                        ))
-                    }).collect();
+                    let result = bars
+                        .iter()
+                        .filter_map(|b| {
+                            Some((
+                                chrono::DateTime::parse_from_rfc3339(b["timestamp"].as_str()?)
+                                    .ok()?
+                                    .timestamp_millis(),
+                                b["open"].as_f64()?,
+                                b["high"].as_f64()?,
+                                b["low"].as_f64()?,
+                                b["close"].as_f64()?,
+                                b["volume"].as_f64().unwrap_or(0.0),
+                            ))
+                        })
+                        .collect();
                     Ok(Some(result))
                 }
             }
@@ -530,10 +695,13 @@ impl SqliteCache {
     /// For 500 bars from a 50K-bar cache: converts only 500 bars to JSON instead of 50K.
     /// Decompression overhead is unchanged (zstd doesn't support seeking).
     pub fn get_bars_tail(&self, key: &str, tail: usize) -> Result<Option<(String, i64)>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT data, timestamp FROM bar_cache WHERE key = ?1"
-        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached("SELECT data, timestamp FROM bar_cache WHERE key = ?1")
+            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
 
         let result = stmt.query_row(params![key], |row| {
             let data: Vec<u8> = row.get(0)?;
@@ -550,7 +718,8 @@ impl SqliteCache {
                     // Legacy JSON: parse, trim, reserialize
                     let text = String::from_utf8(decompressed)
                         .map_err(|e| format!("UTF-8 decode failed: {e}"))?;
-                    let all: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap_or_default();
+                    let all: Vec<serde_json::Value> =
+                        serde_json::from_str(&text).unwrap_or_default();
                     if tail > 0 && all.len() > tail {
                         serde_json::to_string(&all[all.len() - tail..])
                             .map_err(|e| format!("JSON error: {e}"))?
@@ -575,7 +744,8 @@ impl SqliteCache {
         conn.execute(
             "INSERT OR REPLACE INTO kv_cache (key, value, timestamp) VALUES (?1, ?2, ?3)",
             params![key, compressed, timestamp],
-        ).map_err(|e| format!("SQLite insert failed: {e}"))?;
+        )
+        .map_err(|e| format!("SQLite insert failed: {e}"))?;
         Ok(())
     }
 
@@ -587,16 +757,20 @@ impl SqliteCache {
         conn.execute(
             "INSERT OR REPLACE INTO kv_cache (key, value, timestamp) VALUES (?1, ?2, ?3)",
             params![key, compressed, timestamp],
-        ).map_err(|e| format!("SQLite insert failed: {e}"))?;
+        )
+        .map_err(|e| format!("SQLite insert failed: {e}"))?;
         Ok(())
     }
 
     /// Load key-value data.
     pub fn get_kv(&self, key: &str) -> Result<Option<String>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT value FROM kv_cache WHERE key = ?1"
-        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached("SELECT value FROM kv_cache WHERE key = ?1")
+            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
 
         let result = stmt.query_row(params![key], |row| {
             let data: Vec<u8> = row.get(0)?;
@@ -639,14 +813,16 @@ impl SqliteCache {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let like = format!("{prefix}:%");
         // Collect matching keys + values in order.
-        let mut stmt = conn.prepare_cached(
-            "SELECT key, value FROM kv_cache WHERE key LIKE ?1 ORDER BY key"
-        ).map_err(|e| format!("Prepare failed: {e}"))?;
-        let rows = stmt.query_map(params![like], |row| {
-            let key: String = row.get(0)?;
-            let data: Vec<u8> = row.get(1)?;
-            Ok((key, data))
-        }).map_err(|e| format!("Query failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached("SELECT key, value FROM kv_cache WHERE key LIKE ?1 ORDER BY key")
+            .map_err(|e| format!("Prepare failed: {e}"))?;
+        let rows = stmt
+            .query_map(params![like], |row| {
+                let key: String = row.get(0)?;
+                let data: Vec<u8> = row.get(1)?;
+                Ok((key, data))
+            })
+            .map_err(|e| format!("Query failed: {e}"))?;
 
         let mut result: Vec<(String, String)> = Vec::new();
         for row in rows {
@@ -665,17 +841,23 @@ impl SqliteCache {
         // roundtrips to the SQLite engine. Bulk form cuts this to ~N/CHUNK calls.
         if !result.is_empty() {
             const CHUNK: usize = 512;
-            let tx = conn.unchecked_transaction()
+            let tx = conn
+                .unchecked_transaction()
                 .map_err(|e| format!("Transaction begin failed: {e}"))?;
             for chunk in result.chunks(CHUNK) {
-                let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(",");
+                let placeholders = std::iter::repeat("?")
+                    .take(chunk.len())
+                    .collect::<Vec<_>>()
+                    .join(",");
                 let sql = format!("DELETE FROM kv_cache WHERE key IN ({placeholders})");
-                let params_refs: Vec<&dyn rusqlite::types::ToSql> = chunk.iter()
+                let params_refs: Vec<&dyn rusqlite::types::ToSql> = chunk
+                    .iter()
                     .map(|(k, _)| k as &dyn rusqlite::types::ToSql)
                     .collect();
                 let _ = tx.execute(&sql, params_refs.as_slice());
             }
-            tx.commit().map_err(|e| format!("Transaction commit failed: {e}"))?;
+            tx.commit()
+                .map_err(|e| format!("Transaction commit failed: {e}"))?;
         }
 
         Ok(result.into_iter().map(|(_, v)| v).collect())
@@ -686,10 +868,13 @@ impl SqliteCache {
     /// so the server should not pay the decompression cost. Also useful for
     /// "is this key present?" probes without the decode overhead.
     pub fn get_kv_raw(&self, key: &str) -> Result<Option<(Vec<u8>, i64)>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT value, timestamp FROM kv_cache WHERE key = ?1"
-        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached("SELECT value, timestamp FROM kv_cache WHERE key = ?1")
+            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
         match stmt.query_row(params![key], |row| {
             let data: Vec<u8> = row.get(0)?;
             let ts: i64 = row.get(1)?;
@@ -705,19 +890,26 @@ impl SqliteCache {
     pub fn evict_old(&self, max_age_secs: i64) -> Result<u64, String> {
         let cutoff = chrono::Utc::now().timestamp() - max_age_secs;
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let bars_deleted = conn.execute(
-            "DELETE FROM bar_cache WHERE timestamp < ?1", params![cutoff]
-        ).map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
-        let kv_deleted = conn.execute(
-            "DELETE FROM kv_cache WHERE timestamp < ?1", params![cutoff]
-        ).map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
+        let bars_deleted = conn
+            .execute(
+                "DELETE FROM bar_cache WHERE timestamp < ?1",
+                params![cutoff],
+            )
+            .map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
+        let kv_deleted = conn
+            .execute("DELETE FROM kv_cache WHERE timestamp < ?1", params![cutoff])
+            .map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
         Ok(bars_deleted + kv_deleted)
     }
 
     /// Get cache stats.
     pub fn stats(&self) -> Result<(i64, i64, i64), String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
-        let bar_count: i64 = conn.query_row("SELECT COUNT(*) FROM bar_cache", [], |r| r.get(0))
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
+        let bar_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM bar_cache", [], |r| r.get(0))
             .unwrap_or(0);
         // Internal migration markers (keys wrapped in "__") are not user-facing cache data.
         let kv_count: i64 = conn.query_row(
@@ -725,33 +917,37 @@ impl SqliteCache {
             [],
             |r| r.get(0),
         ).unwrap_or(0);
-        // Report actual file size on disk (includes freed pages from DELETEs).
-        // SUM(LENGTH(data)) only counts live data — misleading after purge operations
-        // where the file stays large until VACUUM reclaims freed pages.
-        let file_size = std::fs::metadata(&self.db_path)
-            .map(|m| m.len() as i64)
-            .unwrap_or(0);
+        // Report full on-disk footprint (main DB + WAL + SHM). Freed pages stay
+        // allocated until VACUUM rebuilds the DB, so physical size is the user-visible metric.
+        let file_size = Self::total_disk_usage_bytes(&self.db_path);
         Ok((bar_count, kv_count, file_size))
     }
 
     /// Get detailed per-key cache stats: returns JSON array of {key, compressed_bytes, timestamp}.
     /// Keys are "symbol:timeframe" format (e.g., "AAPL:1Hour").
     pub fn detailed_stats(&self) -> Result<Vec<(String, i64, i64)>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
         // Use bar_count instead of LENGTH(data) — avoids reading blob headers on 3.9GB DB
-        let mut stmt = conn.prepare_cached(
-            "SELECT key, bar_count, timestamp FROM bar_cache ORDER BY key"
-        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        }).map_err(|e| format!("SQLite query failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached("SELECT key, bar_count, timestamp FROM bar_cache ORDER BY key")
+            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| format!("SQLite query failed: {e}"))?;
         let mut result = Vec::new();
         for row in rows {
-            if let Ok(r) = row { result.push(r); }
+            if let Ok(r) = row {
+                result.push(r);
+            }
         }
         Ok(result)
     }
@@ -762,21 +958,30 @@ impl SqliteCache {
     /// does not stream blob bodies off disk. Tuple order is (key, bar_count,
     /// timestamp, blob_bytes).
     pub fn detailed_stats_with_size(&self) -> Result<Vec<(String, i64, i64, i64)>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT key, bar_count, timestamp, LENGTH(data) FROM bar_cache ORDER BY key"
-        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
-        }).map_err(|e| format!("SQLite query failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT key, bar_count, timestamp, LENGTH(data) FROM bar_cache ORDER BY key",
+            )
+            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|e| format!("SQLite query failed: {e}"))?;
         let mut result = Vec::new();
         for row in rows {
-            if let Ok(r) = row { result.push(r); }
+            if let Ok(r) = row {
+                result.push(r);
+            }
         }
         Ok(result)
     }
@@ -787,16 +992,24 @@ impl SqliteCache {
     /// `pattern` is matched case-insensitively against the key. Returns at most `limit`
     /// keys ordered by last-modified timestamp (most recent first).
     pub fn search_keys(&self, pattern: &str, limit: usize) -> Result<Vec<String>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
         let like_pattern = format!("%{}%", pattern);
         let mut stmt = conn.prepare_cached(
             "SELECT key FROM bar_cache WHERE LOWER(key) LIKE LOWER(?1) ORDER BY timestamp DESC LIMIT ?2"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
-        let rows = stmt.query_map(params![like_pattern, limit as i64], |row| row.get::<_, String>(0))
+        let rows = stmt
+            .query_map(params![like_pattern, limit as i64], |row| {
+                row.get::<_, String>(0)
+            })
             .map_err(|e| format!("SQLite query failed: {e}"))?;
         let mut result = Vec::new();
         for row in rows {
-            if let Ok(k) = row { result.push(k); }
+            if let Ok(k) = row {
+                result.push(k);
+            }
         }
         Ok(result)
     }
@@ -804,10 +1017,43 @@ impl SqliteCache {
     /// Delete a specific cache entry by key.
     pub fn delete_key(&self, key: &str) -> Result<bool, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let deleted = conn.execute(
-            "DELETE FROM bar_cache WHERE key = ?1", params![key]
-        ).map_err(|e| format!("SQLite delete failed: {e}"))?;
+        let deleted = conn
+            .execute("DELETE FROM bar_cache WHERE key = ?1", params![key])
+            .map_err(|e| format!("SQLite delete failed: {e}"))?;
         Ok(deleted > 0)
+    }
+
+    /// Delete a specific set of bar-cache keys in chunks, then reclaim freed pages.
+    /// Intended for bulk filter deletes from the Storage Manager.
+    pub fn delete_keys(&self, keys: &[String]) -> Result<u64, String> {
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("SQLite transaction failed: {e}"))?;
+        let mut deleted = 0u64;
+        for chunk in keys.chunks(500) {
+            let placeholders = std::iter::repeat("?")
+                .take(chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!("DELETE FROM bar_cache WHERE key IN ({placeholders})");
+            deleted +=
+                tx.execute(&sql, rusqlite::params_from_iter(chunk.iter()))
+                    .map_err(|e| format!("SQLite bulk delete failed: {e}"))? as u64;
+            let track_sql = format!("DELETE FROM bar_track WHERE key IN ({placeholders})");
+            let _ = tx.execute(&track_sql, rusqlite::params_from_iter(chunk.iter()));
+        }
+        tx.commit()
+            .map_err(|e| format!("SQLite commit failed: {e}"))?;
+        match Self::reclaim_space_locked(&conn, &self.db_path) {
+            Ok(_) => Ok(deleted),
+            Err(e) => Err(format!(
+                "Deleted {deleted} cache rows but reclaim failed: {e}"
+            )),
+        }
     }
 
     fn normalize_timeframe_suffix(tf: &str) -> Option<&'static str> {
@@ -832,12 +1078,15 @@ impl SqliteCache {
     /// Also returns the total bar count for logging.
     /// Returns None if key doesn't exist or has fewer than 2 bars.
     pub fn get_incremental_start(&self, key: &str) -> Result<Option<(String, usize)>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Lock failed: {e}"))?;
 
         // Fast path: read from metadata columns (no decompression needed)
-        let mut stmt = conn.prepare_cached(
-            "SELECT bar_count, second_last_ts FROM bar_cache WHERE key = ?1"
-        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached("SELECT bar_count, second_last_ts FROM bar_cache WHERE key = ?1")
+            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
 
         let result = stmt.query_row(rusqlite::params![key], |row| {
             let count: i64 = row.get(0)?;
@@ -847,7 +1096,9 @@ impl SqliteCache {
 
         match result {
             Ok((count, second_last_ts)) => {
-                if count < 2 { return Ok(None); }
+                if count < 2 {
+                    return Ok(None);
+                }
                 // If metadata columns are populated, use them directly (zero decompression)
                 if let Some(ts) = second_last_ts {
                     if !ts.is_empty() {
@@ -855,25 +1106,34 @@ impl SqliteCache {
                     }
                 }
                 // Fallback: decompress for legacy entries without metadata columns
-                let mut stmt2 = conn.prepare_cached(
-                    "SELECT data FROM bar_cache WHERE key = ?1"
-                ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
-                let data: Vec<u8> = stmt2.query_row(rusqlite::params![key], |row| row.get(0))
+                let mut stmt2 = conn
+                    .prepare_cached("SELECT data FROM bar_cache WHERE key = ?1")
+                    .map_err(|e| format!("SQLite prepare failed: {e}"))?;
+                let data: Vec<u8> = stmt2
+                    .query_row(rusqlite::params![key], |row| row.get(0))
                     .map_err(|e| format!("SQLite query failed: {e}"))?;
                 let decompressed = zstd::decode_all(data.as_slice())
                     .map_err(|e| format!("zstd decompress failed: {e}"))?;
                 if decompressed.len() >= 8 && &decompressed[0..4] == BAR_BINARY_MAGIC {
-                    let bc = u32::from_le_bytes(
-                        decompressed[4..8].try_into().unwrap_or([0;4])
-                    ) as usize;
-                    if bc < 2 { return Ok(None); }
-                    let target_offset = match (bc - 2).checked_mul(BYTES_PER_BAR).and_then(|n| n.checked_add(8)) {
+                    let bc = u32::from_le_bytes(decompressed[4..8].try_into().unwrap_or([0; 4]))
+                        as usize;
+                    if bc < 2 {
+                        return Ok(None);
+                    }
+                    let target_offset = match (bc - 2)
+                        .checked_mul(BYTES_PER_BAR)
+                        .and_then(|n| n.checked_add(8))
+                    {
                         Some(n) => n,
                         None => return Ok(None),
                     };
-                    if decompressed.len() < target_offset + 8 { return Ok(None); }
+                    if decompressed.len() < target_offset + 8 {
+                        return Ok(None);
+                    }
                     let ts_ms = i64::from_le_bytes(
-                        decompressed[target_offset..target_offset+8].try_into().unwrap_or([0;8])
+                        decompressed[target_offset..target_offset + 8]
+                            .try_into()
+                            .unwrap_or([0; 8]),
                     );
                     let dt = chrono::DateTime::from_timestamp_millis(ts_ms).unwrap_or_default();
                     Ok(Some((dt.to_rfc3339(), bc)))
@@ -882,8 +1142,12 @@ impl SqliteCache {
                         .map_err(|e| format!("UTF-8 decode failed: {e}"))?;
                     let bars: Vec<serde_json::Value> = serde_json::from_str(&json_str)
                         .map_err(|e| format!("JSON parse failed: {e}"))?;
-                    if bars.len() < 2 { return Ok(None); }
-                    let ts = bars[bars.len() - 2]["timestamp"].as_str().map(|s| s.to_string());
+                    if bars.len() < 2 {
+                        return Ok(None);
+                    }
+                    let ts = bars[bars.len() - 2]["timestamp"]
+                        .as_str()
+                        .map(|s| s.to_string());
                     Ok(ts.map(|t| (t, bars.len())))
                 }
             }
@@ -898,8 +1162,8 @@ impl SqliteCache {
     /// Returns the full merged dataset as JSON.
     pub fn merge_bars(&self, key: &str, new_json: &str, max_bars: usize) -> Result<String, String> {
         // Parse new bars
-        let new_bars: Vec<serde_json::Value> = serde_json::from_str(new_json)
-            .map_err(|e| format!("JSON parse failed: {e}"))?;
+        let new_bars: Vec<serde_json::Value> =
+            serde_json::from_str(new_json).map_err(|e| format!("JSON parse failed: {e}"))?;
         if new_bars.is_empty() {
             // Nothing to merge — return existing cache or empty
             return match self.get_bars(key)? {
@@ -919,7 +1183,8 @@ impl SqliteCache {
         // and buckets all missing/empty timestamps together at the start of the series.
         all_bars.extend(new_bars);
         let ts_ms_of = |v: &serde_json::Value| -> Option<i64> {
-            v["timestamp"].as_str()
+            v["timestamp"]
+                .as_str()
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|dt| dt.timestamp_millis())
                 .filter(|ms| *ms > 0)
@@ -935,8 +1200,8 @@ impl SqliteCache {
         }
 
         // Store merged result (zstd level 3 for merge writes — faster than level 9)
-        let merged_json = serde_json::to_string(&all_bars)
-            .map_err(|e| format!("JSON serialize failed: {e}"))?;
+        let merged_json =
+            serde_json::to_string(&all_bars).map_err(|e| format!("JSON serialize failed: {e}"))?;
         self.put_bars_fast(key, &merged_json)?;
 
         Ok(merged_json)
@@ -947,7 +1212,9 @@ impl SqliteCache {
     fn put_bars_fast(&self, key: &str, json_data: &str) -> Result<(), String> {
         let binary = pack_bars(json_data)?;
         let bar_count = u32::from_le_bytes(
-            binary[4..8].try_into().map_err(|_| "bar_count header slice failed in put_bars_fast")?
+            binary[4..8]
+                .try_into()
+                .map_err(|_| "bar_count header slice failed in put_bars_fast")?,
         ) as i64;
         let (second_last_ts, last_ts) = get_last_two_bar_timestamps(&binary, bar_count as usize);
         let zstd_level = 3i32;
@@ -966,10 +1233,13 @@ impl SqliteCache {
     /// Get cache timestamp (when bars were last stored) for a key.
     /// Returns None if key doesn't exist.
     pub fn get_cache_age_secs(&self, key: &str) -> Result<Option<i64>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT timestamp FROM bar_cache WHERE key = ?1"
-        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached("SELECT timestamp FROM bar_cache WHERE key = ?1")
+            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
 
         match stmt.query_row(rusqlite::params![key], |row| row.get::<_, i64>(0)) {
             Ok(ts) => Ok(Some(chrono::Utc::now().timestamp() - ts)),
@@ -980,10 +1250,13 @@ impl SqliteCache {
 
     /// Get bar count for a cache entry. Returns None if key doesn't exist.
     pub fn get_bar_count(&self, key: &str) -> Result<Option<i64>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT bar_count FROM bar_cache WHERE key = ?1"
-        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached("SELECT bar_count FROM bar_cache WHERE key = ?1")
+            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
 
         match stmt.query_row(rusqlite::params![key], |row| row.get::<_, i64>(0)) {
             Ok(count) => Ok(Some(count)),
@@ -994,10 +1267,16 @@ impl SqliteCache {
 
     /// Batch-write pre-compressed bar entries in a single transaction.
     /// Takes (key, compressed_data, bar_count) tuples — compression done by caller.
-    pub fn put_compressed_batch(&self, entries: &[(String, Vec<u8>, i64)]) -> Result<usize, String> {
-        if entries.is_empty() { return Ok(0); }
+    pub fn put_compressed_batch(
+        &self,
+        entries: &[(String, Vec<u8>, i64)],
+    ) -> Result<usize, String> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        conn.execute_batch("BEGIN").map_err(|e| format!("BEGIN failed: {e}"))?;
+        conn.execute_batch("BEGIN")
+            .map_err(|e| format!("BEGIN failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
         let mut count = 0;
         for (key, compressed, bar_count) in entries {
@@ -1009,39 +1288,62 @@ impl SqliteCache {
                 Err(e) => tracing::warn!("Batch write skip {}: {}", key, e),
             }
         }
-        conn.execute_batch("COMMIT").map_err(|e| format!("COMMIT failed: {e}"))?;
+        conn.execute_batch("COMMIT")
+            .map_err(|e| format!("COMMIT failed: {e}"))?;
         Ok(count)
     }
 
     /// Bulk-load cache metadata for entries updated since `since_ts`.
     /// Returns Vec<(key, timestamp, bar_count)> — only changed entries.
     pub fn get_cache_meta_since(&self, since_ts: i64) -> Result<Vec<(String, i64, i64)>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn.prepare(
-            "SELECT key, timestamp, bar_count FROM bar_cache WHERE timestamp > ?1"
-        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare("SELECT key, timestamp, bar_count FROM bar_cache WHERE timestamp > ?1")
+            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
         let mut result = Vec::new();
-        let rows = stmt.query_map(rusqlite::params![since_ts], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
-        }).map_err(|e| format!("SQLite query failed: {e}"))?;
+        let rows = stmt
+            .query_map(rusqlite::params![since_ts], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| format!("SQLite query failed: {e}"))?;
         for row in rows {
-            if let Ok(entry) = row { result.push(entry); }
+            if let Ok(entry) = row {
+                result.push(entry);
+            }
         }
         Ok(result)
     }
 
     /// Bulk-load cache metadata (age_secs, bar_count) for all entries.
     /// Returns HashMap<key, (age_secs, bar_count)> — one query instead of N individual lookups.
-    pub fn get_all_cache_meta(&self) -> Result<std::collections::HashMap<String, (i64, i64)>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn.prepare(
-            "SELECT key, timestamp, bar_count FROM bar_cache"
-        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+    pub fn get_all_cache_meta(
+        &self,
+    ) -> Result<std::collections::HashMap<String, (i64, i64)>, String> {
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare("SELECT key, timestamp, bar_count FROM bar_cache")
+            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
         let now = chrono::Utc::now().timestamp();
         let mut map = std::collections::HashMap::new();
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
-        }).map_err(|e| format!("SQLite query failed: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| format!("SQLite query failed: {e}"))?;
         for row in rows {
             if let Ok((key, ts, bc)) = row {
                 map.insert(key, (now - ts, bc));
@@ -1067,22 +1369,23 @@ impl SqliteCache {
         } // lock released here
 
         // File I/O + level-9 compression without holding any lock
-        let data = std::fs::read(&backup_path)
-            .map_err(|e| format!("Read backup failed: {e}"))?;
-        let compressed = zstd::encode_all(data.as_slice(), 9)
-            .map_err(|e| format!("Compress failed: {e}"))?;
-        std::fs::write(path, &compressed)
-            .map_err(|e| format!("Write backup failed: {e}"))?;
+        let data = std::fs::read(&backup_path).map_err(|e| format!("Read backup failed: {e}"))?;
+        let compressed =
+            zstd::encode_all(data.as_slice(), 9).map_err(|e| format!("Compress failed: {e}"))?;
+        std::fs::write(path, &compressed).map_err(|e| format!("Write backup failed: {e}"))?;
         let _ = std::fs::remove_file(&backup_path);
 
         let size_mb = compressed.len() as f64 / 1_048_576.0;
-        Ok(format!("{{\"size_bytes\":{},\"size_mb\":{:.1}}}", compressed.len(), size_mb))
+        Ok(format!(
+            "{{\"size_bytes\":{},\"size_mb\":{:.1}}}",
+            compressed.len(),
+            size_mb
+        ))
     }
 
     /// Import cache from a compressed backup file. Merges with existing data (newer wins).
     pub fn import_backup(&self, path: &str) -> Result<String, String> {
-        let compressed = std::fs::read(path)
-            .map_err(|e| format!("Read backup failed: {e}"))?;
+        let compressed = std::fs::read(path).map_err(|e| format!("Read backup failed: {e}"))?;
         let data = zstd::decode_all(compressed.as_slice())
             .map_err(|e| format!("Decompress failed: {e}"))?;
 
@@ -1095,11 +1398,10 @@ impl SqliteCache {
                 .create_new(true)
                 .open(&tmp_path)
                 .map_err(|e| format!("Create temp file failed (may already exist): {e}"))?;
-            f.write_all(&data)
-                .map_err(|e| {
-                    let _ = std::fs::remove_file(&tmp_path);
-                    format!("Write temp failed: {e}")
-                })?;
+            f.write_all(&data).map_err(|e| {
+                let _ = std::fs::remove_file(&tmp_path);
+                format!("Write temp failed: {e}")
+            })?;
         }
 
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
@@ -1112,39 +1414,46 @@ impl SqliteCache {
             })?;
 
         // Merge bar_cache: import entries where backup has newer timestamp or key doesn't exist
-        let bar_count = conn.execute(
-            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, zstd_level)
+        let bar_count = conn
+            .execute(
+                "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, zstd_level)
              SELECT b.key, b.data, b.timestamp, b.bar_count, COALESCE(b.zstd_level, 3)
              FROM backup_db.bar_cache b
              LEFT JOIN main.bar_cache c ON c.key = b.key
              WHERE c.key IS NULL OR b.timestamp > c.timestamp",
-            [],
-        ).map_err(|e| {
-            let _ = conn.execute("DETACH DATABASE backup_db", []);
-            let _ = std::fs::remove_file(&tmp_path);
-            format!("Merge bar_cache failed: {e}")
-        })?;
+                [],
+            )
+            .map_err(|e| {
+                let _ = conn.execute("DETACH DATABASE backup_db", []);
+                let _ = std::fs::remove_file(&tmp_path);
+                format!("Merge bar_cache failed: {e}")
+            })?;
 
         // Merge kv_cache: same newer-wins strategy
-        let kv_count = conn.execute(
-            "INSERT OR REPLACE INTO kv_cache (key, value, timestamp)
+        let kv_count = conn
+            .execute(
+                "INSERT OR REPLACE INTO kv_cache (key, value, timestamp)
              SELECT b.key, b.value, b.timestamp
              FROM backup_db.kv_cache b
              LEFT JOIN main.kv_cache c ON c.key = b.key
              WHERE c.key IS NULL OR b.timestamp > c.timestamp",
-            [],
-        ).map_err(|e| {
-            let _ = conn.execute("DETACH DATABASE backup_db", []);
-            let _ = std::fs::remove_file(&tmp_path);
-            format!("Merge kv_cache failed: {e}")
-        })?;
+                [],
+            )
+            .map_err(|e| {
+                let _ = conn.execute("DETACH DATABASE backup_db", []);
+                let _ = std::fs::remove_file(&tmp_path);
+                format!("Merge kv_cache failed: {e}")
+            })?;
 
         conn.execute("DETACH DATABASE backup_db", [])
             .map_err(|e| format!("Detach failed: {e}"))?;
 
         let _ = std::fs::remove_file(&tmp_path);
 
-        Ok(format!("{{\"bars_imported\":{},\"kv_imported\":{}}}", bar_count, kv_count))
+        Ok(format!(
+            "{{\"bars_imported\":{},\"kv_imported\":{}}}",
+            bar_count, kv_count
+        ))
     }
 
     /// Get the database file path.
@@ -1157,22 +1466,26 @@ impl SqliteCache {
     pub fn get_bar_timestamp_range_with_conn(conn: &Connection, key: &str) -> Option<(i64, i64)> {
         // prepare_cached → repeated calls (BG thread iterates all crypto entries every cycle)
         // reuse the same parsed statement instead of reparsing on every call.
-        let mut stmt = conn.prepare_cached(
-            "SELECT data FROM bar_cache WHERE key = ?1"
-        ).ok()?;
-        let blob: Vec<u8> = stmt.query_row(params![key], |row| {
-            match row.get_ref(0)? {
+        let mut stmt = conn
+            .prepare_cached("SELECT data FROM bar_cache WHERE key = ?1")
+            .ok()?;
+        let blob: Vec<u8> = stmt
+            .query_row(params![key], |row| match row.get_ref(0)? {
                 rusqlite::types::ValueRef::Blob(b) => Ok(b.to_vec()),
                 rusqlite::types::ValueRef::Text(t) => Ok(t.to_vec()),
                 _ => Err(rusqlite::Error::InvalidColumnType(
-                    0, "data".into(), rusqlite::types::Type::Blob
+                    0,
+                    "data".into(),
+                    rusqlite::types::Type::Blob,
                 )),
-            }
-        }).ok()?;
+            })
+            .ok()?;
         let decompressed = maybe_decompress(blob).ok()?;
         if decompressed.len() >= 8 && &decompressed[0..4] == BAR_BINARY_MAGIC {
             let count = u32::from_le_bytes(decompressed[4..8].try_into().ok()?) as usize;
-            if count == 0 || decompressed.len() < 8 + count * BYTES_PER_BAR { return None; }
+            if count == 0 || decompressed.len() < 8 + count * BYTES_PER_BAR {
+                return None;
+            }
             let first_ts = i64::from_le_bytes(decompressed[8..16].try_into().ok()?);
             let last_off = 8 + (count - 1) * BYTES_PER_BAR;
             let last_ts = i64::from_le_bytes(decompressed[last_off..last_off + 8].try_into().ok()?);
@@ -1182,12 +1495,14 @@ impl SqliteCache {
         // Legacy JSON rows can still exist in upgraded caches. Preserve first/last
         // bar visibility instead of treating them as timestamp-less blobs.
         let bars: Vec<serde_json::Value> = serde_json::from_slice(&decompressed).ok()?;
-        let first_ts = chrono::DateTime::parse_from_rfc3339(
-            bars.first()?.get("timestamp")?.as_str()?
-        ).ok()?.timestamp_millis();
-        let last_ts = chrono::DateTime::parse_from_rfc3339(
-            bars.last()?.get("timestamp")?.as_str()?
-        ).ok()?.timestamp_millis();
+        let first_ts =
+            chrono::DateTime::parse_from_rfc3339(bars.first()?.get("timestamp")?.as_str()?)
+                .ok()?
+                .timestamp_millis();
+        let last_ts =
+            chrono::DateTime::parse_from_rfc3339(bars.last()?.get("timestamp")?.as_str()?)
+                .ok()?
+                .timestamp_millis();
         Some((first_ts, last_ts))
     }
 
@@ -1200,7 +1515,9 @@ impl SqliteCache {
     /// Get a read-only connection for queries that don't mutate.
     /// Uses the dedicated read connection — never blocked by write operations.
     pub fn read_connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
-        self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))
+        self.read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))
     }
 
     /// Try to get a read connection without blocking. Returns None if the read_conn lock is held.
@@ -1214,26 +1531,34 @@ impl SqliteCache {
     /// Use this for long-running background threads that need to read without
     /// contending with the UI thread's read_conn or the write conn.
     pub fn open_bg_read_connection(&self) -> Result<Connection, String> {
-        let conn = Connection::open_with_flags(&self.db_path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-            .map_err(|e| format!("BG read conn open failed: {e}"))?;
+        let conn = Connection::open_with_flags(
+            &self.db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| format!("BG read conn open failed: {e}"))?;
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| format!("BG read conn busy_timeout failed: {e}"))?;
-        let _ = conn.execute_batch("
+        let _ = conn.execute_batch(
+            "
             PRAGMA cache_size=-32000;
             PRAGMA temp_store=MEMORY;
             PRAGMA mmap_size=268435456;
-        ");
+        ",
+        );
         Ok(conn)
     }
 
     /// Non-blocking version of get_bars_raw. Returns Ok(None) if lock is contended.
-    pub fn try_get_bars_raw(&self, key: &str) -> Result<Option<Vec<(i64, f64, f64, f64, f64, f64)>>, String> {
+    pub fn try_get_bars_raw(
+        &self,
+        key: &str,
+    ) -> Result<Option<Vec<(i64, f64, f64, f64, f64, f64)>>, String> {
         let conn = match self.read_conn.try_lock() {
             Ok(c) => c,
             Err(_) => return Ok(None), // lock contended — skip this frame
         };
-        let mut stmt = conn.prepare_cached("SELECT data FROM bar_cache WHERE key = ?1")
+        let mut stmt = conn
+            .prepare_cached("SELECT data FROM bar_cache WHERE key = ?1")
             .map_err(|e| format!("Prepare failed: {e}"))?;
         let row: Option<Vec<u8>> = stmt.query_row(params![key], |r| r.get(0)).ok();
         match row {
@@ -1246,13 +1571,21 @@ impl SqliteCache {
                     let text = String::from_utf8_lossy(&bytes);
                     let bars: Vec<serde_json::Value> = serde_json::from_str(&text)
                         .map_err(|e| format!("JSON parse failed: {e}"))?;
-                    let result = bars.iter().filter_map(|b| {
-                        Some((
-                            chrono::DateTime::parse_from_rfc3339(b["timestamp"].as_str()?).ok()?.timestamp_millis(),
-                            b["open"].as_f64()?, b["high"].as_f64()?, b["low"].as_f64()?,
-                            b["close"].as_f64()?, b["volume"].as_f64().unwrap_or(0.0),
-                        ))
-                    }).collect();
+                    let result = bars
+                        .iter()
+                        .filter_map(|b| {
+                            Some((
+                                chrono::DateTime::parse_from_rfc3339(b["timestamp"].as_str()?)
+                                    .ok()?
+                                    .timestamp_millis(),
+                                b["open"].as_f64()?,
+                                b["high"].as_f64()?,
+                                b["low"].as_f64()?,
+                                b["close"].as_f64()?,
+                                b["volume"].as_f64().unwrap_or(0.0),
+                            ))
+                        })
+                        .collect();
                     Ok(Some(result))
                 }
             }
@@ -1262,18 +1595,23 @@ impl SqliteCache {
     /// List all kv_cache keys matching a prefix (e.g., "cred:" returns all credential keys).
     /// LIKE wildcards in the prefix are escaped to prevent overly broad matches.
     pub fn list_kv_keys(&self, prefix: &str) -> Result<Vec<String>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Lock failed: {e}"))?;
         let escaped = prefix.replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("{}%", escaped);
-        let mut stmt = conn.prepare(
-            "SELECT key FROM kv_cache WHERE key LIKE ?1 ESCAPE '\\'"
-        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
-        let rows = stmt.query_map(params![pattern], |row| {
-            row.get::<_, String>(0)
-        }).map_err(|e| format!("SQLite query failed: {e}"))?;
+        let mut stmt = conn
+            .prepare("SELECT key FROM kv_cache WHERE key LIKE ?1 ESCAPE '\\'")
+            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let rows = stmt
+            .query_map(params![pattern], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("SQLite query failed: {e}"))?;
         let mut keys = Vec::new();
         for row in rows {
-            if let Ok(k) = row { keys.push(k); }
+            if let Ok(k) = row {
+                keys.push(k);
+            }
         }
         Ok(keys)
     }
@@ -1291,7 +1629,8 @@ impl SqliteCache {
             "SELECT last_sync_ts FROM sync_state WHERE key = ?1",
             params![key],
             |row| row.get::<_, i64>(0),
-        ).unwrap_or(0)
+        )
+        .unwrap_or(0)
     }
 
     /// Set the last sync timestamp for a given sync key.
@@ -1300,7 +1639,8 @@ impl SqliteCache {
         conn.execute(
             "INSERT OR REPLACE INTO sync_state (key, last_sync_ts) VALUES (?1, ?2)",
             params![key, ts],
-        ).map_err(|e| format!("SQLite insert sync_state failed: {e}"))?;
+        )
+        .map_err(|e| format!("SQLite insert sync_state failed: {e}"))?;
         Ok(())
     }
 
@@ -1309,22 +1649,32 @@ impl SqliteCache {
     /// List KV entries updated since a given timestamp.
     /// Returns (key, compressed_value) pairs for entries with timestamp > since_ts.
     /// Used by LAN sync server to send only new/updated KV entries.
-    pub fn list_kv_entries_since(&self, since_ts: i64) -> Result<Vec<(String, Vec<u8>, i64)>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+    pub fn list_kv_entries_since(
+        &self,
+        since_ts: i64,
+    ) -> Result<Vec<(String, Vec<u8>, i64)>, String> {
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Lock failed: {e}"))?;
         // prepare_cached avoids reparse on the hot LAN-sync polling loop.
         let mut stmt = conn.prepare_cached(
             "SELECT key, value, timestamp FROM kv_cache WHERE timestamp > ?1 ORDER BY timestamp ASC"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
-        let rows = stmt.query_map(params![since_ts], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Vec<u8>>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        }).map_err(|e| format!("SQLite query failed: {e}"))?;
+        let rows = stmt
+            .query_map(params![since_ts], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| format!("SQLite query failed: {e}"))?;
         let mut entries = Vec::new();
         for row in rows {
-            if let Ok(entry) = row { entries.push(entry); }
+            if let Ok(entry) = row {
+                entries.push(entry);
+            }
         }
         Ok(entries)
     }
@@ -1335,8 +1685,12 @@ impl SqliteCache {
             Ok(c) => c,
             Err(_) => return 0,
         };
-        conn.query_row("SELECT COALESCE(MAX(timestamp), 0) FROM kv_cache", [], |r| r.get::<_, i64>(0))
-            .unwrap_or(0)
+        conn.query_row(
+            "SELECT COALESCE(MAX(timestamp), 0) FROM kv_cache",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
     }
 
     /// Count rows in kv_cache.
@@ -1352,10 +1706,13 @@ impl SqliteCache {
     /// Get raw bar cache entry without decompression (for LAN sync transfer).
     /// Returns the compressed blob and its timestamp as stored in SQLite.
     pub fn get_raw_bar_entry(&self, key: &str) -> Result<Option<(Vec<u8>, i64)>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT data, timestamp FROM bar_cache WHERE key = ?1"
-        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached("SELECT data, timestamp FROM bar_cache WHERE key = ?1")
+            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
 
         match stmt.query_row(params![key], |row| {
             let data: Vec<u8> = row.get(0)?;
@@ -1369,7 +1726,13 @@ impl SqliteCache {
     }
 
     /// Write raw bar cache entry (from LAN sync, no compression needed — already compressed).
-    pub fn put_raw_bar_entry(&self, key: &str, data: &[u8], timestamp: i64, bar_count: i64) -> Result<(), String> {
+    pub fn put_raw_bar_entry(
+        &self,
+        key: &str,
+        data: &[u8],
+        timestamp: i64,
+        bar_count: i64,
+    ) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         conn.execute(
             "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -1380,10 +1743,15 @@ impl SqliteCache {
 
     /// List all keys in bar_cache.
     pub fn all_keys(&self) -> Result<Vec<String>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn.prepare_cached("SELECT key FROM bar_cache")
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached("SELECT key FROM bar_cache")
             .map_err(|e| format!("Prepare failed: {e}"))?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
             .map_err(|e| format!("Query failed: {e}"))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Collect failed: {e}"))
@@ -1392,8 +1760,12 @@ impl SqliteCache {
     /// Get the raw compressed blob, timestamp, and bar_count for a key.
     /// Used for zero-copy sync between databases.
     pub fn get_raw_blob(&self, key: &str) -> Result<Option<(Vec<u8>, i64, i64)>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn.prepare_cached("SELECT data, timestamp, bar_count FROM bar_cache WHERE key = ?1")
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached("SELECT data, timestamp, bar_count FROM bar_cache WHERE key = ?1")
             .map_err(|e| format!("Prepare failed: {e}"))?;
         let result = stmt.query_row(params![key], |row| {
             // Use get_ref to accept both BLOB and TEXT without UTF-8 validation.
@@ -1404,7 +1776,13 @@ impl SqliteCache {
             let data: Vec<u8> = match row.get_ref(0)? {
                 rusqlite::types::ValueRef::Blob(b) => b.to_vec(),
                 rusqlite::types::ValueRef::Text(t) => t.to_vec(),
-                _ => return Err(rusqlite::Error::InvalidColumnType(0, "data".into(), rusqlite::types::Type::Blob)),
+                _ => {
+                    return Err(rusqlite::Error::InvalidColumnType(
+                        0,
+                        "data".into(),
+                        rusqlite::types::Type::Blob,
+                    ));
+                }
             };
             Ok((data, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
         });
@@ -1423,9 +1801,12 @@ impl SqliteCache {
     /// calls that succeeded (a row whose timestamp wasn't newer still
     /// counts as a success — the SQL just updates zero rows).
     pub fn put_raw_blobs(&self, items: &[(String, Vec<u8>, i64, i64)]) -> Result<usize, String> {
-        if items.is_empty() { return Ok(0); }
+        if items.is_empty() {
+            return Ok(0);
+        }
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let tx = conn.unchecked_transaction()
+        let tx = conn
+            .unchecked_transaction()
             .map_err(|e| format!("Batch begin failed: {e}"))?;
         let mut ok = 0usize;
         {
@@ -1441,7 +1822,8 @@ impl SqliteCache {
                 }
             }
         }
-        tx.commit().map_err(|e| format!("Batch commit failed: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("Batch commit failed: {e}"))?;
         Ok(ok)
     }
 
@@ -1457,7 +1839,10 @@ impl SqliteCache {
     /// If `account_tag` is empty, returns the first heartbeat found (useful
     /// when the caller does not know which account the source DB is bound to).
     pub fn read_mt5_heartbeat(&self, account_tag: &str) -> Result<Option<(String, i64)>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Lock failed: {e}"))?;
         let key_pattern = if account_tag.is_empty() {
             "mt5:__HEARTBEAT__:%".to_string()
         } else {
@@ -1479,16 +1864,26 @@ impl SqliteCache {
             // Text at index 0". Read via ValueRef and handle both so we're
             // robust to however the EA ended up binding the value.
             use rusqlite::types::ValueRef;
-            let json = match row.get_ref(0).map_err(|e| format!("Heartbeat col 0 ref failed: {e}"))? {
+            let json = match row
+                .get_ref(0)
+                .map_err(|e| format!("Heartbeat col 0 ref failed: {e}"))?
+            {
                 ValueRef::Text(bytes) => std::str::from_utf8(bytes)
                     .map_err(|e| format!("Heartbeat TEXT not UTF-8: {e}"))?
                     .to_string(),
                 ValueRef::Blob(bytes) => std::str::from_utf8(bytes)
                     .map_err(|e| format!("Heartbeat BLOB not UTF-8: {e}"))?
                     .to_string(),
-                other => return Err(format!("Heartbeat unexpected column type: {:?}", other.data_type())),
+                other => {
+                    return Err(format!(
+                        "Heartbeat unexpected column type: {:?}",
+                        other.data_type()
+                    ));
+                }
             };
-            let ts: i64 = row.get(1).map_err(|e| format!("Heartbeat ts get failed: {e}"))?;
+            let ts: i64 = row
+                .get(1)
+                .map_err(|e| format!("Heartbeat ts get failed: {e}"))?;
             Ok(Some((json, ts)))
         } else {
             Ok(None)
@@ -1498,17 +1893,23 @@ impl SqliteCache {
     /// Read all bid/ask quotes from the bid_ask table (BarCacheWriter live prices).
     /// Returns Vec of (symbol, bid, ask, spread).
     pub fn read_bid_ask(&self) -> Result<Vec<(String, f64, f64, f64)>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let mut stmt = conn.prepare_cached("SELECT symbol, bid, ask, spread FROM bid_ask WHERE bid > 0 OR ask > 0")
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached("SELECT symbol, bid, ask, spread FROM bid_ask WHERE bid > 0 OR ask > 0")
             .map_err(|e| format!("Prepare failed (bid_ask table may not exist): {e}"))?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, f64>(1)?,
-                row.get::<_, f64>(2)?,
-                row.get::<_, f64>(3)?,
-            ))
-        }).map_err(|e| format!("Query failed: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, f64>(3)?,
+                ))
+            })
+            .map_err(|e| format!("Query failed: {e}"))?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
@@ -1518,9 +1919,12 @@ impl SqliteCache {
         // Escape LIKE wildcards in prefix to prevent overly broad deletion
         let escaped = symbol_prefix.replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("{}:%", escaped);
-        let deleted = conn.execute(
-            "DELETE FROM bar_cache WHERE key LIKE ?1 ESCAPE '\\'", params![pattern]
-        ).map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
+        let deleted = conn
+            .execute(
+                "DELETE FROM bar_cache WHERE key LIKE ?1 ESCAPE '\\'",
+                params![pattern],
+            )
+            .map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
         Ok(deleted)
     }
 
@@ -1532,27 +1936,38 @@ impl SqliteCache {
         };
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let pattern = format!("%:{}", tf);
-        let deleted = conn.execute(
-            "DELETE FROM bar_cache WHERE key LIKE ?1 ESCAPE '\\'", params![pattern]
-        ).map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
+        let deleted = conn
+            .execute(
+                "DELETE FROM bar_cache WHERE key LIKE ?1 ESCAPE '\\'",
+                params![pattern],
+            )
+            .map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
         let _ = conn.execute(
-            "DELETE FROM bar_track WHERE key LIKE ?1 ESCAPE '\\'", params![pattern]
+            "DELETE FROM bar_track WHERE key LIKE ?1 ESCAPE '\\'",
+            params![pattern],
         );
-        let _ = conn.execute_batch("VACUUM");
-        Ok(deleted)
+        match Self::reclaim_space_locked(&conn, &self.db_path) {
+            Ok(_) => Ok(deleted),
+            Err(e) => Err(format!(
+                "Deleted {deleted} timeframe rows but reclaim failed: {e}"
+            )),
+        }
     }
 
     /// Delete ALL bar data from the cache. Returns the number of rows deleted.
     /// Runs VACUUM to reclaim freed pages and shrink the DB file on disk.
     pub fn delete_all_bars(&self) -> Result<u64, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let deleted = conn.execute("DELETE FROM bar_cache", [])
+        let deleted = conn
+            .execute("DELETE FROM bar_cache", [])
             .map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
         let _ = conn.execute("DELETE FROM bar_track", []);
-        // VACUUM reclaims freed pages — without this, the DB file stays the same
-        // size after DELETE (e.g., 56 GB file with only 14 GB of live data).
-        let _ = conn.execute_batch("VACUUM");
-        Ok(deleted)
+        match Self::reclaim_space_locked(&conn, &self.db_path) {
+            Ok(_) => Ok(deleted),
+            Err(e) => Err(format!(
+                "Deleted {deleted} bar rows but reclaim failed: {e}"
+            )),
+        }
     }
 
     /// Delete ALL DARWIN data (accounts, deals, positions, equity snapshots).
@@ -1562,12 +1977,65 @@ impl SqliteCache {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let mut total = 0u64;
         // Table names are compile-time constants, not user input — safe for format!()
-        for table in &["darwin_deals", "darwin_positions", "darwin_equity_snapshots", "darwin_accounts"] {
-            let deleted = conn.execute(&format!("DELETE FROM {}", table), []).unwrap_or(0) as u64;
+        for table in &[
+            "darwin_deals",
+            "darwin_positions",
+            "darwin_equity_snapshots",
+            "darwin_accounts",
+        ] {
+            let deleted = conn
+                .execute(&format!("DELETE FROM {}", table), [])
+                .unwrap_or(0) as u64;
             total += deleted;
         }
-        let _ = conn.execute_batch("VACUUM");
-        Ok(total)
+        match Self::reclaim_space_locked(&conn, &self.db_path) {
+            Ok(_) => Ok(total),
+            Err(e) => Err(format!(
+                "Deleted {total} DARWIN rows but reclaim failed: {e}"
+            )),
+        }
+    }
+
+    /// Delete all cache data for one supported broker prefix and reclaim freed pages.
+    /// Applies to bar_cache, kv_cache, and bar_track keys with the broker prefix.
+    pub fn delete_broker_data(&self, broker_prefix: &str) -> Result<u64, String> {
+        let broker = match broker_prefix.to_ascii_lowercase().as_str() {
+            "alpaca" => "alpaca",
+            "tastytrade" => "tastytrade",
+            "mt5" => "mt5",
+            other => return Err(format!("Unsupported broker purge target: {other}")),
+        };
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let pattern = format!("{}:%", broker);
+        let bars_deleted =
+            conn.execute(
+                "DELETE FROM bar_cache WHERE key LIKE ?1 ESCAPE '\\'",
+                params![pattern],
+            )
+            .map_err(|e| format!("SQLite bar delete failed: {e}"))? as u64;
+        let kv_deleted = conn
+            .execute(
+                "DELETE FROM kv_cache WHERE key LIKE ?1 ESCAPE '\\'",
+                params![pattern],
+            )
+            .map_err(|e| format!("SQLite KV delete failed: {e}"))? as u64;
+        let _ = conn.execute(
+            "DELETE FROM bar_track WHERE key LIKE ?1 ESCAPE '\\'",
+            params![pattern],
+        );
+        let total = bars_deleted + kv_deleted;
+        match Self::reclaim_space_locked(&conn, &self.db_path) {
+            Ok(_) => Ok(total),
+            Err(e) => Err(format!(
+                "Deleted {total} {broker} cache rows but reclaim failed: {e}"
+            )),
+        }
+    }
+
+    /// Force a WAL checkpoint + VACUUM cycle to reclaim free pages after prior deletes.
+    pub fn reclaim_space(&self) -> Result<(i64, i64), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        Self::reclaim_space_locked(&conn, &self.db_path)
     }
 
     /// Run PRAGMA incremental_vacuum to reclaim freed pages without full VACUUM.
@@ -1585,14 +2053,17 @@ impl SqliteCache {
     /// may have left stale 0 values. Returns number of entries repaired.
     pub fn repair_bar_counts(&self) -> Result<usize, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let mut stmt = conn.prepare("SELECT key, data FROM bar_cache WHERE bar_count = 0 OR bar_count IS NULL")
+        let mut stmt = conn
+            .prepare("SELECT key, data FROM bar_cache WHERE bar_count = 0 OR bar_count IS NULL")
             .map_err(|e| format!("Prepare failed: {e}"))?;
         let mut updates: Vec<(String, i64)> = Vec::new();
-        let rows = stmt.query_map([], |row| {
-            let key: String = row.get(0)?;
-            let data: Vec<u8> = row.get(1)?;
-            Ok((key, data))
-        }).map_err(|e| format!("Query failed: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                let key: String = row.get(0)?;
+                let data: Vec<u8> = row.get(1)?;
+                Ok((key, data))
+            })
+            .map_err(|e| format!("Query failed: {e}"))?;
         for row in rows {
             if let Ok((key, data)) = row {
                 // Skip MT5 metadata rows — they all follow `<prefix>:__<NAME>__[…]`
@@ -1602,7 +2073,10 @@ impl SqliteCache {
                 }
                 let bytes = match maybe_decompress(data) {
                     Ok(b) => b,
-                    Err(e) => { tracing::warn!("repair_bar_counts: decompress failed for {key}: {e}"); continue; }
+                    Err(e) => {
+                        tracing::warn!("repair_bar_counts: decompress failed for {key}: {e}");
+                        continue;
+                    }
                 };
                 if bytes.len() >= 8 && &bytes[0..4] == BAR_BINARY_MAGIC {
                     let count = u32::from_le_bytes(bytes[4..8].try_into().unwrap_or([0; 4])) as i64;
@@ -1628,18 +2102,23 @@ impl SqliteCache {
     /// evicting hot data. Returns (evicted_count, bytes_freed).
     pub fn evict_lru(&self, max_bytes: i64) -> Result<(usize, i64), String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let total: i64 = conn.query_row(
-            "SELECT COALESCE(SUM(LENGTH(data)), 0) FROM bar_cache",
-            [],
-            |r| r.get(0),
-        ).unwrap_or(0);
-        if total <= max_bytes { return Ok((0, 0)); }
+        let total: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(LENGTH(data)), 0) FROM bar_cache",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if total <= max_bytes {
+            return Ok((0, 0));
+        }
         let cutoff_ts = chrono::Utc::now().timestamp() - 7 * 86400; // 7 days
         // Select oldest entries (excluding hot ones)
         let mut stmt = conn.prepare(
             "SELECT key, LENGTH(data) FROM bar_cache WHERE timestamp < ?1 ORDER BY timestamp ASC"
         ).map_err(|e| format!("Prepare evict failed: {e}"))?;
-        let rows: Vec<(String, i64)> = stmt.query_map([cutoff_ts], |r| Ok((r.get(0)?, r.get(1)?)))
+        let rows: Vec<(String, i64)> = stmt
+            .query_map([cutoff_ts], |r| Ok((r.get(0)?, r.get(1)?)))
             .map_err(|e| format!("Query evict failed: {e}"))?
             .filter_map(|r| r.ok())
             .collect();
@@ -1651,7 +2130,9 @@ impl SqliteCache {
         let mut freed: i64 = 0;
         let mut keys_to_delete: Vec<String> = Vec::new();
         for (key, size) in rows {
-            if freed >= target_free { break; }
+            if freed >= target_free {
+                break;
+            }
             keys_to_delete.push(key);
             freed += size;
         }
@@ -1660,10 +2141,17 @@ impl SqliteCache {
             // Chunked to stay within SQLITE_MAX_VARIABLE_NUMBER (32766 in modern sqlite)
             const CHUNK: usize = 512;
             for chunk in keys_to_delete.chunks(CHUNK) {
-                let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(",");
+                let placeholders = std::iter::repeat("?")
+                    .take(chunk.len())
+                    .collect::<Vec<_>>()
+                    .join(",");
                 let sql = format!("DELETE FROM bar_cache WHERE key IN ({placeholders})");
-                let params_refs: Vec<&dyn rusqlite::types::ToSql> = chunk.iter().map(|k| k as &dyn rusqlite::types::ToSql).collect();
-                conn.execute(&sql, params_refs.as_slice()).map_err(|e| format!("Bulk evict delete failed: {e}"))?;
+                let params_refs: Vec<&dyn rusqlite::types::ToSql> = chunk
+                    .iter()
+                    .map(|k| k as &dyn rusqlite::types::ToSql)
+                    .collect();
+                conn.execute(&sql, params_refs.as_slice())
+                    .map_err(|e| format!("Bulk evict delete failed: {e}"))?;
             }
         }
         Ok((evicted, freed))
@@ -1673,7 +2161,11 @@ impl SqliteCache {
     /// Decompression speed is identical regardless of compression level — only storage shrinks.
     /// Returns (entries_processed, bytes_saved).
     /// Progress callback: (processed, total, key, old_size, new_size)
-    pub fn compact_storage(&self, level: i32, progress: Option<&dyn Fn(usize, usize, &str, usize, usize)>) -> Result<(usize, i64), String> {
+    pub fn compact_storage(
+        &self,
+        level: i32,
+        progress: Option<&dyn Fn(usize, usize, &str, usize, usize)>,
+    ) -> Result<(usize, i64), String> {
         // Phase 1: Read entries that need compaction (skip already at target level)
         let entries: Vec<(String, Vec<u8>)>;
         let kv_entries: Vec<(String, Vec<u8>)>;
@@ -1681,25 +2173,33 @@ impl SqliteCache {
         {
             let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
             // Only select entries where zstd_level < target — skip already-compacted
-            let mut stmt = conn.prepare("SELECT key, data FROM bar_cache WHERE zstd_level < ?1")
+            let mut stmt = conn
+                .prepare("SELECT key, data FROM bar_cache WHERE zstd_level < ?1")
                 .map_err(|e| format!("Prepare failed: {e}"))?;
-            entries = stmt.query_map(params![level], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-            }).map_err(|e| format!("Query failed: {e}"))?
-              .filter_map(|r| r.ok())
-              .collect();
+            entries = stmt
+                .query_map(params![level], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                })
+                .map_err(|e| format!("Query failed: {e}"))?
+                .filter_map(|r| r.ok())
+                .collect();
             // Count how many were skipped (already at target level)
-            _skipped_count = conn.query_row(
-                "SELECT COUNT(*) FROM bar_cache WHERE zstd_level >= ?1",
-                params![level], |r| r.get::<_, i64>(0),
-            ).unwrap_or(0) as usize;
+            _skipped_count = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM bar_cache WHERE zstd_level >= ?1",
+                    params![level],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap_or(0) as usize;
             drop(stmt);
             kv_entries = match conn.prepare("SELECT key, data FROM kv_store") {
-                Ok(mut kv_stmt) => {
-                    kv_stmt.query_map([], |row| {
+                Ok(mut kv_stmt) => kv_stmt
+                    .query_map([], |row| {
                         Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-                    }).ok().map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
-                }
+                    })
+                    .ok()
+                    .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                    .unwrap_or_default(),
                 Err(_) => Vec::new(),
             };
         } // Lock released — UI thread can read cache freely during recompression
@@ -1714,11 +2214,17 @@ impl SqliteCache {
         for (key, compressed) in &entries {
             let decompressed = match zstd::decode_all(compressed.as_slice()) {
                 Ok(d) => d,
-                Err(_) => { processed += 1; continue; }
+                Err(_) => {
+                    processed += 1;
+                    continue;
+                }
             };
             let recompressed = match zstd::encode_all(decompressed.as_slice(), level) {
                 Ok(r) => r,
-                Err(_) => { processed += 1; continue; }
+                Err(_) => {
+                    processed += 1;
+                    continue;
+                }
             };
             let saved = compressed.len() as i64 - recompressed.len() as i64;
             if saved > 0 {
@@ -1727,7 +2233,17 @@ impl SqliteCache {
             }
             processed += 1;
             if let Some(cb) = progress {
-                cb(processed, total, key, compressed.len(), if saved > 0 { recompressed.len() } else { compressed.len() });
+                cb(
+                    processed,
+                    total,
+                    key,
+                    compressed.len(),
+                    if saved > 0 {
+                        recompressed.len()
+                    } else {
+                        compressed.len()
+                    },
+                );
             }
         }
 
@@ -1754,14 +2270,20 @@ impl SqliteCache {
             for chunk in bar_updates.chunks(50) {
                 let _ = conn.execute_batch("BEGIN;");
                 for (key, data) in chunk {
-                    let _ = conn.execute("UPDATE bar_cache SET data = ?1, zstd_level = ?2 WHERE key = ?3", params![data, level, key]);
+                    let _ = conn.execute(
+                        "UPDATE bar_cache SET data = ?1, zstd_level = ?2 WHERE key = ?3",
+                        params![data, level, key],
+                    );
                 }
                 let _ = conn.execute_batch("COMMIT;");
             }
             for chunk in kv_updates.chunks(50) {
                 let _ = conn.execute_batch("BEGIN;");
                 for (key, data) in chunk {
-                    let _ = conn.execute("UPDATE kv_store SET data = ?1 WHERE key = ?2", params![data, key]);
+                    let _ = conn.execute(
+                        "UPDATE kv_store SET data = ?1 WHERE key = ?2",
+                        params![data, key],
+                    );
                 }
                 let _ = conn.execute_batch("COMMIT;");
             }
@@ -1780,19 +2302,29 @@ impl SqliteCache {
     /// Bundle format: [u32 entry_count][per entry: u32 key_len, key_bytes, u32 data_len, data_bytes, i64 timestamp, i64 bar_count]
     /// Returns the serialized bundle bytes.
     pub fn export_keys(&self, key_patterns: &[&str]) -> Result<Vec<u8>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Lock failed: {e}"))?;
         let all_keys = {
-            let mut stmt = conn.prepare("SELECT key FROM bar_cache")
+            let mut stmt = conn
+                .prepare("SELECT key FROM bar_cache")
                 .map_err(|e| format!("Prepare failed: {e}"))?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
                 .map_err(|e| format!("Query failed: {e}"))?;
             rows.collect::<Result<Vec<_>, _>>()
                 .map_err(|e| format!("Collect failed: {e}"))?
         };
 
         // Filter keys matching any pattern (prefix match or substring match)
-        let matched: Vec<&String> = all_keys.iter()
-            .filter(|k| key_patterns.iter().any(|p| k.contains(p) || k.starts_with(p)))
+        let matched: Vec<&String> = all_keys
+            .iter()
+            .filter(|k| {
+                key_patterns
+                    .iter()
+                    .any(|p| k.contains(p) || k.starts_with(p))
+            })
             .collect();
 
         let mut buf = Vec::new();
@@ -1800,9 +2332,9 @@ impl SqliteCache {
 
         for key in &matched {
             // Read raw compressed data directly (no decompression needed)
-            let mut stmt = conn.prepare_cached(
-                "SELECT data, timestamp, bar_count FROM bar_cache WHERE key = ?1"
-            ).map_err(|e| format!("Prepare failed: {e}"))?;
+            let mut stmt = conn
+                .prepare_cached("SELECT data, timestamp, bar_count FROM bar_cache WHERE key = ?1")
+                .map_err(|e| format!("Prepare failed: {e}"))?;
 
             if let Ok(row) = stmt.query_row(params![key], |row| {
                 Ok((
@@ -1828,7 +2360,9 @@ impl SqliteCache {
     /// Import a portable bundle into this cache (from LAN sync).
     /// Returns number of entries imported.
     pub fn import_keys(&self, bundle: &[u8]) -> Result<usize, String> {
-        if bundle.len() < 4 { return Err("Bundle too small".into()); }
+        if bundle.len() < 4 {
+            return Err("Bundle too small".into());
+        }
         let count = u32::from_le_bytes(bundle[0..4].try_into().map_err(|_| "Bad header")?) as usize;
         let mut offset = 4;
         let mut imported = 0;
@@ -1836,24 +2370,52 @@ impl SqliteCache {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
 
         for _ in 0..count {
-            if offset + 4 > bundle.len() { break; }
-            let key_len = u32::from_le_bytes(bundle[offset..offset+4].try_into().map_err(|_| "Bad key_len")?) as usize;
+            if offset + 4 > bundle.len() {
+                break;
+            }
+            let key_len = u32::from_le_bytes(
+                bundle[offset..offset + 4]
+                    .try_into()
+                    .map_err(|_| "Bad key_len")?,
+            ) as usize;
             offset += 4;
-            if offset + key_len > bundle.len() { break; }
-            let key = std::str::from_utf8(&bundle[offset..offset+key_len]).map_err(|_| "Bad key UTF-8")?.to_string();
+            if offset + key_len > bundle.len() {
+                break;
+            }
+            let key = std::str::from_utf8(&bundle[offset..offset + key_len])
+                .map_err(|_| "Bad key UTF-8")?
+                .to_string();
             offset += key_len;
 
-            if offset + 4 > bundle.len() { break; }
-            let data_len = u32::from_le_bytes(bundle[offset..offset+4].try_into().map_err(|_| "Bad data_len")?) as usize;
+            if offset + 4 > bundle.len() {
+                break;
+            }
+            let data_len = u32::from_le_bytes(
+                bundle[offset..offset + 4]
+                    .try_into()
+                    .map_err(|_| "Bad data_len")?,
+            ) as usize;
             offset += 4;
-            if offset + data_len > bundle.len() { break; }
-            let data = &bundle[offset..offset+data_len];
+            if offset + data_len > bundle.len() {
+                break;
+            }
+            let data = &bundle[offset..offset + data_len];
             offset += data_len;
 
-            if offset + 16 > bundle.len() { break; }
-            let timestamp = i64::from_le_bytes(bundle[offset..offset+8].try_into().map_err(|_| "Bad timestamp")?);
+            if offset + 16 > bundle.len() {
+                break;
+            }
+            let timestamp = i64::from_le_bytes(
+                bundle[offset..offset + 8]
+                    .try_into()
+                    .map_err(|_| "Bad timestamp")?,
+            );
             offset += 8;
-            let bar_count = i64::from_le_bytes(bundle[offset..offset+8].try_into().map_err(|_| "Bad bar_count")?);
+            let bar_count = i64::from_le_bytes(
+                bundle[offset..offset + 8]
+                    .try_into()
+                    .map_err(|_| "Bad bar_count")?,
+            );
             offset += 8;
 
             conn.execute(
@@ -1868,16 +2430,29 @@ impl SqliteCache {
 
     /// List keys matching patterns with their sizes (for sync preview).
     /// Returns Vec of (key, bar_count, compressed_size_bytes).
-    pub fn list_matching_keys(&self, patterns: &[&str]) -> Result<Vec<(String, i64, usize)>, String> {
-        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let mut stmt = conn.prepare("SELECT key, bar_count, length(data) FROM bar_cache")
+    pub fn list_matching_keys(
+        &self,
+        patterns: &[&str],
+    ) -> Result<Vec<(String, i64, usize)>, String> {
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare("SELECT key, bar_count, length(data) FROM bar_cache")
             .map_err(|e| format!("Prepare failed: {e}"))?;
-        let rows: Vec<(String, i64, usize)> = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)? as usize))
-        }).map_err(|e| format!("Query failed: {e}"))?
-          .filter_map(|r| r.ok())
-          .filter(|(k, _, _)| patterns.iter().any(|p| k.contains(p) || k.starts_with(p)))
-          .collect();
+        let rows: Vec<(String, i64, usize)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)? as usize,
+                ))
+            })
+            .map_err(|e| format!("Query failed: {e}"))?
+            .filter_map(|r| r.ok())
+            .filter(|(k, _, _)| patterns.iter().any(|p| k.contains(p) || k.starts_with(p)))
+            .collect();
         Ok(rows)
     }
 }
@@ -2162,10 +2737,7 @@ mod tests {
     #[test]
     fn binary_format_size_is_correct() {
         assert_eq!(BYTES_PER_BAR, 48); // i64 + 5*f64
-        let bars = vec![
-            (0, 1.0, 2.0, 3.0, 4.0, 5.0),
-            (1, 6.0, 7.0, 8.0, 9.0, 10.0),
-        ];
+        let bars = vec![(0, 1.0, 2.0, 3.0, 4.0, 5.0), (1, 6.0, 7.0, 8.0, 9.0, 10.0)];
         let binary = make_binary_bars(&bars);
         // 4 (magic) + 4 (count) + 2 * 48 (bars) = 104
         assert_eq!(binary.len(), 4 + 4 + 2 * 48);
@@ -2202,7 +2774,7 @@ mod tests {
 
         let raw = cache.get_bars_raw("EURUSD:1Hour").unwrap().unwrap();
         assert_eq!(raw.len(), 2);
-        assert_eq!(raw[0].1, 1.1);  // open
+        assert_eq!(raw[0].1, 1.1); // open
         assert_eq!(raw[1].4, 1.25); // close
     }
 
@@ -2311,12 +2883,15 @@ mod tests {
             "INSERT INTO bar_cache (key, data, timestamp, bar_count, zstd_level)
              VALUES (?1, CAST(?2 AS TEXT), ?3, ?4, ?5)",
             params!["TEXTTTBR:1D", raw, 1_704_153_600i64, bars.len() as i64, 3],
-        ).unwrap();
-        let ty: String = conn.query_row(
-            "SELECT typeof(data) FROM bar_cache WHERE key = ?1",
-            params!["TEXTTTBR:1D"],
-            |r| r.get(0),
-        ).unwrap();
+        )
+        .unwrap();
+        let ty: String = conn
+            .query_row(
+                "SELECT typeof(data) FROM bar_cache WHERE key = ?1",
+                params!["TEXTTTBR:1D"],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(ty, "text");
 
         let range = SqliteCache::get_bar_timestamp_range_with_conn(&conn, "TEXTTTBR:1D");
@@ -2338,7 +2913,8 @@ mod tests {
             "INSERT INTO bar_cache (key, data, timestamp, bar_count, zstd_level)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params!["LEGACY:1D", compressed, 1_704_153_600i64, 2i64, 3],
-        ).unwrap();
+        )
+        .unwrap();
 
         let range = SqliteCache::get_bar_timestamp_range_with_conn(&conn, "LEGACY:1D");
         assert_eq!(range, Some((1_704_067_200_000, 1_704_153_600_000)));
@@ -2456,6 +3032,94 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_cache_reclaim_space_shrinks_after_prior_delete() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        {
+            let conn = cache.connection().unwrap();
+            conn.execute(
+                "INSERT INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    "mt5:EURUSD:1Min",
+                    vec![0xABu8; 2_000_000],
+                    1i64,
+                    1000i64,
+                    3i64
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params!["keep:1Day", vec![0xCDu8; 128_000], 1i64, 100i64, 3i64],
+            )
+            .unwrap();
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                .unwrap();
+        }
+
+        let size_before_delete = cache.stats().unwrap().2;
+        assert!(cache.delete_key("mt5:EURUSD:1Min").unwrap());
+        let size_after_delete = cache.stats().unwrap().2;
+        assert!(size_after_delete >= size_before_delete);
+
+        let (before_reclaim, after_reclaim) = cache.reclaim_space().unwrap();
+        assert!(after_reclaim < before_reclaim);
+        assert!(cache.stats().unwrap().2 < size_before_delete);
+    }
+
+    #[test]
+    fn sqlite_cache_delete_keys_batch_reclaims_space() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        {
+            let conn = cache.connection().unwrap();
+            for i in 0..3 {
+                conn.execute(
+                    "INSERT INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![format!("mt5:PAIR{i}:1Min"), vec![i as u8; 900_000], 1i64, 1000i64, 3i64],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params!["keep:1Hour", vec![0xEFu8; 64_000], 1i64, 100i64, 3i64],
+            )
+            .unwrap();
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                .unwrap();
+        }
+
+        let before = cache.stats().unwrap().2;
+        let deleted = cache
+            .delete_keys(&[
+                "mt5:PAIR0:1Min".to_string(),
+                "mt5:PAIR1:1Min".to_string(),
+                "mt5:PAIR2:1Min".to_string(),
+            ])
+            .unwrap();
+        assert_eq!(deleted, 3);
+        let after = cache.stats().unwrap().2;
+        assert!(after < before);
+    }
+
+    #[test]
+    fn sqlite_cache_delete_broker_data_removes_bar_and_kv_rows() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+
+        let json = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
+        cache.put_bars("alpaca:AAPL:1Day", json).unwrap();
+        cache.put_bars("mt5:EURUSD:1Day", json).unwrap();
+        cache.put_kv("alpaca:meta:test", "{\"ok\":true}").unwrap();
+
+        let deleted = cache.delete_broker_data("alpaca").unwrap();
+        assert_eq!(deleted, 2);
+        assert!(cache.get_bars("alpaca:AAPL:1Day").unwrap().is_none());
+        assert!(cache.get_bars("mt5:EURUSD:1Day").unwrap().is_some());
+        assert!(cache.get_kv("alpaca:meta:test").unwrap().is_none());
+    }
+
+    #[test]
     fn search_keys_finds_partial_matches() {
         let db_path = temp_db_path();
         let cache = SqliteCache::open(&db_path).unwrap();
@@ -2490,9 +3154,15 @@ mod tests {
         let db_path = temp_db_path();
         let cache = SqliteCache::open(&db_path).unwrap();
 
-        cache.append_to_queue("lan:test_queue", r#"{"cmd":"A"}"#).unwrap();
-        cache.append_to_queue("lan:test_queue", r#"{"cmd":"B"}"#).unwrap();
-        cache.append_to_queue("lan:test_queue", r#"{"cmd":"C"}"#).unwrap();
+        cache
+            .append_to_queue("lan:test_queue", r#"{"cmd":"A"}"#)
+            .unwrap();
+        cache
+            .append_to_queue("lan:test_queue", r#"{"cmd":"B"}"#)
+            .unwrap();
+        cache
+            .append_to_queue("lan:test_queue", r#"{"cmd":"C"}"#)
+            .unwrap();
 
         let drained = cache.drain_queue("lan:test_queue").unwrap();
         assert_eq!(drained.len(), 3);
