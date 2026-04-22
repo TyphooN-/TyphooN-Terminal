@@ -2557,6 +2557,38 @@ pub struct ShortInterestDeltaRankSnapshot {
     pub note: String,
 }
 
+// ── ADR-199 Round 96 — insider ownership concentration parity ─────────────
+
+/// INSIDERCONC — insider ownership concentration vs sector peers.
+/// Estimates insider-held % from the latest known `shares_owned_after` per
+/// reporter in cached INS rows, normalized by Fundamentals.shares_outstanding.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InsiderConcentrationSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub latest_holdings_date: String,
+    pub trade_rows_used: usize,
+    pub reporters_covered: usize,
+    pub reporters_holding_shares: usize,
+    pub shares_outstanding: f64,
+    pub total_estimated_insider_shares: f64,
+    pub estimated_insider_pct_held: f64,
+    pub largest_reporter: String,
+    pub largest_reporter_shares: f64,
+    pub largest_reporter_pct_of_outstanding: f64,
+    pub largest_reporter_weight_pct: f64,
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_pct_held: f64,
+    pub sector_p25_pct_held: f64,
+    pub sector_p75_pct_held: f64,
+    pub percentile_rank: f64,
+    pub rank_position: usize,
+    pub rank_label: String, // TOP_DECILE .. BOTTOM_DECILE | INSUFFICIENT_DATA | NO_DATA
+    pub note: String,
+}
+
 // ── ADR-128 Round 21 — beta/peg rank + HP 52wk/rvcone/calendar ──
 
 /// BETARANK — Sector percentile rank of Fundamentals.beta, risk-inverted.
@@ -22673,6 +22705,270 @@ pub fn compute_shortrank_delta_snapshot(
         percentile_rank,
         rank_position,
         rank_label: risk_rank_label_for_percentile(percentile_rank).into(),
+        note: String::new(),
+    }
+}
+
+fn normalize_insider_trade_date(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.len() < 10 {
+        return None;
+    }
+    let cand = &trimmed[..10];
+    chrono::NaiveDate::parse_from_str(cand, "%Y-%m-%d")
+        .ok()
+        .map(|_| cand.to_string())
+}
+
+#[derive(Debug, Clone)]
+struct InsiderConcentrationContext {
+    latest_holdings_date: String,
+    trade_rows_used: usize,
+    reporters_covered: usize,
+    reporters_holding_shares: usize,
+    total_estimated_insider_shares: f64,
+    estimated_insider_pct_held: f64,
+    largest_reporter: String,
+    largest_reporter_shares: f64,
+    largest_reporter_weight_pct: f64,
+}
+
+fn insider_concentration_context(
+    shares_outstanding: f64,
+    trades: &[InsiderTrade],
+) -> Option<InsiderConcentrationContext> {
+    if !shares_outstanding.is_finite() || shares_outstanding <= 0.0 {
+        return None;
+    }
+
+    #[derive(Debug, Clone)]
+    struct LatestHolding {
+        reporter_display: String,
+        effective_date: chrono::NaiveDate,
+        effective_date_str: String,
+        filing_date: Option<chrono::NaiveDate>,
+        shares_owned_after: f64,
+    }
+
+    let mut by_reporter: std::collections::BTreeMap<String, LatestHolding> =
+        std::collections::BTreeMap::new();
+    let mut trade_rows_used = 0usize;
+
+    for trade in trades {
+        let reporter_display = trade.reporting_name.trim();
+        if reporter_display.is_empty() {
+            continue;
+        }
+        if !trade.shares_owned_after.is_finite() || trade.shares_owned_after < 0.0 {
+            continue;
+        }
+        let effective_date_str = normalize_insider_trade_date(&trade.transaction_date)
+            .or_else(|| normalize_insider_trade_date(&trade.filing_date));
+        let Some(effective_date_str) = effective_date_str else {
+            continue;
+        };
+        let Some(effective_date) =
+            chrono::NaiveDate::parse_from_str(&effective_date_str, "%Y-%m-%d").ok()
+        else {
+            continue;
+        };
+        let filing_date = normalize_insider_trade_date(&trade.filing_date)
+            .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
+        trade_rows_used += 1;
+
+        let entry = LatestHolding {
+            reporter_display: reporter_display.to_string(),
+            effective_date,
+            effective_date_str,
+            filing_date,
+            shares_owned_after: trade.shares_owned_after,
+        };
+        let key = reporter_display.to_lowercase();
+        match by_reporter.get_mut(&key) {
+            Some(existing) => {
+                let take_new = entry.effective_date > existing.effective_date
+                    || (entry.effective_date == existing.effective_date
+                        && entry.filing_date > existing.filing_date)
+                    || (entry.effective_date == existing.effective_date
+                        && entry.filing_date == existing.filing_date
+                        && entry.shares_owned_after > existing.shares_owned_after);
+                if take_new {
+                    *existing = entry;
+                }
+            }
+            None => {
+                by_reporter.insert(key, entry);
+            }
+        }
+    }
+
+    if by_reporter.is_empty() {
+        return None;
+    }
+
+    let reporters_covered = by_reporter.len();
+    let reporters_holding_shares = by_reporter
+        .values()
+        .filter(|row| row.shares_owned_after > 0.0)
+        .count();
+    let total_estimated_insider_shares: f64 =
+        by_reporter.values().map(|row| row.shares_owned_after).sum();
+    let estimated_insider_pct_held = total_estimated_insider_shares / shares_outstanding * 100.0;
+
+    let (largest_reporter, largest_reporter_shares) = by_reporter
+        .values()
+        .max_by(|a, b| {
+            a.shares_owned_after
+                .partial_cmp(&b.shares_owned_after)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|row| (row.reporter_display.clone(), row.shares_owned_after))
+        .unwrap_or_default();
+    let largest_reporter_weight_pct = if total_estimated_insider_shares > 0.0 {
+        largest_reporter_shares / total_estimated_insider_shares * 100.0
+    } else {
+        0.0
+    };
+    let latest_holdings_date = by_reporter
+        .values()
+        .map(|row| row.effective_date_str.as_str())
+        .max()
+        .unwrap_or("")
+        .to_string();
+
+    Some(InsiderConcentrationContext {
+        latest_holdings_date,
+        trade_rows_used,
+        reporters_covered,
+        reporters_holding_shares,
+        total_estimated_insider_shares,
+        estimated_insider_pct_held,
+        largest_reporter,
+        largest_reporter_shares,
+        largest_reporter_weight_pct,
+    })
+}
+
+/// INSIDERCONC — estimate insider-held % from cached INS rows, then rank that
+/// vs same-sector peers. Higher insider concentration earns a higher rank.
+pub fn compute_insiderconc_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    shares_outstanding: Option<f64>,
+    subject_trades: &[InsiderTrade],
+    peers: &[(String, Option<f64>, Vec<InsiderTrade>)],
+) -> InsiderConcentrationSnapshot {
+    let sym = symbol.to_uppercase();
+    let Some(subject_shares_outstanding) = shares_outstanding else {
+        return InsiderConcentrationSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            rank_label: "NO_DATA".into(),
+            note: "Need Fundamentals.shares_outstanding and cached INS rows for the subject".into(),
+            ..Default::default()
+        };
+    };
+
+    let Some(subject_ctx) =
+        insider_concentration_context(subject_shares_outstanding, subject_trades)
+    else {
+        return InsiderConcentrationSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            shares_outstanding: if subject_shares_outstanding.is_finite()
+                && subject_shares_outstanding > 0.0
+            {
+                subject_shares_outstanding
+            } else {
+                0.0
+            },
+            rank_label: "NO_DATA".into(),
+            note: "Need at least one dated INS row with shares_owned_after for the subject".into(),
+            ..Default::default()
+        };
+    };
+
+    let peer_contexts: Vec<InsiderConcentrationContext> = peers
+        .iter()
+        .filter_map(|(_, peer_shares_outstanding, peer_trades)| {
+            peer_shares_outstanding
+                .and_then(|shares| insider_concentration_context(shares, peer_trades))
+        })
+        .collect();
+    let peer_pcts: Vec<f64> = peer_contexts
+        .iter()
+        .map(|ctx| ctx.estimated_insider_pct_held)
+        .collect();
+    let peers_considered = peers.len();
+    let peers_with_data = peer_pcts.len();
+    if peers_with_data < 3 {
+        return InsiderConcentrationSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            latest_holdings_date: subject_ctx.latest_holdings_date,
+            trade_rows_used: subject_ctx.trade_rows_used,
+            reporters_covered: subject_ctx.reporters_covered,
+            reporters_holding_shares: subject_ctx.reporters_holding_shares,
+            shares_outstanding: subject_shares_outstanding,
+            total_estimated_insider_shares: subject_ctx.total_estimated_insider_shares,
+            estimated_insider_pct_held: subject_ctx.estimated_insider_pct_held,
+            largest_reporter: subject_ctx.largest_reporter.clone(),
+            largest_reporter_shares: subject_ctx.largest_reporter_shares,
+            largest_reporter_pct_of_outstanding: subject_ctx.largest_reporter_shares
+                / subject_shares_outstanding
+                * 100.0,
+            largest_reporter_weight_pct: subject_ctx.largest_reporter_weight_pct,
+            peers_considered,
+            peers_with_data,
+            rank_label: "INSUFFICIENT_DATA".into(),
+            note: format!(
+                "Only {} sector peers have usable INS holdings coverage (need ≥3)",
+                peers_with_data
+            ),
+            ..Default::default()
+        };
+    }
+
+    let mut sorted = peer_pcts.clone();
+    sorted.push(subject_ctx.estimated_insider_pct_held);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let percentile_rank =
+        percentile_rank_score(subject_ctx.estimated_insider_pct_held, &peer_pcts, true);
+    let rank_position = peer_pcts
+        .iter()
+        .filter(|&&pct| pct > subject_ctx.estimated_insider_pct_held)
+        .count()
+        + 1;
+
+    InsiderConcentrationSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        latest_holdings_date: subject_ctx.latest_holdings_date,
+        trade_rows_used: subject_ctx.trade_rows_used,
+        reporters_covered: subject_ctx.reporters_covered,
+        reporters_holding_shares: subject_ctx.reporters_holding_shares,
+        shares_outstanding: subject_shares_outstanding,
+        total_estimated_insider_shares: subject_ctx.total_estimated_insider_shares,
+        estimated_insider_pct_held: subject_ctx.estimated_insider_pct_held,
+        largest_reporter: subject_ctx.largest_reporter.clone(),
+        largest_reporter_shares: subject_ctx.largest_reporter_shares,
+        largest_reporter_pct_of_outstanding: subject_ctx.largest_reporter_shares
+            / subject_shares_outstanding
+            * 100.0,
+        largest_reporter_weight_pct: subject_ctx.largest_reporter_weight_pct,
+        peers_considered,
+        peers_with_data,
+        sector_median_pct_held: quantile_f64(&sorted, 0.5),
+        sector_p25_pct_held: quantile_f64(&sorted, 0.25),
+        sector_p75_pct_held: quantile_f64(&sorted, 0.75),
+        percentile_rank,
+        rank_position,
+        rank_label: rank_label_for_percentile(percentile_rank).into(),
         note: String::new(),
     }
 }
@@ -67215,6 +67511,62 @@ pub fn get_shortrank_delta(
     }
 }
 
+// ── ADR-199 Round 96 schema v93 (insider ownership concentration) ────────
+//    INSIDERCONC
+
+pub fn create_research_tables_v93(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v92(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_insiderconc (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_insiderconc_updated
+            ON research_insiderconc(updated_at);",
+    )
+    .map_err(|e| format!("create v93 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_insiderconc(
+    conn: &Connection,
+    symbol: &str,
+    snap: &InsiderConcentrationSnapshot,
+) -> Result<(), String> {
+    let _ = create_research_tables_v93(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("insiderconc json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_insiderconc (symbol, snapshot_json, updated_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    )
+    .map_err(|e| format!("upsert insiderconc: {e}"))?;
+    Ok(())
+}
+
+pub fn get_insiderconc(
+    conn: &Connection,
+    symbol: &str,
+) -> Result<Option<InsiderConcentrationSnapshot>, String> {
+    let _ = create_research_tables_v93(conn);
+    let mut stmt = conn
+        .prepare("SELECT snapshot_json FROM research_insiderconc WHERE symbol = ?1")
+        .map_err(|e| format!("prep insiderconc: {e}"))?;
+    let mut rows = stmt
+        .query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query insiderconc: {e}"))?;
+    if let Some(r) = rows.next().map_err(|e| format!("row insiderconc: {e}"))? {
+        let j: String = r.get(0).map_err(|e| format!("get insiderconc: {e}"))?;
+        let snap: InsiderConcentrationSnapshot =
+            serde_json::from_str(&j).map_err(|e| format!("parse insiderconc: {e}"))?;
+        Ok(Some(snap))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn upsert_mass_index(
     conn: &Connection,
     symbol: &str,
@@ -89378,5 +89730,186 @@ Trailing text.
         assert_eq!(snap.rank_position, 1);
         assert_eq!(snap.subject_trend_label, "HEAVY_COVERING");
         assert!(snap.delta_short_pct_points < snap.sector_p25_delta_pct_pts);
+    }
+
+    #[test]
+    fn insiderconc_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = InsiderConcentrationSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-22".into(),
+            sector: "Technology".into(),
+            latest_holdings_date: "2026-04-18".into(),
+            trade_rows_used: 6,
+            reporters_covered: 3,
+            reporters_holding_shares: 2,
+            shares_outstanding: 100_000_000.0,
+            total_estimated_insider_shares: 12_500_000.0,
+            estimated_insider_pct_held: 12.5,
+            largest_reporter: "Alice CEO".into(),
+            largest_reporter_shares: 8_000_000.0,
+            largest_reporter_pct_of_outstanding: 8.0,
+            largest_reporter_weight_pct: 64.0,
+            peers_considered: 7,
+            peers_with_data: 4,
+            sector_median_pct_held: 6.5,
+            sector_p25_pct_held: 4.0,
+            sector_p75_pct_held: 9.5,
+            percentile_rank: 92.0,
+            rank_position: 1,
+            rank_label: "TOP_DECILE".into(),
+            note: String::new(),
+        };
+        upsert_insiderconc(&conn, "TEST", &snap).unwrap();
+        let got = get_insiderconc(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.rank_label, "TOP_DECILE");
+        assert_eq!(got.largest_reporter, "Alice CEO");
+        assert!((got.estimated_insider_pct_held - 12.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_insiderconc_uses_latest_holding_per_reporter() {
+        let subject = vec![
+            InsiderTrade {
+                transaction_date: "2026-01-10".into(),
+                filing_date: "2026-01-11".into(),
+                reporting_name: "Alice CEO".into(),
+                shares_owned_after: 1_000_000.0,
+                ..Default::default()
+            },
+            InsiderTrade {
+                transaction_date: "2026-04-10".into(),
+                filing_date: "2026-04-11".into(),
+                reporting_name: "Alice CEO".into(),
+                shares_owned_after: 3_000_000.0,
+                ..Default::default()
+            },
+            InsiderTrade {
+                transaction_date: "2026-04-12".into(),
+                filing_date: "2026-04-13".into(),
+                reporting_name: "Bob CFO".into(),
+                shares_owned_after: 1_500_000.0,
+                ..Default::default()
+            },
+            InsiderTrade {
+                transaction_date: "2026-04-12".into(),
+                filing_date: "2026-04-13".into(),
+                reporting_name: "Carol Director".into(),
+                shares_owned_after: 0.0,
+                ..Default::default()
+            },
+        ];
+        let peers = vec![
+            (
+                "BBB".into(),
+                Some(100_000_000.0),
+                vec![InsiderTrade {
+                    transaction_date: "2026-04-10".into(),
+                    filing_date: "2026-04-11".into(),
+                    reporting_name: "Peer One".into(),
+                    shares_owned_after: 2_000_000.0,
+                    ..Default::default()
+                }],
+            ),
+            (
+                "CCC".into(),
+                Some(100_000_000.0),
+                vec![InsiderTrade {
+                    transaction_date: "2026-04-10".into(),
+                    filing_date: "2026-04-11".into(),
+                    reporting_name: "Peer Two".into(),
+                    shares_owned_after: 5_000_000.0,
+                    ..Default::default()
+                }],
+            ),
+            (
+                "DDD".into(),
+                Some(100_000_000.0),
+                vec![InsiderTrade {
+                    transaction_date: "2026-04-10".into(),
+                    filing_date: "2026-04-11".into(),
+                    reporting_name: "Peer Three".into(),
+                    shares_owned_after: 7_000_000.0,
+                    ..Default::default()
+                }],
+            ),
+            (
+                "EEE".into(),
+                Some(100_000_000.0),
+                vec![InsiderTrade {
+                    transaction_date: "2026-04-10".into(),
+                    filing_date: "2026-04-11".into(),
+                    reporting_name: "Peer Four".into(),
+                    shares_owned_after: 9_000_000.0,
+                    ..Default::default()
+                }],
+            ),
+        ];
+        let snap = compute_insiderconc_snapshot(
+            "AAA",
+            "2026-04-22",
+            "Technology",
+            Some(20_000_000.0),
+            &subject,
+            &peers,
+        );
+        assert_eq!(snap.rank_label, "TOP_DECILE");
+        assert_eq!(snap.rank_position, 1);
+        assert_eq!(snap.reporters_covered, 3);
+        assert_eq!(snap.reporters_holding_shares, 2);
+        assert_eq!(snap.latest_holdings_date, "2026-04-12");
+        assert!((snap.total_estimated_insider_shares - 4_500_000.0).abs() < 1e-9);
+        assert!((snap.estimated_insider_pct_held - 22.5).abs() < 1e-9);
+        assert_eq!(snap.largest_reporter, "Alice CEO");
+        assert!((snap.largest_reporter_pct_of_outstanding - 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_insiderconc_no_data_without_subject_rows() {
+        let peers = vec![
+            (
+                "BBB".into(),
+                Some(100_000_000.0),
+                vec![InsiderTrade {
+                    transaction_date: "2026-04-10".into(),
+                    filing_date: "2026-04-11".into(),
+                    reporting_name: "Peer One".into(),
+                    shares_owned_after: 2_000_000.0,
+                    ..Default::default()
+                }],
+            ),
+            (
+                "CCC".into(),
+                Some(100_000_000.0),
+                vec![InsiderTrade {
+                    transaction_date: "2026-04-10".into(),
+                    filing_date: "2026-04-11".into(),
+                    reporting_name: "Peer Two".into(),
+                    shares_owned_after: 3_000_000.0,
+                    ..Default::default()
+                }],
+            ),
+            (
+                "DDD".into(),
+                Some(100_000_000.0),
+                vec![InsiderTrade {
+                    transaction_date: "2026-04-10".into(),
+                    filing_date: "2026-04-11".into(),
+                    reporting_name: "Peer Three".into(),
+                    shares_owned_after: 4_000_000.0,
+                    ..Default::default()
+                }],
+            ),
+        ];
+        let snap = compute_insiderconc_snapshot(
+            "AAA",
+            "2026-04-22",
+            "Technology",
+            Some(50_000_000.0),
+            &[],
+            &peers,
+        );
+        assert_eq!(snap.rank_label, "NO_DATA");
+        assert!(snap.note.contains("shares_owned_after"));
     }
 }

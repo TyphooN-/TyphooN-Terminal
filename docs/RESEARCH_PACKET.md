@@ -1149,9 +1149,9 @@ short interest earns a higher (safer) rank. Header line gives the
 BELOW_MEDIAN_RISKY / BOTTOM_QUARTILE_RISKY / RISKIEST_DECILE /
 INSUFFICIENT_DATA / NO_DATA), subject short %, rank position, and
 sector. Body block reports sector median / p25 / p75 short % and
-peer counts. Replaces the originally-planned INSIDERCONC (which
-required a new Fundamentals field that doesn't exist in the cache).
-Requires ≥3 sector peers with short interest data. Source: ADR-127
+peer counts. Complementary to INSIDERCONC, which estimates insider-held
+% from cached INS rows rather than ranking short interest. Requires ≥3
+sector peers with short interest data. Source: ADR-127
 SHRANK window.
 
 #### 2.89 Annualized ATR (ATRANN — ADR-127)
