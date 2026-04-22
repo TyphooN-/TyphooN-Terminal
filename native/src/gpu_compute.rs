@@ -24,6 +24,9 @@ pub enum Indicator {
     WilliamsR,
     Obv,
     Momentum,
+    Cmo,
+    Disparity,
+    Stddev,
 }
 
 pub struct GpuCompute {
@@ -72,6 +75,11 @@ pub struct GpuCompute {
     williams_r_pipeline: wgpu::ComputePipeline,
     obv_pipeline: wgpu::ComputePipeline,
     momentum_pipeline: wgpu::ComputePipeline,
+    cmo_pipeline: wgpu::ComputePipeline,
+    qstick_pipeline: wgpu::ComputePipeline,
+    disparity_pipeline: wgpu::ComputePipeline,
+    bop_pipeline: wgpu::ComputePipeline,
+    stddev_pipeline: wgpu::ComputePipeline,
     var_osc_pipeline: wgpu::ComputePipeline,
     psar_pipeline: wgpu::ComputePipeline,
     ichimoku_pipeline: wgpu::ComputePipeline,
@@ -302,6 +310,11 @@ impl GpuCompute {
         let williams_r_pipeline = make_pipeline("williams_r_pipeline", WILLIAMS_R_SHADER);
         let obv_pipeline = make_pipeline("obv_pipeline", OBV_SHADER);
         let momentum_pipeline = make_pipeline("momentum_pipeline", MOMENTUM_SHADER);
+        let cmo_pipeline = make_pipeline("cmo_pipeline", CMO_SHADER);
+        let qstick_pipeline = make_pipeline("qstick_pipeline", QSTICK_SHADER);
+        let disparity_pipeline = make_pipeline("disparity_pipeline", DISPARITY_SHADER);
+        let bop_pipeline = make_pipeline("bop_pipeline", BOP_SHADER);
+        let stddev_pipeline = make_pipeline("stddev_pipeline", STDDEV_SHADER);
         let var_osc_pipeline = make_pipeline("var_osc_pipeline", VAR_OSCILLATOR_SHADER);
         let psar_pipeline = make_pipeline("psar_pipeline", PSAR_SHADER);
         let ichimoku_pipeline = make_pipeline("ichimoku_pipeline", ICHIMOKU_SHADER);
@@ -355,6 +368,11 @@ impl GpuCompute {
             williams_r_pipeline,
             obv_pipeline,
             momentum_pipeline,
+            cmo_pipeline,
+            qstick_pipeline,
+            disparity_pipeline,
+            bop_pipeline,
+            stddev_pipeline,
             var_osc_pipeline,
             psar_pipeline,
             ichimoku_pipeline,
@@ -679,6 +697,102 @@ impl GpuCompute {
         Some(result)
     }
 
+    fn dispatch_custom_input_indicator(
+        &self,
+        input: &[f32],
+        pipeline: &wgpu::ComputePipeline,
+        period: u32,
+        out_per_bar: u32,
+        parallel: bool,
+    ) -> Option<Vec<f32>> {
+        if self.bar_count == 0 || input.is_empty() {
+            return None;
+        }
+        let rb_buf = self.readback_buffer.as_ref()?;
+        let input_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("custom_ind_in"),
+            size: (input.len() as u64) * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue
+            .write_buffer(&input_buf, 0, bytemuck_cast_slice(input));
+
+        let out_size = (self.bar_count as u64) * (out_per_bar as u64) * 4;
+        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("custom_ind_out"),
+            size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let params = [period, self.bar_count];
+        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("custom_ind_params"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue
+            .write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("custom_ind_bg"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: out_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("custom_ind_pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            if parallel {
+                pass.dispatch_workgroups((self.bar_count + 255) / 256, 1, 1);
+            } else {
+                pass.dispatch_workgroups(1, 1, 1);
+            }
+        }
+        let read_size = out_size.min(rb_buf.size());
+        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, read_size);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = rb_buf.slice(0..read_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
+        let data = slice.get_mapped_range();
+        let result = bytemuck_cast_slice_to_f32(&data);
+        drop(data);
+        rb_buf.unmap();
+        Some(result)
+    }
+
     // ─── Public indicator compute methods ───
 
     /// Generic public dispatch for SMA/EMA/RSI/KAMA using close prices.
@@ -695,6 +809,9 @@ impl GpuCompute {
             Indicator::Kama => &self.kama_pipeline,
             Indicator::Wma => &self.wma_pipeline,
             Indicator::Momentum => &self.momentum_pipeline,
+            Indicator::Cmo => &self.cmo_pipeline,
+            Indicator::Disparity => &self.disparity_pipeline,
+            Indicator::Stddev => &self.stddev_pipeline,
             _ => return None, // CCI, WilliamsR, Obv need special input buffers
         };
         self.dispatch_indicator(pipeline, period, parallel)
@@ -708,6 +825,65 @@ impl GpuCompute {
     /// Compute Momentum on GPU. Returns f32 per bar.
     pub fn compute_momentum_gpu(&self, period: u32) -> Option<Vec<f32>> {
         self.dispatch_indicator(&self.momentum_pipeline, period, true)
+    }
+
+    /// Compute CMO on GPU. Returns f32 per bar.
+    pub fn compute_cmo_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.cmo_pipeline, period, true)
+    }
+
+    /// Compute QStick on GPU from interleaved [open, close] data.
+    pub fn compute_qstick_gpu(
+        &self,
+        opens: &[f32],
+        closes: &[f32],
+        period: u32,
+    ) -> Option<Vec<f32>> {
+        if opens.len() != closes.len() || opens.len() != self.bar_count as usize {
+            return None;
+        }
+        let mut interleaved = Vec::with_capacity(opens.len() * 2);
+        for i in 0..opens.len() {
+            interleaved.push(opens[i]);
+            interleaved.push(closes[i]);
+        }
+        self.dispatch_custom_input_indicator(&interleaved, &self.qstick_pipeline, period, 1, true)
+    }
+
+    /// Compute Disparity Index on GPU. Returns f32 per bar.
+    pub fn compute_disparity_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.disparity_pipeline, period, true)
+    }
+
+    /// Compute BOP on GPU from interleaved [open, high, low, close] data.
+    pub fn compute_bop_gpu(
+        &self,
+        opens: &[f32],
+        highs: &[f32],
+        lows: &[f32],
+        closes: &[f32],
+        period: u32,
+    ) -> Option<Vec<f32>> {
+        if opens.len() != closes.len()
+            || highs.len() != closes.len()
+            || lows.len() != closes.len()
+            || closes.len() != self.bar_count as usize
+        {
+            return None;
+        }
+        let mut interleaved = Vec::with_capacity(opens.len() * 4);
+        for i in 0..opens.len() {
+            interleaved.push(opens[i]);
+            interleaved.push(highs[i]);
+            interleaved.push(lows[i]);
+            interleaved.push(closes[i]);
+        }
+        self.dispatch_custom_input_indicator(&interleaved, &self.bop_pipeline, period, 1, true)
+    }
+
+    /// Compute rolling sample standard deviation on GPU. Returns f32 per bar.
+    pub fn compute_stddev_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.stddev_pipeline, period, true)
     }
 
     /// Compute VaR oscillator on GPU using rolling parametric 95% VaR.
@@ -2939,6 +3115,156 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (i >= params.bar_count) { output[i] = 0.0; return; }
     if (i < params.period) { output[i] = 0.0; return; }
     output[i] = bars[i] - bars[i - params.period];
+}
+"#;
+
+const CMO_SHADER: &str = r#"
+// CMO — parallel rolling gain/loss spread on closes.
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count) { return; }
+    if (params.period == 0u || i < params.period) {
+        output[i] = 0.0;
+        return;
+    }
+    var sum_up: f32 = 0.0;
+    var sum_dn: f32 = 0.0;
+    let start = i + 1u - params.period;
+    for (var j: u32 = start; j <= i; j = j + 1u) {
+        let delta = bars[j] - bars[j - 1u];
+        if (delta > 0.0) {
+            sum_up = sum_up + delta;
+        } else if (delta < 0.0) {
+            sum_dn = sum_dn - delta;
+        }
+    }
+    let denom = sum_up + sum_dn;
+    var value: f32 = 0.0;
+    if (denom > 1e-6) {
+        value = 100.0 * (sum_up - sum_dn) / denom;
+    }
+    output[i] = value;
+}
+"#;
+
+const QSTICK_SHADER: &str = r#"
+// QStick — parallel SMA of candle body using [open, close] pairs.
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count) { return; }
+    if (params.period == 0u || i + 1u < params.period) {
+        output[i] = 0.0;
+        return;
+    }
+    var sum: f32 = 0.0;
+    let start = i + 1u - params.period;
+    for (var j: u32 = start; j <= i; j = j + 1u) {
+        let open = bars[j * 2u];
+        let close = bars[j * 2u + 1u];
+        sum = sum + (close - open);
+    }
+    output[i] = sum / f32(params.period);
+}
+"#;
+
+const DISPARITY_SHADER: &str = r#"
+// Disparity Index — parallel % deviation of close from SMA(period).
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count) { return; }
+    if (params.period == 0u || i + 1u < params.period) {
+        output[i] = 0.0;
+        return;
+    }
+    var sum: f32 = 0.0;
+    let start = i + 1u - params.period;
+    for (var j: u32 = start; j <= i; j = j + 1u) {
+        sum = sum + bars[j];
+    }
+    let sma = sum / f32(params.period);
+    var value: f32 = 0.0;
+    if (abs(sma) > 1e-6) {
+        value = (bars[i] / sma - 1.0) * 100.0;
+    }
+    output[i] = value;
+}
+"#;
+
+const BOP_SHADER: &str = r#"
+// BOP — parallel SMA of (close-open)/(high-low) using [open, high, low, close] quads.
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count) { return; }
+    if (params.period == 0u || i + 1u < params.period) {
+        output[i] = 0.0;
+        return;
+    }
+    var sum: f32 = 0.0;
+    let start = i + 1u - params.period;
+    for (var j: u32 = start; j <= i; j = j + 1u) {
+        let base = j * 4u;
+        let open = bars[base];
+        let high = bars[base + 1u];
+        let low = bars[base + 2u];
+        let close = bars[base + 3u];
+        let range = max(high - low, 1e-6);
+        sum = sum + (close - open) / range;
+    }
+    output[i] = sum / f32(params.period);
+}
+"#;
+
+const STDDEV_SHADER: &str = r#"
+// StdDev — parallel rolling sample standard deviation of closes.
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count) { return; }
+    if (params.period < 2u || i + 1u < params.period) {
+        output[i] = 0.0;
+        return;
+    }
+    var sum: f32 = 0.0;
+    let start = i + 1u - params.period;
+    for (var j: u32 = start; j <= i; j = j + 1u) {
+        sum = sum + bars[j];
+    }
+    let mean = sum / f32(params.period);
+    var ss: f32 = 0.0;
+    for (var j: u32 = start; j <= i; j = j + 1u) {
+        let d = bars[j] - mean;
+        ss = ss + d * d;
+    }
+    output[i] = sqrt(max(ss / f32(params.period - 1u), 0.0));
 }
 "#;
 
