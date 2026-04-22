@@ -682,6 +682,9 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_divacc",
     "research_epsacc",
     "research_vrp",
+    // ── ADR-198 Round 95 ───────────────────────────
+    "research_short_interest_history",
+    "research_shortrank_delta",
     // ── ADR-189 Round 76 ────────────────────────────
     "research_modsharpe",
     "research_hsiehtest",
@@ -3828,6 +3831,20 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
+        "research_short_interest_history" => Some(
+            "CREATE TABLE IF NOT EXISTS research_short_interest_history (
+                symbol TEXT PRIMARY KEY,
+                rows_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )",
+        ),
+        "research_shortrank_delta" => Some(
+            "CREATE TABLE IF NOT EXISTS research_shortrank_delta (
+                symbol TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )",
+        ),
         "research_modsharpe" => Some(
             "CREATE TABLE IF NOT EXISTS research_modsharpe (
                 symbol TEXT PRIMARY KEY,
@@ -4396,6 +4413,9 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_divacc" => Some("updated_at"),
         "research_epsacc" => Some("updated_at"),
         "research_vrp" => Some("updated_at"),
+        // ── ADR-198 Round 95 ──
+        "research_short_interest_history" => Some("updated_at"),
+        "research_shortrank_delta" => Some("updated_at"),
         // ── ADR-189 Round 76 ──
         "research_modsharpe" => Some("updated_at"),
         "research_hsiehtest" => Some("updated_at"),

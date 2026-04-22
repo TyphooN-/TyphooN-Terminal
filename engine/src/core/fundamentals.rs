@@ -71,7 +71,7 @@ pub struct Fundamentals {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuarterlyFinancial {
     pub symbol: String,
-    pub period_end: String,  // YYYY-MM-DD
+    pub period_end: String, // YYYY-MM-DD
     pub total_revenue: Option<f64>,
     pub net_income: Option<f64>,
     pub free_cash_flow: Option<f64>,
@@ -103,7 +103,8 @@ pub struct ScrapeResult {
 // ── SQLite Tables ───────────────────────────────────────────────────
 
 pub fn create_fundamentals_tables(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch("
+    conn.execute_batch(
+        "
         CREATE TABLE IF NOT EXISTS fundamentals (
             symbol TEXT PRIMARY KEY,
             cik TEXT,
@@ -169,12 +170,23 @@ pub fn create_fundamentals_tables(conn: &Connection) -> Result<(), String> {
             reason TEXT NOT NULL DEFAULT '',
             failed_at TEXT NOT NULL DEFAULT ''
         );
-    ").map_err(|e| format!("Create fundamentals tables failed: {e}"))?;
+    ",
+    )
+    .map_err(|e| format!("Create fundamentals tables failed: {e}"))?;
 
     // Schema migration: add updated_at columns for incremental LAN sync
-    let _ = conn.execute("ALTER TABLE fundamentals ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0", []);
-    let _ = conn.execute("ALTER TABLE quarterly_financials ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0", []);
-    let _ = conn.execute("ALTER TABLE institutional_holders ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute(
+        "ALTER TABLE fundamentals ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE quarterly_financials ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE institutional_holders ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
 
     Ok(())
 }
@@ -191,12 +203,16 @@ struct SecCompanyEntry {
 /// Look up CIK for a ticker from SEC EDGAR.
 pub async fn lookup_cik(client: &reqwest::Client, ticker: &str) -> Result<String, String> {
     let url = "https://www.sec.gov/files/company_tickers.json";
-    let resp = client.get(url)
+    let resp = client
+        .get(url)
         .header("User-Agent", SEC_USER_AGENT)
-        .send().await
+        .send()
+        .await
         .map_err(|e| format!("SEC CIK fetch failed: {e}"))?;
 
-    let data: HashMap<String, SecCompanyEntry> = resp.json().await
+    let data: HashMap<String, SecCompanyEntry> = resp
+        .json()
+        .await
         .map_err(|e| format!("SEC CIK parse failed: {e}"))?;
 
     let upper = ticker.to_uppercase();
@@ -235,16 +251,20 @@ pub async fn fetch_ev_from_sec(
         return Err(format!("Invalid CIK: {cik}"));
     }
     let url = format!("https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json");
-    let resp = client.get(&url)
+    let resp = client
+        .get(&url)
         .header("User-Agent", SEC_USER_AGENT)
-        .send().await
+        .send()
+        .await
         .map_err(|e| format!("SEC XBRL fetch failed: {e}"))?;
 
     if !resp.status().is_success() {
         return Err(format!("SEC XBRL returned {}", resp.status()));
     }
 
-    let facts: serde_json::Value = resp.json().await
+    let facts: serde_json::Value = resp
+        .json()
+        .await
         .map_err(|e| format!("SEC XBRL parse failed: {e}"))?;
 
     // Cash
@@ -283,9 +303,13 @@ pub struct YahooSession {
 
 impl YahooSession {
     /// Get the authenticated HTTP client (with cookie jar).
-    pub fn client(&self) -> &reqwest::Client { &self.client }
+    pub fn client(&self) -> &reqwest::Client {
+        &self.client
+    }
     /// Get the crumb token for API calls.
-    pub fn crumb(&self) -> &str { &self.crumb }
+    pub fn crumb(&self) -> &str {
+        &self.crumb
+    }
 
     /// Create a new authenticated Yahoo Finance session.
     /// Uses consent-bypass flow to get cookies + crumb token.
@@ -308,26 +332,42 @@ impl YahooSession {
         }
 
         // Step 2: Get crumb directly (the fc.yahoo.com cookies are enough)
-        let crumb_resp = client.get("https://query2.finance.yahoo.com/v1/test/getcrumb")
+        let crumb_resp = client
+            .get("https://query2.finance.yahoo.com/v1/test/getcrumb")
             .header("Accept", "text/plain")
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("Yahoo crumb fetch failed: {e}"))?;
 
         let status = crumb_resp.status();
-        let crumb = crumb_resp.text().await
+        let crumb = crumb_resp
+            .text()
+            .await
             .map_err(|e| format!("Yahoo crumb read failed: {e}"))?;
 
         if !status.is_success() {
             tracing::warn!("Yahoo crumb returned {} — trying without crumb", status);
-            return Ok(Self { client, crumb: String::new() });
+            return Ok(Self {
+                client,
+                crumb: String::new(),
+            });
         }
 
         if crumb.is_empty() || crumb.contains('<') || crumb.len() > 50 {
-            tracing::warn!("Yahoo crumb looks invalid ({} bytes) — trying without crumb", crumb.len());
-            return Ok(Self { client, crumb: String::new() });
+            tracing::warn!(
+                "Yahoo crumb looks invalid ({} bytes) — trying without crumb",
+                crumb.len()
+            );
+            return Ok(Self {
+                client,
+                crumb: String::new(),
+            });
         }
 
-        tracing::info!("Yahoo session established (crumb: {}...)", &crumb[..crumb.len().min(6)]);
+        tracing::info!(
+            "Yahoo session established (crumb: {}...)",
+            &crumb[..crumb.len().min(6)]
+        );
         Ok(Self { client, crumb })
     }
 }
@@ -338,30 +378,44 @@ pub async fn fetch_yahoo_fundamentals(
     ticker: &str,
 ) -> Result<serde_json::Value, String> {
     // Validate ticker: alphanumeric + dots + hyphens only (prevent URL injection)
-    if ticker.is_empty() || ticker.len() > 20
-        || !ticker.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    if ticker.is_empty()
+        || ticker.len() > 20
+        || !ticker
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
     {
         return Err(format!("Invalid ticker for Yahoo: {ticker}"));
     }
     let url = if session.crumb.is_empty() {
-        format!("https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules={YAHOO_MODULES}")
+        format!(
+            "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules={YAHOO_MODULES}"
+        )
     } else {
-        format!("https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules={YAHOO_MODULES}&crumb={}", session.crumb)
+        format!(
+            "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules={YAHOO_MODULES}&crumb={}",
+            session.crumb
+        )
     };
-    let resp = session.client.get(&url)
+    let resp = session
+        .client
+        .get(&url)
         .header("Accept", "application/json")
-        .send().await
+        .send()
+        .await
         .map_err(|e| format!("Yahoo fetch failed for {ticker}: {e}"))?;
 
     if !resp.status().is_success() {
         return Err(format!("Yahoo returned {} for {ticker}", resp.status()));
     }
 
-    let data: serde_json::Value = resp.json().await
+    let data: serde_json::Value = resp
+        .json()
+        .await
         .map_err(|e| format!("Yahoo parse failed for {ticker}: {e}"))?;
 
     // Navigate to the result
-    let result = data.pointer("/quoteSummary/result/0")
+    let result = data
+        .pointer("/quoteSummary/result/0")
         .ok_or_else(|| format!("No Yahoo data for {ticker}"))?;
 
     Ok(result.clone())
@@ -374,7 +428,10 @@ fn yahoo_json_raw(val: &serde_json::Value, path: &str) -> Option<f64> {
 
 /// Helper to extract a string from Yahoo's nested {"fmt": "2026-04-15"} format.
 fn yahoo_json_fmt(val: &serde_json::Value, path: &str) -> Option<String> {
-    val.pointer(path)?.get("fmt")?.as_str().map(|s| s.to_string())
+    val.pointer(path)?
+        .get("fmt")?
+        .as_str()
+        .map(|s| s.to_string())
 }
 
 /// Parse Yahoo Finance JSON into Fundamentals struct.
@@ -388,9 +445,21 @@ pub fn parse_yahoo_data(ticker: &str, yahoo: &serde_json::Value) -> Fundamentals
 
     // summaryProfile (equities) — may be empty for ETFs/mutual funds
     if let Some(p) = yahoo.get("summaryProfile") {
-        f.sector = p.get("sector").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        f.industry = p.get("industry").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        f.description = p.get("longBusinessSummary").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        f.sector = p
+            .get("sector")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        f.industry = p
+            .get("industry")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        f.description = p
+            .get("longBusinessSummary")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
     }
 
     // ETF/fund fallback: when summaryProfile is empty, pull from fundProfile + quoteType.
@@ -398,12 +467,16 @@ pub fn parse_yahoo_data(ticker: &str, yahoo: &serde_json::Value) -> Fundamentals
     // funds use fundProfile.categoryName ("Large Blend", "Emerging Markets", etc.)
     // and quoteType.quoteType ("ETF", "MUTUALFUND") for classification.
     if f.sector.is_empty() && f.industry.is_empty() {
-        let qt = yahoo.get("quoteType")
+        let qt = yahoo
+            .get("quoteType")
             .and_then(|q| q.get("quoteType"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if let Some(fp) = yahoo.get("fundProfile") {
-            let category = fp.get("categoryName").and_then(|v| v.as_str()).unwrap_or("");
+            let category = fp
+                .get("categoryName")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let family = fp.get("family").and_then(|v| v.as_str()).unwrap_or("");
             let legal_type = fp.get("legalType").and_then(|v| v.as_str()).unwrap_or("");
             if !category.is_empty() || !family.is_empty() || !legal_type.is_empty() {
@@ -446,7 +519,11 @@ pub fn parse_yahoo_data(ticker: &str, yahoo: &serde_json::Value) -> Fundamentals
 
     // price module
     if let Some(p) = yahoo.get("price") {
-        f.company_name = p.get("shortName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        f.company_name = p
+            .get("shortName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         f.market_cap = yahoo_json_raw(p, "/marketCap");
         f.stock_price = yahoo_json_raw(p, "/regularMarketPrice");
     }
@@ -456,7 +533,8 @@ pub fn parse_yahoo_data(ticker: &str, yahoo: &serde_json::Value) -> Fundamentals
         f.enterprise_value = yahoo_json_raw(ks, "/enterpriseValue");
         f.shares_outstanding = yahoo_json_raw(ks, "/sharesOutstanding");
         f.pe_ratio = yahoo_json_raw(ks, "/trailingEps").and_then(|eps| {
-            f.stock_price.map(|p| if eps != 0.0 { p / eps } else { 0.0 })
+            f.stock_price
+                .map(|p| if eps != 0.0 { p / eps } else { 0.0 })
         });
         f.forward_pe = yahoo_json_raw(ks, "/forwardPE");
         f.peg_ratio = yahoo_json_raw(ks, "/pegRatio");
@@ -485,13 +563,17 @@ pub fn parse_yahoo_data(ticker: &str, yahoo: &serde_json::Value) -> Fundamentals
         f.roe = yahoo_json_raw(fd, "/returnOnEquity");
         f.roa = yahoo_json_raw(fd, "/returnOnAssets");
         f.total_debt = f.total_debt.or_else(|| yahoo_json_raw(fd, "/totalDebt"));
-        f.cash_and_equivalents = f.cash_and_equivalents.or_else(|| yahoo_json_raw(fd, "/totalCash"));
+        f.cash_and_equivalents = f
+            .cash_and_equivalents
+            .or_else(|| yahoo_json_raw(fd, "/totalCash"));
         f.ev_to_ebitda = yahoo_json_raw(fd, "/enterpriseToEbitda");
     }
 
     // EV components: prefer SEC XBRL (filled later), fallback to Yahoo
     if f.enterprise_value.is_none() {
-        if let (Some(mc), Some(debt), Some(cash)) = (f.market_cap, f.total_debt, f.cash_and_equivalents) {
+        if let (Some(mc), Some(debt), Some(cash)) =
+            (f.market_cap, f.total_debt, f.cash_and_equivalents)
+        {
             f.enterprise_value = Some(mc + debt - cash);
         }
     }
@@ -531,7 +613,10 @@ pub fn parse_yahoo_data(ticker: &str, yahoo: &serde_json::Value) -> Fundamentals
 }
 
 /// Parse quarterly financials from Yahoo Finance JSON.
-pub fn parse_quarterly_financials(ticker: &str, yahoo: &serde_json::Value) -> Vec<QuarterlyFinancial> {
+pub fn parse_quarterly_financials(
+    ticker: &str,
+    yahoo: &serde_json::Value,
+) -> Vec<QuarterlyFinancial> {
     let mut results = Vec::new();
 
     // Income statement quarterly
@@ -565,7 +650,8 @@ pub fn parse_quarterly_financials(ticker: &str, yahoo: &serde_json::Value) -> Ve
                 gross_profit: yahoo_json_raw(entry, "/grossProfit"),
                 operating_income: yahoo_json_raw(entry, "/operatingIncome"),
                 ebitda: yahoo_json_raw(entry, "/ebitda"),
-                eps: yahoo_json_raw(entry, "/dilutedEPS").or_else(|| yahoo_json_raw(entry, "/basicEPS")),
+                eps: yahoo_json_raw(entry, "/dilutedEPS")
+                    .or_else(|| yahoo_json_raw(entry, "/basicEPS")),
                 free_cash_flow: None,
             };
 
@@ -586,26 +672,34 @@ pub fn parse_quarterly_financials(ticker: &str, yahoo: &serde_json::Value) -> Ve
 }
 
 /// Parse institutional holders from Yahoo Finance JSON.
-pub fn parse_institutional_holders(ticker: &str, yahoo: &serde_json::Value) -> Vec<InstitutionalHolder> {
+pub fn parse_institutional_holders(
+    ticker: &str,
+    yahoo: &serde_json::Value,
+) -> Vec<InstitutionalHolder> {
     let mut results = Vec::new();
 
     if let Some(inst) = yahoo.pointer("/institutionOwnership/ownershipList") {
         if let Some(arr) = inst.as_array() {
             for entry in arr {
-                let name = entry.pointer("/organization")
+                let name = entry
+                    .pointer("/organization")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Unknown")
                     .to_string();
-                let shares = entry.pointer("/position/raw")
+                let shares = entry
+                    .pointer("/position/raw")
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0);
-                let pct = entry.pointer("/pctHeld/raw")
+                let pct = entry
+                    .pointer("/pctHeld/raw")
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0);
-                let value = entry.pointer("/value/raw")
+                let value = entry
+                    .pointer("/value/raw")
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0);
-                let date = entry.pointer("/reportDate/fmt")
+                let date = entry
+                    .pointer("/reportDate/fmt")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
@@ -681,6 +775,31 @@ pub fn upsert_fundamentals(conn: &Connection, f: &Fundamentals) -> Result<(), St
             chrono::Utc::now().timestamp(),
         ],
     ).map_err(|e| format!("Upsert fundamentals failed: {e}"))?;
+
+    if f.short_percent_of_float
+        .map(|v| v.is_finite() && v >= 0.0)
+        .unwrap_or(false)
+        || f.short_ratio
+            .map(|v| v.is_finite() && v >= 0.0)
+            .unwrap_or(false)
+    {
+        let as_of = if f.last_updated.len() >= 10 {
+            f.last_updated[..10].to_string()
+        } else {
+            chrono::Utc::now().format("%Y-%m-%d").to_string()
+        };
+        let _ = crate::core::research::append_short_interest_history_point(
+            conn,
+            &f.symbol,
+            crate::core::research::ShortInterestHistoryPoint {
+                as_of,
+                short_percent_of_float: f.short_percent_of_float.unwrap_or(0.0).max(0.0),
+                short_ratio: f.short_ratio.unwrap_or(0.0).max(0.0),
+                shares_outstanding: f.shares_outstanding.unwrap_or(0.0).max(0.0),
+            },
+        );
+    }
+
     Ok(())
 }
 
@@ -697,11 +816,19 @@ pub fn upsert_quarterly(conn: &Connection, quarters: &[QuarterlyFinancial]) -> R
                 operating_income=excluded.operating_income, ebitda=excluded.ebitda,
                 eps=excluded.eps, updated_at=excluded.updated_at",
             params![
-                q.symbol, q.period_end, q.total_revenue, q.net_income,
-                q.free_cash_flow, q.gross_profit, q.operating_income, q.ebitda, q.eps,
+                q.symbol,
+                q.period_end,
+                q.total_revenue,
+                q.net_income,
+                q.free_cash_flow,
+                q.gross_profit,
+                q.operating_income,
+                q.ebitda,
+                q.eps,
                 chrono::Utc::now().timestamp(),
             ],
-        ).map_err(|e| format!("Upsert quarterly failed: {e}"))?;
+        )
+        .map_err(|e| format!("Upsert quarterly failed: {e}"))?;
     }
     Ok(())
 }
@@ -709,8 +836,11 @@ pub fn upsert_quarterly(conn: &Connection, quarters: &[QuarterlyFinancial]) -> R
 /// Store institutional holders (replace all for a symbol).
 pub fn upsert_holders(conn: &Connection, holders: &[InstitutionalHolder]) -> Result<(), String> {
     if let Some(first) = holders.first() {
-        conn.execute("DELETE FROM institutional_holders WHERE symbol = ?1", params![first.symbol])
-            .map_err(|e| format!("Delete holders failed: {e}"))?;
+        conn.execute(
+            "DELETE FROM institutional_holders WHERE symbol = ?1",
+            params![first.symbol],
+        )
+        .map_err(|e| format!("Delete holders failed: {e}"))?;
     }
     for h in holders {
         conn.execute(
@@ -728,8 +858,9 @@ pub fn upsert_holders(conn: &Connection, holders: &[InstitutionalHolder]) -> Res
 /// Get fundamentals for a single symbol.
 pub fn get_fundamentals(conn: &Connection, symbol: &str) -> Result<Option<Fundamentals>, String> {
     // prepare_cached: called frequently during research panel refreshes.
-    let mut stmt = conn.prepare_cached(
-        "SELECT symbol, cik, company_name, sector, industry, description,
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT symbol, cik, company_name, sector, industry, description,
                 market_cap, enterprise_value, total_debt, cash_and_equivalents,
                 shares_outstanding, stock_price, mcap_ev_ratio,
                 next_earnings_date, previous_earnings_date,
@@ -738,8 +869,9 @@ pub fn get_fundamentals(conn: &Connection, symbol: &str) -> Result<Option<Fundam
                 pe_ratio, forward_pe, peg_ratio, price_to_book, price_to_sales,
                 ev_to_ebitda, profit_margin, operating_margin, roe, roa,
                 beta, short_ratio, short_percent_of_float, last_updated
-         FROM fundamentals WHERE symbol = ?1"
-    ).map_err(|e| format!("Prepare failed: {e}"))?;
+         FROM fundamentals WHERE symbol = ?1",
+        )
+        .map_err(|e| format!("Prepare failed: {e}"))?;
 
     let result = stmt.query_row(params![symbol.to_uppercase()], |row| {
         Ok(Fundamentals {
@@ -790,8 +922,9 @@ pub fn get_fundamentals(conn: &Connection, symbol: &str) -> Result<Option<Fundam
 /// Get all fundamentals (for EV scanner table).
 pub fn get_all_fundamentals(conn: &Connection) -> Result<Vec<Fundamentals>, String> {
     // prepare_cached: called every BG cycle to refresh the fundamentals cache.
-    let mut stmt = conn.prepare_cached(
-        "SELECT symbol, cik, company_name, sector, industry, '',
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT symbol, cik, company_name, sector, industry, '',
                 market_cap, enterprise_value, total_debt, cash_and_equivalents,
                 shares_outstanding, stock_price, mcap_ev_ratio,
                 next_earnings_date, previous_earnings_date,
@@ -800,134 +933,174 @@ pub fn get_all_fundamentals(conn: &Connection) -> Result<Vec<Fundamentals>, Stri
                 pe_ratio, forward_pe, peg_ratio, price_to_book, price_to_sales,
                 ev_to_ebitda, profit_margin, operating_margin, roe, roa,
                 beta, short_ratio, short_percent_of_float, last_updated
-         FROM fundamentals ORDER BY symbol"
-    ).map_err(|e| format!("Prepare all fundamentals failed: {e}"))?;
+         FROM fundamentals ORDER BY symbol",
+        )
+        .map_err(|e| format!("Prepare all fundamentals failed: {e}"))?;
 
-    let rows = stmt.query_map([], |row| {
-        Ok(Fundamentals {
-            symbol: row.get(0)?,
-            cik: row.get(1)?,
-            company_name: row.get(2)?,
-            sector: row.get(3)?,
-            industry: row.get(4)?,
-            description: row.get(5)?,
-            market_cap: row.get(6)?,
-            enterprise_value: row.get(7)?,
-            total_debt: row.get(8)?,
-            cash_and_equivalents: row.get(9)?,
-            shares_outstanding: row.get(10)?,
-            stock_price: row.get(11)?,
-            mcap_ev_ratio: row.get(12)?,
-            next_earnings_date: row.get(13)?,
-            previous_earnings_date: row.get(14)?,
-            next_ex_dividend_date: row.get(15)?,
-            next_dividend_payment_date: row.get(16)?,
-            last_dividend_payment_date: row.get(17)?,
-            is_dividend_stock: row.get::<_, i32>(18)? != 0,
-            dividend_yield: row.get(19)?,
-            pe_ratio: row.get(20)?,
-            forward_pe: row.get(21)?,
-            peg_ratio: row.get(22)?,
-            price_to_book: row.get(23)?,
-            price_to_sales: row.get(24)?,
-            ev_to_ebitda: row.get(25)?,
-            profit_margin: row.get(26)?,
-            operating_margin: row.get(27)?,
-            roe: row.get(28)?,
-            roa: row.get(29)?,
-            beta: row.get(30)?,
-            short_ratio: row.get(31)?,
-            short_percent_of_float: row.get(32)?,
-            last_updated: row.get(33)?,
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(Fundamentals {
+                symbol: row.get(0)?,
+                cik: row.get(1)?,
+                company_name: row.get(2)?,
+                sector: row.get(3)?,
+                industry: row.get(4)?,
+                description: row.get(5)?,
+                market_cap: row.get(6)?,
+                enterprise_value: row.get(7)?,
+                total_debt: row.get(8)?,
+                cash_and_equivalents: row.get(9)?,
+                shares_outstanding: row.get(10)?,
+                stock_price: row.get(11)?,
+                mcap_ev_ratio: row.get(12)?,
+                next_earnings_date: row.get(13)?,
+                previous_earnings_date: row.get(14)?,
+                next_ex_dividend_date: row.get(15)?,
+                next_dividend_payment_date: row.get(16)?,
+                last_dividend_payment_date: row.get(17)?,
+                is_dividend_stock: row.get::<_, i32>(18)? != 0,
+                dividend_yield: row.get(19)?,
+                pe_ratio: row.get(20)?,
+                forward_pe: row.get(21)?,
+                peg_ratio: row.get(22)?,
+                price_to_book: row.get(23)?,
+                price_to_sales: row.get(24)?,
+                ev_to_ebitda: row.get(25)?,
+                profit_margin: row.get(26)?,
+                operating_margin: row.get(27)?,
+                roe: row.get(28)?,
+                roa: row.get(29)?,
+                beta: row.get(30)?,
+                short_ratio: row.get(31)?,
+                short_percent_of_float: row.get(32)?,
+                last_updated: row.get(33)?,
+            })
         })
-    }).map_err(|e| format!("Query all fundamentals failed: {e}"))?;
+        .map_err(|e| format!("Query all fundamentals failed: {e}"))?;
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Collect fundamentals failed: {e}"))
 }
 
 /// Get upcoming earnings dates sorted by date.
-pub fn get_upcoming_earnings(conn: &Connection, limit: usize) -> Result<Vec<(String, String, String)>, String> {
+pub fn get_upcoming_earnings(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<(String, String, String)>, String> {
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     // prepare_cached: called every BG cycle.
-    let mut stmt = conn.prepare_cached(
-        "SELECT symbol, company_name, next_earnings_date FROM fundamentals
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT symbol, company_name, next_earnings_date FROM fundamentals
          WHERE next_earnings_date IS NOT NULL AND next_earnings_date >= ?1
-         ORDER BY next_earnings_date ASC LIMIT ?2"
-    ).map_err(|e| format!("Prepare earnings query failed: {e}"))?;
+         ORDER BY next_earnings_date ASC LIMIT ?2",
+        )
+        .map_err(|e| format!("Prepare earnings query failed: {e}"))?;
 
-    let rows = stmt.query_map(params![today, limit as i64], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
-    }).map_err(|e| format!("Query earnings failed: {e}"))?;
+    let rows = stmt
+        .query_map(params![today, limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|e| format!("Query earnings failed: {e}"))?;
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Collect earnings failed: {e}"))
 }
 
 /// Get upcoming ex-dividend dates sorted by date.
-pub fn get_upcoming_dividends(conn: &Connection, limit: usize) -> Result<Vec<(String, String, String, Option<f64>)>, String> {
+pub fn get_upcoming_dividends(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<(String, String, String, Option<f64>)>, String> {
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     // prepare_cached: called every BG cycle.
-    let mut stmt = conn.prepare_cached(
-        "SELECT symbol, company_name, next_ex_dividend_date, dividend_yield FROM fundamentals
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT symbol, company_name, next_ex_dividend_date, dividend_yield FROM fundamentals
          WHERE next_ex_dividend_date IS NOT NULL AND next_ex_dividend_date >= ?1
          AND is_dividend_stock = 1
-         ORDER BY next_ex_dividend_date ASC LIMIT ?2"
-    ).map_err(|e| format!("Prepare dividend query failed: {e}"))?;
+         ORDER BY next_ex_dividend_date ASC LIMIT ?2",
+        )
+        .map_err(|e| format!("Prepare dividend query failed: {e}"))?;
 
-    let rows = stmt.query_map(params![today, limit as i64], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<f64>>(3)?))
-    }).map_err(|e| format!("Query dividends failed: {e}"))?;
+    let rows = stmt
+        .query_map(params![today, limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<f64>>(3)?,
+            ))
+        })
+        .map_err(|e| format!("Query dividends failed: {e}"))?;
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Collect dividends failed: {e}"))
 }
 
 /// Get quarterly financials for a symbol.
-pub fn get_quarterly_financials(conn: &Connection, symbol: &str) -> Result<Vec<QuarterlyFinancial>, String> {
+pub fn get_quarterly_financials(
+    conn: &Connection,
+    symbol: &str,
+) -> Result<Vec<QuarterlyFinancial>, String> {
     // prepare_cached: called per-symbol by the research panel.
-    let mut stmt = conn.prepare_cached(
-        "SELECT symbol, period_end, total_revenue, net_income, free_cash_flow,
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT symbol, period_end, total_revenue, net_income, free_cash_flow,
                 gross_profit, operating_income, ebitda, eps
-         FROM quarterly_financials WHERE symbol = ?1 ORDER BY period_end DESC LIMIT 8"
-    ).map_err(|e| format!("Prepare quarterly query failed: {e}"))?;
+         FROM quarterly_financials WHERE symbol = ?1 ORDER BY period_end DESC LIMIT 8",
+        )
+        .map_err(|e| format!("Prepare quarterly query failed: {e}"))?;
 
-    let rows = stmt.query_map(params![symbol.to_uppercase()], |row| {
-        Ok(QuarterlyFinancial {
-            symbol: row.get(0)?,
-            period_end: row.get(1)?,
-            total_revenue: row.get(2)?,
-            net_income: row.get(3)?,
-            free_cash_flow: row.get(4)?,
-            gross_profit: row.get(5)?,
-            operating_income: row.get(6)?,
-            ebitda: row.get(7)?,
-            eps: row.get(8)?,
+    let rows = stmt
+        .query_map(params![symbol.to_uppercase()], |row| {
+            Ok(QuarterlyFinancial {
+                symbol: row.get(0)?,
+                period_end: row.get(1)?,
+                total_revenue: row.get(2)?,
+                net_income: row.get(3)?,
+                free_cash_flow: row.get(4)?,
+                gross_profit: row.get(5)?,
+                operating_income: row.get(6)?,
+                ebitda: row.get(7)?,
+                eps: row.get(8)?,
+            })
         })
-    }).map_err(|e| format!("Query quarterly failed: {e}"))?;
+        .map_err(|e| format!("Query quarterly failed: {e}"))?;
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Collect quarterly failed: {e}"))
 }
 
 /// Get institutional holders for a symbol.
-pub fn get_institutional_holders(conn: &Connection, symbol: &str) -> Result<Vec<InstitutionalHolder>, String> {
+pub fn get_institutional_holders(
+    conn: &Connection,
+    symbol: &str,
+) -> Result<Vec<InstitutionalHolder>, String> {
     // prepare_cached: called per-symbol by the research panel.
-    let mut stmt = conn.prepare_cached(
-        "SELECT symbol, holder_name, shares, pct_held, value, date_reported
-         FROM institutional_holders WHERE symbol = ?1 ORDER BY shares DESC"
-    ).map_err(|e| format!("Prepare holders query failed: {e}"))?;
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT symbol, holder_name, shares, pct_held, value, date_reported
+         FROM institutional_holders WHERE symbol = ?1 ORDER BY shares DESC",
+        )
+        .map_err(|e| format!("Prepare holders query failed: {e}"))?;
 
-    let rows = stmt.query_map(params![symbol.to_uppercase()], |row| {
-        Ok(InstitutionalHolder {
-            symbol: row.get(0)?,
-            holder_name: row.get(1)?,
-            shares: row.get(2)?,
-            pct_held: row.get(3)?,
-            value: row.get(4)?,
-            date_reported: row.get(5)?,
+    let rows = stmt
+        .query_map(params![symbol.to_uppercase()], |row| {
+            Ok(InstitutionalHolder {
+                symbol: row.get(0)?,
+                holder_name: row.get(1)?,
+                shares: row.get(2)?,
+                pct_held: row.get(3)?,
+                value: row.get(4)?,
+                date_reported: row.get(5)?,
+            })
         })
-    }).map_err(|e| format!("Query holders failed: {e}"))?;
+        .map_err(|e| format!("Query holders failed: {e}"))?;
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Collect holders failed: {e}"))
@@ -951,10 +1124,16 @@ pub async fn scrape_ticker(
         tokio::time::sleep(std::time::Duration::from_millis(SEC_RATE_LIMIT_MS)).await;
         if let Ok((sec_debt, sec_cash)) = fetch_ev_from_sec(&session.client, &cik).await {
             // Prefer SEC XBRL values over Yahoo for EV accuracy
-            if let Some(d) = sec_debt { fund.total_debt = Some(d); }
-            if let Some(c) = sec_cash { fund.cash_and_equivalents = Some(c); }
+            if let Some(d) = sec_debt {
+                fund.total_debt = Some(d);
+            }
+            if let Some(c) = sec_cash {
+                fund.cash_and_equivalents = Some(c);
+            }
             // Recalculate EV with SEC data
-            if let (Some(mc), Some(debt), Some(cash)) = (fund.market_cap, fund.total_debt, fund.cash_and_equivalents) {
+            if let (Some(mc), Some(debt), Some(cash)) =
+                (fund.market_cap, fund.total_debt, fund.cash_and_equivalents)
+            {
                 fund.enterprise_value = Some(mc + debt - cash);
                 if let Some(ev) = fund.enterprise_value {
                     if ev > 0.0 {
@@ -1004,7 +1183,9 @@ pub async fn scrape_batch(
         let mut set = std::collections::HashSet::new();
         if let Ok(mut stmt) = conn.prepare("SELECT symbol FROM scrape_failures") {
             if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
-                for r in rows.flatten() { set.insert(r); }
+                for r in rows.flatten() {
+                    set.insert(r);
+                }
             }
         }
         set
@@ -1015,7 +1196,9 @@ pub async fn scrape_batch(
             if let Ok(rows) = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             }) {
-                for r in rows.flatten() { map.insert(r.0, r.1); }
+                for r in rows.flatten() {
+                    map.insert(r.0, r.1);
+                }
             }
         }
         map
@@ -1045,7 +1228,9 @@ pub async fn scrape_batch(
                         success: true,
                         message: "Skipped (recently updated)".into(),
                     };
-                    if let Some(tx) = progress_tx { let _ = tx.send(r.clone()); }
+                    if let Some(tx) = progress_tx {
+                        let _ = tx.send(r.clone());
+                    }
                     results.push(r);
                     continue;
                 }
@@ -1062,7 +1247,9 @@ pub async fn scrape_batch(
                     success: true,
                     message: format!("OK"),
                 };
-                if let Some(tx) = progress_tx { let _ = tx.send(r.clone()); }
+                if let Some(tx) = progress_tx {
+                    let _ = tx.send(r.clone());
+                }
                 results.push(r);
             }
             Err(e) => {
@@ -1078,7 +1265,9 @@ pub async fn scrape_batch(
                     success: false,
                     message: e,
                 };
-                if let Some(tx) = progress_tx { let _ = tx.send(r.clone()); }
+                if let Some(tx) = progress_tx {
+                    let _ = tx.send(r.clone());
+                }
                 results.push(r);
             }
         }
@@ -1100,7 +1289,8 @@ pub fn extract_stock_tickers_from_cache(conn: &Connection) -> Result<Vec<String>
     )
         .map_err(|e| format!("Prepare cache keys failed: {e}"))?;
 
-    let keys: Vec<String> = stmt.query_map([], |row| row.get(0))
+    let keys: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
         .map_err(|e| format!("Query cache keys failed: {e}"))?
         .filter_map(|r| r.ok())
         .collect();
@@ -1108,43 +1298,75 @@ pub fn extract_stock_tickers_from_cache(conn: &Connection) -> Result<Vec<String>
     let mut symbols: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Known non-stock patterns to skip
-    let forex_suffixes = ["USD", "JPY", "GBP", "EUR", "CHF", "CAD", "AUD", "NZD", "SEK", "NOK", "HKD", "SGD", "TRY", "MXN", "ZAR", "PLN", "CZK", "HUF"];
+    let forex_suffixes = [
+        "USD", "JPY", "GBP", "EUR", "CHF", "CAD", "AUD", "NZD", "SEK", "NOK", "HKD", "SGD", "TRY",
+        "MXN", "ZAR", "PLN", "CZK", "HUF",
+    ];
     // Crypto symbols (USD-denominated pairs)
-    let crypto_patterns = ["BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LTC", "LINK", "AVAX", "DOT",
-        "UNI", "AAVE", "MATIC", "SHIB", "FIL", "ATOM", "NEAR", "APE", "SAND", "MANA",
-        "CRV", "COMP", "MKR", "SNX", "GRT", "BAT", "1INCH", "SUSHI", "YFI", "ENJ"];
+    let crypto_patterns = [
+        "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LTC", "LINK", "AVAX", "DOT", "UNI", "AAVE",
+        "MATIC", "SHIB", "FIL", "ATOM", "NEAR", "APE", "SAND", "MANA", "CRV", "COMP", "MKR", "SNX",
+        "GRT", "BAT", "1INCH", "SUSHI", "YFI", "ENJ",
+    ];
     // Futures contract suffixes (e.g., 6C_M, GC_M, CL_M, ES_M, NQ_M)
-    let futures_suffixes = ["_M", "_H", "_U", "_Z", "_F", "_G", "_J", "_K", "_N", "_Q", "_V", "_X"];
+    let futures_suffixes = [
+        "_M", "_H", "_U", "_Z", "_F", "_G", "_J", "_K", "_N", "_Q", "_V", "_X",
+    ];
     // Known futures root symbols
-    let futures_roots = ["6A", "6B", "6C", "6E", "6J", "6M", "6N", "6S", "6Z",
-        "GC", "SI", "HG", "PL", "PA", "CL", "NG", "HO", "RB", "BZ",
-        "ES", "NQ", "YM", "RTY", "EMD", "ZB", "ZN", "ZF", "ZT",
-        "ZC", "ZW", "ZS", "ZM", "ZL", "CT", "KC", "SB", "CC", "OJ",
-        "LE", "HE", "GF", "DX", "VX"];
+    let futures_roots = [
+        "6A", "6B", "6C", "6E", "6J", "6M", "6N", "6S", "6Z", "GC", "SI", "HG", "PL", "PA", "CL",
+        "NG", "HO", "RB", "BZ", "ES", "NQ", "YM", "RTY", "EMD", "ZB", "ZN", "ZF", "ZT", "ZC", "ZW",
+        "ZS", "ZM", "ZL", "CT", "KC", "SB", "CC", "OJ", "LE", "HE", "GF", "DX", "VX",
+    ];
 
     for key in &keys {
         // `mt5:{SYM}:{TF}` — metadata already stripped at the SQL level.
         let mut it = key.split(':');
-        let _prefix = match it.next() { Some(p) => p, None => continue };
-        let sym = match it.next() { Some(s) if !s.is_empty() => s, _ => continue };
-        let _tf = match it.next() { Some(s) => s, _ => continue };
-        if it.next().is_some() { continue; } // ignore any stray >3-part rows
+        let _prefix = match it.next() {
+            Some(p) => p,
+            None => continue,
+        };
+        let sym = match it.next() {
+            Some(s) if !s.is_empty() => s,
+            _ => continue,
+        };
+        let _tf = match it.next() {
+            Some(s) => s,
+            _ => continue,
+        };
+        if it.next().is_some() {
+            continue;
+        } // ignore any stray >3-part rows
 
         let sym_upper = sym.to_uppercase();
         // Skip forex (pairs like EURUSD, GBPJPY, NZDUSD — any length ending in currency code)
-        if forex_suffixes.iter().any(|s| sym_upper.ends_with(s) && sym_upper.len() >= 5 && sym_upper.len() <= 7) {
+        if forex_suffixes
+            .iter()
+            .any(|s| sym_upper.ends_with(s) && sym_upper.len() >= 5 && sym_upper.len() <= 7)
+        {
             continue;
         }
         // Skip symbols starting with currency code + another currency (AUDCAD, NZDCHF, etc.)
-        let forex_prefixes = ["AUD", "CAD", "CHF", "EUR", "GBP", "JPY", "NZD", "USD", "SEK", "NOK", "TRY", "MXN", "ZAR", "PLN", "HKD", "SGD", "CZK", "HUF"];
-        if forex_prefixes.iter().any(|p| sym_upper.starts_with(p) && sym_upper.len() >= 6 && sym_upper.len() <= 7
-            && forex_suffixes.iter().any(|s| sym_upper.ends_with(s))) {
+        let forex_prefixes = [
+            "AUD", "CAD", "CHF", "EUR", "GBP", "JPY", "NZD", "USD", "SEK", "NOK", "TRY", "MXN",
+            "ZAR", "PLN", "HKD", "SGD", "CZK", "HUF",
+        ];
+        if forex_prefixes.iter().any(|p| {
+            sym_upper.starts_with(p)
+                && sym_upper.len() >= 6
+                && sym_upper.len() <= 7
+                && forex_suffixes.iter().any(|s| sym_upper.ends_with(s))
+        }) {
             continue;
         }
         // Skip crypto — exact match or with USD/USDT suffix
         if crypto_patterns.iter().any(|c| {
             sym_upper == *c
-            || sym_upper.starts_with(c) && (sym_upper.ends_with("USD") || sym_upper.ends_with("USDT") || sym_upper.ends_with("BTC") || sym_upper.ends_with("ETH"))
+                || sym_upper.starts_with(c)
+                    && (sym_upper.ends_with("USD")
+                        || sym_upper.ends_with("USDT")
+                        || sym_upper.ends_with("BTC")
+                        || sym_upper.ends_with("ETH"))
         }) {
             continue;
         }
@@ -1153,7 +1375,12 @@ pub fn extract_stock_tickers_from_cache(conn: &Connection) -> Result<Vec<String>
             continue;
         }
         // Skip known futures root symbols (exact match or with digits)
-        if futures_roots.iter().any(|r| sym_upper == *r || (sym_upper.starts_with(r) && sym_upper.len() <= r.len() + 2 && sym_upper[r.len()..].chars().all(|c| c.is_ascii_digit()))) {
+        if futures_roots.iter().any(|r| {
+            sym_upper == *r
+                || (sym_upper.starts_with(r)
+                    && sym_upper.len() <= r.len() + 2
+                    && sym_upper[r.len()..].chars().all(|c| c.is_ascii_digit()))
+        }) {
             continue;
         }
         // Skip indices (start with #, ., or are known index names)
@@ -1169,20 +1396,29 @@ pub fn extract_stock_tickers_from_cache(conn: &Connection) -> Result<Vec<String>
             continue;
         }
         // Skip CFDs, metals, indices, and non-Yahoo symbols
-        let skip_exact = ["XNGUSD", "XNG", "XAGUSD", "XAUUSD", "XPDUSD", "XPTUSD",
-            "AUS200", "NI225", "SP500", "STOXX50E", "GDAXI", "SPA35", "FCHI40",
-            "FTSE100", "DAX40", "CAC40", "NIKKEI", "HSI", "KOSPI", "MASI",
-            "US30", "US500", "US2000", "USTEC", "JP225", "UK100", "DE40", "FR40",
-            "EU50", "HK50", "CN50", "PAPER", "TPL"];
+        let skip_exact = [
+            "XNGUSD", "XNG", "XAGUSD", "XAUUSD", "XPDUSD", "XPTUSD", "AUS200", "NI225", "SP500",
+            "STOXX50E", "GDAXI", "SPA35", "FCHI40", "FTSE100", "DAX40", "CAC40", "NIKKEI", "HSI",
+            "KOSPI", "MASI", "US30", "US500", "US2000", "USTEC", "JP225", "UK100", "DE40", "FR40",
+            "EU50", "HK50", "CN50", "PAPER", "TPL",
+        ];
         if skip_exact.iter().any(|&s| sym_upper == s) {
             continue;
         }
         // Skip symbols with digits in them (likely indices: AUS200, NI225, etc.)
-        if sym_upper.len() > 3 && sym_upper.chars().any(|c| c.is_ascii_digit()) && !sym_upper.chars().all(|c| c.is_ascii_uppercase()) {
+        if sym_upper.len() > 3
+            && sym_upper.chars().any(|c| c.is_ascii_digit())
+            && !sym_upper.chars().all(|c| c.is_ascii_uppercase())
+        {
             // Has mixed letters+digits and is longer than 3 chars — likely an index
-            let letter_count = sym_upper.chars().filter(|c| c.is_ascii_alphabetic()).count();
+            let letter_count = sym_upper
+                .chars()
+                .filter(|c| c.is_ascii_alphabetic())
+                .count();
             let digit_count = sym_upper.chars().filter(|c| c.is_ascii_digit()).count();
-            if digit_count >= 2 && letter_count >= 2 { continue; } // e.g., AUS200, NI225, SP500
+            if digit_count >= 2 && letter_count >= 2 {
+                continue;
+            } // e.g., AUS200, NI225, SP500
         }
 
         symbols.insert(sym_upper);
@@ -1305,7 +1541,10 @@ mod tests {
         let json = serde_json::json!({
             "price": { "marketCap": { "raw": 1234567890.0, "fmt": "1.23B" } }
         });
-        assert_eq!(yahoo_json_raw(&json, "/price/marketCap"), Some(1234567890.0));
+        assert_eq!(
+            yahoo_json_raw(&json, "/price/marketCap"),
+            Some(1234567890.0)
+        );
     }
 
     #[test]
@@ -1319,13 +1558,19 @@ mod tests {
         let json = serde_json::json!({
             "calendarEvents": { "exDividendDate": { "raw": 1718409600, "fmt": "2024-06-15" } }
         });
-        assert_eq!(yahoo_json_fmt(&json, "/calendarEvents/exDividendDate"), Some("2024-06-15".to_string()));
+        assert_eq!(
+            yahoo_json_fmt(&json, "/calendarEvents/exDividendDate"),
+            Some("2024-06-15".to_string())
+        );
     }
 
     #[test]
     fn yf_fmt_returns_none_on_missing() {
         let json = serde_json::json!({});
-        assert_eq!(yahoo_json_fmt(&json, "/calendarEvents/exDividendDate"), None);
+        assert_eq!(
+            yahoo_json_fmt(&json, "/calendarEvents/exDividendDate"),
+            None
+        );
     }
 
     // ── parse_yahoo_data ───────────────────────────────────────────
@@ -1691,16 +1936,14 @@ mod tests {
     #[test]
     fn upsert_and_get_institutional_holders() {
         let conn = setup_test_db();
-        let holders = vec![
-            InstitutionalHolder {
-                symbol: "TEST".to_string(),
-                holder_name: "Vanguard".to_string(),
-                shares: 1_000_000,
-                pct_held: 0.05,
-                value: 150_000_000.0,
-                date_reported: "2024-03-31".to_string(),
-            },
-        ];
+        let holders = vec![InstitutionalHolder {
+            symbol: "TEST".to_string(),
+            holder_name: "Vanguard".to_string(),
+            shares: 1_000_000,
+            pct_held: 0.05,
+            value: 150_000_000.0,
+            date_reported: "2024-03-31".to_string(),
+        }];
         upsert_holders(&conn, &holders).unwrap();
 
         let loaded = get_institutional_holders(&conn, "TEST").unwrap();
@@ -1714,23 +1957,28 @@ mod tests {
     #[test]
     fn extract_stock_tickers_filters_correctly() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE bar_cache (key TEXT PRIMARY KEY, value BLOB)").unwrap();
+        conn.execute_batch("CREATE TABLE bar_cache (key TEXT PRIMARY KEY, value BLOB)")
+            .unwrap();
 
         // Insert test cache keys — `mt5:{SYM}:{TF}` shape (BarCacheWriter's
         // only bar-key format; the legacy 4-part `mt5:{broker}:…` was never
         // actually emitted and is no longer supported by the extractor).
         let keys = [
-            "mt5:AAPL:4Hour",    // stock — should be kept
-            "mt5:MSFT:Daily",    // stock — should be kept
-            "mt5:EURUSD:1Hour",  // forex — should be skipped
-            "mt5:BTCUSD:4Hour",  // crypto — should be skipped
-            "mt5:GC:Daily",      // futures — should be skipped
-            "mt5:XAUUSD:4Hour",  // gold CFD — should be skipped
-            "mt5:SOLUSD:1Hour",  // crypto — should be skipped
-            "mt5:NVDA:Daily",    // stock — should be kept
+            "mt5:AAPL:4Hour",   // stock — should be kept
+            "mt5:MSFT:Daily",   // stock — should be kept
+            "mt5:EURUSD:1Hour", // forex — should be skipped
+            "mt5:BTCUSD:4Hour", // crypto — should be skipped
+            "mt5:GC:Daily",     // futures — should be skipped
+            "mt5:XAUUSD:4Hour", // gold CFD — should be skipped
+            "mt5:SOLUSD:1Hour", // crypto — should be skipped
+            "mt5:NVDA:Daily",   // stock — should be kept
         ];
         for key in keys {
-            conn.execute("INSERT INTO bar_cache (key, value) VALUES (?1, x'00')", params![key]).unwrap();
+            conn.execute(
+                "INSERT INTO bar_cache (key, value) VALUES (?1, x'00')",
+                params![key],
+            )
+            .unwrap();
         }
 
         let tickers = extract_stock_tickers_from_cache(&conn).unwrap();
@@ -1746,15 +1994,20 @@ mod tests {
     #[test]
     fn extract_stock_tickers_skips_futures() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE bar_cache (key TEXT PRIMARY KEY, value BLOB)").unwrap();
+        conn.execute_batch("CREATE TABLE bar_cache (key TEXT PRIMARY KEY, value BLOB)")
+            .unwrap();
 
         let keys = [
-            "mt5:ES_M:Daily",  // futures — skip
-            "mt5:CL_H:4Hour",  // futures — skip
-            "mt5:GOOG:Daily",  // stock — keep
+            "mt5:ES_M:Daily", // futures — skip
+            "mt5:CL_H:4Hour", // futures — skip
+            "mt5:GOOG:Daily", // stock — keep
         ];
         for key in keys {
-            conn.execute("INSERT INTO bar_cache (key, value) VALUES (?1, x'00')", params![key]).unwrap();
+            conn.execute(
+                "INSERT INTO bar_cache (key, value) VALUES (?1, x'00')",
+                params![key],
+            )
+            .unwrap();
         }
 
         let tickers = extract_stock_tickers_from_cache(&conn).unwrap();
@@ -1766,15 +2019,16 @@ mod tests {
     #[test]
     fn extract_stock_tickers_deduplicates() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE bar_cache (key TEXT PRIMARY KEY, value BLOB)").unwrap();
+        conn.execute_batch("CREATE TABLE bar_cache (key TEXT PRIMARY KEY, value BLOB)")
+            .unwrap();
 
-        let keys = [
-            "mt5:AAPL:4Hour",
-            "mt5:AAPL:Daily",
-            "mt5:AAPL:1Hour",
-        ];
+        let keys = ["mt5:AAPL:4Hour", "mt5:AAPL:Daily", "mt5:AAPL:1Hour"];
         for key in keys {
-            conn.execute("INSERT INTO bar_cache (key, value) VALUES (?1, x'00')", params![key]).unwrap();
+            conn.execute(
+                "INSERT INTO bar_cache (key, value) VALUES (?1, x'00')",
+                params![key],
+            )
+            .unwrap();
         }
 
         let tickers = extract_stock_tickers_from_cache(&conn).unwrap();

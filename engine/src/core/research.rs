@@ -1094,6 +1094,17 @@ pub struct ShortInterestSnapshot {
     pub note: String,
 }
 
+/// One short-interest history observation for a symbol.
+/// Stored as a compact per-symbol time series and fed by fundamentals scrapes
+/// plus explicit short-interest fetches when available.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ShortInterestHistoryPoint {
+    pub as_of: String, // YYYY-MM-DD
+    pub short_percent_of_float: f64,
+    pub short_ratio: f64,
+    pub shares_outstanding: f64,
+}
+
 // ── ADR-118 Godel Parity Round 11 ───────────────────────────────────────────
 
 /// ALTZ — one component of the Altman Z-score.
@@ -2511,6 +2522,38 @@ pub struct VolRiskPremiumSnapshot {
     pub iv_minus_rv252_pct: f64,
     pub iv_to_rv252_ratio: f64,
     pub premium_label: String, // CHEAP_IV | FAIR_IV | RICH_IV | EXTREME_RICH | INSUFFICIENT_DATA
+    pub note: String,
+}
+
+// ── ADR-198 Round 95 — short-interest history + trend rank ─────────────────
+
+/// SHORTRANK_DELTA — short-interest trend rank vs sector peers.
+/// Uses the change in `short_percent_of_float` over the trailing 180-day
+/// window, risk-inverted so short covering (more negative delta) earns a
+/// higher / safer rank.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ShortInterestDeltaRankSnapshot {
+    pub symbol: String,
+    pub as_of: String,
+    pub sector: String,
+    pub lookback_days: i32,
+    pub history_points_used: usize,
+    pub history_start_date: String,
+    pub history_end_date: String,
+    pub latest_short_pct_of_float: f64,
+    pub prior_short_pct_of_float: f64,
+    pub delta_short_pct_points: f64,
+    pub latest_short_ratio: f64,
+    pub prior_short_ratio: f64,
+    pub subject_trend_label: String, // HEAVY_COVERING | COVERING | STABLE | BUILDING | HEAVY_BUILD
+    pub peers_considered: usize,
+    pub peers_with_data: usize,
+    pub sector_median_delta_pct_pts: f64,
+    pub sector_p25_delta_pct_pts: f64,
+    pub sector_p75_delta_pct_pts: f64,
+    pub percentile_rank: f64, // risk-inverted: lower delta -> higher / safer percentile
+    pub rank_position: usize, // 1 = safest short-interest trend in sector
+    pub rank_label: String,   // SAFEST_DECILE … RISKIEST_DECILE | INSUFFICIENT_DATA | NO_DATA
     pub note: String,
 }
 
@@ -22300,6 +22343,337 @@ pub fn compute_vrp_snapshot(
         iv_to_rv252_ratio,
         premium_label: premium_label.into(),
         note: note_parts.join(" | "),
+    }
+}
+
+fn normalize_short_interest_history_date(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.len() < 10 {
+        return None;
+    }
+    let cand = &trimmed[..10];
+    chrono::NaiveDate::parse_from_str(cand, "%Y-%m-%d")
+        .ok()
+        .map(|_| cand.to_string())
+}
+
+fn same_short_interest_point(a: &ShortInterestHistoryPoint, b: &ShortInterestHistoryPoint) -> bool {
+    (a.short_percent_of_float - b.short_percent_of_float).abs() < 1e-9
+        && (a.short_ratio - b.short_ratio).abs() < 1e-9
+        && (a.shares_outstanding - b.shares_outstanding).abs() < 1e-6
+}
+
+fn merge_short_interest_history_rows(
+    existing: &[ShortInterestHistoryPoint],
+    new_rows: &[ShortInterestHistoryPoint],
+) -> Vec<ShortInterestHistoryPoint> {
+    let mut by_date: std::collections::BTreeMap<String, ShortInterestHistoryPoint> =
+        std::collections::BTreeMap::new();
+
+    for row in existing.iter().chain(new_rows.iter()) {
+        let as_of = match normalize_short_interest_history_date(&row.as_of) {
+            Some(v) => v,
+            None => continue,
+        };
+        if !row.short_percent_of_float.is_finite() || row.short_percent_of_float < 0.0 {
+            continue;
+        }
+        let normalized = ShortInterestHistoryPoint {
+            as_of: as_of.clone(),
+            short_percent_of_float: row.short_percent_of_float,
+            short_ratio: if row.short_ratio.is_finite() && row.short_ratio >= 0.0 {
+                row.short_ratio
+            } else {
+                0.0
+            },
+            shares_outstanding: if row.shares_outstanding.is_finite()
+                && row.shares_outstanding >= 0.0
+            {
+                row.shares_outstanding
+            } else {
+                0.0
+            },
+        };
+        by_date.insert(as_of, normalized);
+    }
+
+    let mut compacted: Vec<ShortInterestHistoryPoint> = Vec::new();
+    for row in by_date.into_values() {
+        if compacted
+            .last()
+            .map(|prev| same_short_interest_point(prev, &row))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        compacted.push(row);
+    }
+
+    let keep_from = compacted.len().saturating_sub(256);
+    compacted.into_iter().skip(keep_from).collect()
+}
+
+fn short_interest_trend_label(delta_pct_pts: f64) -> &'static str {
+    if delta_pct_pts <= -5.0 {
+        "HEAVY_COVERING"
+    } else if delta_pct_pts <= -1.5 {
+        "COVERING"
+    } else if delta_pct_pts < 1.5 {
+        "STABLE"
+    } else if delta_pct_pts < 5.0 {
+        "BUILDING"
+    } else {
+        "HEAVY_BUILD"
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ShortInterestDeltaContext {
+    history_points_used: usize,
+    history_start_date: String,
+    history_end_date: String,
+    prior_short_pct_of_float: f64,
+    latest_short_pct_of_float: f64,
+    prior_short_ratio: f64,
+    latest_short_ratio: f64,
+    delta_short_pct_points: f64,
+}
+
+fn short_interest_delta_context(
+    as_of: &str,
+    rows: &[ShortInterestHistoryPoint],
+    lookback_days: i64,
+) -> Option<ShortInterestDeltaContext> {
+    let ref_date = normalize_short_interest_history_date(as_of)
+        .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
+        .or_else(|| {
+            rows.iter()
+                .rev()
+                .find_map(|row| normalize_short_interest_history_date(&row.as_of))
+                .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
+        })?;
+
+    let min_date = ref_date - chrono::Duration::days(lookback_days.max(1));
+    let mut window: Vec<(chrono::NaiveDate, &ShortInterestHistoryPoint)> = rows
+        .iter()
+        .filter_map(|row| {
+            let parsed = normalize_short_interest_history_date(&row.as_of)
+                .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())?;
+            if parsed < min_date || parsed > ref_date {
+                None
+            } else {
+                Some((parsed, row))
+            }
+        })
+        .collect();
+    if window.len() < 2 {
+        return None;
+    }
+    window.sort_by_key(|(date, _)| *date);
+
+    let (_, start) = window.first()?;
+    let (_, end) = window.last()?;
+    Some(ShortInterestDeltaContext {
+        history_points_used: window.len(),
+        history_start_date: start.as_of.clone(),
+        history_end_date: end.as_of.clone(),
+        prior_short_pct_of_float: start.short_percent_of_float,
+        latest_short_pct_of_float: end.short_percent_of_float,
+        prior_short_ratio: start.short_ratio,
+        latest_short_ratio: end.short_ratio,
+        delta_short_pct_points: end.short_percent_of_float - start.short_percent_of_float,
+    })
+}
+
+fn json_value_number(row: &serde_json::Value, keys: &[&str]) -> Option<f64> {
+    for key in keys {
+        let value = match row.get(*key) {
+            Some(v) => v,
+            None => continue,
+        };
+        if let Some(num) = value.as_f64() {
+            if num.is_finite() {
+                return Some(num);
+            }
+        }
+        if let Some(s) = value.as_str() {
+            let cleaned = s.trim().replace(',', "");
+            if let Ok(num) = cleaned.parse::<f64>() {
+                if num.is_finite() {
+                    return Some(num);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn json_value_string(row: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        let value = match row.get(*key) {
+            Some(v) => v,
+            None => continue,
+        };
+        if let Some(s) = value.as_str() {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Parse vendor short-interest rows into the compact per-symbol history format.
+/// The parser is intentionally tolerant because upstream providers use slightly
+/// different field names for the same concept.
+pub fn short_interest_history_points_from_json_rows(
+    rows: &[serde_json::Value],
+) -> Vec<ShortInterestHistoryPoint> {
+    let parsed: Vec<ShortInterestHistoryPoint> = rows
+        .iter()
+        .filter_map(|row| {
+            let as_of = json_value_string(row, &["date", "settlementDate", "reportDate"])
+                .and_then(|s| normalize_short_interest_history_date(&s))?;
+            let short_percent_of_float = json_value_number(
+                row,
+                &[
+                    "shortPercentOfFloat",
+                    "short_percent_of_float",
+                    "shortPercentFloat",
+                    "shortInterestPct",
+                    "percentOfFloat",
+                ],
+            )
+            .or_else(|| {
+                let short_interest =
+                    json_value_number(row, &["shortInterest", "shortShares", "sharesShort"])?;
+                let float_shares =
+                    json_value_number(row, &["shareFloat", "floatShares", "sharesFloat"])?;
+                if float_shares > 0.0 {
+                    Some(short_interest / float_shares * 100.0)
+                } else {
+                    None
+                }
+            })?;
+            let short_ratio = json_value_number(
+                row,
+                &["shortRatio", "daysToCover", "short_ratio", "days_to_cover"],
+            )
+            .unwrap_or(0.0);
+            let shares_outstanding =
+                json_value_number(row, &["sharesOutstanding", "shares_outstanding"]).unwrap_or(0.0);
+
+            Some(ShortInterestHistoryPoint {
+                as_of,
+                short_percent_of_float,
+                short_ratio,
+                shares_outstanding,
+            })
+        })
+        .collect();
+
+    merge_short_interest_history_rows(&[], &parsed)
+}
+
+/// SHORTRANK_DELTA — rank the 180-day change in short_percent_of_float vs
+/// same-sector peers. More negative delta (short covering) is safer.
+pub fn compute_shortrank_delta_snapshot(
+    symbol: &str,
+    as_of: &str,
+    sector: &str,
+    subject_history: &[ShortInterestHistoryPoint],
+    peers: &[(String, Vec<ShortInterestHistoryPoint>)],
+) -> ShortInterestDeltaRankSnapshot {
+    const LOOKBACK_DAYS: i64 = 180;
+
+    let sym = symbol.to_uppercase();
+    let subject_ctx = match short_interest_delta_context(as_of, subject_history, LOOKBACK_DAYS) {
+        Some(ctx) => ctx,
+        None => {
+            return ShortInterestDeltaRankSnapshot {
+                symbol: sym,
+                as_of: as_of.to_string(),
+                sector: sector.to_string(),
+                lookback_days: LOOKBACK_DAYS as i32,
+                rank_label: "NO_DATA".into(),
+                note: "Need at least 2 short-interest history points for the subject in the trailing 180d window".into(),
+                ..Default::default()
+            };
+        }
+    };
+
+    let peer_contexts: Vec<ShortInterestDeltaContext> = peers
+        .iter()
+        .filter_map(|(_, rows)| short_interest_delta_context(as_of, rows, LOOKBACK_DAYS))
+        .collect();
+    let peer_deltas: Vec<f64> = peer_contexts
+        .iter()
+        .map(|ctx| ctx.delta_short_pct_points)
+        .collect();
+    let peers_considered = peers.len();
+    let peers_with_data = peer_deltas.len();
+    if peers_with_data < 3 {
+        return ShortInterestDeltaRankSnapshot {
+            symbol: sym,
+            as_of: as_of.to_string(),
+            sector: sector.to_string(),
+            lookback_days: LOOKBACK_DAYS as i32,
+            history_points_used: subject_ctx.history_points_used,
+            history_start_date: subject_ctx.history_start_date,
+            history_end_date: subject_ctx.history_end_date,
+            latest_short_pct_of_float: subject_ctx.latest_short_pct_of_float,
+            prior_short_pct_of_float: subject_ctx.prior_short_pct_of_float,
+            delta_short_pct_points: subject_ctx.delta_short_pct_points,
+            latest_short_ratio: subject_ctx.latest_short_ratio,
+            prior_short_ratio: subject_ctx.prior_short_ratio,
+            subject_trend_label: short_interest_trend_label(subject_ctx.delta_short_pct_points)
+                .into(),
+            peers_considered,
+            peers_with_data,
+            rank_label: "INSUFFICIENT_DATA".into(),
+            note: format!(
+                "Only {} sector peers have usable short-interest trend history (need ≥3)",
+                peers_with_data
+            ),
+            ..Default::default()
+        };
+    }
+
+    let mut sorted = peer_deltas.clone();
+    sorted.push(subject_ctx.delta_short_pct_points);
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let percentile_rank =
+        percentile_rank_score(subject_ctx.delta_short_pct_points, &peer_deltas, false);
+    let rank_position = peer_deltas
+        .iter()
+        .filter(|&&delta| delta < subject_ctx.delta_short_pct_points)
+        .count()
+        + 1;
+
+    ShortInterestDeltaRankSnapshot {
+        symbol: sym,
+        as_of: as_of.to_string(),
+        sector: sector.to_string(),
+        lookback_days: LOOKBACK_DAYS as i32,
+        history_points_used: subject_ctx.history_points_used,
+        history_start_date: subject_ctx.history_start_date,
+        history_end_date: subject_ctx.history_end_date,
+        latest_short_pct_of_float: subject_ctx.latest_short_pct_of_float,
+        prior_short_pct_of_float: subject_ctx.prior_short_pct_of_float,
+        delta_short_pct_points: subject_ctx.delta_short_pct_points,
+        latest_short_ratio: subject_ctx.latest_short_ratio,
+        prior_short_ratio: subject_ctx.prior_short_ratio,
+        subject_trend_label: short_interest_trend_label(subject_ctx.delta_short_pct_points).into(),
+        peers_considered,
+        peers_with_data,
+        sector_median_delta_pct_pts: quantile_f64(&sorted, 0.5),
+        sector_p25_delta_pct_pts: quantile_f64(&sorted, 0.25),
+        sector_p75_delta_pct_pts: quantile_f64(&sorted, 0.75),
+        percentile_rank,
+        rank_position,
+        rank_label: risk_rank_label_for_percentile(percentile_rank).into(),
+        note: String::new(),
     }
 }
 
@@ -66711,6 +67085,136 @@ pub fn get_vrp(conn: &Connection, symbol: &str) -> Result<Option<VolRiskPremiumS
     }
 }
 
+// ── ADR-198 Round 95 schema v92 (short-interest history + trend rank) ────
+//    SHORT_INTEREST_HISTORY / SHORTRANK_DELTA
+
+pub fn create_research_tables_v92(conn: &Connection) -> Result<(), String> {
+    create_research_tables_v91(conn)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_short_interest_history (
+            symbol TEXT PRIMARY KEY,
+            rows_json TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_short_interest_history_updated
+            ON research_short_interest_history(updated_at);
+
+        CREATE TABLE IF NOT EXISTS research_shortrank_delta (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_shortrank_delta_updated
+            ON research_shortrank_delta(updated_at);",
+    )
+    .map_err(|e| format!("create v92 tables: {e}"))?;
+    Ok(())
+}
+
+pub fn upsert_short_interest_history(
+    conn: &Connection,
+    symbol: &str,
+    rows: &[ShortInterestHistoryPoint],
+) -> Result<(), String> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let _ = create_research_tables_v92(conn);
+    let existing = get_short_interest_history(conn, symbol)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let merged = merge_short_interest_history_rows(&existing, rows);
+    if merged.is_empty() {
+        return Ok(());
+    }
+    let json =
+        serde_json::to_string(&merged).map_err(|e| format!("short_interest_history json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_short_interest_history (symbol, rows_json, updated_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET rows_json=excluded.rows_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    )
+    .map_err(|e| format!("upsert short_interest_history: {e}"))?;
+    Ok(())
+}
+
+pub fn append_short_interest_history_point(
+    conn: &Connection,
+    symbol: &str,
+    row: ShortInterestHistoryPoint,
+) -> Result<(), String> {
+    upsert_short_interest_history(conn, symbol, &[row])
+}
+
+pub fn get_short_interest_history(
+    conn: &Connection,
+    symbol: &str,
+) -> Result<Option<Vec<ShortInterestHistoryPoint>>, String> {
+    let _ = create_research_tables_v92(conn);
+    let mut stmt = conn
+        .prepare("SELECT rows_json FROM research_short_interest_history WHERE symbol = ?1")
+        .map_err(|e| format!("prep short_interest_history: {e}"))?;
+    let mut rows = stmt
+        .query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query short_interest_history: {e}"))?;
+    if let Some(r) = rows
+        .next()
+        .map_err(|e| format!("row short_interest_history: {e}"))?
+    {
+        let j: String = r
+            .get(0)
+            .map_err(|e| format!("get short_interest_history: {e}"))?;
+        let parsed: Vec<ShortInterestHistoryPoint> =
+            serde_json::from_str(&j).map_err(|e| format!("parse short_interest_history: {e}"))?;
+        Ok(Some(parsed))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn upsert_shortrank_delta(
+    conn: &Connection,
+    symbol: &str,
+    snap: &ShortInterestDeltaRankSnapshot,
+) -> Result<(), String> {
+    let _ = create_research_tables_v92(conn);
+    let json = serde_json::to_string(snap).map_err(|e| format!("shortrank_delta json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_shortrank_delta (symbol, snapshot_json, updated_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    )
+    .map_err(|e| format!("upsert shortrank_delta: {e}"))?;
+    Ok(())
+}
+
+pub fn get_shortrank_delta(
+    conn: &Connection,
+    symbol: &str,
+) -> Result<Option<ShortInterestDeltaRankSnapshot>, String> {
+    let _ = create_research_tables_v92(conn);
+    let mut stmt = conn
+        .prepare("SELECT snapshot_json FROM research_shortrank_delta WHERE symbol = ?1")
+        .map_err(|e| format!("prep shortrank_delta: {e}"))?;
+    let mut rows = stmt
+        .query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query shortrank_delta: {e}"))?;
+    if let Some(r) = rows
+        .next()
+        .map_err(|e| format!("row shortrank_delta: {e}"))?
+    {
+        let j: String = r.get(0).map_err(|e| format!("get shortrank_delta: {e}"))?;
+        let snap: ShortInterestDeltaRankSnapshot =
+            serde_json::from_str(&j).map_err(|e| format!("parse shortrank_delta: {e}"))?;
+        Ok(Some(snap))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn upsert_mass_index(
     conn: &Connection,
     symbol: &str,
@@ -88681,5 +89185,198 @@ Trailing text.
         assert_eq!(snap.premium_label, "EXTREME_RICH");
         assert!(snap.iv_to_rv20_ratio > 1.5);
         assert!(snap.iv_minus_rv20_pct > 15.0);
+    }
+
+    #[test]
+    fn short_interest_history_upsert_dedupes_repeated_values() {
+        let conn = Connection::open_in_memory().unwrap();
+        upsert_short_interest_history(
+            &conn,
+            "TEST",
+            &[ShortInterestHistoryPoint {
+                as_of: "2026-01-15".into(),
+                short_percent_of_float: 12.0,
+                short_ratio: 3.2,
+                shares_outstanding: 100_000_000.0,
+            }],
+        )
+        .unwrap();
+        upsert_short_interest_history(
+            &conn,
+            "TEST",
+            &[
+                ShortInterestHistoryPoint {
+                    as_of: "2026-01-29".into(),
+                    short_percent_of_float: 12.0,
+                    short_ratio: 3.2,
+                    shares_outstanding: 100_000_000.0,
+                },
+                ShortInterestHistoryPoint {
+                    as_of: "2026-02-12".into(),
+                    short_percent_of_float: 10.5,
+                    short_ratio: 2.9,
+                    shares_outstanding: 100_000_000.0,
+                },
+            ],
+        )
+        .unwrap();
+        let got = get_short_interest_history(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].as_of, "2026-01-15");
+        assert_eq!(got[1].as_of, "2026-02-12");
+        assert!((got[1].short_percent_of_float - 10.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn short_interest_history_parser_handles_finnhub_style_rows() {
+        let rows = vec![
+            serde_json::json!({
+                "date": "2026-02-28",
+                "shortPercentOfFloat": 7.25,
+                "shortRatio": 2.4,
+                "sharesOutstanding": 123456789.0
+            }),
+            serde_json::json!({
+                "settlementDate": "2026-03-15T00:00:00Z",
+                "shortInterest": 9000000.0,
+                "shareFloat": 100000000.0,
+                "daysToCover": "2.8"
+            }),
+        ];
+        let parsed = short_interest_history_points_from_json_rows(&rows);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].as_of, "2026-02-28");
+        assert!((parsed[0].short_percent_of_float - 7.25).abs() < 1e-9);
+        assert_eq!(parsed[1].as_of, "2026-03-15");
+        assert!((parsed[1].short_percent_of_float - 9.0).abs() < 1e-9);
+        assert!((parsed[1].short_ratio - 2.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn shortrank_delta_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snap = ShortInterestDeltaRankSnapshot {
+            symbol: "TEST".into(),
+            as_of: "2026-04-21".into(),
+            sector: "Technology".into(),
+            lookback_days: 180,
+            history_points_used: 4,
+            history_start_date: "2026-01-02".into(),
+            history_end_date: "2026-04-18".into(),
+            latest_short_pct_of_float: 6.5,
+            prior_short_pct_of_float: 10.5,
+            delta_short_pct_points: -4.0,
+            latest_short_ratio: 2.3,
+            prior_short_ratio: 3.9,
+            subject_trend_label: "COVERING".into(),
+            peers_considered: 6,
+            peers_with_data: 4,
+            sector_median_delta_pct_pts: 1.0,
+            sector_p25_delta_pct_pts: -0.5,
+            sector_p75_delta_pct_pts: 2.0,
+            percentile_rank: 90.0,
+            rank_position: 1,
+            rank_label: "SAFEST_DECILE".into(),
+            note: String::new(),
+        };
+        upsert_shortrank_delta(&conn, "TEST", &snap).unwrap();
+        let got = get_shortrank_delta(&conn, "TEST").unwrap().unwrap();
+        assert_eq!(got.rank_label, "SAFEST_DECILE");
+        assert_eq!(got.history_start_date, "2026-01-02");
+        assert!((got.delta_short_pct_points + 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_shortrank_delta_safest_decile() {
+        let subject = vec![
+            ShortInterestHistoryPoint {
+                as_of: "2026-01-10".into(),
+                short_percent_of_float: 12.0,
+                short_ratio: 4.1,
+                shares_outstanding: 1_000_000.0,
+            },
+            ShortInterestHistoryPoint {
+                as_of: "2026-04-18".into(),
+                short_percent_of_float: 7.0,
+                short_ratio: 2.5,
+                shares_outstanding: 1_000_000.0,
+            },
+        ];
+        let peers = vec![
+            (
+                "BBB".into(),
+                vec![
+                    ShortInterestHistoryPoint {
+                        as_of: "2026-01-10".into(),
+                        short_percent_of_float: 5.0,
+                        short_ratio: 1.9,
+                        shares_outstanding: 1_000_000.0,
+                    },
+                    ShortInterestHistoryPoint {
+                        as_of: "2026-04-18".into(),
+                        short_percent_of_float: 6.0,
+                        short_ratio: 2.0,
+                        shares_outstanding: 1_000_000.0,
+                    },
+                ],
+            ),
+            (
+                "CCC".into(),
+                vec![
+                    ShortInterestHistoryPoint {
+                        as_of: "2026-01-10".into(),
+                        short_percent_of_float: 8.0,
+                        short_ratio: 2.6,
+                        shares_outstanding: 1_000_000.0,
+                    },
+                    ShortInterestHistoryPoint {
+                        as_of: "2026-04-18".into(),
+                        short_percent_of_float: 10.0,
+                        short_ratio: 3.1,
+                        shares_outstanding: 1_000_000.0,
+                    },
+                ],
+            ),
+            (
+                "DDD".into(),
+                vec![
+                    ShortInterestHistoryPoint {
+                        as_of: "2026-01-10".into(),
+                        short_percent_of_float: 6.0,
+                        short_ratio: 2.0,
+                        shares_outstanding: 1_000_000.0,
+                    },
+                    ShortInterestHistoryPoint {
+                        as_of: "2026-04-18".into(),
+                        short_percent_of_float: 6.5,
+                        short_ratio: 2.2,
+                        shares_outstanding: 1_000_000.0,
+                    },
+                ],
+            ),
+            (
+                "EEE".into(),
+                vec![
+                    ShortInterestHistoryPoint {
+                        as_of: "2026-01-10".into(),
+                        short_percent_of_float: 9.0,
+                        short_ratio: 3.0,
+                        shares_outstanding: 1_000_000.0,
+                    },
+                    ShortInterestHistoryPoint {
+                        as_of: "2026-04-18".into(),
+                        short_percent_of_float: 8.0,
+                        short_ratio: 2.8,
+                        shares_outstanding: 1_000_000.0,
+                    },
+                ],
+            ),
+        ];
+        let snap =
+            compute_shortrank_delta_snapshot("AAA", "2026-04-21", "Technology", &subject, &peers);
+        assert_eq!(snap.rank_label, "SAFEST_DECILE");
+        assert_eq!(snap.rank_position, 1);
+        assert_eq!(snap.subject_trend_label, "HEAVY_COVERING");
+        assert!(snap.delta_short_pct_points < snap.sector_p25_delta_pct_pts);
     }
 }
