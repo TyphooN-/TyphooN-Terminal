@@ -6808,6 +6808,70 @@ pub struct SwapHarvestResult {
 
 /// Load ALL __SPECS__ entries from cache (multiple MT5 accounts), merge by symbol.
 /// Returns the combined CSV as a single string with all unique symbols.
+pub fn normalize_imported_symbols_csv(csv: &str) -> String {
+    let mut out = String::new();
+    for line in csv.lines() {
+        let line = line.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() || line.starts_with("Symbol;") {
+            continue;
+        }
+        let fields: Vec<&str> = line.split(';').collect();
+        if fields.len() < 31 {
+            continue;
+        }
+        let symbol = fields[0].trim();
+        if symbol.is_empty() {
+            continue;
+        }
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            symbol,
+            fields.get(29).unwrap_or(&"").trim(),
+            fields.get(30).unwrap_or(&"").trim(),
+            fields.get(10).unwrap_or(&"").trim(),
+            fields.get(21).unwrap_or(&"").trim(),
+            fields.get(22).unwrap_or(&"").trim(),
+            fields.get(6).unwrap_or(&"").trim(),
+            fields.get(12).unwrap_or(&"").trim(),
+            fields.get(13).unwrap_or(&"").trim(),
+            fields.get(14).unwrap_or(&"").trim(),
+            fields.get(9).unwrap_or(&"").trim(),
+            fields.get(7).unwrap_or(&"").trim(),
+            fields.get(8).unwrap_or(&"").trim(),
+            fields.get(4).unwrap_or(&"").trim(),
+            fields.get(15).unwrap_or(&"").trim(),
+            fields.get(16).unwrap_or(&"").trim(),
+            fields.get(1).unwrap_or(&"").trim(),
+            fields.get(2).unwrap_or(&"").trim(),
+            fields.get(3).unwrap_or(&"").trim(),
+        ));
+    }
+    out
+}
+
+fn load_imported_specs(cache_conn: &Connection) -> Option<String> {
+    let mut stmt = cache_conn
+        .prepare("SELECT value FROM kv_cache WHERE key = 'darwin:imported_symbols_csv' ORDER BY timestamp DESC LIMIT 1")
+        .ok()?;
+    let raw: Vec<u8> = stmt
+        .query_row([], |row| {
+            row.get::<_, Vec<u8>>(0)
+                .or_else(|_| row.get::<_, String>(0).map(|s| s.into_bytes()))
+        })
+        .ok()?;
+    let text = if let Ok(d) = zstd::decode_all(raw.as_slice()) {
+        String::from_utf8(d).ok()?
+    } else {
+        String::from_utf8(raw).ok()?
+    };
+    let normalized = normalize_imported_symbols_csv(&text);
+    if normalized.trim().is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
 fn load_all_specs(cache_conn: &Connection) -> Result<String, String> {
     let load_from_table = |table: &str| -> Vec<String> {
         let (col, tbl) = if table == "bar_cache" { ("data", "bar_cache") } else { ("value", "kv_cache") };
@@ -6835,9 +6899,15 @@ fn load_all_specs(cache_conn: &Connection) -> Result<String, String> {
 
     let mut all_blobs = load_from_table("bar_cache");
     all_blobs.extend(load_from_table("kv_cache"));
+    if let Some(imported) = load_imported_specs(cache_conn) {
+        all_blobs.push(imported);
+    }
 
     if all_blobs.is_empty() {
-        return Err("No MT5 specs data found in cache. Run BarCacheWriter first.".into());
+        return Err(
+            "No Darwin/MT5 specs data found in cache. Run BarCacheWriter or import ExportSymbols CSV first."
+                .into(),
+        );
     }
 
     // Merge all specs CSVs, deduplicating by symbol name (first field).
@@ -7053,6 +7123,55 @@ mod tests {
         // Verify tables exist
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM darwin_accounts", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_normalize_imported_symbols_csv_maps_exportsymbols_columns() {
+        let csv = concat!(
+            "Symbol;BaseCurrency;QuoteCurrency;Description;Digits;Point;Spread;TickSize;TickValue;TradeContractSize;",
+            "TradeMode;TradeExecutionMode;VolumeMin;VolumeMax;VolumeStep;MarginInitial;MarginMaintenance;MarginHedged;",
+            "MarginCurrency;StartDate;ExpirationDate;SwapLong;SwapShort;SwapType;Swap3Days;TradeSessions;VaR_1_Lot;",
+            "BidPrice;AskPrice;SectorName;IndustryName;ATR_D1;ATR_W1;ATR_MN1\n",
+            "AAPL.US;USD;USD;Apple Inc.;2;0.01;12;0.01;1.25;1;4;2;0.01;100;0.01;1000;500;0;USD;",
+            "2024.01.01 00:00;1970.01.01 00:00;-0.2;-0.1;0;3;0900-1700;1.5;180;180.1;Technology;Consumer Electronics;1;2;3\n"
+        );
+        let normalized = normalize_imported_symbols_csv(csv);
+        assert_eq!(
+            normalized.trim(),
+            "AAPL.US,Technology,Consumer Electronics,4,-0.2,-0.1,12,0.01,100,0.01,1,0.01,1.25,2,1000,500,USD,USD,Apple Inc."
+        );
+    }
+
+    #[test]
+    fn test_load_all_specs_parsed_accepts_imported_exportsymbols_csv() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE kv_cache (key TEXT PRIMARY KEY, value BLOB, timestamp INTEGER)",
+            [],
+        )
+        .unwrap();
+        let csv = concat!(
+            "Symbol;BaseCurrency;QuoteCurrency;Description;Digits;Point;Spread;TickSize;TickValue;TradeContractSize;",
+            "TradeMode;TradeExecutionMode;VolumeMin;VolumeMax;VolumeStep;MarginInitial;MarginMaintenance;MarginHedged;",
+            "MarginCurrency;StartDate;ExpirationDate;SwapLong;SwapShort;SwapType;Swap3Days;TradeSessions;VaR_1_Lot;",
+            "BidPrice;AskPrice;SectorName;IndustryName;ATR_D1;ATR_W1;ATR_MN1\n",
+            "MSFT.US;USD;USD;Microsoft;2;0.01;10;0.01;1.1;1;4;2;0.01;100;0.01;1200;600;0;USD;",
+            "2024.01.01 00:00;1970.01.01 00:00;-0.3;-0.15;0;3;0900-1700;1.5;420;420.1;Technology;Software;1;2;3\n"
+        );
+        conn.execute(
+            "INSERT INTO kv_cache (key, value, timestamp) VALUES (?1, ?2, ?3)",
+            params!["darwin:imported_symbols_csv", csv.as_bytes(), 1i64],
+        )
+        .unwrap();
+
+        let rows = load_all_specs_parsed(&conn).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "MSFT.US");
+        assert_eq!(rows[0].1, "Technology");
+        assert_eq!(rows[0].2, "Software");
+        assert_eq!(rows[0].3, 4);
+        assert!((rows[0].4 + 0.3).abs() < f64::EPSILON);
+        assert!((rows[0].5 + 0.15).abs() < f64::EPSILON);
     }
 
     #[test]

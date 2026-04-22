@@ -80,6 +80,11 @@ pub struct GpuCompute {
     disparity_pipeline: wgpu::ComputePipeline,
     bop_pipeline: wgpu::ComputePipeline,
     stddev_pipeline: wgpu::ComputePipeline,
+    mfi_pipeline: wgpu::ComputePipeline,
+    trix_pipeline: wgpu::ComputePipeline,
+    ppo_pipeline: wgpu::ComputePipeline,
+    ultosc_pipeline: wgpu::ComputePipeline,
+    stochrsi_pipeline: wgpu::ComputePipeline,
     var_osc_pipeline: wgpu::ComputePipeline,
     psar_pipeline: wgpu::ComputePipeline,
     ichimoku_pipeline: wgpu::ComputePipeline,
@@ -315,6 +320,11 @@ impl GpuCompute {
         let disparity_pipeline = make_pipeline("disparity_pipeline", DISPARITY_SHADER);
         let bop_pipeline = make_pipeline("bop_pipeline", BOP_SHADER);
         let stddev_pipeline = make_pipeline("stddev_pipeline", STDDEV_SHADER);
+        let mfi_pipeline = make_pipeline("mfi_pipeline", MFI_SHADER);
+        let trix_pipeline = make_pipeline("trix_pipeline", TRIX_SHADER);
+        let ppo_pipeline = make_pipeline("ppo_pipeline", PPO_SHADER);
+        let ultosc_pipeline = make_pipeline("ultosc_pipeline", ULTOSC_SHADER);
+        let stochrsi_pipeline = make_pipeline("stochrsi_pipeline", STOCHRSI_SHADER);
         let var_osc_pipeline = make_pipeline("var_osc_pipeline", VAR_OSCILLATOR_SHADER);
         let psar_pipeline = make_pipeline("psar_pipeline", PSAR_SHADER);
         let ichimoku_pipeline = make_pipeline("ichimoku_pipeline", ICHIMOKU_SHADER);
@@ -373,6 +383,11 @@ impl GpuCompute {
             disparity_pipeline,
             bop_pipeline,
             stddev_pipeline,
+            mfi_pipeline,
+            trix_pipeline,
+            ppo_pipeline,
+            ultosc_pipeline,
+            stochrsi_pipeline,
             var_osc_pipeline,
             psar_pipeline,
             ichimoku_pipeline,
@@ -884,6 +899,94 @@ impl GpuCompute {
     /// Compute rolling sample standard deviation on GPU. Returns f32 per bar.
     pub fn compute_stddev_gpu(&self, period: u32) -> Option<Vec<f32>> {
         self.dispatch_indicator(&self.stddev_pipeline, period, true)
+    }
+
+    /// Compute MFI on GPU from interleaved [high, low, close, volume] data.
+    pub fn compute_mfi_gpu(
+        &self,
+        highs: &[f32],
+        lows: &[f32],
+        closes: &[f32],
+        volumes: &[f32],
+        period: u32,
+    ) -> Option<Vec<f32>> {
+        if highs.len() != closes.len()
+            || lows.len() != closes.len()
+            || volumes.len() != closes.len()
+            || closes.len() != self.bar_count as usize
+        {
+            return None;
+        }
+        let mut interleaved = Vec::with_capacity(closes.len() * 4);
+        for i in 0..closes.len() {
+            interleaved.push(highs[i]);
+            interleaved.push(lows[i]);
+            interleaved.push(closes[i]);
+            interleaved.push(volumes[i]);
+        }
+        self.dispatch_custom_input_indicator(&interleaved, &self.mfi_pipeline, period, 1, true)
+    }
+
+    /// Compute TRIX on GPU from close prices. Output: [line, signal, hist] × bar_count.
+    pub fn compute_trix_gpu(&self, closes: &[f32], period: u32, signal_period: u32) -> Option<Vec<f32>> {
+        if closes.len() != self.bar_count as usize {
+            return None;
+        }
+        let packed = (period & 0xFF) | ((signal_period & 0xFF) << 8);
+        self.dispatch_custom_input_indicator(closes, &self.trix_pipeline, packed, 3, false)
+    }
+
+    /// Compute PPO on GPU from close prices. Output: [line, signal, hist] × bar_count.
+    pub fn compute_ppo_gpu(
+        &self,
+        closes: &[f32],
+        fast_period: u32,
+        slow_period: u32,
+        signal_period: u32,
+    ) -> Option<Vec<f32>> {
+        if closes.len() != self.bar_count as usize {
+            return None;
+        }
+        let packed =
+            (fast_period & 0xFF) | ((slow_period & 0xFF) << 8) | ((signal_period & 0xFF) << 16);
+        self.dispatch_custom_input_indicator(closes, &self.ppo_pipeline, packed, 3, false)
+    }
+
+    /// Compute Ultimate Oscillator on GPU from interleaved [high, low, close] data.
+    pub fn compute_ultosc_gpu(&self, highs: &[f32], lows: &[f32], closes: &[f32]) -> Option<Vec<f32>> {
+        if highs.len() != closes.len()
+            || lows.len() != closes.len()
+            || closes.len() != self.bar_count as usize
+        {
+            return None;
+        }
+        let mut interleaved = Vec::with_capacity(closes.len() * 3);
+        for i in 0..closes.len() {
+            interleaved.push(highs[i]);
+            interleaved.push(lows[i]);
+            interleaved.push(closes[i]);
+        }
+        let packed = 7u32 | (14u32 << 8) | (28u32 << 16);
+        self.dispatch_custom_input_indicator(&interleaved, &self.ultosc_pipeline, packed, 1, false)
+    }
+
+    /// Compute StochRSI on GPU from close prices. Output: [%K, %D] × bar_count.
+    pub fn compute_stochrsi_gpu(
+        &self,
+        closes: &[f32],
+        rsi_period: u32,
+        stoch_period: u32,
+        k_smooth: u32,
+        d_smooth: u32,
+    ) -> Option<Vec<f32>> {
+        if closes.len() != self.bar_count as usize {
+            return None;
+        }
+        let packed = (rsi_period & 0xFF)
+            | ((stoch_period & 0xFF) << 8)
+            | ((k_smooth & 0xFF) << 16)
+            | ((d_smooth & 0xFF) << 24);
+        self.dispatch_custom_input_indicator(closes, &self.stochrsi_pipeline, packed, 2, false)
     }
 
     /// Compute VaR oscillator on GPU using rolling parametric 95% VaR.
@@ -3265,6 +3368,309 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         ss = ss + d * d;
     }
     output[i] = sqrt(max(ss / f32(params.period - 1u), 0.0));
+}
+"#;
+
+const MFI_SHADER: &str = r#"
+// MFI — parallel Money Flow Index using [high, low, close, volume] quads.
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count) { return; }
+    if (params.period == 0u || i < params.period) {
+        output[i] = 0.0;
+        return;
+    }
+    var pos_sum: f32 = 0.0;
+    var neg_sum: f32 = 0.0;
+    let start = i + 1u - params.period;
+    for (var j: u32 = start; j <= i; j = j + 1u) {
+        let base = j * 4u;
+        let prev_base = (j - 1u) * 4u;
+        let tp = (bars[base] + bars[base + 1u] + bars[base + 2u]) / 3.0;
+        let prev_tp = (bars[prev_base] + bars[prev_base + 1u] + bars[prev_base + 2u]) / 3.0;
+        let money_flow = tp * max(bars[base + 3u], 0.0);
+        if (tp > prev_tp) {
+            pos_sum = pos_sum + money_flow;
+        } else if (tp < prev_tp) {
+            neg_sum = neg_sum + money_flow;
+        }
+    }
+    if (neg_sum <= 1e-6) {
+        output[i] = select(100.0, 50.0, pos_sum <= 1e-6);
+        return;
+    }
+    let ratio = pos_sum / neg_sum;
+    output[i] = clamp(100.0 - 100.0 / (1.0 + ratio), 0.0, 100.0);
+}
+"#;
+
+const TRIX_SHADER: &str = r#"
+// TRIX — sequential triple-EMA ROC with signal EMA.
+// params.period encodes: [7:0]=period, [15:8]=signal period.
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let period_raw = params.period & 0xFFu;
+    let signal_raw = (params.period >> 8u) & 0xFFu;
+    let period = select(period_raw, 15u, period_raw == 0u);
+    let signal_period = select(signal_raw, 9u, signal_raw == 0u);
+    let k = 2.0 / (f32(period) + 1.0);
+    let sig_k = 2.0 / (f32(signal_period) + 1.0);
+
+    var ema1 = bars[0];
+    var ema2 = bars[0];
+    var ema3 = bars[0];
+    var prev_ema3 = bars[0];
+    var signal = 0.0;
+    var signal_started = false;
+
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        if (i > 0u) {
+            ema1 = bars[i] * k + ema1 * (1.0 - k);
+            ema2 = ema1 * k + ema2 * (1.0 - k);
+            ema3 = ema2 * k + ema3 * (1.0 - k);
+        }
+        var trix = 0.0;
+        if (i > 0u && abs(prev_ema3) > 1e-6) {
+            trix = 100.0 * (ema3 / prev_ema3 - 1.0);
+        }
+        if (i + 1u >= signal_period) {
+            if (!signal_started) {
+                signal = trix;
+                signal_started = true;
+            } else {
+                signal = trix * sig_k + signal * (1.0 - sig_k);
+            }
+        }
+        output[i * 3u] = trix;
+        output[i * 3u + 1u] = signal;
+        output[i * 3u + 2u] = trix - signal;
+        prev_ema3 = ema3;
+    }
+}
+"#;
+
+const PPO_SHADER: &str = r#"
+// PPO — sequential percentage price oscillator with signal EMA.
+// params.period encodes: [7:0]=fast, [15:8]=slow, [23:16]=signal.
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let fast_raw = params.period & 0xFFu;
+    let slow_raw = (params.period >> 8u) & 0xFFu;
+    let signal_raw = (params.period >> 16u) & 0xFFu;
+    let fast = select(fast_raw, 12u, fast_raw == 0u);
+    let slow = select(slow_raw, 26u, slow_raw == 0u);
+    let signal_period = select(signal_raw, 9u, signal_raw == 0u);
+    let k_fast = 2.0 / (f32(fast) + 1.0);
+    let k_slow = 2.0 / (f32(slow) + 1.0);
+    let k_sig = 2.0 / (f32(signal_period) + 1.0);
+
+    var ema_fast = bars[0];
+    var ema_slow = bars[0];
+    var signal = 0.0;
+    var signal_started = false;
+
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        if (i > 0u) {
+            ema_fast = bars[i] * k_fast + ema_fast * (1.0 - k_fast);
+            ema_slow = bars[i] * k_slow + ema_slow * (1.0 - k_slow);
+        }
+        var ppo = 0.0;
+        if (abs(ema_slow) > 1e-6) {
+            ppo = 100.0 * (ema_fast - ema_slow) / ema_slow;
+        }
+        if (i + 1u >= signal_period) {
+            if (!signal_started) {
+                signal = ppo;
+                signal_started = true;
+            } else {
+                signal = ppo * k_sig + signal * (1.0 - k_sig);
+            }
+        }
+        output[i * 3u] = ppo;
+        output[i * 3u + 1u] = signal;
+        output[i * 3u + 2u] = ppo - signal;
+    }
+}
+"#;
+
+const ULTOSC_SHADER: &str = r#"
+// Ultimate Oscillator — sequential weighted BP/TR average using [high, low, close] triplets.
+// params.period encodes: [7:0]=short, [15:8]=mid, [23:16]=long.
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+fn true_low(low: f32, prev_close: f32) -> f32 {
+    return min(low, prev_close);
+}
+
+fn true_high(high: f32, prev_close: f32) -> f32 {
+    return max(high, prev_close);
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    let p1_raw = params.period & 0xFFu;
+    let p2_raw = (params.period >> 8u) & 0xFFu;
+    let p3_raw = (params.period >> 16u) & 0xFFu;
+    let p1 = select(p1_raw, 7u, p1_raw == 0u);
+    let p2 = select(p2_raw, 14u, p2_raw == 0u);
+    let p3 = select(p3_raw, 28u, p3_raw == 0u);
+
+    output[0] = 0.0;
+    for (var i: u32 = 1u; i < params.bar_count; i = i + 1u) {
+        if (i < p3) {
+            output[i] = 0.0;
+            continue;
+        }
+        var bp1: f32 = 0.0;
+        var bp2: f32 = 0.0;
+        var bp3: f32 = 0.0;
+        var tr1: f32 = 0.0;
+        var tr2: f32 = 0.0;
+        var tr3: f32 = 0.0;
+        for (var j: u32 = i + 1u - p3; j <= i; j = j + 1u) {
+            let base = j * 3u;
+            let prev_base = (j - 1u) * 3u;
+            let prev_close = bars[prev_base + 2u];
+            let high = bars[base];
+            let low = bars[base + 1u];
+            let close = bars[base + 2u];
+            let bp = close - true_low(low, prev_close);
+            let tr = max(true_high(high, prev_close) - true_low(low, prev_close), 1e-6);
+            bp3 = bp3 + bp;
+            tr3 = tr3 + tr;
+            if (j + p2 >= i + 1u) {
+                bp2 = bp2 + bp;
+                tr2 = tr2 + tr;
+            }
+            if (j + p1 >= i + 1u) {
+                bp1 = bp1 + bp;
+                tr1 = tr1 + tr;
+            }
+        }
+        let avg1 = bp1 / max(tr1, 1e-6);
+        let avg2 = bp2 / max(tr2, 1e-6);
+        let avg3 = bp3 / max(tr3, 1e-6);
+        output[i] = clamp(100.0 * (4.0 * avg1 + 2.0 * avg2 + avg3) / 7.0, 0.0, 100.0);
+    }
+}
+"#;
+
+const STOCHRSI_SHADER: &str = r#"
+// StochRSI — sequential RSI, raw StochRSI, %K, then %D.
+// params.period encodes: [7:0]=rsi, [15:8]=stoch, [23:16]=k, [31:24]=d.
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+fn compute_rsi_value(avg_gain: f32, avg_loss: f32) -> f32 {
+    if (avg_loss <= 1e-6) {
+        return select(100.0, 50.0, avg_gain <= 1e-6);
+    }
+    let rs = avg_gain / avg_loss;
+    return 100.0 - 100.0 / (1.0 + rs);
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    let rsi_raw = params.period & 0xFFu;
+    let stoch_raw = (params.period >> 8u) & 0xFFu;
+    let k_raw = (params.period >> 16u) & 0xFFu;
+    let d_raw = (params.period >> 24u) & 0xFFu;
+    let rsi_period = select(rsi_raw, 14u, rsi_raw == 0u);
+    let stoch_period = select(stoch_raw, 14u, stoch_raw == 0u);
+    let k_period = select(k_raw, 3u, k_raw == 0u);
+    let d_period = select(d_raw, 3u, d_raw == 0u);
+
+    output[0] = 50.0;
+    output[1] = 0.0;
+    var avg_gain: f32 = 0.0;
+    var avg_loss: f32 = 0.0;
+    for (var i: u32 = 1u; i < params.bar_count; i = i + 1u) {
+        let delta = bars[i] - bars[i - 1u];
+        let gain = max(delta, 0.0);
+        let loss = max(-delta, 0.0);
+        if (i < rsi_period) {
+            avg_gain = avg_gain + gain;
+            avg_loss = avg_loss + loss;
+            output[i * 2u] = 50.0;
+        } else if (i == rsi_period) {
+            avg_gain = (avg_gain + gain) / f32(rsi_period);
+            avg_loss = (avg_loss + loss) / f32(rsi_period);
+            output[i * 2u] = compute_rsi_value(avg_gain, avg_loss);
+        } else {
+            avg_gain = (avg_gain * f32(rsi_period - 1u) + gain) / f32(rsi_period);
+            avg_loss = (avg_loss * f32(rsi_period - 1u) + loss) / f32(rsi_period);
+            output[i * 2u] = compute_rsi_value(avg_gain, avg_loss);
+        }
+        output[i * 2u + 1u] = 0.0;
+    }
+
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        if (i < stoch_period - 1u) {
+            output[i * 2u + 1u] = 0.0;
+            continue;
+        }
+        var min_rsi = 1e9;
+        var max_rsi = -1e9;
+        let start = i + 1u - stoch_period;
+        for (var j: u32 = start; j <= i; j = j + 1u) {
+            let rsi = output[j * 2u];
+            min_rsi = min(min_rsi, rsi);
+            max_rsi = max(max_rsi, rsi);
+        }
+        let range = max_rsi - min_rsi;
+        output[i * 2u + 1u] = select(
+            clamp((output[i * 2u] - min_rsi) / range * 100.0, 0.0, 100.0),
+            50.0,
+            range <= 1e-6,
+        );
+    }
+
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        if (i < k_period - 1u) {
+            output[i * 2u] = 0.0;
+            continue;
+        }
+        let start = i + 1u - k_period;
+        var sum_k: f32 = 0.0;
+        for (var j: u32 = start; j <= i; j = j + 1u) {
+            sum_k = sum_k + output[j * 2u + 1u];
+        }
+        output[i * 2u] = clamp(sum_k / f32(k_period), 0.0, 100.0);
+    }
+
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        if (i < d_period - 1u) {
+            output[i * 2u + 1u] = 0.0;
+            continue;
+        }
+        let start = i + 1u - d_period;
+        var sum_d: f32 = 0.0;
+        for (var j: u32 = start; j <= i; j = j + 1u) {
+            sum_d = sum_d + output[j * 2u];
+        }
+        output[i * 2u + 1u] = clamp(sum_d / f32(d_period), 0.0, 100.0);
+    }
 }
 "#;
 
