@@ -3,13 +3,13 @@
 //! Wraps Alpaca REST API and WebSocket streaming.
 //! Provides the same operations as MQL5 CTrade: open, close, partial close, modify, account info.
 
+use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
-use futures_util::{SinkExt, StreamExt};
 
 /// Shared HTTP client for SEC EDGAR requests (reuses TCP connections).
 fn sec_client() -> &'static Client {
@@ -24,20 +24,27 @@ fn sec_client() -> &'static Client {
 }
 
 /// Cached SEC ticker→CIK map. Fetched once (~8MB), reused for all lookups.
-static SEC_TICKER_MAP: tokio::sync::OnceCell<serde_json::Value> = tokio::sync::OnceCell::const_new();
+static SEC_TICKER_MAP: tokio::sync::OnceCell<serde_json::Value> =
+    tokio::sync::OnceCell::const_new();
 
 async fn get_sec_ticker_map() -> Result<&'static serde_json::Value, String> {
-    SEC_TICKER_MAP.get_or_try_init(|| async {
-        let client = sec_client();
-        let resp = client
-            .get("https://www.sec.gov/files/company_tickers.json")
-            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
-            .send()
-            .await
-            .map_err(|_| "SEC ticker map request failed".to_string())?;
-        resp.json::<serde_json::Value>().await
-            .map_err(|_| "SEC ticker map parse failed".to_string())
-    }).await
+    SEC_TICKER_MAP
+        .get_or_try_init(|| async {
+            let client = sec_client();
+            let resp = client
+                .get("https://www.sec.gov/files/company_tickers.json")
+                .header(
+                    "User-Agent",
+                    "TyphooN-Terminal/0.1 (support@marketwizardry.org)",
+                )
+                .send()
+                .await
+                .map_err(|_| "SEC ticker map request failed".to_string())?;
+            resp.json::<serde_json::Value>()
+                .await
+                .map_err(|_| "SEC ticker map parse failed".to_string())
+        })
+        .await
 }
 
 /// Look up CIK number for a ticker symbol from cached SEC ticker map.
@@ -47,7 +54,8 @@ async fn lookup_cik(ticker: &str) -> Result<u64, String> {
     if let Some(obj) = tickers.as_object() {
         for (_, v) in obj {
             if v["ticker"].as_str() == Some(&upper_ticker) {
-                if let Some(cik) = v["cik_str"].as_u64()
+                if let Some(cik) = v["cik_str"]
+                    .as_u64()
                     .or_else(|| v["cik_str"].as_str().and_then(|s| s.parse().ok()))
                 {
                     return Ok(cik);
@@ -69,6 +77,86 @@ const RATE_LIMIT_MS: u64 = 320;
 /// If a single chunk takes longer than this, the API is throttling us progressively.
 /// Accept what we have rather than spending hours on historical data.
 const SLOW_CHUNK_THRESHOLD_SECS: u64 = 60;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BarsLookbackMode {
+    /// Tight windows for freshness checks and incremental sync.
+    Incremental,
+    /// Wider windows sized to hit the terminal's target cache depth without
+    /// requesting since-inception history for every missing symbol.
+    Targeted,
+}
+
+fn bars_per_day(is_crypto: bool, timeframe: &str) -> f64 {
+    if is_crypto {
+        match timeframe {
+            "1Min" => 1440.0,
+            "5Min" => 288.0,
+            "15Min" => 96.0,
+            "30Min" => 48.0,
+            "1Hour" => 24.0,
+            "4Hour" => 6.0,
+            "1Day" => 1.0,
+            "1Week" => 0.14,
+            _ => 1.0,
+        }
+    } else {
+        match timeframe {
+            "1Min" => 390.0,
+            "5Min" => 78.0,
+            "15Min" => 26.0,
+            "30Min" => 13.0,
+            "1Hour" => 7.0,
+            "4Hour" => 2.0,
+            "1Day" => 0.7,
+            "1Week" => 0.14,
+            _ => 0.7,
+        }
+    }
+}
+
+fn max_lookback_days(is_crypto: bool, timeframe: &str, mode: BarsLookbackMode) -> i64 {
+    match (is_crypto, mode, timeframe) {
+        (true, BarsLookbackMode::Incremental, "1Min") => 3,
+        (true, BarsLookbackMode::Incremental, "5Min" | "15Min" | "30Min") => 14,
+        (true, BarsLookbackMode::Incremental, "1Hour") => 90,
+        (true, BarsLookbackMode::Incremental, "4Hour") => 180,
+        (true, BarsLookbackMode::Incremental, "1Day") => 1825,
+        (true, BarsLookbackMode::Incremental, "1Week") => 3650,
+        (true, BarsLookbackMode::Incremental, _) => 365,
+        (false, BarsLookbackMode::Incremental, "1Min") => 7,
+        (false, BarsLookbackMode::Incremental, "5Min" | "15Min" | "30Min") => 30,
+        (false, BarsLookbackMode::Incremental, "1Hour") => 365,
+        (false, BarsLookbackMode::Incremental, "4Hour") => 730,
+        (false, BarsLookbackMode::Incremental, "1Day") => 3650,
+        (false, BarsLookbackMode::Incremental, "1Week") => 7300,
+        (false, BarsLookbackMode::Incremental, _) => 1825,
+        (true, BarsLookbackMode::Targeted, "1Min") => 120,
+        (true, BarsLookbackMode::Targeted, "5Min") => 730,
+        (true, BarsLookbackMode::Targeted, "15Min" | "30Min") => 1825,
+        (true, BarsLookbackMode::Targeted, "1Hour" | "4Hour" | "1Day") => 3650,
+        (true, BarsLookbackMode::Targeted, "1Week") => 7300,
+        (true, BarsLookbackMode::Targeted, _) => 1825,
+        (false, BarsLookbackMode::Targeted, "1Min") => 365,
+        (false, BarsLookbackMode::Targeted, "5Min") => 1825,
+        (false, BarsLookbackMode::Targeted, "15Min" | "30Min") => 3650,
+        (false, BarsLookbackMode::Targeted, "1Hour" | "4Hour" | "1Day" | "1Week") => 7300,
+        (false, BarsLookbackMode::Targeted, _) => 3650,
+    }
+}
+
+fn lookback_days_for_request(
+    is_crypto: bool,
+    timeframe: &str,
+    limit: u32,
+    mode: BarsLookbackMode,
+) -> i64 {
+    let proportional_days =
+        ((limit as f64 / bars_per_day(is_crypto, timeframe)) * 1.5).ceil() as i64;
+    proportional_days
+        .max(7)
+        .min(max_lookback_days(is_crypto, timeframe, mode))
+}
 
 /// Round price to valid increment for Alpaca orders.
 /// Stocks > $1: 2 decimal places (penny). Stocks < $1: 4 decimal places (sub-penny allowed).
@@ -112,7 +200,9 @@ pub struct RateLimiter {
 impl RateLimiter {
     pub fn new() -> Self {
         Self {
-            last_request: Arc::new(Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1))),
+            last_request: Arc::new(Mutex::new(
+                std::time::Instant::now() - std::time::Duration::from_secs(1),
+            )),
             cooldown_until: Arc::new(Mutex::new(None)),
             adaptive_ms: Arc::new(Mutex::new(RATE_LIMIT_MS)),
         }
@@ -124,7 +214,9 @@ impl RateLimiter {
         let cooldown_remaining = {
             let cooldown = self.cooldown_until.lock().await;
             match *cooldown {
-                Some(until) if std::time::Instant::now() < until => Some(until - std::time::Instant::now()),
+                Some(until) if std::time::Instant::now() < until => {
+                    Some(until - std::time::Instant::now())
+                }
                 _ => None,
             }
         };
@@ -152,7 +244,10 @@ impl RateLimiter {
         // Double adaptive interval on 429 (capped at 5s)
         let mut adaptive = self.adaptive_ms.lock().await;
         *adaptive = (*adaptive * 2).min(5000);
-        tracing::warn!("Rate limit hit — cooling down for 60s (adaptive interval: {}ms)", *adaptive);
+        tracing::warn!(
+            "Rate limit hit — cooling down for 60s (adaptive interval: {}ms)",
+            *adaptive
+        );
     }
 
     /// Report how long a request took. If responses are slow, back off.
@@ -307,7 +402,8 @@ impl AlpacaBroker {
     /// to shave ~200ms off the first bar fetch.
     pub async fn warm_data_connection(&self) {
         // HEAD request to data endpoint — establishes connection without fetching data
-        let _ = self.client
+        let _ = self
+            .client
             .head(format!("{}/v2/stocks/AAPL/bars", DATA_BASE))
             .headers(self.headers())
             .send()
@@ -382,7 +478,12 @@ impl AlpacaBroker {
 
     // ── Orders ───────────────────────────────────────────────────────
 
-    pub async fn market_order(&self, symbol: &str, qty: f64, side: &str) -> Result<OrderResult, String> {
+    pub async fn market_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+    ) -> Result<OrderResult, String> {
         let mut body = HashMap::new();
         body.insert("symbol", symbol.to_string());
         body.insert("qty", qty.to_string());
@@ -414,7 +515,14 @@ impl AlpacaBroker {
     }
 
     /// Place a limit order.
-    pub async fn limit_order(&self, symbol: &str, qty: f64, side: &str, limit_price: f64, tif: &str) -> Result<OrderResult, String> {
+    pub async fn limit_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        limit_price: f64,
+        tif: &str,
+    ) -> Result<OrderResult, String> {
         let body = serde_json::json!({
             "symbol": symbol,
             "qty": qty.to_string(),
@@ -427,7 +535,14 @@ impl AlpacaBroker {
     }
 
     /// Place a stop order.
-    pub async fn stop_order(&self, symbol: &str, qty: f64, side: &str, stop_price: f64, tif: &str) -> Result<OrderResult, String> {
+    pub async fn stop_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        stop_price: f64,
+        tif: &str,
+    ) -> Result<OrderResult, String> {
         let body = serde_json::json!({
             "symbol": symbol,
             "qty": qty.to_string(),
@@ -440,7 +555,15 @@ impl AlpacaBroker {
     }
 
     /// Place a stop-limit order.
-    pub async fn stop_limit_order(&self, symbol: &str, qty: f64, side: &str, stop_price: f64, limit_price: f64, tif: &str) -> Result<OrderResult, String> {
+    pub async fn stop_limit_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        stop_price: f64,
+        limit_price: f64,
+        tif: &str,
+    ) -> Result<OrderResult, String> {
         let body = serde_json::json!({
             "symbol": symbol,
             "qty": qty.to_string(),
@@ -454,7 +577,15 @@ impl AlpacaBroker {
     }
 
     /// Place a trailing stop order.
-    pub async fn trailing_stop_order(&self, symbol: &str, qty: f64, side: &str, trail_price: Option<f64>, trail_percent: Option<f64>, tif: &str) -> Result<OrderResult, String> {
+    pub async fn trailing_stop_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        trail_price: Option<f64>,
+        trail_percent: Option<f64>,
+        tif: &str,
+    ) -> Result<OrderResult, String> {
         let mut body = serde_json::json!({
             "symbol": symbol,
             "qty": qty.to_string(),
@@ -472,7 +603,14 @@ impl AlpacaBroker {
     }
 
     /// Place a bracket order (market entry with TP + SL legs).
-    pub async fn bracket_order(&self, symbol: &str, qty: f64, side: &str, tp_price: f64, sl_price: f64) -> Result<OrderResult, String> {
+    pub async fn bracket_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        tp_price: f64,
+        sl_price: f64,
+    ) -> Result<OrderResult, String> {
         // Round prices to valid increments (Alpaca rejects sub-penny for stocks > $1)
         let tp_rounded = format_order_price(tp_price);
         let sl_rounded = format_order_price(sl_price);
@@ -491,7 +629,15 @@ impl AlpacaBroker {
 
     /// Place an OCO (one-cancels-other) exit order: TP limit + SL stop on same side.
     /// When one leg fills, the other is automatically cancelled.
-    pub async fn oco_order(&self, symbol: &str, qty: f64, side: &str, tp_price: f64, sl_price: f64, sl_limit: Option<f64>) -> Result<OrderResult, String> {
+    pub async fn oco_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        tp_price: f64,
+        sl_price: f64,
+        sl_limit: Option<f64>,
+    ) -> Result<OrderResult, String> {
         let mut body = serde_json::json!({
             "symbol": symbol,
             "qty": qty.to_string(),
@@ -579,12 +725,33 @@ impl AlpacaBroker {
     }
 
     /// Modify a pending order.
-    pub async fn modify_order(&self, order_id: &str, qty: Option<f64>, limit_price: Option<f64>, stop_price: Option<f64>, trail: Option<f64>) -> Result<OrderResult, String> {
+    pub async fn modify_order(
+        &self,
+        order_id: &str,
+        qty: Option<f64>,
+        limit_price: Option<f64>,
+        stop_price: Option<f64>,
+        trail: Option<f64>,
+    ) -> Result<OrderResult, String> {
         let mut body = serde_json::Map::new();
-        if let Some(q) = qty { body.insert("qty".into(), serde_json::json!(q.to_string())); }
-        if let Some(lp) = limit_price { body.insert("limit_price".into(), serde_json::json!(format_order_price(lp))); }
-        if let Some(sp) = stop_price { body.insert("stop_price".into(), serde_json::json!(format_order_price(sp))); }
-        if let Some(t) = trail { body.insert("trail".into(), serde_json::json!(t.to_string())); }
+        if let Some(q) = qty {
+            body.insert("qty".into(), serde_json::json!(q.to_string()));
+        }
+        if let Some(lp) = limit_price {
+            body.insert(
+                "limit_price".into(),
+                serde_json::json!(format_order_price(lp)),
+            );
+        }
+        if let Some(sp) = stop_price {
+            body.insert(
+                "stop_price".into(),
+                serde_json::json!(format_order_price(sp)),
+            );
+        }
+        if let Some(t) = trail {
+            body.insert("trail".into(), serde_json::json!(t.to_string()));
+        }
 
         let resp = self
             .client
@@ -622,21 +789,25 @@ impl AlpacaBroker {
 
     fn parse_order_info(o: &serde_json::Value) -> OrderInfo {
         // Parse bracket legs recursively
-        let legs = o["legs"].as_array().map(|arr| {
-            arr.iter().map(Self::parse_order_info).collect()
-        });
+        let legs = o["legs"]
+            .as_array()
+            .map(|arr| arr.iter().map(Self::parse_order_info).collect());
         // Helper: parse price field that may be string or number
         let price_field = |v: &serde_json::Value| -> Option<String> {
-            v.as_str().map(|s| s.to_string())
+            v.as_str()
+                .map(|s| s.to_string())
                 .or_else(|| v.as_f64().map(|f| f.to_string()))
         };
         OrderInfo {
             id: o["id"].as_str().unwrap_or("").to_string(),
             symbol: o["symbol"].as_str().unwrap_or("").to_string(),
-            qty: o["qty"].as_str().unwrap_or_else(|| {
-                // qty may be numeric in some API responses
-                "0"
-            }).to_string(),
+            qty: o["qty"]
+                .as_str()
+                .unwrap_or_else(|| {
+                    // qty may be numeric in some API responses
+                    "0"
+                })
+                .to_string(),
             filled_qty: o["filled_qty"].as_str().unwrap_or("0").to_string(),
             side: o["side"].as_str().unwrap_or("").to_string(),
             order_type: o["type"].as_str().unwrap_or("").to_string(),
@@ -653,11 +824,18 @@ impl AlpacaBroker {
         }
     }
 
-    pub async fn close_position(&self, symbol: &str, qty: Option<f64>) -> Result<OrderResult, String> {
+    pub async fn close_position(
+        &self,
+        symbol: &str,
+        qty: Option<f64>,
+    ) -> Result<OrderResult, String> {
         // Alpaca position endpoint uses symbol without slash (BTC/USD → BTCUSD)
         let encoded_symbol = symbol.replace('/', "%2F");
         let url = if let Some(q) = qty {
-            format!("{}/v2/positions/{}?qty={}", self.base_url, encoded_symbol, q)
+            format!(
+                "{}/v2/positions/{}?qty={}",
+                self.base_url, encoded_symbol, q
+            )
         } else {
             format!("{}/v2/positions/{}", self.base_url, encoded_symbol)
         };
@@ -720,14 +898,22 @@ impl AlpacaBroker {
             shortable: json["shortable"].as_bool().unwrap_or(false),
             fractionable: json["fractionable"].as_bool().unwrap_or(false),
             min_order_size: json["min_order_size"].as_str().and_then(|s| s.parse().ok()),
-            min_trade_increment: json["min_trade_increment"].as_str().and_then(|s| s.parse().ok()),
-            price_increment: json["price_increment"].as_str().and_then(|s| s.parse().ok()),
+            min_trade_increment: json["min_trade_increment"]
+                .as_str()
+                .and_then(|s| s.parse().ok()),
+            price_increment: json["price_increment"]
+                .as_str()
+                .and_then(|s| s.parse().ok()),
         })
     }
 
     // ── News ─────────────────────────────────────────────────────
 
-    pub async fn get_news(&self, symbol: &str, limit: u32) -> Result<Vec<serde_json::Value>, String> {
+    pub async fn get_news(
+        &self,
+        symbol: &str,
+        limit: u32,
+    ) -> Result<Vec<serde_json::Value>, String> {
         self.rate_limiter.wait().await;
         let resp = self
             .client
@@ -748,7 +934,9 @@ impl AlpacaBroker {
             return Err(format!("News request failed: HTTP {}", status));
         }
 
-        let json: serde_json::Value = resp.json().await
+        let json: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("News parse failed: {e}"))?;
 
         Ok(json["news"].as_array().cloned().unwrap_or_default())
@@ -756,13 +944,21 @@ impl AlpacaBroker {
 
     // ── Finnhub News (secondary source, free API key) ──────────────
 
-    pub async fn get_finnhub_news(&self, symbol: &str, finnhub_key: &str) -> Result<Vec<serde_json::Value>, String> {
-        if finnhub_key.is_empty() { return Ok(vec![]); }
+    pub async fn get_finnhub_news(
+        &self,
+        symbol: &str,
+        finnhub_key: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        if finnhub_key.is_empty() {
+            return Ok(vec![]);
+        }
         // Strip /USD for crypto symbols (Finnhub uses BINANCE:BTCUSDT format for crypto)
         let clean_sym = symbol.replace("/USD", "").replace("/", "");
 
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        let week_ago = (chrono::Utc::now() - chrono::Duration::days(7)).format("%Y-%m-%d").to_string();
+        let week_ago = (chrono::Utc::now() - chrono::Duration::days(7))
+            .format("%Y-%m-%d")
+            .to_string();
 
         let resp = sec_client()
             .get("https://finnhub.io/api/v1/company-news")
@@ -780,7 +976,9 @@ impl AlpacaBroker {
             return Err(format!("Finnhub news: HTTP {}", resp.status()));
         }
 
-        let articles: Vec<serde_json::Value> = resp.json().await
+        let articles: Vec<serde_json::Value> = resp
+            .json()
+            .await
             .map_err(|e| format!("Finnhub parse failed: {e}"))?;
 
         // Normalize to same format as Alpaca news
@@ -800,31 +998,66 @@ impl AlpacaBroker {
 
     // ── Alpha Vantage — Earnings (EPS estimates vs actual) ─────────
 
-    pub async fn get_alpha_vantage_earnings(&self, symbol: &str, av_key: &str) -> Result<serde_json::Value, String> {
-        if av_key.is_empty() { return Err("Alpha Vantage API key required".into()); }
+    pub async fn get_alpha_vantage_earnings(
+        &self,
+        symbol: &str,
+        av_key: &str,
+    ) -> Result<serde_json::Value, String> {
+        if av_key.is_empty() {
+            return Err("Alpha Vantage API key required".into());
+        }
         let resp = sec_client()
             .get("https://www.alphavantage.co/query")
-            .query(&[("function", "EARNINGS"), ("symbol", symbol), ("apikey", av_key)])
-            .send().await.map_err(|e| format!("AV earnings failed: {e}"))?;
-        if !resp.status().is_success() { return Err(format!("AV earnings: HTTP {}", resp.status())); }
-        resp.json().await.map_err(|e| format!("AV parse failed: {e}"))
+            .query(&[
+                ("function", "EARNINGS"),
+                ("symbol", symbol),
+                ("apikey", av_key),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("AV earnings failed: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("AV earnings: HTTP {}", resp.status()));
+        }
+        resp.json()
+            .await
+            .map_err(|e| format!("AV parse failed: {e}"))
     }
 
     // ── FMP — Analyst Ratings ────────────────────────────────────
 
-    pub async fn get_fmp_analyst_ratings(&self, symbol: &str, fmp_key: &str) -> Result<Vec<serde_json::Value>, String> {
-        if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+    pub async fn get_fmp_analyst_ratings(
+        &self,
+        symbol: &str,
+        fmp_key: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        if fmp_key.is_empty() {
+            return Err("FMP API key required".into());
+        }
         let resp = sec_client()
-            .get(format!("https://financialmodelingprep.com/api/v3/grade/{}", symbol))
+            .get(format!(
+                "https://financialmodelingprep.com/api/v3/grade/{}",
+                symbol
+            ))
             .query(&[("apikey", fmp_key), ("limit", "20")])
-            .send().await.map_err(|e| format!("FMP ratings failed: {e}"))?;
-        if !resp.status().is_success() { return Err(format!("FMP ratings: HTTP {}", resp.status())); }
-        resp.json().await.map_err(|e| format!("FMP parse failed: {e}"))
+            .send()
+            .await
+            .map_err(|e| format!("FMP ratings failed: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("FMP ratings: HTTP {}", resp.status()));
+        }
+        resp.json()
+            .await
+            .map_err(|e| format!("FMP parse failed: {e}"))
     }
 
     // ── Portfolio History ────────────────────────────────────────
 
-    pub async fn get_portfolio_history(&self, period: &str, timeframe: &str) -> Result<serde_json::Value, String> {
+    pub async fn get_portfolio_history(
+        &self,
+        period: &str,
+        timeframe: &str,
+    ) -> Result<serde_json::Value, String> {
         self.rate_limiter.wait().await;
         let resp = self
             .client
@@ -838,7 +1071,9 @@ impl AlpacaBroker {
         if !resp.status().is_success() {
             return Err(format!("Portfolio history: HTTP {}", resp.status()));
         }
-        resp.json().await.map_err(|e| format!("Portfolio history parse failed: {e}"))
+        resp.json()
+            .await
+            .map_err(|e| format!("Portfolio history parse failed: {e}"))
     }
 
     // ── Market Clock ─────────────────────────────────────────────
@@ -856,12 +1091,17 @@ impl AlpacaBroker {
         if !resp.status().is_success() {
             return Err(format!("Market clock: HTTP {}", resp.status()));
         }
-        resp.json().await.map_err(|e| format!("Market clock parse failed: {e}"))
+        resp.json()
+            .await
+            .map_err(|e| format!("Market clock parse failed: {e}"))
     }
 
     // ── Corporate Actions (Earnings/Dividends) ──────────────────
 
-    pub async fn get_corporate_actions(&self, symbol: &str) -> Result<Vec<serde_json::Value>, String> {
+    pub async fn get_corporate_actions(
+        &self,
+        symbol: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
         self.rate_limiter.wait().await;
         let resp = self
             .client
@@ -876,7 +1116,9 @@ impl AlpacaBroker {
 
         match resp {
             Ok(r) if r.status().is_success() => {
-                let json: serde_json::Value = r.json().await
+                let json: serde_json::Value = r
+                    .json()
+                    .await
                     .map_err(|e| format!("Corporate actions parse failed: {e}"))?;
                 Ok(json.as_array().cloned().unwrap_or_default())
             }
@@ -887,8 +1129,14 @@ impl AlpacaBroker {
 
     // ── Finnhub Recommendation Trends ────────────────────────────
 
-    pub async fn get_finnhub_recommendations(&self, symbol: &str, finnhub_key: &str) -> Result<Vec<serde_json::Value>, String> {
-        if finnhub_key.is_empty() { return Err("Finnhub API key required".into()); }
+    pub async fn get_finnhub_recommendations(
+        &self,
+        symbol: &str,
+        finnhub_key: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        if finnhub_key.is_empty() {
+            return Err("Finnhub API key required".into());
+        }
         let resp = sec_client()
             .get("https://finnhub.io/api/v1/stock/recommendation")
             .query(&[("symbol", symbol), ("token", finnhub_key)])
@@ -899,13 +1147,21 @@ impl AlpacaBroker {
         if !resp.status().is_success() {
             return Err(format!("Finnhub recommendations: HTTP {}", resp.status()));
         }
-        resp.json().await.map_err(|e| format!("Finnhub recommendations parse failed: {e}"))
+        resp.json()
+            .await
+            .map_err(|e| format!("Finnhub recommendations parse failed: {e}"))
     }
 
     // ── Finnhub Price Targets ────────────────────────────────────
 
-    pub async fn get_finnhub_price_target(&self, symbol: &str, finnhub_key: &str) -> Result<serde_json::Value, String> {
-        if finnhub_key.is_empty() { return Err("Finnhub API key required".into()); }
+    pub async fn get_finnhub_price_target(
+        &self,
+        symbol: &str,
+        finnhub_key: &str,
+    ) -> Result<serde_json::Value, String> {
+        if finnhub_key.is_empty() {
+            return Err("Finnhub API key required".into());
+        }
         let resp = sec_client()
             .get("https://finnhub.io/api/v1/stock/price-target")
             .query(&[("symbol", symbol), ("token", finnhub_key)])
@@ -916,16 +1172,28 @@ impl AlpacaBroker {
         if !resp.status().is_success() {
             return Err(format!("Finnhub price target: HTTP {}", resp.status()));
         }
-        resp.json().await.map_err(|e| format!("Finnhub price target parse failed: {e}"))
+        resp.json()
+            .await
+            .map_err(|e| format!("Finnhub price target parse failed: {e}"))
     }
 
     // ── Finnhub Insider Sentiment ────────────────────────────────
 
-    pub async fn get_finnhub_insider_sentiment(&self, symbol: &str, finnhub_key: &str) -> Result<serde_json::Value, String> {
-        if finnhub_key.is_empty() { return Err("Finnhub API key required".into()); }
+    pub async fn get_finnhub_insider_sentiment(
+        &self,
+        symbol: &str,
+        finnhub_key: &str,
+    ) -> Result<serde_json::Value, String> {
+        if finnhub_key.is_empty() {
+            return Err("Finnhub API key required".into());
+        }
         let resp = sec_client()
             .get("https://finnhub.io/api/v1/stock/insider-sentiment")
-            .query(&[("symbol", symbol), ("token", finnhub_key), ("from", "2024-01-01")])
+            .query(&[
+                ("symbol", symbol),
+                ("token", finnhub_key),
+                ("from", "2024-01-01"),
+            ])
             .send()
             .await
             .map_err(|e| format!("Finnhub insider sentiment failed: {e}"))?;
@@ -933,7 +1201,9 @@ impl AlpacaBroker {
         if !resp.status().is_success() {
             return Err(format!("Finnhub insider sentiment: HTTP {}", resp.status()));
         }
-        resp.json().await.map_err(|e| format!("Finnhub insider sentiment parse failed: {e}"))
+        resp.json()
+            .await
+            .map_err(|e| format!("Finnhub insider sentiment parse failed: {e}"))
     }
 
     // ── SEC EDGAR Filings ─────────────────────────────────────────
@@ -941,11 +1211,23 @@ impl AlpacaBroker {
     /// Fetch recent SEC filings for a company via EDGAR API (free, no auth).
     /// CIK lookup by ticker, then fetch filings.
     /// Hardened: uses .query() to prevent URL parameter injection.
-    pub async fn get_sec_filings(ticker: &str, filing_type: &str, _limit: u32) -> Result<serde_json::Value, String> {
-        if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric() || c == '/') {
+    pub async fn get_sec_filings(
+        ticker: &str,
+        filing_type: &str,
+        _limit: u32,
+    ) -> Result<serde_json::Value, String> {
+        if ticker.is_empty()
+            || ticker.len() > 10
+            || !ticker
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '/')
+        {
             return Err("Invalid ticker for SEC lookup".to_string());
         }
-        if !matches!(filing_type, "10-K" | "10-Q" | "8-K" | "S-1" | "DEF 14A" | "13F" | "4" | "SC 13D" | "SC 13G") {
+        if !matches!(
+            filing_type,
+            "10-K" | "10-Q" | "8-K" | "S-1" | "DEF 14A" | "13F" | "4" | "SC 13D" | "SC 13G"
+        ) {
             return Err("Invalid filing type".to_string());
         }
         let client = sec_client();
@@ -959,7 +1241,9 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("SEC tickers lookup failed: {e}"))?;
 
-        let tickers_json: serde_json::Value = tickers_resp.json().await
+        let tickers_json: serde_json::Value = tickers_resp
+            .json()
+            .await
             .map_err(|e| format!("SEC tickers parse failed: {e}"))?;
 
         // Find CIK for this ticker (case-insensitive)
@@ -970,7 +1254,9 @@ impl AlpacaBroker {
             for (_, entry) in obj {
                 if let Some(t) = entry["ticker"].as_str() {
                     if t.to_uppercase() == upper_ticker {
-                        cik = entry["cik_str"].as_u64().or_else(|| entry["cik_str"].as_str().and_then(|s| s.parse().ok()));
+                        cik = entry["cik_str"]
+                            .as_u64()
+                            .or_else(|| entry["cik_str"].as_str().and_then(|s| s.parse().ok()));
                         company_name = entry["title"].as_str().unwrap_or("").to_string();
                         break;
                     }
@@ -980,23 +1266,35 @@ impl AlpacaBroker {
 
         let cik_num = match cik {
             Some(c) => c,
-            None => return Ok(serde_json::json!({ "hits": { "hits": [] }, "error": format!("Ticker '{}' not found in SEC EDGAR", ticker) })),
+            None => {
+                return Ok(
+                    serde_json::json!({ "hits": { "hits": [] }, "error": format!("Ticker '{}' not found in SEC EDGAR", ticker) }),
+                );
+            }
         };
 
         // Step 2: Fetch filings by CIK from submissions endpoint
         let cik_padded = format!("{:010}", cik_num);
         let submissions_resp = client
-            .get(&format!("https://data.sec.gov/submissions/CIK{}.json", cik_padded))
+            .get(&format!(
+                "https://data.sec.gov/submissions/CIK{}.json",
+                cik_padded
+            ))
             .header("User-Agent", ua)
             .send()
             .await
             .map_err(|e| format!("SEC submissions failed: {e}"))?;
 
         if !submissions_resp.status().is_success() {
-            return Err(format!("SEC submissions: HTTP {}", submissions_resp.status()));
+            return Err(format!(
+                "SEC submissions: HTTP {}",
+                submissions_resp.status()
+            ));
         }
 
-        let submissions: serde_json::Value = submissions_resp.json().await
+        let submissions: serde_json::Value = submissions_resp
+            .json()
+            .await
             .map_err(|e| format!("SEC submissions parse failed: {e}"))?;
 
         // Step 3: Filter recent filings by type
@@ -1011,13 +1309,24 @@ impl AlpacaBroker {
         if let (Some(forms), Some(dates), Some(accessions)) = (forms, dates, accessions) {
             for i in 0..forms.len().min(200) {
                 let form = forms[i].as_str().unwrap_or("");
-                if form != filing_type { continue; }
+                if form != filing_type {
+                    continue;
+                }
                 let date = dates.get(i).and_then(|d| d.as_str()).unwrap_or("");
                 let acc = accessions.get(i).and_then(|a| a.as_str()).unwrap_or("");
-                let doc = primary_docs.and_then(|d| d.get(i)).and_then(|d| d.as_str()).unwrap_or("");
-                let desc = descriptions.and_then(|d| d.get(i)).and_then(|d| d.as_str()).unwrap_or("");
+                let doc = primary_docs
+                    .and_then(|d| d.get(i))
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("");
+                let desc = descriptions
+                    .and_then(|d| d.get(i))
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("");
                 let acc_clean = acc.replace('-', "");
-                let url = format!("https://www.sec.gov/Archives/edgar/data/{}/{}/{}", cik_num, acc_clean, doc);
+                let url = format!(
+                    "https://www.sec.gov/Archives/edgar/data/{}/{}/{}",
+                    cik_num, acc_clean, doc
+                );
 
                 hits.push(serde_json::json!({
                     "_source": {
@@ -1028,7 +1337,9 @@ impl AlpacaBroker {
                     },
                     "_id": url,
                 }));
-                if hits.len() >= 20 { break; }
+                if hits.len() >= 20 {
+                    break;
+                }
             }
         }
 
@@ -1039,7 +1350,10 @@ impl AlpacaBroker {
     /// Hardened: timeout, validated ticker, generic error messages.
     /// Uses cached ticker map and shared HTTP client.
     pub async fn get_sec_company_facts(ticker: &str) -> Result<serde_json::Value, String> {
-        if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
+        if ticker.is_empty()
+            || ticker.len() > 10
+            || !ticker.chars().all(|c| c.is_ascii_alphanumeric())
+        {
             return Err("Invalid ticker for SEC lookup".to_string());
         }
         let client = sec_client();
@@ -1047,8 +1361,14 @@ impl AlpacaBroker {
         let cik_padded = format!("CIK{:010}", cik);
 
         let facts_resp = client
-            .get(format!("https://data.sec.gov/api/xbrl/companyfacts/{}.json", cik_padded))
-            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
+            .get(format!(
+                "https://data.sec.gov/api/xbrl/companyfacts/{}.json",
+                cik_padded
+            ))
+            .header(
+                "User-Agent",
+                "TyphooN-Terminal/0.1 (support@marketwizardry.org)",
+            )
             .send()
             .await
             .map_err(|e| format!("SEC company facts failed: {e}"))?;
@@ -1057,7 +1377,9 @@ impl AlpacaBroker {
             return Err(format!("SEC company facts: HTTP {}", facts_resp.status()));
         }
 
-        let facts: serde_json::Value = facts_resp.json().await
+        let facts: serde_json::Value = facts_resp
+            .json()
+            .await
             .map_err(|e| format!("SEC facts parse failed: {e}"))?;
 
         // Extract key metrics
@@ -1126,7 +1448,9 @@ impl AlpacaBroker {
                 shortable: a["shortable"].as_bool().unwrap_or(false),
                 fractionable: a["fractionable"].as_bool().unwrap_or(false),
                 min_order_size: a["min_order_size"].as_str().and_then(|s| s.parse().ok()),
-                min_trade_increment: a["min_trade_increment"].as_str().and_then(|s| s.parse().ok()),
+                min_trade_increment: a["min_trade_increment"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok()),
                 price_increment: a["price_increment"].as_str().and_then(|s| s.parse().ok()),
             })
             .collect())
@@ -1158,10 +1482,18 @@ impl AlpacaBroker {
             format!("{}/v2/stocks/{}/bars", DATA_BASE, symbol)
         };
 
-        let feeds: Vec<Option<&str>> = if is_crypto { vec![None] } else { vec![Some("iex"), Some("sip")] };
+        let feeds: Vec<Option<&str>> = if is_crypto {
+            vec![None]
+        } else {
+            vec![Some("iex"), Some("sip")]
+        };
 
         // Start from the earliest reasonable date
-        let start_date = if is_crypto { "2015-01-01" } else { "2000-01-01" };
+        let start_date = if is_crypto {
+            "2015-01-01"
+        } else {
+            "2000-01-01"
+        };
         let mut last_error = String::new();
 
         for feed in &feeds {
@@ -1186,19 +1518,36 @@ impl AlpacaBroker {
                 } else {
                     params.push(("start", format!("{}T00:00:00Z", start_date)));
                 }
-                if let Some(f) = feed { params.push(("feed", f.to_string())); }
-                if is_crypto { params.push(("symbols", symbol.to_string())); }
+                if let Some(f) = feed {
+                    params.push(("feed", f.to_string()));
+                }
+                if is_crypto {
+                    params.push(("symbols", symbol.to_string()));
+                }
 
-                let resp = match self.client.get(&base).headers(self.headers()).query(&params).send().await {
+                let resp = match self
+                    .client
+                    .get(&base)
+                    .headers(self.headers())
+                    .query(&params)
+                    .send()
+                    .await
+                {
                     Ok(r) => r,
-                    Err(e) => { last_error = format!("Request failed: {e}"); break; }
+                    Err(e) => {
+                        last_error = format!("Request failed: {e}");
+                        break;
+                    }
                 };
 
                 if resp.status().as_u16() == 429 {
                     self.rate_limiter.trigger_cooldown().await;
                     self.rate_limiter.wait().await;
                     rate_limited = true;
-                    if all_bars.is_empty() { last_error = "Rate limited".into(); break; }
+                    if all_bars.is_empty() {
+                        last_error = "Rate limited".into();
+                        break;
+                    }
                     // Accept partial data on rate limit
                     break;
                 }
@@ -1210,28 +1559,48 @@ impl AlpacaBroker {
 
                 let json: serde_json::Value = match resp.json().await {
                     Ok(j) => j,
-                    Err(e) => { last_error = format!("Parse: {e}"); break; }
+                    Err(e) => {
+                        last_error = format!("Parse: {e}");
+                        break;
+                    }
                 };
 
-                let new_page_token = json.get("next_page_token").and_then(|t| t.as_str()).map(|s| s.to_string());
+                let new_page_token = json
+                    .get("next_page_token")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string());
                 let chunk_bars = Self::parse_bars(&json, symbol, is_crypto);
                 let bars_in_chunk = chunk_bars.len();
                 chunk_count += 1;
 
-                if bars_in_chunk == 0 { break; }
+                if bars_in_chunk == 0 {
+                    break;
+                }
 
                 all_bars.extend(chunk_bars);
 
                 // Report progress
                 if let Some(tx) = progress {
                     let elapsed = fetch_start.elapsed().as_secs();
-                    let last_ts = all_bars.last().map(|b| &b.timestamp[..10.min(b.timestamp.len())]).unwrap_or("?");
-                    let _ = tx.send(format!("{} {}: {} bars (chunk #{}, {}s, latest: {})",
-                        symbol, timeframe, all_bars.len(), chunk_count, elapsed, last_ts));
+                    let last_ts = all_bars
+                        .last()
+                        .map(|b| &b.timestamp[..10.min(b.timestamp.len())])
+                        .unwrap_or("?");
+                    let _ = tx.send(format!(
+                        "{} {}: {} bars (chunk #{}, {}s, latest: {})",
+                        symbol,
+                        timeframe,
+                        all_bars.len(),
+                        chunk_count,
+                        elapsed,
+                        last_ts
+                    ));
                 }
 
                 match new_page_token {
-                    Some(token) if !token.is_empty() => { next_page_token = Some(token); }
+                    Some(token) if !token.is_empty() => {
+                        next_page_token = Some(token);
+                    }
                     _ => break,
                 }
             }
@@ -1239,11 +1608,23 @@ impl AlpacaBroker {
             if !all_bars.is_empty() {
                 all_bars.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
                 all_bars.dedup_by(|a, b| a.timestamp == b.timestamp);
-                let outcome = if rate_limited { FetchOutcome::RateLimitedPartial } else { FetchOutcome::Complete };
-                tracing::info!("{} {}: get_all_bars {} — {} bars in {}s",
-                    symbol, timeframe,
-                    if rate_limited { "partial (rate-limited)" } else { "complete" },
-                    all_bars.len(), fetch_start.elapsed().as_secs());
+                let outcome = if rate_limited {
+                    FetchOutcome::RateLimitedPartial
+                } else {
+                    FetchOutcome::Complete
+                };
+                tracing::info!(
+                    "{} {}: get_all_bars {} — {} bars in {}s",
+                    symbol,
+                    timeframe,
+                    if rate_limited {
+                        "partial (rate-limited)"
+                    } else {
+                        "complete"
+                    },
+                    all_bars.len(),
+                    fetch_start.elapsed().as_secs()
+                );
                 return Ok((all_bars, outcome));
             }
             if rate_limited {
@@ -1267,7 +1648,22 @@ impl AlpacaBroker {
         // Strip the FetchOutcome here so this trait-exposed method keeps its
         // existing signature. The retry queue runs off direct get_bars_after
         // callers that care about partial/rate-limited results.
-        self.get_bars_after(symbol, timeframe, limit, None).await.map(|(bars, _)| bars)
+        self.get_bars_window(symbol, timeframe, limit, None, BarsLookbackMode::Targeted)
+            .await
+            .map(|(bars, _)| bars)
+    }
+
+    /// Fetch up to `limit` bars using a wider lookback window sized for the
+    /// terminal's automated sync target. This is deeper than the incremental
+    /// freshness path, but still bounded unlike `get_all_bars()`.
+    pub async fn get_target_bars(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        limit: u32,
+    ) -> Result<(Vec<Bar>, FetchOutcome), String> {
+        self.get_bars_window(symbol, timeframe, limit, None, BarsLookbackMode::Targeted)
+            .await
     }
 
     /// Fetch bars, optionally starting after a given timestamp (for incremental fetching).
@@ -1280,12 +1676,37 @@ impl AlpacaBroker {
         limit: u32,
         after_timestamp: Option<&str>,
     ) -> Result<(Vec<Bar>, FetchOutcome), String> {
+        self.get_bars_window(
+            symbol,
+            timeframe,
+            limit,
+            after_timestamp,
+            BarsLookbackMode::Incremental,
+        )
+        .await
+    }
+
+    async fn get_bars_window(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        limit: u32,
+        after_timestamp: Option<&str>,
+        lookback_mode: BarsLookbackMode,
+    ) -> Result<(Vec<Bar>, FetchOutcome), String> {
         let is_crypto = symbol.contains('/');
 
         // Alpaca doesn't support 1Month — fetch weekly bars and aggregate
         if timeframe == "1Month" {
             // Fetch enough weekly bars: ~4.3 weeks per month, request 5x for safety
-            let (weekly, outcome) = Box::pin(self.get_bars_after(symbol, "1Week", (limit * 5).max(1000), after_timestamp)).await?;
+            let (weekly, outcome) = Box::pin(self.get_bars_window(
+                symbol,
+                "1Week",
+                (limit * 5).max(1000),
+                after_timestamp,
+                lookback_mode,
+            ))
+            .await?;
             let monthly = Self::aggregate_weekly_to_monthly(&weekly);
             let trimmed = if monthly.len() > limit as usize {
                 monthly[monthly.len() - limit as usize..].to_vec()
@@ -1311,46 +1732,8 @@ impl AlpacaBroker {
         } else {
             format!("{}/v2/stocks/{}/bars", DATA_BASE, symbol)
         };
-
-        // Bars per calendar day — crypto trades 24/7, stocks ~6.5h/day
-        let bars_per_day: f64 = if is_crypto {
-            match actual_tf {
-                "1Min" => 1440.0, "5Min" => 288.0, "15Min" => 96.0,
-                "30Min" => 48.0, "1Hour" => 24.0, "4Hour" => 6.0,
-                "1Day" => 1.0, "1Week" => 0.14, _ => 1.0,
-            }
-        } else {
-            match actual_tf {
-                "1Min" => 390.0, "5Min" => 78.0, "15Min" => 26.0,
-                "30Min" => 13.0, "1Hour" => 7.0, "4Hour" => 2.0,
-                "1Day" => 0.7, "1Week" => 0.14, _ => 0.7,
-            }
-        };
-        // Tighter lookback for crypto (trades 24/7, free tier throttles hard)
-        let max_lookback_days: i64 = if is_crypto {
-            match actual_tf {
-                "1Min" => 3,
-                "5Min" | "15Min" | "30Min" => 14,
-                "1Hour" => 90,     // was 365 — saves ~75% chunks
-                "4Hour" => 180,    // was 730 — saves ~75% chunks
-                "1Day" => 1825,
-                "1Week" => 3650,
-                _ => 365,
-            }
-        } else {
-            match actual_tf {
-                "1Min" => 7,
-                "5Min" | "15Min" | "30Min" => 30,
-                "1Hour" => 365,
-                "4Hour" => 730,
-                "1Day" => 3650,
-                "1Week" => 7300,
-                _ => 1825,
-            }
-        };
-        // Proportional lookback: bars_needed / bars_per_day * 1.5 safety margin
-        let proportional_days = ((actual_limit as f64 / bars_per_day) * 1.5).ceil() as i64;
-        let lookback_days = proportional_days.max(7).min(max_lookback_days);
+        let lookback_days =
+            lookback_days_for_request(is_crypto, actual_tf, actual_limit, lookback_mode);
 
         // Incremental fetch: if caller provides a cached timestamp, start from there
         // instead of the full lookback. This reduces 13+ chunks to 1-2 chunks.
@@ -1359,7 +1742,9 @@ impl AlpacaBroker {
                 let cached_start = parsed.with_timezone(&chrono::Utc);
                 tracing::info!(
                     "{} @ {}: incremental fetch from {} (cache hit)",
-                    symbol, actual_tf, &after_ts[..19.min(after_ts.len())]
+                    symbol,
+                    actual_tf,
+                    &after_ts[..19.min(after_ts.len())]
                 );
                 cached_start
             } else {
@@ -1437,15 +1822,25 @@ impl AlpacaBroker {
                         rate_limit_retries += 1;
                         self.rate_limiter.trigger_cooldown().await;
                         if rate_limit_retries <= MAX_RATE_LIMIT_RETRIES {
-                            tracing::warn!("429 rate limit for {} @ {}: retry {}/{} ({} bars so far)",
-                                symbol, actual_tf, rate_limit_retries, MAX_RATE_LIMIT_RETRIES, all_bars.len());
+                            tracing::warn!(
+                                "429 rate limit for {} @ {}: retry {}/{} ({} bars so far)",
+                                symbol,
+                                actual_tf,
+                                rate_limit_retries,
+                                MAX_RATE_LIMIT_RETRIES,
+                                all_bars.len()
+                            );
                             self.rate_limiter.wait().await;
                             continue; // retry the same chunk (page_token unchanged)
                         }
                         rate_limited = true;
                         if !all_bars.is_empty() {
-                            tracing::warn!("429 rate limit: max retries for {} @ {}, returning {} bars",
-                                symbol, actual_tf, all_bars.len());
+                            tracing::warn!(
+                                "429 rate limit: max retries for {} @ {}, returning {} bars",
+                                symbol,
+                                actual_tf,
+                                all_bars.len()
+                            );
                             break;
                         }
                     }
@@ -1467,7 +1862,8 @@ impl AlpacaBroker {
                 self.rate_limiter.report_latency(chunk_elapsed_ms).await;
 
                 // Extract next_page_token from response for efficient pagination
-                let new_page_token = json.get("next_page_token")
+                let new_page_token = json
+                    .get("next_page_token")
                     .and_then(|t| t.as_str())
                     .map(|s| s.to_string());
 
@@ -1487,14 +1883,23 @@ impl AlpacaBroker {
                         let total = all_bars.len() + bars_in_chunk;
                         let elapsed_secs = fetch_start.elapsed().as_secs();
                         // Progress %: use expected bars from lookback (not raw limit which may be 50K)
-                        let expected_bars = (lookback_days as f64 * bars_per_day).ceil() as usize;
+                        let expected_bars = (lookback_days as f64
+                            * bars_per_day(is_crypto, actual_tf))
+                        .ceil() as usize;
                         let bars_target = expected_bars.min(actual_limit as usize).max(1);
                         let pct = (total * 100) / bars_target;
                         tracing::info!(
                             "{} @ {}: chunk #{} +{} bars ({} → {}), total {} ({}%, {}s elapsed, {:.0}ms/chunk)",
-                            symbol, actual_tf, chunk_count, bars_in_chunk,
-                            first_date, last_date, total,
-                            pct.min(100), elapsed_secs, chunk_elapsed_ms
+                            symbol,
+                            actual_tf,
+                            chunk_count,
+                            bars_in_chunk,
+                            first_date,
+                            last_date,
+                            total,
+                            pct.min(100),
+                            elapsed_secs,
+                            chunk_elapsed_ms
                         );
                     }
                 }
@@ -1508,11 +1913,16 @@ impl AlpacaBroker {
 
                 // Early termination: if chunks are taking too long, accept what we have.
                 // This prevents hours-long fetches on free tier progressive throttling.
-                if chunk_elapsed_ms > (SLOW_CHUNK_THRESHOLD_SECS * 1000) as u64 && all_bars.len() > 100 {
+                if chunk_elapsed_ms > (SLOW_CHUNK_THRESHOLD_SECS * 1000) as u64
+                    && all_bars.len() > 100
+                {
                     tracing::warn!(
                         "{} @ {}: chunk took {}s (>{} threshold) — accepting {} bars to avoid progressive throttle",
-                        symbol, actual_tf, chunk_elapsed_ms / 1000,
-                        SLOW_CHUNK_THRESHOLD_SECS, all_bars.len()
+                        symbol,
+                        actual_tf,
+                        chunk_elapsed_ms / 1000,
+                        SLOW_CHUNK_THRESHOLD_SECS,
+                        all_bars.len()
                     );
                     break;
                 }
@@ -1542,9 +1952,18 @@ impl AlpacaBroker {
                 let elapsed_secs = fetch_start.elapsed().as_secs();
                 tracing::info!(
                     "Loaded {} bars for {} @ {} (feed={}, {} chunks, {}s total)",
-                    all_bars.len(), symbol, actual_tf, feed_label, chunk_count, elapsed_secs
+                    all_bars.len(),
+                    symbol,
+                    actual_tf,
+                    feed_label,
+                    chunk_count,
+                    elapsed_secs
                 );
-                let outcome = if rate_limited { FetchOutcome::RateLimitedPartial } else { FetchOutcome::Complete };
+                let outcome = if rate_limited {
+                    FetchOutcome::RateLimitedPartial
+                } else {
+                    FetchOutcome::Complete
+                };
                 return Ok((all_bars, outcome));
             }
             if rate_limited {
@@ -1553,13 +1972,17 @@ impl AlpacaBroker {
             }
         }
 
-        Err(format!("No bar data for {symbol} @ {timeframe}: {last_error}"))
+        Err(format!(
+            "No bar data for {symbol} @ {timeframe}: {last_error}"
+        ))
     }
 
     /// Aggregate weekly bars into synthetic monthly bars.
     /// Groups by calendar month (year-month), combines OHLCV.
     pub fn aggregate_weekly_to_monthly(weekly: &[Bar]) -> Vec<Bar> {
-        if weekly.is_empty() { return vec![]; }
+        if weekly.is_empty() {
+            return vec![];
+        }
         let mut monthly: Vec<Bar> = Vec::new();
         let mut cur_month = String::new();
         let mut open = 0.0;
@@ -1571,12 +1994,20 @@ impl AlpacaBroker {
 
         for bar in weekly {
             // Extract YYYY-MM from timestamp
-            let ym = if bar.timestamp.len() >= 7 { &bar.timestamp[..7] } else { "" };
+            let ym = if bar.timestamp.len() >= 7 {
+                &bar.timestamp[..7]
+            } else {
+                ""
+            };
             if ym != cur_month {
                 if !cur_month.is_empty() {
                     monthly.push(Bar {
                         timestamp: month_start.clone(),
-                        open, high, low, close, volume,
+                        open,
+                        high,
+                        low,
+                        close,
+                        volume,
                     });
                 }
                 cur_month = ym.to_string();
@@ -1595,7 +2026,12 @@ impl AlpacaBroker {
         }
         if !cur_month.is_empty() {
             monthly.push(Bar {
-                timestamp: month_start, open, high, low, close, volume,
+                timestamp: month_start,
+                open,
+                high,
+                low,
+                close,
+                volume,
             });
         }
         monthly
@@ -1619,7 +2055,8 @@ impl AlpacaBroker {
                         let c = b["c"].as_f64().unwrap_or(0.0);
                         let v = b["v"].as_f64().unwrap_or(0.0);
                         // Reject bars with missing timestamp or zero/NaN prices
-                        if ts.is_empty() || o <= 0.0 || c <= 0.0 || !o.is_finite() || !c.is_finite() {
+                        if ts.is_empty() || o <= 0.0 || c <= 0.0 || !o.is_finite() || !c.is_finite()
+                        {
                             return None;
                         }
                         // Fix OHLC: high must be >= all, low must be <= all
@@ -1651,12 +2088,12 @@ impl AlpacaBroker {
 
         let resp = self
             .client
-            .get(format!("{}/v1beta1/options/snapshots/{}", DATA_BASE, underlying_symbol))
+            .get(format!(
+                "{}/v1beta1/options/snapshots/{}",
+                DATA_BASE, underlying_symbol
+            ))
             .headers(self.headers())
-            .query(&[
-                ("feed", "indicative"),
-                ("expiration_date", expiry),
-            ])
+            .query(&[("feed", "indicative"), ("expiration_date", expiry)])
             .send()
             .await
             .map_err(|e| format!("Options request failed: {e}"))?;
@@ -1667,7 +2104,9 @@ impl AlpacaBroker {
             return Err(format!("Options request failed: HTTP {status}"));
         }
 
-        let json: serde_json::Value = resp.json().await
+        let json: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Options parse failed: {e}"))?;
 
         let mut contracts = Vec::new();
@@ -1703,7 +2142,11 @@ impl AlpacaBroker {
         }
 
         // Sort by strike price
-        contracts.sort_by(|a, b| a.strike.partial_cmp(&b.strike).unwrap_or(std::cmp::Ordering::Equal));
+        contracts.sort_by(|a, b| {
+            a.strike
+                .partial_cmp(&b.strike)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         Ok(contracts)
     }
 
@@ -1726,7 +2169,12 @@ impl AlpacaBroker {
         // YYMMDD is at len-15..len-9
         let date_str = &sym[len - 15..len - 9];
         let expiry = if date_str.len() == 6 {
-            format!("20{}-{}-{}", &date_str[0..2], &date_str[2..4], &date_str[4..6])
+            format!(
+                "20{}-{}-{}",
+                &date_str[0..2],
+                &date_str[2..4],
+                &date_str[4..6]
+            )
         } else {
             String::new()
         };
@@ -1739,7 +2187,10 @@ impl AlpacaBroker {
     /// Returns income statement, balance sheet, and cash flow data.
     /// Uses cached ticker map and shared HTTP client.
     pub async fn get_financial_analysis(ticker: &str) -> Result<serde_json::Value, String> {
-        if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
+        if ticker.is_empty()
+            || ticker.len() > 10
+            || !ticker.chars().all(|c| c.is_ascii_alphanumeric())
+        {
             return Err("Invalid ticker for SEC lookup".to_string());
         }
         let client = sec_client();
@@ -1747,8 +2198,14 @@ impl AlpacaBroker {
         let cik_padded = format!("CIK{:010}", cik);
 
         let facts_resp = client
-            .get(format!("https://data.sec.gov/api/xbrl/companyfacts/{}.json", cik_padded))
-            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
+            .get(format!(
+                "https://data.sec.gov/api/xbrl/companyfacts/{}.json",
+                cik_padded
+            ))
+            .header(
+                "User-Agent",
+                "TyphooN-Terminal/0.1 (support@marketwizardry.org)",
+            )
             .send()
             .await
             .map_err(|e| format!("SEC company facts failed: {e}"))?;
@@ -1757,7 +2214,9 @@ impl AlpacaBroker {
             return Err(format!("SEC company facts: HTTP {}", facts_resp.status()));
         }
 
-        let facts: serde_json::Value = facts_resp.json().await
+        let facts: serde_json::Value = facts_resp
+            .json()
+            .await
             .map_err(|e| format!("SEC facts parse failed: {e}"))?;
 
         let us_gaap = &facts["facts"]["us-gaap"];
@@ -1823,7 +2282,10 @@ impl AlpacaBroker {
     /// Looks for 13F filings in the company's filing history.
     /// Uses cached ticker map and shared HTTP client.
     pub async fn get_institutional_holders(ticker: &str) -> Result<serde_json::Value, String> {
-        if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
+        if ticker.is_empty()
+            || ticker.len() > 10
+            || !ticker.chars().all(|c| c.is_ascii_alphanumeric())
+        {
             return Err("Invalid ticker for SEC lookup".to_string());
         }
         let client = sec_client();
@@ -1831,8 +2293,14 @@ impl AlpacaBroker {
         let cik_padded = format!("{:010}", cik);
 
         let subs_resp = client
-            .get(format!("https://data.sec.gov/submissions/CIK{}.json", cik_padded))
-            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
+            .get(format!(
+                "https://data.sec.gov/submissions/CIK{}.json",
+                cik_padded
+            ))
+            .header(
+                "User-Agent",
+                "TyphooN-Terminal/0.1 (support@marketwizardry.org)",
+            )
             .send()
             .await
             .map_err(|e| format!("SEC submissions request failed: {e}"))?;
@@ -1841,7 +2309,9 @@ impl AlpacaBroker {
             return Err(format!("SEC submissions: HTTP {}", subs_resp.status()));
         }
 
-        let subs: serde_json::Value = subs_resp.json().await
+        let subs: serde_json::Value = subs_resp
+            .json()
+            .await
             .map_err(|e| format!("SEC submissions parse failed: {e}"))?;
 
         // Extract company info
@@ -1879,7 +2349,9 @@ impl AlpacaBroker {
                             accession.replace('-', "")
                         ),
                     }));
-                    if filings_13f.len() >= 20 { break; }
+                    if filings_13f.len() >= 20 {
+                        break;
+                    }
                 }
             }
         }
@@ -1906,7 +2378,10 @@ impl AlpacaBroker {
 
         let resp = self
             .client
-            .get(format!("{}/v1beta1/screener/stocks/most-actives", DATA_BASE))
+            .get(format!(
+                "{}/v1beta1/screener/stocks/most-actives",
+                DATA_BASE
+            ))
             .headers(self.headers())
             .query(&[("top", top.to_string())])
             .send()
@@ -1919,7 +2394,9 @@ impl AlpacaBroker {
             return Err(format!("Most actives request failed: HTTP {status}"));
         }
 
-        let json: serde_json::Value = resp.json().await
+        let json: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Most actives parse failed: {e}"))?;
 
         Ok(json)
@@ -1927,7 +2404,11 @@ impl AlpacaBroker {
 
     /// Fetch top movers (gainers/losers) from Alpaca screener API.
     /// market_type: "stocks" or "crypto"
-    pub async fn get_top_movers(&self, market_type: &str, top: u32) -> Result<serde_json::Value, String> {
+    pub async fn get_top_movers(
+        &self,
+        market_type: &str,
+        top: u32,
+    ) -> Result<serde_json::Value, String> {
         if !matches!(market_type, "stocks" | "crypto") {
             return Err("market_type must be 'stocks' or 'crypto'".to_string());
         }
@@ -1935,7 +2416,10 @@ impl AlpacaBroker {
 
         let resp = self
             .client
-            .get(format!("{}/v1beta1/screener/{}/movers", DATA_BASE, market_type))
+            .get(format!(
+                "{}/v1beta1/screener/{}/movers",
+                DATA_BASE, market_type
+            ))
             .headers(self.headers())
             .query(&[("top", top.to_string())])
             .send()
@@ -1948,7 +2432,9 @@ impl AlpacaBroker {
             return Err(format!("Top movers request failed: HTTP {status}"));
         }
 
-        let json: serde_json::Value = resp.json().await
+        let json: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Top movers parse failed: {e}"))?;
 
         Ok(json)
@@ -1962,7 +2448,10 @@ impl AlpacaBroker {
 
         let resp = self
             .client
-            .get(format!("{}/v1beta1/crypto/us/orderbooks/snapshots", DATA_BASE))
+            .get(format!(
+                "{}/v1beta1/crypto/us/orderbooks/snapshots",
+                DATA_BASE
+            ))
             .headers(self.headers())
             .query(&[("symbols", symbol)])
             .send()
@@ -1975,7 +2464,9 @@ impl AlpacaBroker {
             return Err(format!("Orderbook request failed: HTTP {status}"));
         }
 
-        let json: serde_json::Value = resp.json().await
+        let json: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Orderbook parse failed: {e}"))?;
 
         // Extract the orderbook for the requested symbol and structure it
@@ -2020,21 +2511,28 @@ impl AlpacaBroker {
 
         if is_crypto {
             let url = format!("{}/v1beta3/crypto/us/latest/quotes", DATA_BASE);
-            let resp = self.client.get(&url)
+            let resp = self
+                .client
+                .get(&url)
                 .headers(self.headers())
                 .query(&[("symbols", symbol)])
-                .send().await
+                .send()
+                .await
                 .map_err(|e| format!("Quote request failed: {e}"))?;
             if !resp.status().is_success() {
                 return Err(format!("Quote request failed: HTTP {}", resp.status()));
             }
-            let json: serde_json::Value = resp.json().await
+            let json: serde_json::Value = resp
+                .json()
+                .await
                 .map_err(|e| format!("Quote parse failed: {e}"))?;
             let q = json["quotes"][symbol].clone();
             let bid = q["bp"].as_f64().unwrap_or(0.0);
             let ask = q["ap"].as_f64().unwrap_or(0.0);
             Ok(LatestQuote {
-                symbol: symbol.to_string(), bid, ask,
+                symbol: symbol.to_string(),
+                bid,
+                ask,
                 bid_size: q["bs"].as_f64().unwrap_or(0.0),
                 ask_size: q["as"].as_f64().unwrap_or(0.0),
                 spread: ask - bid,
@@ -2044,15 +2542,20 @@ impl AlpacaBroker {
             // Stocks/ETFs: use snapshot endpoint for pre/post-market data
             // Snapshot returns: { latestTrade, latestQuote, minuteBar, dailyBar, prevDailyBar }
             let url = format!("{}/v2/stocks/{}/snapshot", DATA_BASE, symbol);
-            let resp = self.client.get(&url)
+            let resp = self
+                .client
+                .get(&url)
                 .headers(self.headers())
                 .query(&[("feed", "iex")])
-                .send().await
+                .send()
+                .await
                 .map_err(|e| format!("Snapshot request failed: {e}"))?;
             if !resp.status().is_success() {
                 return Err(format!("Snapshot request failed: HTTP {}", resp.status()));
             }
-            let json: serde_json::Value = resp.json().await
+            let json: serde_json::Value = resp
+                .json()
+                .await
                 .map_err(|e| format!("Snapshot parse failed: {e}"))?;
 
             // Latest quote (may be regular hours only on IEX)
@@ -2102,36 +2605,52 @@ impl AlpacaBroker {
         if is_crypto {
             // Crypto: use latest bars endpoint for prev close, latest trade for last
             let snap_url = format!("{}/v1beta3/crypto/us/snapshots", DATA_BASE);
-            let resp = self.client.get(&snap_url)
+            let resp = self
+                .client
+                .get(&snap_url)
                 .headers(self.headers())
                 .query(&[("symbols", symbol)])
-                .send().await
+                .send()
+                .await
                 .map_err(|e| format!("Crypto snapshot failed: {e}"))?;
             if !resp.status().is_success() {
                 return Err(format!("Crypto snapshot HTTP {}", resp.status()));
             }
-            let json: serde_json::Value = resp.json().await
+            let json: serde_json::Value = resp
+                .json()
+                .await
                 .map_err(|e| format!("Crypto snapshot parse: {e}"))?;
             let snap = &json["snapshots"][symbol];
             let last = snap["latestTrade"]["p"].as_f64().unwrap_or(0.0);
             let daily_volume = snap["dailyBar"]["v"].as_f64().unwrap_or(0.0);
             let regular_close = snap["dailyBar"]["c"].as_f64().unwrap_or(0.0);
             let prev_close = snap["prevDailyBar"]["c"].as_f64().unwrap_or(0.0);
-            Ok(SnapshotData { symbol: symbol.to_string(), last, prev_close, daily_volume, regular_close })
+            Ok(SnapshotData {
+                symbol: symbol.to_string(),
+                last,
+                prev_close,
+                daily_volume,
+                regular_close,
+            })
         } else {
             // Stock/ETF: v2/stocks/{symbol}/snapshot
             let url = format!("{}/v2/stocks/{}/snapshot", DATA_BASE, symbol);
             // Use SIP feed for snapshots — includes extended hours (pre/post market) trades.
             // IEX feed only reports regular session trades, missing pre/post market entirely.
-            let resp = self.client.get(&url)
+            let resp = self
+                .client
+                .get(&url)
                 .headers(self.headers())
                 .query(&[("feed", "sip")])
-                .send().await
+                .send()
+                .await
                 .map_err(|e| format!("Snapshot failed: {e}"))?;
             if !resp.status().is_success() {
                 return Err(format!("Snapshot HTTP {}", resp.status()));
             }
-            let json: serde_json::Value = resp.json().await
+            let json: serde_json::Value = resp
+                .json()
+                .await
                 .map_err(|e| format!("Snapshot parse: {e}"))?;
             // latestTrade.p = last trade price
             let trade_price = json["latestTrade"]["p"].as_f64().unwrap_or(0.0);
@@ -2141,17 +2660,35 @@ impl AlpacaBroker {
             let prev_close = json["prevDailyBar"]["c"].as_f64().unwrap_or(0.0);
             // Use trade price for "last" (includes pre/post market)
             let regular_close = json["dailyBar"]["c"].as_f64().unwrap_or(0.0);
-            let last = if trade_price > 0.0 { trade_price } else { regular_close };
-            Ok(SnapshotData { symbol: symbol.to_string(), last, prev_close, daily_volume, regular_close })
+            let last = if trade_price > 0.0 {
+                trade_price
+            } else {
+                regular_close
+            };
+            Ok(SnapshotData {
+                symbol: symbol.to_string(),
+                last,
+                prev_close,
+                daily_volume,
+                regular_close,
+            })
         }
     }
 
     // ── Account Activities ───────────────────────────────────────────
 
     /// Fetch account activities (fills, dividends, deposits, etc.)
-    pub async fn get_account_activities(&self, activity_types: &str, limit: u32) -> Result<Vec<AccountActivity>, String> {
+    pub async fn get_account_activities(
+        &self,
+        activity_types: &str,
+        limit: u32,
+    ) -> Result<Vec<AccountActivity>, String> {
         // Validate activity_types: alphanumeric + comma only (prevent path traversal)
-        if !activity_types.is_empty() && !activity_types.chars().all(|c| c.is_alphanumeric() || c == ',' || c == '_') {
+        if !activity_types.is_empty()
+            && !activity_types
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == ',' || c == '_')
+        {
             return Err("Invalid activity type characters".to_string());
         }
         let url = if activity_types.is_empty() {
@@ -2160,7 +2697,8 @@ impl AlpacaBroker {
             format!("{}/v2/account/activities/{}", self.base_url, activity_types)
         };
 
-        let resp = self.client
+        let resp = self
+            .client
             .get(&url)
             .headers(self.headers())
             .query(&[("direction", "desc"), ("page_size", &limit.to_string())])
@@ -2174,37 +2712,49 @@ impl AlpacaBroker {
             return Err(format!("Activities request failed: HTTP {}", status));
         }
 
-        let json: Vec<serde_json::Value> = resp.json().await
+        let json: Vec<serde_json::Value> = resp
+            .json()
+            .await
             .map_err(|e| format!("Activities parse failed: {e}"))?;
 
-        Ok(json.iter().map(|a| {
-            let activity_type = a["activity_type"].as_str().unwrap_or("").to_string();
-            let description = match activity_type.as_str() {
-                "FILL" => format!("{} {} {} @ {}",
-                    a["side"].as_str().unwrap_or(""),
-                    a["qty"].as_str().unwrap_or("0"),
-                    a["symbol"].as_str().unwrap_or(""),
-                    a["price"].as_str().unwrap_or("?")),
-                "DIV" | "DIVCGL" | "DIVCGS" | "DIVNRA" | "DIVROC" | "DIVTXEX" =>
-                    format!("Dividend {} ${}", a["symbol"].as_str().unwrap_or(""), a["net_amount"].as_str().unwrap_or("0")),
-                "CSD" => format!("Deposit ${}", a["net_amount"].as_str().unwrap_or("0")),
-                "CSW" => format!("Withdrawal ${}", a["net_amount"].as_str().unwrap_or("0")),
-                _ => format!("{} {}", activity_type, a["symbol"].as_str().unwrap_or("")),
-            };
-            AccountActivity {
-                id: a["id"].as_str().unwrap_or("").to_string(),
-                activity_type,
-                symbol: a["symbol"].as_str().map(|s| s.to_string()),
-                side: a["side"].as_str().map(|s| s.to_string()),
-                qty: a["qty"].as_str().map(|s| s.to_string()),
-                price: a["price"].as_str().map(|s| s.to_string()),
-                net_amount: a["net_amount"].as_str().map(|s| s.to_string()),
-                date: a["transaction_time"].as_str()
-                    .or_else(|| a["date"].as_str())
-                    .unwrap_or("").to_string(),
-                description,
-            }
-        }).collect())
+        Ok(json
+            .iter()
+            .map(|a| {
+                let activity_type = a["activity_type"].as_str().unwrap_or("").to_string();
+                let description = match activity_type.as_str() {
+                    "FILL" => format!(
+                        "{} {} {} @ {}",
+                        a["side"].as_str().unwrap_or(""),
+                        a["qty"].as_str().unwrap_or("0"),
+                        a["symbol"].as_str().unwrap_or(""),
+                        a["price"].as_str().unwrap_or("?")
+                    ),
+                    "DIV" | "DIVCGL" | "DIVCGS" | "DIVNRA" | "DIVROC" | "DIVTXEX" => format!(
+                        "Dividend {} ${}",
+                        a["symbol"].as_str().unwrap_or(""),
+                        a["net_amount"].as_str().unwrap_or("0")
+                    ),
+                    "CSD" => format!("Deposit ${}", a["net_amount"].as_str().unwrap_or("0")),
+                    "CSW" => format!("Withdrawal ${}", a["net_amount"].as_str().unwrap_or("0")),
+                    _ => format!("{} {}", activity_type, a["symbol"].as_str().unwrap_or("")),
+                };
+                AccountActivity {
+                    id: a["id"].as_str().unwrap_or("").to_string(),
+                    activity_type,
+                    symbol: a["symbol"].as_str().map(|s| s.to_string()),
+                    side: a["side"].as_str().map(|s| s.to_string()),
+                    qty: a["qty"].as_str().map(|s| s.to_string()),
+                    price: a["price"].as_str().map(|s| s.to_string()),
+                    net_amount: a["net_amount"].as_str().map(|s| s.to_string()),
+                    date: a["transaction_time"]
+                        .as_str()
+                        .or_else(|| a["date"].as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    description,
+                }
+            })
+            .collect())
     }
 
     // ── Insider Trading (SEC Form 4) ─────────────────────────────────
@@ -2212,7 +2762,10 @@ impl AlpacaBroker {
     /// Fetch insider trades for a ticker via SEC EDGAR (Form 4 filings).
     /// Uses cached ticker map and shared HTTP client.
     pub async fn get_insider_trades(ticker: &str) -> Result<Vec<InsiderTrade>, String> {
-        if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
+        if ticker.is_empty()
+            || ticker.len() > 10
+            || !ticker.chars().all(|c| c.is_ascii_alphanumeric())
+        {
             return Err("Invalid ticker for SEC lookup".to_string());
         }
         let client = sec_client();
@@ -2220,8 +2773,14 @@ impl AlpacaBroker {
         let cik_padded = format!("{:010}", cik);
 
         let subs_resp = client
-            .get(format!("https://data.sec.gov/submissions/CIK{}.json", cik_padded))
-            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
+            .get(format!(
+                "https://data.sec.gov/submissions/CIK{}.json",
+                cik_padded
+            ))
+            .header(
+                "User-Agent",
+                "TyphooN-Terminal/0.1 (support@marketwizardry.org)",
+            )
             .send()
             .await
             .map_err(|e| format!("SEC submissions fetch failed: {e}"))?;
@@ -2230,7 +2789,9 @@ impl AlpacaBroker {
             return Err(format!("SEC submissions: HTTP {}", subs_resp.status()));
         }
 
-        let subs: serde_json::Value = subs_resp.json().await
+        let subs: serde_json::Value = subs_resp
+            .json()
+            .await
             .map_err(|e| format!("SEC submissions parse failed: {e}"))?;
 
         // Step 3: Filter for Form 4 filings from recent filings
@@ -2247,8 +2808,12 @@ impl AlpacaBroker {
         {
             for i in 0..forms.len().min(200) {
                 let form = forms[i].as_str().unwrap_or("");
-                if form != "4" { continue; }
-                if insider_trades.len() >= 50 { break; }
+                if form != "4" {
+                    continue;
+                }
+                if insider_trades.len() >= 50 {
+                    break;
+                }
 
                 let filing_date = dates[i].as_str().unwrap_or("").to_string();
                 let accession = accessions[i].as_str().unwrap_or("").to_string();
@@ -2289,11 +2854,22 @@ impl AlpacaBroker {
     // ── Finnhub Short Interest ────────────────────────────────────
 
     /// Fetch FINRA short interest data from Finnhub (bi-weekly reports).
-    pub async fn get_finnhub_short_interest(&self, symbol: &str, finnhub_key: &str) -> Result<Vec<serde_json::Value>, String> {
-        if finnhub_key.is_empty() { return Err("Finnhub API key required".into()); }
+    pub async fn get_finnhub_short_interest(
+        &self,
+        symbol: &str,
+        finnhub_key: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        if finnhub_key.is_empty() {
+            return Err("Finnhub API key required".into());
+        }
         let resp = sec_client()
             .get("https://finnhub.io/api/v1/stock/short-interest")
-            .query(&[("symbol", symbol), ("token", finnhub_key), ("from", "2025-01-01"), ("to", "2026-12-31")])
+            .query(&[
+                ("symbol", symbol),
+                ("token", finnhub_key),
+                ("from", "2025-01-01"),
+                ("to", "2026-12-31"),
+            ])
             .send()
             .await
             .map_err(|e| format!("Finnhub short interest failed: {e}"))?;
@@ -2301,7 +2877,9 @@ impl AlpacaBroker {
         if !resp.status().is_success() {
             return Err(format!("Finnhub short interest: HTTP {}", resp.status()));
         }
-        let body: serde_json::Value = resp.json().await
+        let body: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Finnhub short interest parse failed: {e}"))?;
         // Finnhub returns { "data": [...], "symbol": "..." }
         match body.get("data").and_then(|d| d.as_array()) {
@@ -2323,15 +2901,23 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Get watchlists failed: {e}"))?;
 
-        if resp.status().as_u16() == 429 { self.rate_limiter.trigger_cooldown().await; }
+        if resp.status().as_u16() == 429 {
+            self.rate_limiter.trigger_cooldown().await;
+        }
         if !resp.status().is_success() {
             return Err(format!("Get watchlists: HTTP {}", resp.status()));
         }
-        resp.json().await.map_err(|e| format!("Watchlists parse failed: {e}"))
+        resp.json()
+            .await
+            .map_err(|e| format!("Watchlists parse failed: {e}"))
     }
 
     /// Create a new watchlist on Alpaca.
-    pub async fn create_watchlist(&self, name: &str, symbols: &[String]) -> Result<serde_json::Value, String> {
+    pub async fn create_watchlist(
+        &self,
+        name: &str,
+        symbols: &[String],
+    ) -> Result<serde_json::Value, String> {
         self.rate_limiter.wait().await;
         let body = serde_json::json!({
             "name": name,
@@ -2346,17 +2932,25 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Create watchlist failed: {e}"))?;
 
-        if resp.status().as_u16() == 429 { self.rate_limiter.trigger_cooldown().await; }
+        if resp.status().as_u16() == 429 {
+            self.rate_limiter.trigger_cooldown().await;
+        }
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
             return Err(format!("Create watchlist: HTTP {status} — {text}"));
         }
-        resp.json().await.map_err(|e| format!("Create watchlist parse failed: {e}"))
+        resp.json()
+            .await
+            .map_err(|e| format!("Create watchlist parse failed: {e}"))
     }
 
     /// Update an existing watchlist on Alpaca (replace symbols).
-    pub async fn update_watchlist(&self, id: &str, symbols: &[String]) -> Result<serde_json::Value, String> {
+    pub async fn update_watchlist(
+        &self,
+        id: &str,
+        symbols: &[String],
+    ) -> Result<serde_json::Value, String> {
         self.rate_limiter.wait().await;
         let body = serde_json::json!({
             "symbols": symbols,
@@ -2370,13 +2964,17 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Update watchlist failed: {e}"))?;
 
-        if resp.status().as_u16() == 429 { self.rate_limiter.trigger_cooldown().await; }
+        if resp.status().as_u16() == 429 {
+            self.rate_limiter.trigger_cooldown().await;
+        }
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
             return Err(format!("Update watchlist: HTTP {status} — {text}"));
         }
-        resp.json().await.map_err(|e| format!("Update watchlist parse failed: {e}"))
+        resp.json()
+            .await
+            .map_err(|e| format!("Update watchlist parse failed: {e}"))
     }
 
     // ── WebSocket Streaming ─────────────────────────────────────────
@@ -2389,7 +2987,10 @@ impl AlpacaBroker {
         trade_symbols: Vec<String>,
         quote_symbols: Vec<String>,
     ) -> Result<tokio::sync::mpsc::Receiver<StreamMessage>, String> {
-        let is_crypto = trade_symbols.iter().chain(quote_symbols.iter()).any(|s| s.contains('/'));
+        let is_crypto = trade_symbols
+            .iter()
+            .chain(quote_symbols.iter())
+            .any(|s| s.contains('/'));
         let ws_url = if is_crypto {
             "wss://stream.data.alpaca.markets/v1beta3/crypto/us"
         } else {
@@ -2410,7 +3011,9 @@ impl AlpacaBroker {
             "secret": self.secret_key.as_str(),
         });
         write
-            .send(tokio_tungstenite::tungstenite::Message::Text(auth_msg.to_string().into()))
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                auth_msg.to_string().into(),
+            ))
             .await
             .map_err(|e| format!("WebSocket auth send failed: {e}"))?;
 
@@ -2433,7 +3036,9 @@ impl AlpacaBroker {
             "quotes": &quote_symbols,
         });
         write
-            .send(tokio_tungstenite::tungstenite::Message::Text(sub_msg.to_string().into()))
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                sub_msg.to_string().into(),
+            ))
             .await
             .map_err(|e| format!("WebSocket subscribe failed: {e}"))?;
 
@@ -2481,7 +3086,10 @@ impl AlpacaBroker {
                                             symbol: event["S"].as_str().unwrap_or("").to_string(),
                                             price,
                                             size,
-                                            timestamp: event["t"].as_str().unwrap_or("").to_string(),
+                                            timestamp: event["t"]
+                                                .as_str()
+                                                .unwrap_or("")
+                                                .to_string(),
                                         }))
                                     }
                                 }
@@ -2651,7 +3259,7 @@ pub struct SnapshotData {
     pub last: f64,
     pub prev_close: f64,
     pub daily_volume: f64,
-    pub regular_close: f64,  // Regular session close (dailyBar.c) — for extended hours change calc
+    pub regular_close: f64, // Regular session close (dailyBar.c) — for extended hours change calc
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2804,6 +3412,22 @@ mod tests {
         assert_eq!(strike, 0.0);
         assert_eq!(opt_type, "unknown");
         assert!(expiry.is_empty());
+    }
+
+    #[test]
+    fn targeted_lookback_is_wider_than_incremental_for_equity_minute_sync() {
+        let incremental =
+            lookback_days_for_request(false, "1Min", 50_000, BarsLookbackMode::Incremental);
+        let targeted = lookback_days_for_request(false, "1Min", 50_000, BarsLookbackMode::Targeted);
+        assert_eq!(incremental, 7);
+        assert!(targeted > incremental);
+    }
+
+    #[test]
+    fn targeted_lookback_scales_for_equity_hour_sync() {
+        let targeted =
+            lookback_days_for_request(false, "1Hour", 30_000, BarsLookbackMode::Targeted);
+        assert!(targeted >= 6_000);
     }
 
     // ── parse_bars (mock JSON) ──────────────────────────────────────
@@ -3038,12 +3662,47 @@ mod tests {
     #[test]
     fn aggregate_weekly_to_monthly_basic() {
         let weekly = vec![
-            Bar { timestamp: "2024-01-01T00:00:00Z".into(), open: 100.0, high: 110.0, low: 95.0, close: 105.0, volume: 1000.0 },
-            Bar { timestamp: "2024-01-08T00:00:00Z".into(), open: 105.0, high: 112.0, low: 100.0, close: 108.0, volume: 1200.0 },
-            Bar { timestamp: "2024-01-15T00:00:00Z".into(), open: 108.0, high: 115.0, low: 106.0, close: 113.0, volume: 900.0 },
-            Bar { timestamp: "2024-01-22T00:00:00Z".into(), open: 113.0, high: 118.0, low: 110.0, close: 116.0, volume: 1100.0 },
+            Bar {
+                timestamp: "2024-01-01T00:00:00Z".into(),
+                open: 100.0,
+                high: 110.0,
+                low: 95.0,
+                close: 105.0,
+                volume: 1000.0,
+            },
+            Bar {
+                timestamp: "2024-01-08T00:00:00Z".into(),
+                open: 105.0,
+                high: 112.0,
+                low: 100.0,
+                close: 108.0,
+                volume: 1200.0,
+            },
+            Bar {
+                timestamp: "2024-01-15T00:00:00Z".into(),
+                open: 108.0,
+                high: 115.0,
+                low: 106.0,
+                close: 113.0,
+                volume: 900.0,
+            },
+            Bar {
+                timestamp: "2024-01-22T00:00:00Z".into(),
+                open: 113.0,
+                high: 118.0,
+                low: 110.0,
+                close: 116.0,
+                volume: 1100.0,
+            },
             // February
-            Bar { timestamp: "2024-02-05T00:00:00Z".into(), open: 116.0, high: 120.0, low: 114.0, close: 119.0, volume: 800.0 },
+            Bar {
+                timestamp: "2024-02-05T00:00:00Z".into(),
+                open: 116.0,
+                high: 120.0,
+                low: 114.0,
+                close: 119.0,
+                volume: 800.0,
+            },
         ];
         let monthly = AlpacaBroker::aggregate_weekly_to_monthly(&weekly);
         assert_eq!(monthly.len(), 2);
@@ -3102,9 +3761,9 @@ mod tests {
 
     #[test]
     fn format_order_price_rounds_correctly() {
-        assert_eq!(format_order_price(100.123456), "100.12");   // $1+ → 2 decimals
-        assert_eq!(format_order_price(0.05), "0.0500");          // $0.01-$0.99 → 4 decimals
-        assert_eq!(format_order_price(0.00345), "0.00345000");   // sub-penny → 8 decimals
+        assert_eq!(format_order_price(100.123456), "100.12"); // $1+ → 2 decimals
+        assert_eq!(format_order_price(0.05), "0.0500"); // $0.01-$0.99 → 4 decimals
+        assert_eq!(format_order_price(0.00345), "0.00345000"); // sub-penny → 8 decimals
         assert_eq!(format_order_price(1500.0), "1500.00");
     }
 }
