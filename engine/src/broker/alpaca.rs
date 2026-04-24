@@ -6,7 +6,7 @@
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
@@ -866,7 +866,64 @@ impl AlpacaBroker {
         }
     }
 
-    pub async fn close_position(
+    fn normalize_order_symbol(symbol: &str) -> String {
+        symbol.replace('/', "").to_ascii_uppercase()
+    }
+
+    fn order_status_is_cancellable(status: &str) -> bool {
+        !matches!(
+            status.to_ascii_lowercase().as_str(),
+            "filled" | "canceled" | "cancelled" | "expired" | "rejected"
+        )
+    }
+
+    fn collect_cancellable_order_ids_for_symbol(orders: &[OrderInfo], symbol: &str) -> Vec<String> {
+        fn walk(
+            order: &OrderInfo,
+            target_symbol: &str,
+            ids: &mut Vec<String>,
+            seen: &mut HashSet<String>,
+        ) {
+            if AlpacaBroker::normalize_order_symbol(&order.symbol) == target_symbol
+                && AlpacaBroker::order_status_is_cancellable(&order.status)
+                && seen.insert(order.id.clone())
+            {
+                ids.push(order.id.clone());
+            }
+            if let Some(legs) = order.legs.as_ref() {
+                for leg in legs {
+                    walk(leg, target_symbol, ids, seen);
+                }
+            }
+        }
+
+        let target_symbol = Self::normalize_order_symbol(symbol);
+        let mut ids = Vec::new();
+        let mut seen = HashSet::new();
+        for order in orders {
+            walk(order, &target_symbol, &mut ids, &mut seen);
+        }
+        ids
+    }
+
+    fn is_insufficient_qty_close_reject(message: &str) -> bool {
+        message
+            .to_ascii_lowercase()
+            .contains("insufficient qty available")
+    }
+
+    async fn cancel_open_orders_for_symbol(&self, symbol: &str) -> Result<usize, String> {
+        let orders = self.get_orders("open", 200).await?;
+        let ids = Self::collect_cancellable_order_ids_for_symbol(&orders, symbol);
+        for order_id in &ids {
+            self.cancel_order(order_id)
+                .await
+                .map_err(|e| format!("Cancel open order {order_id} for {symbol} failed: {e}"))?;
+        }
+        Ok(ids.len())
+    }
+
+    async fn close_position_once(
         &self,
         symbol: &str,
         qty: Option<f64>,
@@ -912,6 +969,47 @@ impl AlpacaBroker {
             side: json["side"].as_str().unwrap_or("").to_string(),
             status: json["status"].as_str().unwrap_or("").to_string(),
         })
+    }
+
+    pub async fn close_position(
+        &self,
+        symbol: &str,
+        qty: Option<f64>,
+    ) -> Result<OrderResult, String> {
+        let cancelled_orders = match self.cancel_open_orders_for_symbol(symbol).await {
+            Ok(count) => count,
+            Err(e) => {
+                tracing::warn!(
+                    "Close {}: failed to pre-cancel open orders before close: {}",
+                    symbol,
+                    e
+                );
+                0
+            }
+        };
+        if cancelled_orders > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+        }
+
+        match self.close_position_once(symbol, qty).await {
+            Ok(result) => Ok(result),
+            Err(e)
+                if cancelled_orders > 0 && Self::is_insufficient_qty_close_reject(&e) =>
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                self.close_position_once(symbol, qty).await.map_err(|retry_err| {
+                    format!(
+                        "{} (after cancelling {} open order(s) for {})",
+                        retry_err, cancelled_orders, symbol
+                    )
+                })
+            }
+            Err(e) if Self::is_insufficient_qty_close_reject(&e) => Err(format!(
+                "{} — quantity may be reserved by open orders or the position snapshot is stale",
+                e
+            )),
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn close_all_positions(&self) -> Result<(), String> {
@@ -3705,6 +3803,94 @@ mod tests {
         assert_eq!(legs[0].limit_price, Some("480.00".to_string()));
         assert_eq!(legs[1].id, "sl-leg");
         assert_eq!(legs[1].stop_price, Some("460.00".to_string()));
+    }
+
+    #[test]
+    fn collect_cancellable_order_ids_for_symbol_skips_filled_parent_and_keeps_open_legs() {
+        let parent = OrderInfo {
+            id: "parent-1".to_string(),
+            symbol: "SPY".to_string(),
+            qty: "5".to_string(),
+            filled_qty: "5".to_string(),
+            side: "buy".to_string(),
+            order_type: "market".to_string(),
+            order_class: Some("bracket".to_string()),
+            status: "filled".to_string(),
+            limit_price: None,
+            stop_price: None,
+            trail_price: None,
+            trail_percent: None,
+            created_at: "2024-01-02T10:00:00Z".to_string(),
+            filled_at: Some("2024-01-02T10:00:01Z".to_string()),
+            filled_avg_price: Some("470.00".to_string()),
+            legs: Some(vec![
+                OrderInfo {
+                    id: "tp-leg".to_string(),
+                    symbol: "SPY".to_string(),
+                    qty: "5".to_string(),
+                    filled_qty: "0".to_string(),
+                    side: "sell".to_string(),
+                    order_type: "limit".to_string(),
+                    order_class: None,
+                    status: "new".to_string(),
+                    limit_price: Some("480.00".to_string()),
+                    stop_price: None,
+                    trail_price: None,
+                    trail_percent: None,
+                    created_at: "2024-01-02T10:00:00Z".to_string(),
+                    filled_at: None,
+                    filled_avg_price: None,
+                    legs: None,
+                },
+                OrderInfo {
+                    id: "sl-leg".to_string(),
+                    symbol: "SPY".to_string(),
+                    qty: "5".to_string(),
+                    filled_qty: "0".to_string(),
+                    side: "sell".to_string(),
+                    order_type: "stop".to_string(),
+                    order_class: None,
+                    status: "held".to_string(),
+                    limit_price: None,
+                    stop_price: Some("460.00".to_string()),
+                    trail_price: None,
+                    trail_percent: None,
+                    created_at: "2024-01-02T10:00:00Z".to_string(),
+                    filled_at: None,
+                    filled_avg_price: None,
+                    legs: None,
+                },
+            ]),
+        };
+
+        let ids = AlpacaBroker::collect_cancellable_order_ids_for_symbol(&[parent], "SPY");
+        assert_eq!(ids, vec!["tp-leg".to_string(), "sl-leg".to_string()]);
+    }
+
+    #[test]
+    fn collect_cancellable_order_ids_for_symbol_normalizes_crypto_symbol() {
+        let order = OrderInfo {
+            id: "crypto-exit".to_string(),
+            symbol: "BTCUSD".to_string(),
+            qty: "0.2".to_string(),
+            filled_qty: "0".to_string(),
+            side: "sell".to_string(),
+            order_type: "limit".to_string(),
+            order_class: Some("oco".to_string()),
+            status: "new".to_string(),
+            limit_price: Some("70000".to_string()),
+            stop_price: None,
+            trail_price: None,
+            trail_percent: None,
+            created_at: "2024-01-02T10:00:00Z".to_string(),
+            filled_at: None,
+            filled_avg_price: None,
+            legs: None,
+        };
+
+        let ids =
+            AlpacaBroker::collect_cancellable_order_ids_for_symbol(&[order], "BTC/USD");
+        assert_eq!(ids, vec!["crypto-exit".to_string()]);
     }
 
     // ── AccountInfo parsing from mock JSON ──────────────────────────
