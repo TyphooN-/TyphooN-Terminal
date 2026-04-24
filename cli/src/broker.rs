@@ -171,7 +171,16 @@ impl AlpacaBroker {
             req = req.query(&[("qty", q.to_string())]);
         }
         let resp = req.send().await.map_err(|e| e.to_string())?;
+        let status_code = resp.status();
         let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        if let Some(msg) = json["message"].as_str() {
+            if !msg.is_empty() {
+                return Err(format!("Close rejected: {msg}"));
+            }
+        }
+        if !status_code.is_success() {
+            return Err(format!("Close failed: HTTP {status_code}"));
+        }
         Ok(OrderResult {
             id: json["id"].as_str().unwrap_or("").to_string(),
             symbol: json["symbol"].as_str().unwrap_or(symbol).to_string(),

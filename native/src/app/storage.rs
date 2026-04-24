@@ -129,6 +129,41 @@ impl TyphooNApp {
     }
 
     pub(super) fn render_storage_table(&mut self, ui: &mut egui::Ui) {
+        if !self.alpaca_no_data_loaded {
+            self.alpaca_no_data_load();
+        }
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Alpaca no-data marks: {}",
+                    self.alpaca_no_data_pairs.len()
+                ))
+                .small()
+                .color(AXIS_TEXT),
+            );
+            if ui
+                .add_enabled(
+                    !self.alpaca_no_data_pairs.is_empty(),
+                    egui::Button::new(
+                        egui::RichText::new("Clear no-data marks")
+                            .small()
+                            .color(egui::Color32::from_rgb(231, 76, 60)),
+                    ),
+                )
+                .on_hover_text(
+                    "Remove persisted Alpaca no-data tombstones so automated sync can try those pairs again.",
+                )
+                .clicked()
+            {
+                let cleared = self.alpaca_no_data_pairs.len();
+                self.alpaca_no_data_clear_all();
+                self.log.push_back(LogEntry::info(format!(
+                    "Cleared {} Alpaca no-data mark(s)",
+                    cleared
+                )));
+            }
+        });
+        ui.separator();
         ui.horizontal(|ui| {
             ui.label("Filter:");
             if ui

@@ -848,10 +848,20 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Close position failed: {e}"))?;
 
+        let status_code = resp.status();
         let json: serde_json::Value = resp
             .json()
             .await
             .map_err(|e| format!("Close parse failed: {e}"))?;
+
+        if let Some(msg) = json["message"].as_str() {
+            if !msg.is_empty() {
+                return Err(format!("Close position rejected: {msg}"));
+            }
+        }
+        if !status_code.is_success() {
+            return Err(format!("Close position failed: HTTP {status_code}"));
+        }
 
         Ok(OrderResult {
             id: json["id"].as_str().unwrap_or("").to_string(),
@@ -863,12 +873,25 @@ impl AlpacaBroker {
     }
 
     pub async fn close_all_positions(&self) -> Result<(), String> {
-        self.client
+        let resp = self
+            .client
             .delete(format!("{}/v2/positions", self.base_url))
             .headers(self.headers())
             .send()
             .await
             .map_err(|e| format!("Close all failed: {e}"))?;
+        if !resp.status().is_success() {
+            let status_code = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                if let Some(msg) = json["message"].as_str() {
+                    if !msg.is_empty() {
+                        return Err(format!("Close all rejected: {msg}"));
+                    }
+                }
+            }
+            return Err(format!("Close all failed: HTTP {status_code}"));
+        }
         Ok(())
     }
 
