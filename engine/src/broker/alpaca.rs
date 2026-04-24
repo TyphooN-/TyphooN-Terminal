@@ -906,6 +906,41 @@ impl AlpacaBroker {
         ids
     }
 
+    fn collect_cancellable_exit_order_ids_for_symbol(
+        orders: &[OrderInfo],
+        symbol: &str,
+        exit_side: &str,
+    ) -> Vec<String> {
+        fn walk(
+            order: &OrderInfo,
+            target_symbol: &str,
+            exit_side: &str,
+            ids: &mut Vec<String>,
+            seen: &mut HashSet<String>,
+        ) {
+            if AlpacaBroker::normalize_order_symbol(&order.symbol) == target_symbol
+                && order.side.eq_ignore_ascii_case(exit_side)
+                && AlpacaBroker::order_status_is_cancellable(&order.status)
+                && seen.insert(order.id.clone())
+            {
+                ids.push(order.id.clone());
+            }
+            if let Some(legs) = order.legs.as_ref() {
+                for leg in legs {
+                    walk(leg, target_symbol, exit_side, ids, seen);
+                }
+            }
+        }
+
+        let target_symbol = Self::normalize_order_symbol(symbol);
+        let mut ids = Vec::new();
+        let mut seen = HashSet::new();
+        for order in orders {
+            walk(order, &target_symbol, exit_side, &mut ids, &mut seen);
+        }
+        ids
+    }
+
     fn is_insufficient_qty_close_reject(message: &str) -> bool {
         message
             .to_ascii_lowercase()
@@ -921,6 +956,64 @@ impl AlpacaBroker {
                 .map_err(|e| format!("Cancel open order {order_id} for {symbol} failed: {e}"))?;
         }
         Ok(ids.len())
+    }
+
+    pub async fn sync_position_exits(
+        &self,
+        symbol: &str,
+        sl_price: Option<f64>,
+        tp_price: Option<f64>,
+    ) -> Result<String, String> {
+        let positions = self.get_positions().await?;
+        let pos = positions
+            .iter()
+            .find(|p| p.symbol.eq_ignore_ascii_case(symbol))
+            .ok_or_else(|| format!("No position found for {symbol}"))?;
+        let exit_side = if pos.side.eq_ignore_ascii_case("long") {
+            "sell"
+        } else {
+            "buy"
+        };
+        let qty = pos.qty.abs();
+        if qty <= 0.0 {
+            return Err(format!("Position {symbol} has zero quantity"));
+        }
+
+        let orders = self.get_orders("open", 200).await?;
+        let ids = Self::collect_cancellable_exit_order_ids_for_symbol(&orders, symbol, exit_side);
+        for order_id in &ids {
+            self.cancel_order(order_id).await.map_err(|e| {
+                format!("Cancel existing exit order {order_id} for {symbol} failed: {e}")
+            })?;
+        }
+        if !ids.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+        }
+
+        let placement = match (sl_price, tp_price) {
+            (Some(sl), Some(tp)) => {
+                self.oco_order(symbol, qty, exit_side, tp, sl, None).await?;
+                format!(
+                    "synced OCO exits (tp={} sl={})",
+                    format_order_price(tp),
+                    format_order_price(sl)
+                )
+            }
+            (Some(sl), None) => {
+                self.stop_order(symbol, qty, exit_side, sl, "gtc").await?;
+                format!("synced SL {}", format_order_price(sl))
+            }
+            (None, Some(tp)) => {
+                self.limit_order(symbol, qty, exit_side, tp, "gtc").await?;
+                format!("synced TP {}", format_order_price(tp))
+            }
+            (None, None) => "cleared exits".to_string(),
+        };
+
+        Ok(format!(
+            "{} for {} {} {} (cancelled {} existing exit order(s))",
+            placement, exit_side, qty, symbol, ids.len()
+        ))
     }
 
     async fn close_position_once(
@@ -3891,6 +3984,53 @@ mod tests {
         let ids =
             AlpacaBroker::collect_cancellable_order_ids_for_symbol(&[order], "BTC/USD");
         assert_eq!(ids, vec!["crypto-exit".to_string()]);
+    }
+
+    #[test]
+    fn collect_cancellable_exit_order_ids_for_symbol_filters_by_exit_side() {
+        let sell_exit = OrderInfo {
+            id: "sell-exit".to_string(),
+            symbol: "SPY".to_string(),
+            qty: "5".to_string(),
+            filled_qty: "0".to_string(),
+            side: "sell".to_string(),
+            order_type: "limit".to_string(),
+            order_class: None,
+            status: "new".to_string(),
+            limit_price: Some("500.00".to_string()),
+            stop_price: None,
+            trail_price: None,
+            trail_percent: None,
+            created_at: "2024-01-02T10:00:00Z".to_string(),
+            filled_at: None,
+            filled_avg_price: None,
+            legs: None,
+        };
+        let buy_entry = OrderInfo {
+            id: "buy-entry".to_string(),
+            symbol: "SPY".to_string(),
+            qty: "5".to_string(),
+            filled_qty: "0".to_string(),
+            side: "buy".to_string(),
+            order_type: "limit".to_string(),
+            order_class: None,
+            status: "new".to_string(),
+            limit_price: Some("470.00".to_string()),
+            stop_price: None,
+            trail_price: None,
+            trail_percent: None,
+            created_at: "2024-01-02T10:01:00Z".to_string(),
+            filled_at: None,
+            filled_avg_price: None,
+            legs: None,
+        };
+
+        let ids = AlpacaBroker::collect_cancellable_exit_order_ids_for_symbol(
+            &[sell_exit, buy_entry],
+            "SPY",
+            "sell",
+        );
+        assert_eq!(ids, vec!["sell-exit".to_string()]);
     }
 
     // ── AccountInfo parsing from mock JSON ──────────────────────────

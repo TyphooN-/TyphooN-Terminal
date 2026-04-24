@@ -205,6 +205,134 @@ impl KrakenBroker {
         Ok(positions)
     }
 
+    fn parse_f64_field(value: &serde_json::Value) -> f64 {
+        value
+            .as_str()
+            .and_then(|s| s.parse::<f64>().ok())
+            .or_else(|| value.as_f64())
+            .unwrap_or(0.0)
+    }
+
+    fn canonical_pair_forms(pair: &str) -> Vec<String> {
+        let raw = Self::normalized_pair_key(pair);
+        let mut forms = vec![raw.clone()];
+        if let Some(mapped) = crate::core::kraken::to_kraken_pair(&raw) {
+            let mapped = Self::normalized_pair_key(mapped);
+            if !forms.iter().any(|f| f == &mapped) {
+                forms.push(mapped);
+            }
+        }
+        forms
+    }
+
+    fn normalized_pair_key(pair: &str) -> String {
+        let raw = pair.replace('/', "").to_ascii_uppercase();
+        let bytes = raw.as_bytes();
+        if raw.len() == 8
+            && matches!(bytes[0] as char, 'X' | 'Z')
+            && matches!(bytes[4] as char, 'X' | 'Z')
+        {
+            format!("{}{}", &raw[1..4], &raw[5..8])
+        } else {
+            raw
+        }
+    }
+
+    fn pair_matches(candidate: &str, target: &str) -> bool {
+        let candidate = Self::normalized_pair_key(candidate);
+        Self::canonical_pair_forms(target)
+            .into_iter()
+            .any(|form| candidate == form || candidate.ends_with(&form) || form.ends_with(&candidate))
+    }
+
+    async fn cancel_live_exit_orders_for_pair(
+        &self,
+        pair: &str,
+        exit_side: &str,
+    ) -> Result<usize, String> {
+        let orders = self.get_open_orders().await?;
+        let mut cancelled = 0usize;
+        for order in orders {
+            let txid = order["txid"].as_str().unwrap_or("").to_string();
+            let descr = &order["descr"];
+            let order_pair = descr["pair"].as_str().unwrap_or("");
+            let order_side = descr["type"].as_str().unwrap_or("");
+            if txid.is_empty()
+                || !Self::pair_matches(order_pair, pair)
+                || !order_side.eq_ignore_ascii_case(exit_side)
+            {
+                continue;
+            }
+            self.cancel_order(&txid)
+                .await
+                .map_err(|e| format!("Cancel open exit order {txid} for {pair} failed: {e}"))?;
+            cancelled += 1;
+        }
+        Ok(cancelled)
+    }
+
+    pub async fn sync_position_exits(
+        &self,
+        pair: &str,
+        sl_price: Option<f64>,
+        tp_price: Option<f64>,
+    ) -> Result<String, String> {
+        let positions = self.get_open_positions().await?;
+        let mut net_volume = 0.0_f64;
+        for pos in positions {
+            let pos_pair = pos["pair"].as_str().unwrap_or("");
+            if !Self::pair_matches(pos_pair, pair) {
+                continue;
+            }
+            let volume = Self::parse_f64_field(&pos["vol"]);
+            let closed = Self::parse_f64_field(&pos["vol_closed"]);
+            let open_volume = (volume - closed).max(0.0);
+            if open_volume <= 0.0 {
+                continue;
+            }
+            let side = pos["type"].as_str().unwrap_or("");
+            if side.eq_ignore_ascii_case("buy") || side.eq_ignore_ascii_case("long") {
+                net_volume += open_volume;
+            } else {
+                net_volume -= open_volume;
+            }
+        }
+
+        if net_volume.abs() <= f64::EPSILON {
+            return Err(format!("No open Kraken position found for {pair}"));
+        }
+
+        let exit_side = if net_volume > 0.0 { "sell" } else { "buy" };
+        let order_pair = crate::core::kraken::to_kraken_pair(pair).unwrap_or(pair);
+        let cancelled = self.cancel_live_exit_orders_for_pair(pair, exit_side).await?;
+        let mut placements = Vec::new();
+        let qty_abs = net_volume.abs();
+        if let Some(sl) = sl_price {
+            self.place_order(order_pair, exit_side, "stop-loss", qty_abs, Some(sl))
+                .await?;
+            placements.push(format!("SL {}", sl));
+        }
+        if let Some(tp) = tp_price {
+            self.place_order(order_pair, exit_side, "take-profit", qty_abs, Some(tp))
+                .await?;
+            placements.push(format!("TP {}", tp));
+        }
+        if placements.is_empty() {
+            placements.push("cleared exits".to_string());
+        } else if sl_price.is_some() && tp_price.is_some() {
+            placements.push("broker-native link unavailable; exits placed independently".to_string());
+        }
+
+        Ok(format!(
+            "{} for {} {} {} (cancelled {} existing exit order(s))",
+            placements.join(", "),
+            exit_side,
+            qty_abs,
+            order_pair,
+            cancelled
+        ))
+    }
+
     /// Place an order on Kraken.
     ///
     /// - `pair`: trading pair (e.g. "XXBTZUSD")
@@ -372,6 +500,14 @@ mod tests {
         let broker = KrakenBroker::new("my_key".to_string(), "my_secret".to_string());
         assert_eq!(broker.api_key.as_str(), "my_key");
         assert_eq!(broker.api_secret.as_str(), "my_secret");
+    }
+
+    #[test]
+    fn pair_matches_normalizes_btc_aliases() {
+        assert!(KrakenBroker::pair_matches("XXBTZUSD", "BTCUSD"));
+        assert!(KrakenBroker::pair_matches("XBTUSD", "BTC/USD"));
+        assert!(KrakenBroker::pair_matches("XDGUSD", "DOGEUSD"));
+        assert!(!KrakenBroker::pair_matches("ETHUSD", "SOLUSD"));
     }
 
     #[tokio::test]

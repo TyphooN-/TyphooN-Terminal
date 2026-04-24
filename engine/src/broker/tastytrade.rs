@@ -10,6 +10,16 @@ use serde::{Deserialize, Serialize};
 const API_BASE: &str = "https://api.tastytrade.com";
 const SANDBOX_BASE: &str = "https://api.cert.tastytrade.com";
 
+fn format_equity_order_price(price: f64) -> String {
+    if price >= 1.0 {
+        format!("{:.2}", price)
+    } else if price >= 0.01 {
+        format!("{:.4}", price)
+    } else {
+        format!("{:.6}", price)
+    }
+}
+
 /// tastytrade broker client.
 pub struct TastytradeBroker {
     client: reqwest::Client,
@@ -272,6 +282,30 @@ impl TastytradeBroker {
         Ok(orders)
     }
 
+    fn order_status_is_live(status: &str) -> bool {
+        !matches!(
+            status.to_ascii_lowercase().as_str(),
+            "filled" | "cancelled" | "canceled" | "rejected" | "expired" | "removed"
+        )
+    }
+
+    fn collect_live_exit_order_ids_for_symbol(orders: &[TastyOrder], symbol: &str) -> Vec<String> {
+        let mut ids = Vec::new();
+        for order in orders {
+            if !Self::order_status_is_live(&order.status) {
+                continue;
+            }
+            if order.legs.iter().any(|leg| {
+                leg.symbol.eq_ignore_ascii_case(symbol)
+                    && leg.action.to_ascii_lowercase().contains("close")
+            }) && !ids.contains(&order.id)
+            {
+                ids.push(order.id.clone());
+            }
+        }
+        ids
+    }
+
     /// Place an equity order.
     pub async fn place_equity_order(
         &self, symbol: &str, qty: i64, action: &str, order_type: &str, price: Option<f64>, tif: &str,
@@ -291,7 +325,7 @@ impl TastytradeBroker {
             }],
         });
         if let Some(p) = price {
-            order["price"] = serde_json::json!(format!("{:.2}", p));
+            order["price"] = serde_json::json!(format_equity_order_price(p));
         }
 
         let resp = self.client.post(&url)
@@ -308,6 +342,66 @@ impl TastytradeBroker {
 
         let data: serde_json::Value = resp.json().await.unwrap_or_default();
         Ok(data["data"]["order"]["id"].as_str().unwrap_or("ok").to_string())
+    }
+
+    pub async fn cancel_live_exit_orders_for_symbol(&self, symbol: &str) -> Result<usize, String> {
+        let orders = self.get_orders("Live").await?;
+        let ids = Self::collect_live_exit_order_ids_for_symbol(&orders, symbol);
+        for order_id in &ids {
+            self.cancel_order(order_id)
+                .await
+                .map_err(|e| format!("Cancel live exit order {order_id} for {symbol} failed: {e}"))?;
+        }
+        Ok(ids.len())
+    }
+
+    pub async fn sync_equity_position_exits(
+        &self,
+        symbol: &str,
+        sl_price: Option<f64>,
+        tp_price: Option<f64>,
+    ) -> Result<String, String> {
+        let positions = self.get_positions().await?;
+        let pos = positions
+            .iter()
+            .find(|p| p.symbol.eq_ignore_ascii_case(symbol))
+            .ok_or_else(|| format!("No open tastytrade position for {symbol}"))?;
+        let qty_abs = pos.quantity.abs().round() as i64;
+        if qty_abs <= 0 {
+            return Err(format!("Position {symbol} has zero quantity"));
+        }
+        let exit_action = if pos.quantity_direction.eq_ignore_ascii_case("Long") {
+            "Sell to Close"
+        } else {
+            "Buy to Close"
+        };
+
+        let cancelled = self.cancel_live_exit_orders_for_symbol(symbol).await?;
+        let mut placements = Vec::new();
+        if let Some(sl) = sl_price {
+            self.place_equity_order(symbol, qty_abs, exit_action, "Stop", Some(sl), "GTC")
+                .await?;
+            placements.push(format!("SL {}", format_equity_order_price(sl)));
+        }
+        if let Some(tp) = tp_price {
+            self.place_equity_order(symbol, qty_abs, exit_action, "Limit", Some(tp), "GTC")
+                .await?;
+            placements.push(format!("TP {}", format_equity_order_price(tp)));
+        }
+        if placements.is_empty() {
+            placements.push("cleared exits".to_string());
+        } else if sl_price.is_some() && tp_price.is_some() {
+            placements.push("broker-native link unavailable; exits placed independently".to_string());
+        }
+
+        Ok(format!(
+            "{} for {} {} {} (cancelled {} existing exit order(s))",
+            placements.join(", "),
+            exit_action,
+            qty_abs,
+            symbol,
+            cancelled
+        ))
     }
 
     /// Cancel an open order by order ID.
@@ -664,6 +758,50 @@ mod tests {
         assert_eq!(pos.quantity_direction, "Short");
         assert!(pos.mark_price.is_none());
         assert!(pos.unrealized_pnl.is_none());
+    }
+
+    #[test]
+    fn format_equity_order_price_scales_for_penny_names() {
+        assert_eq!(format_equity_order_price(12.3456), "12.35");
+        assert_eq!(format_equity_order_price(0.123456), "0.1235");
+        assert_eq!(format_equity_order_price(0.000321), "0.000321");
+    }
+
+    #[test]
+    fn collect_live_exit_order_ids_for_symbol_keeps_close_orders_only() {
+        let orders = vec![
+            TastyOrder {
+                id: "exit-1".to_string(),
+                order_type: "Limit".to_string(),
+                time_in_force: "GTC".to_string(),
+                status: "Live".to_string(),
+                legs: vec![TastyOrderLeg {
+                    instrument_type: "Equity".to_string(),
+                    symbol: "AAPL".to_string(),
+                    action: "Sell to Close".to_string(),
+                    quantity: 10,
+                }],
+                price: Some(220.0),
+                size: 10,
+            },
+            TastyOrder {
+                id: "entry-1".to_string(),
+                order_type: "Limit".to_string(),
+                time_in_force: "GTC".to_string(),
+                status: "Live".to_string(),
+                legs: vec![TastyOrderLeg {
+                    instrument_type: "Equity".to_string(),
+                    symbol: "AAPL".to_string(),
+                    action: "Buy to Open".to_string(),
+                    quantity: 10,
+                }],
+                price: Some(200.0),
+                size: 10,
+            },
+        ];
+
+        let ids = TastytradeBroker::collect_live_exit_order_ids_for_symbol(&orders, "AAPL");
+        assert_eq!(ids, vec!["exit-1".to_string()]);
     }
 
     #[test]

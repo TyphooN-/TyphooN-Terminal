@@ -22,7 +22,7 @@ fn to_kraken_interval(tf: &str) -> Option<u32> {
 }
 
 /// Map TyphooN crypto symbols to Kraken trading pairs.
-fn to_kraken_pair(sym: &str) -> Option<&'static str> {
+pub fn to_kraken_pair(sym: &str) -> Option<&'static str> {
     let clean = sym.replace("/", "").to_uppercase();
     match clean.as_str() {
         "BTCUSD" => Some("XBTUSD"),
