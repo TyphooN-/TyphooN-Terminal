@@ -439,12 +439,40 @@ impl TastytradeBroker {
         if qty_abs == 0 {
             return Err(format!("Position {symbol} has zero quantity"));
         }
+        self.close_equity_position_qty(symbol, qty_abs).await
+    }
+
+    pub async fn close_equity_position_qty(&self, symbol: &str, qty: i64) -> Result<String, String> {
+        let positions = self.get_positions().await?;
+        let pos = positions.iter()
+            .find(|p| p.symbol.eq_ignore_ascii_case(symbol))
+            .ok_or_else(|| format!("No open tastytrade position for {symbol}"))?;
+
+        let qty_abs = pos.quantity.abs().round() as i64;
+        if qty_abs == 0 {
+            return Err(format!("Position {symbol} has zero quantity"));
+        }
+        let close_qty = qty.max(0).min(qty_abs);
+        if close_qty == 0 {
+            return Err(format!("Requested close size for {symbol} is zero"));
+        }
         let action = if pos.quantity_direction.eq_ignore_ascii_case("Long") {
             "Sell to Close"
         } else {
             "Buy to Close"
         };
-        self.place_equity_order(symbol, qty_abs, action, "Market", None, "Day").await
+        let _ = self.cancel_live_exit_orders_for_symbol(symbol).await;
+        self.place_equity_order(symbol, close_qty, action, "Market", None, "Day").await
+    }
+
+    pub async fn close_all_equity_positions(&self) -> Result<usize, String> {
+        let positions = self.get_positions().await?;
+        let mut closed = 0usize;
+        for pos in positions.iter().filter(|p| p.quantity.abs() > 0.0) {
+            self.close_equity_position(&pos.symbol).await?;
+            closed += 1;
+        }
+        Ok(closed)
     }
 
     /// Search symbols by query string.

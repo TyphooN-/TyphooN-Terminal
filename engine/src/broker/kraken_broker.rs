@@ -238,11 +238,88 @@ impl KrakenBroker {
         }
     }
 
+    fn display_pair(pair: &str) -> String {
+        match Self::normalized_pair_key(pair).as_str() {
+            "XBTUSD" => "BTCUSD".to_string(),
+            "XDGUSD" => "DOGEUSD".to_string(),
+            other => other.to_string(),
+        }
+    }
+
     fn pair_matches(candidate: &str, target: &str) -> bool {
         let candidate = Self::normalized_pair_key(candidate);
         Self::canonical_pair_forms(target)
             .into_iter()
             .any(|form| candidate == form || candidate.ends_with(&form) || form.ends_with(&candidate))
+    }
+
+    fn net_position_volume(raw_positions: &[serde_json::Value], pair: &str) -> f64 {
+        let mut net_volume = 0.0_f64;
+        for pos in raw_positions {
+            let pos_pair = pos["pair"].as_str().unwrap_or("");
+            if !Self::pair_matches(pos_pair, pair) {
+                continue;
+            }
+            let volume = Self::parse_f64_field(&pos["vol"]);
+            let closed = Self::parse_f64_field(&pos["vol_closed"]);
+            let open_volume = (volume - closed).max(0.0);
+            if open_volume <= 0.0 {
+                continue;
+            }
+            let side = pos["type"].as_str().unwrap_or("");
+            if side.eq_ignore_ascii_case("buy") || side.eq_ignore_ascii_case("long") {
+                net_volume += open_volume;
+            } else {
+                net_volume -= open_volume;
+            }
+        }
+        net_volume
+    }
+
+    pub fn position_summaries_from_raw(
+        raw_positions: &[serde_json::Value],
+    ) -> Vec<crate::broker::alpaca::PositionInfo> {
+        raw_positions
+            .iter()
+            .filter_map(|pos| {
+                let pair = pos["pair"].as_str().unwrap_or("");
+                if pair.is_empty() {
+                    return None;
+                }
+                let volume = Self::parse_f64_field(&pos["vol"]);
+                let closed = Self::parse_f64_field(&pos["vol_closed"]);
+                let open_volume = (volume - closed).max(0.0);
+                if open_volume <= 0.0 {
+                    return None;
+                }
+                let cost = Self::parse_f64_field(&pos["cost"]);
+                let value = Self::parse_f64_field(&pos["value"]);
+                let net = Self::parse_f64_field(&pos["net"]);
+                let avg_entry = if volume > 0.0 { cost / volume } else { 0.0 };
+                let side = if pos["type"].as_str().unwrap_or("").eq_ignore_ascii_case("sell") {
+                    "short"
+                } else {
+                    "long"
+                };
+                Some(crate::broker::alpaca::PositionInfo {
+                    symbol: Self::display_pair(pair),
+                    qty: open_volume,
+                    side: side.to_string(),
+                    avg_entry_price: avg_entry,
+                    market_value: if value > 0.0 { value } else { cost + net },
+                    unrealized_pl: net,
+                    asset_class: "crypto".to_string(),
+                    asset_id: pos["posid"].as_str().unwrap_or("").to_string(),
+                })
+            })
+            .collect()
+    }
+
+    pub async fn get_position_summaries(
+        &self,
+    ) -> Result<Vec<crate::broker::alpaca::PositionInfo>, String> {
+        let positions = self.get_open_positions().await?;
+        Ok(Self::position_summaries_from_raw(&positions))
     }
 
     async fn cancel_live_exit_orders_for_pair(
@@ -278,25 +355,7 @@ impl KrakenBroker {
         tp_price: Option<f64>,
     ) -> Result<String, String> {
         let positions = self.get_open_positions().await?;
-        let mut net_volume = 0.0_f64;
-        for pos in positions {
-            let pos_pair = pos["pair"].as_str().unwrap_or("");
-            if !Self::pair_matches(pos_pair, pair) {
-                continue;
-            }
-            let volume = Self::parse_f64_field(&pos["vol"]);
-            let closed = Self::parse_f64_field(&pos["vol_closed"]);
-            let open_volume = (volume - closed).max(0.0);
-            if open_volume <= 0.0 {
-                continue;
-            }
-            let side = pos["type"].as_str().unwrap_or("");
-            if side.eq_ignore_ascii_case("buy") || side.eq_ignore_ascii_case("long") {
-                net_volume += open_volume;
-            } else {
-                net_volume -= open_volume;
-            }
-        }
+        let net_volume = Self::net_position_volume(&positions, pair);
 
         if net_volume.abs() <= f64::EPSILON {
             return Err(format!("No open Kraken position found for {pair}"));
@@ -331,6 +390,38 @@ impl KrakenBroker {
             order_pair,
             cancelled
         ))
+    }
+
+    pub async fn close_position(
+        &self,
+        pair: &str,
+        volume: Option<f64>,
+    ) -> Result<serde_json::Value, String> {
+        let positions = self.get_open_positions().await?;
+        let net_volume = Self::net_position_volume(&positions, pair);
+        if net_volume.abs() <= f64::EPSILON {
+            return Err(format!("No open Kraken position found for {pair}"));
+        }
+
+        let close_side = if net_volume > 0.0 { "sell" } else { "buy" };
+        let qty_abs = volume.unwrap_or(net_volume.abs()).min(net_volume.abs());
+        if qty_abs <= f64::EPSILON {
+            return Err(format!("Close size for {pair} is zero"));
+        }
+        let _ = self.cancel_live_exit_orders_for_pair(pair, close_side).await;
+        let order_pair = crate::core::kraken::to_kraken_pair(pair).unwrap_or(pair);
+        self.place_order(order_pair, close_side, "market", qty_abs, None).await
+    }
+
+    pub async fn close_all_positions(&self) -> Result<usize, String> {
+        let positions = self.get_open_positions().await?;
+        let summaries = Self::position_summaries_from_raw(&positions);
+        let mut closed = 0usize;
+        for pos in summaries {
+            self.close_position(&pos.symbol, None).await?;
+            closed += 1;
+        }
+        Ok(closed)
     }
 
     /// Place an order on Kraken.
@@ -508,6 +599,60 @@ mod tests {
         assert!(KrakenBroker::pair_matches("XBTUSD", "BTC/USD"));
         assert!(KrakenBroker::pair_matches("XDGUSD", "DOGEUSD"));
         assert!(!KrakenBroker::pair_matches("ETHUSD", "SOLUSD"));
+    }
+
+    #[test]
+    fn position_summaries_from_raw_normalizes_display_pairs() {
+        let raw = vec![
+            serde_json::json!({
+                "pair": "XXBTZUSD",
+                "type": "buy",
+                "vol": "0.75",
+                "vol_closed": "0.25",
+                "cost": "30000",
+                "value": "31000",
+                "net": "1000",
+                "posid": "abc123"
+            }),
+            serde_json::json!({
+                "pair": "XDGUSD",
+                "type": "sell",
+                "vol": "1000",
+                "vol_closed": "400",
+                "cost": "60",
+                "value": "55",
+                "net": "-5",
+                "posid": "doge456"
+            }),
+        ];
+        let summaries = KrakenBroker::position_summaries_from_raw(&raw);
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].symbol, "BTCUSD");
+        assert_eq!(summaries[0].side, "long");
+        assert!((summaries[0].qty - 0.5).abs() < f64::EPSILON);
+        assert_eq!(summaries[1].symbol, "DOGEUSD");
+        assert_eq!(summaries[1].side, "short");
+        assert!((summaries[1].qty - 600.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn net_position_volume_offsets_long_and_short() {
+        let raw = vec![
+            serde_json::json!({
+                "pair": "XXBTZUSD",
+                "type": "buy",
+                "vol": "1.5",
+                "vol_closed": "0.25"
+            }),
+            serde_json::json!({
+                "pair": "XBTUSD",
+                "type": "sell",
+                "vol": "0.5",
+                "vol_closed": "0.1"
+            }),
+        ];
+        let net = KrakenBroker::net_position_volume(&raw, "BTCUSD");
+        assert!((net - 0.85).abs() < 1e-9);
     }
 
     #[tokio::test]
