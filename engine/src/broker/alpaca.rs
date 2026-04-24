@@ -7,6 +7,7 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
@@ -270,6 +271,8 @@ pub struct AlpacaBroker {
     api_key: Zeroizing<String>,
     secret_key: Zeroizing<String>,
     rate_limiter: RateLimiter,
+    bar_rate_limiter: RateLimiter,
+    sip_bar_feed_unavailable: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -382,6 +385,8 @@ impl AlpacaBroker {
             api_key: Zeroizing::new(api_key),
             secret_key: Zeroizing::new(secret_key),
             rate_limiter: RateLimiter::new(),
+            bar_rate_limiter: RateLimiter::new(),
+            sip_bar_feed_unavailable: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -394,6 +399,43 @@ impl AlpacaBroker {
             headers.insert("APCA-API-SECRET-KEY", secret);
         }
         headers
+    }
+
+    fn stock_bar_feeds(&self) -> Vec<Option<&'static str>> {
+        if self.sip_bar_feed_unavailable.load(Ordering::Relaxed) {
+            vec![Some("iex")]
+        } else {
+            vec![Some("iex"), Some("sip")]
+        }
+    }
+
+    fn is_sip_bar_entitlement_failure(status: reqwest::StatusCode, body: &str) -> bool {
+        if !matches!(status.as_u16(), 401 | 403 | 422) {
+            return false;
+        }
+        let body = body.to_ascii_lowercase();
+        body.contains("sip")
+            && [
+                "subscription",
+                "entitle",
+                "entitlement",
+                "permission",
+                "permit",
+                "upgrade",
+                "plan",
+            ]
+            .iter()
+            .any(|needle| body.contains(needle))
+    }
+
+    fn note_sip_bar_entitlement_failure(&self, status: reqwest::StatusCode, body: &str) -> bool {
+        if !Self::is_sip_bar_entitlement_failure(status, body) {
+            return false;
+        }
+        if !self.sip_bar_feed_unavailable.swap(true, Ordering::Relaxed) {
+            tracing::warn!("Alpaca SIP bar feed unavailable for this session; skipping future SIP probes");
+        }
+        true
     }
 
     /// Pre-warm TCP+TLS connection to the data endpoint (data.alpaca.markets).
@@ -1508,7 +1550,7 @@ impl AlpacaBroker {
         let feeds: Vec<Option<&str>> = if is_crypto {
             vec![None]
         } else {
-            vec![Some("iex"), Some("sip")]
+            self.stock_bar_feeds()
         };
 
         // Start from the earliest reasonable date
@@ -1529,7 +1571,8 @@ impl AlpacaBroker {
             let mut rate_limited = false;
 
             loop {
-                self.rate_limiter.wait().await;
+                self.bar_rate_limiter.wait().await;
+                let chunk_timer = std::time::Instant::now();
 
                 let mut params = vec![
                     ("timeframe", timeframe.to_string()),
@@ -1564,8 +1607,8 @@ impl AlpacaBroker {
                 };
 
                 if resp.status().as_u16() == 429 {
-                    self.rate_limiter.trigger_cooldown().await;
-                    self.rate_limiter.wait().await;
+                    self.bar_rate_limiter.trigger_cooldown().await;
+                    self.bar_rate_limiter.wait().await;
                     rate_limited = true;
                     if all_bars.is_empty() {
                         last_error = "Rate limited".into();
@@ -1575,8 +1618,12 @@ impl AlpacaBroker {
                     break;
                 }
                 if !resp.status().is_success() {
-                    last_error = format!("HTTP {}", resp.status());
-                    let _ = resp.text().await;
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    if matches!(feed, Some("sip")) {
+                        let _ = self.note_sip_bar_entitlement_failure(status, &body);
+                    }
+                    last_error = format!("HTTP {} (feed={:?})", status, feed);
                     break;
                 }
 
@@ -1587,6 +1634,9 @@ impl AlpacaBroker {
                         break;
                     }
                 };
+                self.bar_rate_limiter
+                    .report_latency(chunk_timer.elapsed().as_millis() as u64)
+                    .await;
 
                 let new_page_token = json
                     .get("next_page_token")
@@ -1747,7 +1797,7 @@ impl AlpacaBroker {
         let feeds: Vec<Option<&str>> = if is_crypto {
             vec![None] // crypto endpoint doesn't use feed param
         } else {
-            vec![Some("iex"), Some("sip")] // try free tier first
+            self.stock_bar_feeds() // try free tier first
         };
 
         let base = if is_crypto {
@@ -1794,7 +1844,7 @@ impl AlpacaBroker {
 
             loop {
                 // Centralized rate limiter — respects global request budget + adaptive pacing
-                self.rate_limiter.wait().await;
+                self.bar_rate_limiter.wait().await;
 
                 let chunk_timer = std::time::Instant::now();
 
@@ -1843,7 +1893,7 @@ impl AlpacaBroker {
                     let status = resp.status();
                     if status.as_u16() == 429 {
                         rate_limit_retries += 1;
-                        self.rate_limiter.trigger_cooldown().await;
+                        self.bar_rate_limiter.trigger_cooldown().await;
                         if rate_limit_retries <= MAX_RATE_LIMIT_RETRIES {
                             tracing::warn!(
                                 "429 rate limit for {} @ {}: retry {}/{} ({} bars so far)",
@@ -1853,7 +1903,7 @@ impl AlpacaBroker {
                                 MAX_RATE_LIMIT_RETRIES,
                                 all_bars.len()
                             );
-                            self.rate_limiter.wait().await;
+                            self.bar_rate_limiter.wait().await;
                             continue; // retry the same chunk (page_token unchanged)
                         }
                         rate_limited = true;
@@ -1867,8 +1917,11 @@ impl AlpacaBroker {
                             break;
                         }
                     }
+                    let body = resp.text().await.unwrap_or_default();
+                    if matches!(feed, Some("sip")) {
+                        let _ = self.note_sip_bar_entitlement_failure(status, &body);
+                    }
                     last_error = format!("HTTP {} (feed={:?})", status, feed);
-                    let _ = resp.text().await;
                     break;
                 }
 
@@ -1882,7 +1935,7 @@ impl AlpacaBroker {
 
                 // Report latency for adaptive pacing
                 let chunk_elapsed_ms = chunk_timer.elapsed().as_millis() as u64;
-                self.rate_limiter.report_latency(chunk_elapsed_ms).await;
+                self.bar_rate_limiter.report_latency(chunk_elapsed_ms).await;
 
                 // Extract next_page_token from response for efficient pagination
                 let new_page_token = json
@@ -3451,6 +3504,34 @@ mod tests {
         let targeted =
             lookback_days_for_request(false, "1Hour", 30_000, BarsLookbackMode::Targeted);
         assert!(targeted >= 6_000);
+    }
+
+    #[test]
+    fn detects_sip_bar_entitlement_failures() {
+        assert!(AlpacaBroker::is_sip_bar_entitlement_failure(
+            reqwest::StatusCode::FORBIDDEN,
+            "subscription does not permit querying SIP data"
+        ));
+        assert!(AlpacaBroker::is_sip_bar_entitlement_failure(
+            reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+            "SIP feed requires plan upgrade"
+        ));
+    }
+
+    #[test]
+    fn ignores_non_entitlement_bar_failures() {
+        assert!(!AlpacaBroker::is_sip_bar_entitlement_failure(
+            reqwest::StatusCode::NOT_FOUND,
+            "not found"
+        ));
+        assert!(!AlpacaBroker::is_sip_bar_entitlement_failure(
+            reqwest::StatusCode::FORBIDDEN,
+            "market data temporarily unavailable"
+        ));
+        assert!(!AlpacaBroker::is_sip_bar_entitlement_failure(
+            reqwest::StatusCode::FORBIDDEN,
+            "subscription does not permit querying IEX data"
+        ));
     }
 
     // ── parse_bars (mock JSON) ──────────────────────────────────────
