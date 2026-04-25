@@ -18,19 +18,19 @@
 - [x] SL/TP planning lines
 
 ### Phase 3: Indicators
-- [x] 32+ indicators: SMA, EMA, KAMA, WMA, HMA, Bollinger, Ichimoku, Parabolic SAR, ATR Projection, RSI, Fisher(32), MACD, Stochastic, ADX, CCI, Williams %R, OBV, Momentum, Better Volume, Volume, ATR, Ehlers (8 DSP indicators)
+- [x] 46+ chart indicators: SMA, EMA, KAMA, WMA, HMA, Bollinger, Ichimoku, Parabolic SAR, ATR Projection, RSI, Fisher(32), MACD, Stochastic, ADX, CCI, Williams %R, OBV, Momentum, Better Volume, Volume, ATR, Ehlers (8 DSP indicators), CMO, QStick, Disparity, BOP, StdDev (ADR-200)
 - [x] Sub-pane rendering with MT5-matching histogram/line coloring
 - [x] NNFX default preset (SMA200 + KAMA + Fisher + ATR Proj + BetterVol + PrevLevels + S/D Zones)
 
 ### Phase 4: UI Panels
-- [x] Console (`~`) with 120 commands
+- [x] Console (`~`) with 205+ commands
 - [x] Tab bar with drag-and-drop reordering (Ctrl+N/W/Tab)
 - [x] MTF grid (2×2 to 4×4, up to 16 charts)
 - [x] Right panel: tabbed (Trade/Pos/Ord/WL/Risk), TradingView-style watchlist
 - [x] Bottom panel: log + volume bars
-- [x] 29 floating windows
+- [x] 54+ floating windows
 - [x] Right-click context menu with drawing tools + chart type switcher
-- [x] 56 drawing tools (lines, channels, Fibonacci, shapes, Gann, Elliott, measurement, patterns, annotations, position, cycles, projection, curves)
+- [x] 89 drawing tools (lines, channels, Fibonacci, shapes, Gann, Elliott, measurement, patterns, annotations, position, cycles, projection, curves)
 - [x] Session persistence (save/restore on quit/startup)
 - [x] CSV export with file dialog
 
@@ -98,7 +98,7 @@
 - [x] 5-source bar priority: MT5 → Alpaca → tastytrade → CryptoCompare → Kraken
 
 ### Phase 10: Advanced Features
-- [x] More drawing tools (pitchfork, Elliott, Gann — all implemented, 71 total)
+- [x] More drawing tools (pitchfork, Elliott, Gann — all implemented, 89 total)
 - [x] Price alerts system (indicator-based: RSI, MACD, Fisher, Price conditions)
 - [x] Trade journal (log trades with notes, ~ → JOURNAL)
 - [x] Supply/demand zones (auto-detected from impulse candles, GPU + CPU paths)
@@ -116,12 +116,63 @@
 - [x] FRED economic data (Fed Funds, CPI, GDP, Treasury yields, VIX, M2 Supply)
 
 ### Phase 12: MQL5/PineScript Compiler
-- [x] MQL5 parser (pest grammar → AST, core MQL5 syntax, 75+ tests)
+- [x] MQL5 parser (pest grammar → AST, core MQL5 syntax, 216 tests)
 - [x] WASM backend (CPU execution via wasmtime)
 - [x] WGSL backend (GPU execution via wgpu compute shaders)
-- [x] PineScript v5 parser (indicator, input.*, ta.*, plot, math.*, 7 tests)
+- [x] PineScript v5 parser (indicator, input.*, ta.*, plot, math.*)
+- [x] 8 transpiler frontends/backends: MQL4, PineScript, ThinkScript, EasyLanguage, AFL, ACSIL, cAlgo, NinjaScript, ProBuilder
 - [ ] Hot-reload custom indicators from file
 - [ ] Indicator marketplace / import UI
+
+### Phase 13: Kraken Broker
+- [x] Public OHLCV ingest (gap-fill source)
+- [x] HMAC-SHA512 signed REST trading (ADR-072)
+- [x] Position summaries unified into PositionInfo shape (ADR-201)
+- [x] Display-pair normalization (XBTUSD → BTCUSD)
+
+### Phase 14: LAN Sync v2
+- [x] TLS-encrypted (wss://) WebSocket sync, ephemeral self-signed certs (ADR-065)
+- [x] PBKDF2 passphrase auth, constant-time HMAC-SHA256
+- [x] 14 remote commands (SEC_SCRAPE, DARWIN_IMPORT, FETCH_BARS, etc.) — ADR-066
+- [x] Bandwidth-tuned sync, full data + KV cache (ADR-079)
+
+### Phase 15: Web LAN Client
+- [x] WASM client (eframe/glow), built via trunk (ADR-073)
+- [x] HTTPS + WebSocket relay (axum, axum-server)
+- [x] Read-only chart, watchlist, positions/orders display
+- [x] PBKDF2 passphrase auth shared with native LAN sync
+
+### Phase 16: Fundamentals & Research
+- [x] Fundamentals engine across 21 sources (Alpaca, Finnhub, FMP, Alpha Vantage, FRED, SEC EDGAR, Yahoo, etc.) — ADR-054
+- [x] Fundamentals research packet (markdown bundle for AI agents)
+- [x] News earnings dividends pipeline (ADR-012, ADR-107)
+- [x] Notification system: Discord webhook, Pushover, ntfy.sh, Matrix (ADR-074)
+
+### Phase 17: AI Sessions
+- [x] Persistent AI sessions: Claude Code, Gemini CLI, Codex CLI, generic AI Chat (ADR-157)
+- [x] Cross-client AI response cache, dedup across LAN clients (ADR-162)
+- [x] Slash commands: RESUMECLAUDE / RESUMEGEMINI / RESUMECODEX / RESUMEAI
+- [x] Ask Codex reasoning effort control
+
+### Phase 18: TA-Lib + Godel Parity
+- [x] ~375 TA-Lib primitives (indicators + candlestick patterns) across 75+ rounds
+- [x] Godel-Terminal-documented features (options chain, expirations calendar, earnings whispers, institutional ownership, insider transactions)
+- [x] Research-packet pipeline as the AI-agent-readable surface (ADR-188)
+- [x] Chart-parity reopened for chartable oscillator/stat bundles (ADR-200)
+- [ ] Chart-overlay candlestick pattern marks (deferred — ADR-188)
+
+### Phase 19: MT5 EA Trading-Flow Alignment
+- [x] One net position per symbol across Alpaca / tastytrade / Kraken (ADR-201)
+- [x] Partial close + close-all on every broker
+- [x] Cancel-pending-exit-orders-before-close (no more `insufficient qty` rejects)
+- [x] Display-symbol normalization to EA's symbol table
+
+### Phase 20: Performance & Compile-Speed
+- [x] native/app.rs split into submodules: ai, settings, storage, sync_status, tool_windows, strategy_windows (ADR-202)
+- [x] Alpaca sync autotuning by data tier (ADR-203)
+- [x] Header-driven rate-limit pacing, cache-depth-aware window sizing
+- [x] No-data symbol skip set
+- [x] Dependency audit + RustSec advisory closure (ADR-204)
 
 ## Future
 

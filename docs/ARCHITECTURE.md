@@ -10,31 +10,38 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  ┌─────────────────────────────────────────────┐│
 │  │ Chart Renderer (egui Painter)               ││
 │  │ - Candle/HeikinAshi/Line/Bars/Renko         ││
-│  │ - 32+ indicators (GPU + CPU fallback)        ││
-│  │ - 71 drawing tools + 10 harmonic patterns   ││
+│  │ - 46+ indicators (GPU + CPU fallback)        ││
+│  │ - 89 drawing tools + harmonic patterns       ││
 │  │ - DARWIN trade arrows + position lines       ││
 │  │ - Sub-panes (Fisher, RSI, MACD, ADX, etc.)  ││
 │  ├─────────────────────────────────────────────┤│
 │  │ egui Panels                                 ││
-│  │ - Console (~) with 121 commands               ││
+│  │ - Console (~) with 205+ commands             ││
 │  │ - Positions / Orders / TradingView Watchlist││
 │  │ - Risk calculator, VaR, Margin monitor      ││
-│  │ - DARWIN analytics (80 engine functions)    ││
+│  │ - DARWIN analytics (80+ engine functions)   ││
 │  │ - SEC Filing Scanner + Insider Trades       ││
 │  │ - Finnhub News + Market Data APIs           ││
-│  │ - Backtest engine + optimizer               ││
+│  │ - Fundamentals (21 data sources)             ││
+│  │ - Research packet (TA-Lib + Godel parity)   ││
+│  │ - AI sessions (Claude / Gemini / Codex)     ││
+│  │ - Backtest engine + optimizer (GPU)         ││
 │  │ - MTF Grid (up to 16 chart viewports)       ││
-│  │ - 29 floating windows                       ││
+│  │ - 54+ floating windows                      ││
 │  └─────────────────────────────────────────────┘│
 ├─────────────────────────────────────────────────┤
 │  Engine Library (typhoon-engine crate)          │
 │  - AlpacaBroker (REST + WebSocket)              │
+│  - TastytradeBroker (REST + DXLink WebSocket)   │
+│  - KrakenBroker (REST trade + public OHLCV)     │
 │  - SqliteCache (TTBR binary, zstd compression)  │
-│  - DarwinDB (80 analytics functions, 100% wired) │
+│  - DarwinDB (80+ analytics, 100% wired)         │
 │  - RiskEngine (VaR, TRIM, martingale)           │
 │  - BacktestEngine (bar-by-bar, optimization)    │
 │  - BarBuilder (WebSocket → OHLCV)               │
-│  - Notifications (Discord, Pushover, ntfy)      │
+│  - LanSync (TLS, PBKDF2, 14 remote commands)    │
+│  - Notifications (Discord, Pushover, ntfy,      │
+│    Matrix)                                      │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -54,12 +61,12 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 | Priority | Source | Coverage |
 |----------|--------|----------|
 | 1 | MT5 via BarCacheWriter v1.435 | 895 symbols × 9 TFs, weekday authority (Darwinex). TF gating, 16MB cache, /dev/shm ramdisk. |
-| 2 | Alpaca | Live trading execution, US equities + crypto. Auto-connects on startup. |
-| 3 | tastytrade | Options/futures, DXLink WebSocket historical bars, IV rank/percentile, option chains. |
-| 4 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request, hourly+ TFs |
-| 5 | Kraken | Sub-hourly gap-fill (720 bars, weekend coverage, no rate limit) |
+| 2 | tastytrade DXLink | Real-time bars + quotes for funded accounts. |
+| 3 | Alpaca | US equities + crypto, free IEX or paid SIP. Tier-autotuned sync (ADR-203). |
+| 4 | Kraken | Crypto trading + public OHLCV gap-fill (720 bars, weekend coverage). |
+| 5 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request, hourly+ TFs. |
 
-MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade management stays in MT5 directly. DARWIN account analytics are imported via XLSX trade history exports. Alpaca auto-connects on startup if credentials are saved in the system keyring. tastytrade fully integrated: REST API (auth, positions, orders, quotes, market metrics, option chains) + DXLink WebSocket (historical bars). See ADR-022.
+MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade execution flows through Alpaca / tastytrade / Kraken with MT5 EA semantics (partial close, close-all, cancel-exits-before-close — see ADR-201). DARWIN account analytics are imported via XLSX trade history exports. Alpaca auto-connects on startup if credentials are saved in the system keyring. tastytrade fully integrated: REST API (auth, positions, orders, quotes, market metrics, option chains) + DXLink WebSocket (historical bars). See ADR-022. Kraken supports both crypto trading and public-OHLCV-only modes (ADR-072). See ADR-037 for cross-source priority hierarchy.
 
 ## Technology Stack
 
@@ -82,32 +89,53 @@ TyphooN-Terminal/
 ├── native/                 # Native GPU application
 │   ├── src/
 │   │   ├── main.rs         # eframe init, wgpu renderer selection
-│   │   └── app.rs          # All UI (17,033 lines)
+│   │   ├── app.rs          # TyphooNApp, chart pane, palette, dispatch
+│   │   ├── app/            # Window renderers (ADR-202 split)
+│   │   │   ├── ai.rs               # AI Chat / Claude / Gemini /
+│   │   │   │                       # Codex / Sessions / Response Cache
+│   │   │   ├── settings.rs         # Settings window
+│   │   │   ├── storage.rs          # Storage Manager
+│   │   │   ├── sync_status.rs      # Sync Status (per-broker %)
+│   │   │   ├── tool_windows.rs     # Indicator + analytical windows
+│   │   │   └── strategy_windows.rs # Strategy / backtest / optimizer
+│   │   └── gpu_compute.rs  # WGSL indicator shaders
 │   └── Cargo.toml
 ├── engine/                 # Shared engine library
 │   ├── src/
 │   │   ├── lib.rs          # Crate root
 │   │   ├── core/
-│   │   │   ├── cache.rs    # SQLite + zstd bar cache
-│   │   │   ├── darwin.rs   # DARWIN analytics (80 functions)
-│   │   │   ├── risk.rs     # Lot sizing (4 order modes)
-│   │   │   ├── margin.rs   # TRIM, PROTECT, margin math
-│   │   │   ├── var.rs      # VaR, CVaR, portfolio risk
-│   │   │   ├── backtest.rs # Bar-by-bar engine, strategies
-│   │   │   ├── screener.rs # Symbol filtering
-│   │   │   ├── fred.rs     # FRED economic data (yield curve, CPI, GDP, VIX, M2)
-│   │   │   ├── cryptocompare.rs # CryptoCompare deep history backfill
+│   │   │   ├── cache.rs       # SQLite + zstd bar cache
+│   │   │   ├── darwin.rs      # DARWIN analytics (80+ functions)
+│   │   │   ├── research.rs    # TA-Lib + Godel parity surfaces
+│   │   │   ├── fundamentals.rs # 21 data-source fundamentals
+│   │   │   ├── risk.rs        # Lot sizing (4 order modes)
+│   │   │   ├── margin.rs      # TRIM, PROTECT, margin math
+│   │   │   ├── var.rs         # VaR, CVaR, portfolio risk
+│   │   │   ├── backtest.rs    # Bar-by-bar engine, strategies
+│   │   │   ├── screener.rs    # Symbol filtering
+│   │   │   ├── fred.rs        # FRED economic data
+│   │   │   ├── cryptocompare.rs # CryptoCompare deep history
+│   │   │   ├── ai_sessions.rs # ADR-157 chat persistence
+│   │   │   ├── ai_response_cache.rs # ADR-162 cross-client cache
+│   │   │   ├── lan_sync.rs    # TLS + PBKDF2 LAN sync (ADR-065)
 │   │   │   └── ...
 │   │   └── broker/
-│   │       ├── alpaca.rs   # REST + WebSocket client
-│   │       ├── tastytrade.rs # REST API (auth, positions, orders, quotes, options)
-│   │       └── dxlink.rs   # DXLink WebSocket (historical bars, streaming)
+│   │       ├── alpaca.rs       # REST + WebSocket (ADR-203 autotune)
+│   │       ├── tastytrade.rs   # REST + DXLink (ADR-022)
+│   │       ├── kraken_broker.rs # Trading (ADR-072)
+│   │       └── dxlink.rs       # DXLink WebSocket
 │   └── Cargo.toml
-├── cli/                    # Standalone TUI (6.5MB, SSH-ready)
-├── mql5-compiler/          # MQL5 + PineScript → WASM/WGSL compiler (82 tests)
+├── cli/                    # Standalone TUI (ratatui, SSH-ready)
+├── mql5-compiler/          # MQL5 + PineScript + 8 transpiler backends
+├── web/                    # WASM LAN client (ADR-073)
+├── web-protocol/           # Shared web ↔ server message types
+├── web-server/             # axum HTTPS + WebSocket relay
 └── docs/
-    ├── adr/                # 47 Architecture Decision Records
+    ├── adr/                # 200+ Architecture Decision Records
     ├── API_KEYS.md
+    ├── INDICATORS.md
+    ├── PERFORMANCE.md
+    ├── ROADMAP.md
     └── KEYBOARD_SHORTCUTS.md
 ```
 
@@ -117,7 +145,7 @@ TyphooN-Terminal/
 |--------|-----------|
 | Startup to interactive | < 2s |
 | 10K bar chart render | < 5ms |
-| Indicator computation (32+ indicators) | < 15ms |
+| Indicator computation (46+ indicators) | < 15ms |
 | Memory (single chart) | ~50-80MB |
 | Memory (MTF 4-cell grid) | ~100-150MB |
 | Binary size (release) | ~25MB |
@@ -150,7 +178,7 @@ The right panel sections (Trade, Positions, Orders, Watchlist, Risk) are individ
 
 ### GPU Indicator Compute
 
-28 indicators run on GPU (wgpu compute shaders) with CPU fallback for compatibility. GPU/CPU parity is mandatory — GPU shaders must produce identical output to CPU implementations. BetterVolume GPU uses the full Emini-Watch algorithm with OHLCV interleaved input (5 floats/bar). VWAP GPU uses per-day dispatch via anchored compute calls per trading day. Supply/Demand Zones: GPU does fractal detection (parallel), CPU does zone testing/merging/break detection.
+40+ indicators run on GPU (wgpu compute shaders) with CPU fallback for compatibility. GPU/CPU parity is mandatory — GPU shaders must produce identical output to CPU implementations. BetterVolume GPU uses the full Emini-Watch algorithm with OHLCV interleaved input (5 floats/bar). VWAP GPU uses per-day dispatch via anchored compute calls per trading day. Supply/Demand Zones: GPU does fractal detection (parallel), CPU does zone testing/merging/break detection. Recent chart-parity rounds (CMO, QStick, Disparity, BOP, StdDev — see ADR-200) follow the same GPU-first / CPU-fallback pattern.
 
 ### DARWIN Trade Overlay
 
@@ -159,3 +187,15 @@ Chart renders buy/sell arrows at DARWIN deal entry/exit points with timestamp-to
 ### TradingView-Style Watchlist
 
 Right-aligned numeric columns (Last, Chg, Chg%, Vol) with painter-based rendering. Works offline via SQLite cache fallback — no broker connection required for cached price data. Sortable by any column.
+
+### AI Sessions
+
+Four AI surfaces with persistent, resumable sessions (ADR-157): Claude Code (`claude --resume <uuid>`), Gemini CLI, Codex CLI, and a generic AI Chat (Claude / OpenAI / Gemini / Grok / Mistral / Perplexity / Local). Sessions auto-save to the SqliteCache `kv_cache` (zstd-9 compressed) on every reply. Cross-client AI response cache (ADR-162) deduplicates identical prompts across LAN clients so the same prompt issued from server + phone hits the cache once. Slash commands (`RESUMECLAUDE`, `RESUMEGEMINI`, `RESUMECODEX`, `RESUMEAI`) re-enter prior sessions; the AI Sessions browser window shows history with subject lines and last-touched timestamps.
+
+### Research Packet (TA-Lib + Godel Parity)
+
+The research packet is an AI-agent-readable markdown bundle emitted on demand via `RESEARCH_PACKET`. It carries every cached signal: ~375 TA-Lib primitives (indicators + candlestick patterns), Godel-Terminal-documented features (options chain, expirations calendar, earnings whispers, institutional ownership, insider transactions, etc.), and the user's open positions per symbol. Each surface flows through the same pipeline (snapshot struct → SQLite table → LAN-sync whitelist → BrokerCmd/Msg → packet emitter → egui popup) — see ADR-188. Chart-drawing parity for these signals is deferred (ADR-188); the agent reads the markdown directly.
+
+### Web LAN Client (WASM)
+
+A standalone WASM client built with `eframe`/`glow` (ADR-073) connects to the native `web-server` over HTTPS + WebSocket (PBKDF2 passphrase). Read-only chart, watchlist, positions/orders display — trading and analytics computation stay on the server. Built separately via `trunk`. See `web/`, `web-protocol/`, `web-server/` workspace members.

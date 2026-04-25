@@ -1,6 +1,6 @@
-# TyphooN Terminal — Indicator Reference (32+ Indicators)
+# TyphooN Terminal — Indicator Reference (46+ Indicators)
 
-All indicators computed in pure Rust on `&[f64]` slices. No Web Workers, no WASM bridge.
+All indicators computed in pure Rust on `&[f64]` slices. No Web Workers, no WASM bridge. 40+ run on the GPU via wgpu compute shaders with CPU fallback. See ADR-200 for the chartable parity bundle (CMO / QStick / Disparity / BOP / StdDev) and ADR-188 for the broader TA-Lib + Godel parity surface.
 
 ## NNFX System (Baseline + Confirmation + Volume + Exit)
 
@@ -86,4 +86,4 @@ All indicators computed in pure Rust on `&[f64]` slices. No Web Workers, no WASM
 
 ## Performance
 
-All 32+ indicators compute in < 15ms on 10,000 bars. Indicators pre-computed once on load, cached in ChartState. Session-persistent toggles saved to `~/.config/typhoon-terminal/session.json`.
+All 46+ indicators compute in < 20ms on 10,000 bars. Indicators pre-computed once on load, cached in ChartState. Session-persistent toggles saved to `~/.config/typhoon-terminal/session.json`.

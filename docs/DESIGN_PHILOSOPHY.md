@@ -8,7 +8,7 @@ Every byte from SQLite cache to GPU pixels traverses zero serialization layers. 
 
 ### 2. DARWIN-First Analytics
 
-The terminal is built around Darwinex DARWIN accounts. The analytics engine (darwin.rs, 6,800+ lines, 80 functions) provides independent risk verification — VaR, correlation, exposure, streaks, hourly P&L — without relying on Darwinex's own dashboards.
+The terminal is built around Darwinex DARWIN accounts. The analytics engine (darwin.rs, 80+ functions) provides independent risk verification — VaR, correlation, exposure, streaks, hourly P&L — without relying on Darwinex's own dashboards.
 
 ### 3. MT5 as View-Only Data Source
 
@@ -27,7 +27,7 @@ All ported from MQL5 with exact computational parity.
 
 ### 5. Quake Console Interface
 
-The `~` key opens a Quake-style dropdown command palette with fuzzy search across 50+ commands. Every panel, feature, and chart type is accessible via typed command.
+The `~` key opens a Quake-style dropdown command palette with fuzzy search across 205+ commands. Every panel, feature, and chart type is accessible via typed command.
 
 ### 6. Immediate Mode Rendering
 
@@ -35,7 +35,7 @@ egui's immediate mode paradigm means the entire UI is a function of state — no
 
 ### 7. Engine as Library
 
-The `typhoon-engine` crate exports all broker, cache, risk, analytics, and backtest functionality as a Rust library. The native GUI, CLI/TUI, and any future interface consume the same engine with zero duplication.
+The `typhoon-engine` crate exports all broker, cache, risk, analytics, and backtest functionality as a Rust library. The native GUI, CLI/TUI, and the WASM web LAN client (ADR-073) all consume the same engine with zero duplication.
 
 ### 8. Darwinex VaR Corridor Compliance
 

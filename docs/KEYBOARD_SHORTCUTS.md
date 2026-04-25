@@ -50,9 +50,9 @@
 | Analysis | Correlation, Seasonals, Monte Carlo, Volume Profile |
 | Help | Keyboard Shortcuts |
 
-## Command Palette Commands (50+)
+## Command Palette Commands (205+)
 
-Open with `~` and type to fuzzy-search:
+Open with `~` and type to fuzzy-search. Selected examples below — the full set spans broker control, indicators, drawing tools, chart types, screener, research surfaces, AI sessions, and analytics windows. Type any prefix to filter.
 
 | Command | Action |
 |---------|--------|
