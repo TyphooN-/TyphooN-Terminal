@@ -71,9 +71,10 @@ const PAPER_BASE: &str = "https://paper-api.alpaca.markets";
 const LIVE_BASE: &str = "https://api.alpaca.markets";
 const DATA_BASE: &str = "https://data.alpaca.markets";
 
-/// Alpaca free plan: 200 requests/minute = 1 request per 300ms.
-/// We use 320ms to leave headroom. Adaptive logic may increase this.
-const RATE_LIMIT_MS: u64 = 320;
+/// Alpaca Basic historical data is currently documented at 200 req/min.
+/// We start there unless the caller provides a higher tier hint or the API
+/// confirms a different limit via `X-RateLimit-Limit` headers.
+const DEFAULT_BAR_REQUESTS_PER_MINUTE: u32 = 200;
 
 /// If a single chunk takes longer than this, the API is throttling us progressively.
 /// Accept what we have rather than spending hours on historical data.
@@ -187,6 +188,11 @@ fn format_order_price(price: f64) -> String {
     }
 }
 
+fn rpm_to_interval_ms(rpm: u32) -> u64 {
+    let rpm = rpm.max(1) as f64;
+    ((60_000.0 / rpm) * 1.05).ceil() as u64
+}
+
 /// Centralized rate limiter — shared across all data API requests.
 /// On 429, pauses all requests for a cooldown period.
 /// Adaptive: backs off when API responses slow down (progressive throttling).
@@ -194,18 +200,28 @@ fn format_order_price(price: f64) -> String {
 pub struct RateLimiter {
     last_request: Arc<Mutex<std::time::Instant>>,
     cooldown_until: Arc<Mutex<Option<std::time::Instant>>>,
+    base_interval_ms: Arc<Mutex<u64>>,
     /// Adaptive pacing: increases when API is slow, resets after cooldown
     adaptive_ms: Arc<Mutex<u64>>,
+    requests_per_minute: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl RateLimiter {
     pub fn new() -> Self {
+        Self::with_requests_per_minute(DEFAULT_BAR_REQUESTS_PER_MINUTE)
+    }
+
+    pub fn with_requests_per_minute(rpm: u32) -> Self {
+        let rpm = rpm.max(1);
+        let interval_ms = rpm_to_interval_ms(rpm);
         Self {
             last_request: Arc::new(Mutex::new(
                 std::time::Instant::now() - std::time::Duration::from_secs(1),
             )),
             cooldown_until: Arc::new(Mutex::new(None)),
-            adaptive_ms: Arc::new(Mutex::new(RATE_LIMIT_MS)),
+            base_interval_ms: Arc::new(Mutex::new(interval_ms)),
+            adaptive_ms: Arc::new(Mutex::new(interval_ms)),
+            requests_per_minute: Arc::new(std::sync::atomic::AtomicU32::new(rpm)),
         }
     }
 
@@ -243,8 +259,9 @@ impl RateLimiter {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
         *cooldown = Some(until);
         // Double adaptive interval on 429 (capped at 5s)
+        let base_interval_ms = *self.base_interval_ms.lock().await;
         let mut adaptive = self.adaptive_ms.lock().await;
-        *adaptive = (*adaptive * 2).min(5000);
+        *adaptive = (*adaptive * 2).min(5000).max(base_interval_ms);
         tracing::warn!(
             "Rate limit hit — cooling down for 60s (adaptive interval: {}ms)",
             *adaptive
@@ -253,14 +270,64 @@ impl RateLimiter {
 
     /// Report how long a request took. If responses are slow, back off.
     pub async fn report_latency(&self, elapsed_ms: u64) {
+        let base_interval_ms = *self.base_interval_ms.lock().await;
         let mut adaptive = self.adaptive_ms.lock().await;
         if elapsed_ms > 10_000 {
             // API taking >10s per response — progressive throttling detected
             *adaptive = (*adaptive + 200).min(5000);
-        } else if elapsed_ms < 2_000 && *adaptive > RATE_LIMIT_MS {
+        } else if elapsed_ms < 2_000 && *adaptive > base_interval_ms {
             // Fast responses — gradually recover
-            *adaptive = (*adaptive - 50).max(RATE_LIMIT_MS);
+            *adaptive = adaptive.saturating_sub(50).max(base_interval_ms);
         }
+    }
+
+    async fn set_requests_per_minute(&self, rpm: u32) {
+        let rpm = rpm.max(1);
+        let interval_ms = rpm_to_interval_ms(rpm);
+        self.requests_per_minute.store(rpm, Ordering::Relaxed);
+        *self.base_interval_ms.lock().await = interval_ms;
+        *self.adaptive_ms.lock().await = interval_ms;
+    }
+
+    pub async fn apply_requests_per_minute_hint(&self, rpm: u32) {
+        self.set_requests_per_minute(rpm).await;
+    }
+
+    pub async fn observe_rate_limit_headers(
+        &self,
+        headers: &reqwest::header::HeaderMap,
+    ) -> Option<u32> {
+        let Some(limit_header) = headers
+            .get("x-ratelimit-limit")
+            .or_else(|| headers.get("X-RateLimit-Limit"))
+        else {
+            return None;
+        };
+        let Ok(limit_str) = limit_header.to_str() else {
+            return None;
+        };
+        let Ok(rpm) = limit_str.trim().parse::<u32>() else {
+            return None;
+        };
+        if !(60..=100_000).contains(&rpm) {
+            return None;
+        }
+        let prev = self.requests_per_minute.load(Ordering::Relaxed);
+        if prev != rpm {
+            self.set_requests_per_minute(rpm).await;
+            tracing::info!(
+                "Alpaca historical bar rate limit observed: {} req/min ({}ms floor)",
+                rpm,
+                rpm_to_interval_ms(rpm)
+            );
+            Some(rpm)
+        } else {
+            None
+        }
+    }
+
+    pub fn requests_per_minute(&self) -> u32 {
+        self.requests_per_minute.load(Ordering::Relaxed)
     }
 }
 
@@ -368,7 +435,12 @@ pub enum FetchOutcome {
 }
 
 impl AlpacaBroker {
-    pub fn new(api_key: String, secret_key: String, paper: bool) -> Self {
+    pub fn new(
+        api_key: String,
+        secret_key: String,
+        paper: bool,
+        bar_requests_per_minute: u32,
+    ) -> Self {
         let base_url = if paper {
             PAPER_BASE.to_string()
         } else {
@@ -385,9 +457,21 @@ impl AlpacaBroker {
             api_key: Zeroizing::new(api_key),
             secret_key: Zeroizing::new(secret_key),
             rate_limiter: RateLimiter::new(),
-            bar_rate_limiter: RateLimiter::new(),
+            bar_rate_limiter: RateLimiter::with_requests_per_minute(
+                bar_requests_per_minute.max(DEFAULT_BAR_REQUESTS_PER_MINUTE),
+            ),
             sip_bar_feed_unavailable: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub async fn set_bar_requests_per_minute_hint(&self, rpm: u32) {
+        self.bar_rate_limiter
+            .apply_requests_per_minute_hint(rpm.max(DEFAULT_BAR_REQUESTS_PER_MINUTE))
+            .await;
+    }
+
+    pub fn bar_requests_per_minute(&self) -> u32 {
+        self.bar_rate_limiter.requests_per_minute()
     }
 
     fn headers(&self) -> reqwest::header::HeaderMap {
@@ -433,7 +517,9 @@ impl AlpacaBroker {
             return false;
         }
         if !self.sip_bar_feed_unavailable.swap(true, Ordering::Relaxed) {
-            tracing::warn!("Alpaca SIP bar feed unavailable for this session; skipping future SIP probes");
+            tracing::warn!(
+                "Alpaca SIP bar feed unavailable for this session; skipping future SIP probes"
+            );
         }
         true
     }
@@ -1012,7 +1098,11 @@ impl AlpacaBroker {
 
         Ok(format!(
             "{} for {} {} {} (cancelled {} existing exit order(s))",
-            placement, exit_side, qty, symbol, ids.len()
+            placement,
+            exit_side,
+            qty,
+            symbol,
+            ids.len()
         ))
     }
 
@@ -1086,16 +1176,16 @@ impl AlpacaBroker {
 
         match self.close_position_once(symbol, qty).await {
             Ok(result) => Ok(result),
-            Err(e)
-                if cancelled_orders > 0 && Self::is_insufficient_qty_close_reject(&e) =>
-            {
+            Err(e) if cancelled_orders > 0 && Self::is_insufficient_qty_close_reject(&e) => {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                self.close_position_once(symbol, qty).await.map_err(|retry_err| {
-                    format!(
-                        "{} (after cancelling {} open order(s) for {})",
-                        retry_err, cancelled_orders, symbol
-                    )
-                })
+                self.close_position_once(symbol, qty)
+                    .await
+                    .map_err(|retry_err| {
+                        format!(
+                            "{} (after cancelling {} open order(s) for {})",
+                            retry_err, cancelled_orders, symbol
+                        )
+                    })
             }
             Err(e) if Self::is_insufficient_qty_close_reject(&e) => Err(format!(
                 "{} — quantity may be reserved by open orders or the position snapshot is stale",
@@ -1796,6 +1886,10 @@ impl AlpacaBroker {
                         break;
                     }
                 };
+                let _ = self
+                    .bar_rate_limiter
+                    .observe_rate_limit_headers(resp.headers())
+                    .await;
 
                 if resp.status().as_u16() == 429 {
                     self.bar_rate_limiter.trigger_cooldown().await;
@@ -2079,6 +2173,10 @@ impl AlpacaBroker {
                         break;
                     }
                 };
+                let _ = self
+                    .bar_rate_limiter
+                    .observe_rate_limit_headers(resp.headers())
+                    .await;
 
                 if !resp.status().is_success() {
                     let status = resp.status();
@@ -3581,6 +3679,7 @@ pub struct OptionContract {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::header::{HeaderMap, HeaderValue};
     use serde_json::json;
 
     // ── parse_f64_field ─────────────────────────────────────────────
@@ -3635,6 +3734,22 @@ mod tests {
     fn round_price_sub_penny_crypto() {
         assert_eq!(format_order_price(0.00123456), "0.00123456");
         assert_eq!(format_order_price(0.009), "0.00900000");
+    }
+
+    #[test]
+    fn observe_rate_limit_headers_updates_bar_rpm() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        rt.block_on(async {
+            let limiter = RateLimiter::new();
+            let mut headers = HeaderMap::new();
+            headers.insert("x-ratelimit-limit", HeaderValue::from_static("10000"));
+
+            assert_eq!(
+                limiter.observe_rate_limit_headers(&headers).await,
+                Some(10000)
+            );
+            assert_eq!(limiter.requests_per_minute(), 10000);
+        });
     }
 
     // ── is_crypto detection (symbol.contains('/')) ──────────────────
@@ -3981,8 +4096,7 @@ mod tests {
             legs: None,
         };
 
-        let ids =
-            AlpacaBroker::collect_cancellable_order_ids_for_symbol(&[order], "BTC/USD");
+        let ids = AlpacaBroker::collect_cancellable_order_ids_for_symbol(&[order], "BTC/USD");
         assert_eq!(ids, vec!["crypto-exit".to_string()]);
     }
 

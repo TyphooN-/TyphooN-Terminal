@@ -151,7 +151,7 @@ impl TyphooNApp {
                     ),
                 )
                 .on_hover_text(
-                    "Remove persisted Alpaca no-data tombstones so automated sync can try those pairs again.",
+                    "Remove persisted Alpaca no-data tombstones so automated sync can try those symbols again.",
                 )
                 .clicked()
             {

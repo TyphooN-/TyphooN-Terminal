@@ -48,6 +48,7 @@ impl TyphooNApp {
                         self.log
                             .push_back(LogEntry::warn("Enter API key and secret"));
                     } else {
+                        let capacity = self.alpaca_sync_capacity();
                         self.log.push_back(LogEntry::info(format!(
                             "Connecting to Alpaca {}...",
                             if self.broker_paper { "Paper" } else { "Live" }
@@ -56,6 +57,8 @@ impl TyphooNApp {
                             api_key: self.broker_api_key.clone(),
                             secret: self.broker_secret.clone(),
                             paper: self.broker_paper,
+                            bar_requests_per_minute: self.alpaca_effective_historical_rpm(),
+                            fetch_permits: capacity.fetch_permits,
                         });
                     }
                 }

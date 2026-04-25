@@ -24,6 +24,7 @@ impl TyphooNApp {
                         sync_save_after = true;
                     }
                 });
+                self.render_alpaca_sync_profile_controls(ui, &mut sync_save_after, "sync_status");
                 self.render_sync_timeframe_controls(ui, &mut sync_save_after);
                 ui.separator();
 
@@ -52,7 +53,7 @@ impl TyphooNApp {
                     egui::Grid::new("sync_grid").striped(true).num_columns(6).min_col_width(60.0).show(ui, |ui| {
                         ui.label(egui::RichText::new("Broker").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("TF").color(AXIS_TEXT).small().strong());
-                        ui.label(egui::RichText::new("Pairs").color(AXIS_TEXT).small().strong());
+                        ui.label(egui::RichText::new("Symbols").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Healthy").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Stale").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("% Synced").color(AXIS_TEXT).small().strong());
