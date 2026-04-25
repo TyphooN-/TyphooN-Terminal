@@ -47,7 +47,7 @@
 //! - Custom drawing via `sc.p_GDIFunction`
 
 use crate::ir::*;
-use crate::{IndicatorMeta, InputParam, CompileResult, Diagnostic, DiagLevel, DrawType, PlotDef};
+use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, InputParam, PlotDef};
 
 pub fn parse_acsil(source: &str) -> CompileResult {
     let (ir_module, meta) = build_ir(source);
@@ -56,19 +56,32 @@ pub fn parse_acsil(source: &str) -> CompileResult {
         Ok(wasm) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Info,
-                message: format!("ACSIL compiled: {} inputs, {} plots",
-                    meta.inputs.len(), meta.plots.len()),
-                line: 0, col: 0,
+                message: format!(
+                    "ACSIL compiled: {} inputs, {} plots",
+                    meta.inputs.len(),
+                    meta.plots.len()
+                ),
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: Some(wasm), diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: Some(wasm),
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
         Err(e) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Error,
                 message: format!("ACSIL codegen failed: {e}"),
-                line: 0, col: 0,
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: None, diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: None,
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
     }
 }
@@ -107,7 +120,9 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
 
     for line in &lines {
         let t = line.trim().trim_end_matches(';');
-        if t.is_empty() { continue; }
+        if t.is_empty() {
+            continue;
+        }
 
         // Detect SetDefaults block entry/exit
         if t.contains("sc.SetDefaults") && t.contains("if") {
@@ -261,7 +276,9 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         }
 
         // sc.SimpleMovAvg(source, subgraph, length) — 3-arg form that writes directly to subgraph
-        if let Some((plot_idx, ir_call)) = try_parse_sc_study_call(t, &subgraph_aliases, &input_aliases) {
+        if let Some((plot_idx, ir_call)) =
+            try_parse_sc_study_call(t, &subgraph_aliases, &input_aliases)
+        {
             if plot_idx >= meta.plots.len() {
                 meta.plots.push(PlotDef {
                     index: plot_idx,
@@ -352,10 +369,15 @@ fn extract_call_float(s: &str, func: &str) -> Option<f64> {
     s[pos..pos + end].trim().parse().ok()
 }
 
-fn try_parse_subgraph_assign<'a>(line: &'a str, aliases: &[(String, usize)]) -> Option<(usize, &'a str)> {
+fn try_parse_subgraph_assign<'a>(
+    line: &'a str,
+    aliases: &[(String, usize)],
+) -> Option<(usize, &'a str)> {
     let eq = line.find('=')?;
     let prev = line[..eq].chars().last();
-    if matches!(prev, Some('!' | '<' | '>' | '=')) { return None; }
+    if matches!(prev, Some('!' | '<' | '>' | '=')) {
+        return None;
+    }
     let lhs = line[..eq].trim();
     let rhs = line[eq + 1..].trim();
 
@@ -400,7 +422,8 @@ fn try_parse_sc_study_call(
             // 2-arg form: (source, length) — no subgraph target
             let (source_str, subgraph_idx, length_str) = if parts.len() >= 3 {
                 let sg_name = parts[1].trim();
-                let idx = subgraph_aliases.iter()
+                let idx = subgraph_aliases
+                    .iter()
                     .find(|(a, _)| a == sg_name)
                     .map(|(_, i)| *i)
                     .unwrap_or(0);
@@ -412,7 +435,10 @@ fn try_parse_sc_study_call(
             };
             let source_expr = parse_acsil_expr(source_str, input_aliases)?;
             let length_expr = parse_acsil_expr(length_str, input_aliases)?;
-            return Some((subgraph_idx, IrExpr::Call(ir_name.to_string(), vec![source_expr, length_expr])));
+            return Some((
+                subgraph_idx,
+                IrExpr::Call(ir_name.to_string(), vec![source_expr, length_expr]),
+            ));
         }
     }
     None
@@ -431,13 +457,19 @@ fn try_parse_local(line: &str) -> Option<(String, String)> {
         || line.starts_with('#')
         || line.starts_with("sc.")
         || line.starts_with("SC")
-    { return None; }
+    {
+        return None;
+    }
     let eq = line.find('=')?;
     let prev = line[..eq].chars().last();
-    if matches!(prev, Some('!' | '<' | '>' | '=')) { return None; }
+    if matches!(prev, Some('!' | '<' | '>' | '=')) {
+        return None;
+    }
     let lhs = line[..eq].trim();
     let rhs = line[eq + 1..].trim().to_string();
-    if lhs.contains('[') { return None; }
+    if lhs.contains('[') {
+        return None;
+    }
     let name = if let Some(pos) = lhs.rfind(char::is_whitespace) {
         lhs[pos + 1..].to_string()
     } else {
@@ -451,7 +483,9 @@ fn try_parse_local(line: &str) -> Option<(String, String)> {
 
 fn parse_acsil_expr(expr: &str, input_aliases: &[(String, usize)]) -> Option<IrExpr> {
     let expr = expr.trim().trim_end_matches(';').trim();
-    if expr.is_empty() { return None; }
+    if expr.is_empty() {
+        return None;
+    }
     if expr.starts_with('(') && expr.ends_with(')') && matched_parens(expr) {
         return parse_acsil_expr(&expr[1..expr.len() - 1], input_aliases);
     }
@@ -491,7 +525,9 @@ fn parse_acsil_expr(expr: &str, input_aliases: &[(String, usize)]) -> Option<IrE
 
     // Input reference: `Inp.GetInt()` / `Inp.GetFloat()`
     for (alias, idx) in input_aliases {
-        if expr.starts_with(alias.as_str()) && (expr.contains(".GetInt()") || expr.contains(".GetFloat()")) {
+        if expr.starts_with(alias.as_str())
+            && (expr.contains(".GetInt()") || expr.contains(".GetFloat()"))
+        {
             // Reference the input by its IR name
             let name = format!("input{}", idx);
             return Some(IrExpr::GetLocal(name));
@@ -512,7 +548,8 @@ fn parse_acsil_expr(expr: &str, input_aliases: &[(String, usize)]) -> Option<IrE
         if expr.starts_with(prefix) && expr.ends_with(')') {
             let inner = &expr[prefix.len()..expr.len() - 1];
             let parts = split_top_level_commas(inner);
-            let ir_args: Option<Vec<IrExpr>> = parts.iter()
+            let ir_args: Option<Vec<IrExpr>> = parts
+                .iter()
                 .map(|a| parse_acsil_expr(a.trim(), input_aliases))
                 .collect();
             if let Some(args) = ir_args {
@@ -539,7 +576,9 @@ fn parse_acsil_expr(expr: &str, input_aliases: &[(String, usize)]) -> Option<IrE
     }
 
     // Binary operators
-    for op_str in &[" + ", " - ", " * ", " / ", " >= ", " <= ", " > ", " < ", " == ", " != "] {
+    for op_str in &[
+        " + ", " - ", " * ", " / ", " >= ", " <= ", " > ", " < ", " == ", " != ",
+    ] {
         if let Some(pos) = expr.find(op_str) {
             let left = parse_acsil_expr(&expr[..pos], input_aliases)?;
             let right = parse_acsil_expr(&expr[pos + op_str.len()..], input_aliases)?;
@@ -574,7 +613,9 @@ fn matched_parens(s: &str) -> bool {
             '(' => depth += 1,
             ')' => {
                 depth -= 1;
-                if depth == 0 && i < s.len() - 1 { return false; }
+                if depth == 0 && i < s.len() - 1 {
+                    return false;
+                }
             }
             _ => {}
         }
@@ -587,7 +628,12 @@ fn find_balanced_close(s: &str) -> Option<usize> {
     for (i, c) in s.char_indices() {
         match c {
             '(' => depth += 1,
-            ')' => { depth -= 1; if depth == 0 { return Some(i); } }
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
             _ => {}
         }
     }
@@ -609,7 +655,9 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
             _ => {}
         }
     }
-    if start < s.len() { parts.push(&s[start..]); }
+    if start < s.len() {
+        parts.push(&s[start..]);
+    }
     parts
 }
 
@@ -620,7 +668,10 @@ fn strip_comments(src: &str) -> String {
         if c == '/' && chars.peek() == Some(&'/') {
             while let Some(&d) = chars.peek() {
                 chars.next();
-                if d == '\n' { out.push('\n'); break; }
+                if d == '\n' {
+                    out.push('\n');
+                    break;
+                }
             }
         } else if c == '/' && chars.peek() == Some(&'*') {
             chars.next();
@@ -780,8 +831,9 @@ SCSFExport scsf_X(SCStudyInterfaceRef sc) {}
 
     #[test]
     fn test_acsil_ema_mapping() {
-        if let Some(IrExpr::Call(name, _)) = parse_acsil_expr(
-            "sc.ExponentialMovAvg(sc.BaseDataIn[SC_LAST], 14)", &[]) {
+        if let Some(IrExpr::Call(name, _)) =
+            parse_acsil_expr("sc.ExponentialMovAvg(sc.BaseDataIn[SC_LAST], 14)", &[])
+        {
             assert_eq!(name, "ta_ema");
         } else {
             panic!("ExponentialMovAvg should map to ta_ema");

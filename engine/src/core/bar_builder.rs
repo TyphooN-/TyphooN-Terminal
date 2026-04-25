@@ -63,7 +63,9 @@ pub struct BarBuilder {
 }
 
 impl Default for BarBuilder {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BarBuilder {
@@ -80,9 +82,15 @@ impl BarBuilder {
     /// Validates: price > 0, size >= 0, price is finite, timestamp parses correctly.
     pub fn ingest_trade(&mut self, symbol: &str, price: f64, size: f64, timestamp_rfc3339: &str) {
         // Validate inputs
-        if price <= 0.0 || !price.is_finite() { return; }
-        if size < 0.0 || !size.is_finite() { return; }
-        if symbol.is_empty() { return; }
+        if price <= 0.0 || !price.is_finite() {
+            return;
+        }
+        if size < 0.0 || !size.is_finite() {
+            return;
+        }
+        if symbol.is_empty() {
+            return;
+        }
 
         // Parse timestamp to epoch seconds, floor to minute boundary
         let trade_epoch = match chrono::DateTime::parse_from_rfc3339(timestamp_rfc3339) {
@@ -114,20 +122,24 @@ impl BarBuilder {
                 };
                 // Bound completed buffer
                 if self.completed.len() > MAX_COMPLETED_BARS {
-                    self.completed.drain(0..self.completed.len() - MAX_COMPLETED_BARS);
+                    self.completed
+                        .drain(0..self.completed.len() - MAX_COMPLETED_BARS);
                 }
             }
         } else {
             // First trade for this symbol
-            self.active.insert(symbol.to_string(), PartialBar {
-                minute_epoch: trade_minute,
-                open: price,
-                high: price,
-                low: price,
-                close: price,
-                volume: size,
-                trade_count: 1,
-            });
+            self.active.insert(
+                symbol.to_string(),
+                PartialBar {
+                    minute_epoch: trade_minute,
+                    open: price,
+                    high: price,
+                    low: price,
+                    close: price,
+                    volume: size,
+                    trade_count: 1,
+                },
+            );
         }
     }
 
@@ -137,7 +149,9 @@ impl BarBuilder {
     pub fn flush_stale(&mut self, max_age_secs: i64) {
         let now = chrono::Utc::now().timestamp();
         let cutoff = now - max_age_secs;
-        let stale_syms: Vec<String> = self.active.iter()
+        let stale_syms: Vec<String> = self
+            .active
+            .iter()
             .filter(|(_, bar)| bar.minute_epoch + 60 < cutoff)
             .map(|(sym, _)| sym.clone())
             .collect();
@@ -151,7 +165,9 @@ impl BarBuilder {
     /// Ingest a quote (bid/ask) to update the active bar's close/high/low.
     /// Useful for instruments where quotes arrive more frequently than trades.
     pub fn ingest_quote(&mut self, symbol: &str, bid: f64, ask: f64) {
-        if bid <= 0.0 || ask <= 0.0 || !bid.is_finite() || !ask.is_finite() { return; }
+        if bid <= 0.0 || ask <= 0.0 || !bid.is_finite() || !ask.is_finite() {
+            return;
+        }
         let mid = (bid + ask) / 2.0;
         if let Some(bar) = self.active.get_mut(symbol) {
             bar.close = mid;
@@ -173,7 +189,8 @@ impl BarBuilder {
 
     /// Get all active (forming) bars across all symbols.
     pub fn get_all_active_bars(&self) -> Vec<CompletedBar> {
-        self.active.iter()
+        self.active
+            .iter()
             .map(|(sym, bar)| bar.to_completed(sym))
             .collect()
     }
@@ -378,7 +395,7 @@ mod tests {
         let bar = bb.get_active_bar("AAPL").unwrap();
         assert_eq!(bar.close, 152.5);
         assert_eq!(bar.high, 152.5); // higher than original 150
-        assert_eq!(bar.low, 150.0);  // original still lowest
+        assert_eq!(bar.low, 150.0); // original still lowest
         assert_eq!(bar.trade_count, 1); // quotes don't increment trade count
     }
 

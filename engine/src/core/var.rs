@@ -24,18 +24,31 @@ pub fn compute_var_from_closes(closes: &[f64], confidence: f64) -> Option<(f64, 
 }
 
 /// Full VaR calculation with tick value scaling (tickValue / tickSize).
-pub fn compute_var_from_closes_with_tick(closes: &[f64], confidence: f64, tick_value_per_tick_size: f64) -> Option<(f64, f64)> {
-    if closes.len() < 10 { return None; }
-    let returns: Vec<f64> = closes.windows(2)
+pub fn compute_var_from_closes_with_tick(
+    closes: &[f64],
+    confidence: f64,
+    tick_value_per_tick_size: f64,
+) -> Option<(f64, f64)> {
+    if closes.len() < 10 {
+        return None;
+    }
+    let returns: Vec<f64> = closes
+        .windows(2)
         .filter(|w| w[0] > 0.0 && w[1] > 0.0)
         .map(|w| w[1] / w[0] - 1.0)
         .collect();
-    if returns.len() < 5 { return None; }
+    if returns.len() < 5 {
+        return None;
+    }
     let sd = std_dev(&returns);
-    if sd <= 0.0 { return None; }
+    if sd <= 0.0 {
+        return None;
+    }
     let z = inverse_cumulative_normal(confidence);
     let last_price = closes.last().copied().unwrap_or(0.0);
-    if last_price <= 0.0 { return None; }
+    if last_price <= 0.0 {
+        return None;
+    }
     let nominal = tick_value_per_tick_size.max(1.0) * last_price;
     let var_1_lot = z * sd * nominal;
     let ratio = var_1_lot / last_price; // VaR/Ask ratio (as used by MarketWizardry.org)
@@ -57,30 +70,40 @@ pub fn std_dev(values: &[f64]) -> f64 {
     }
     let mean = sum / n_f;
     let variance = (sum_sq / n_f) - (mean * mean);
-    if variance > 0.0 {
-        variance.sqrt()
-    } else {
-        0.0
-    }
+    if variance > 0.0 { variance.sqrt() } else { 0.0 }
 }
 
 /// Rational approximation of the inverse cumulative normal distribution.
 /// Port of InverseCumulativeNormal from DWEX Portfolio Risk Man.
 pub fn inverse_cumulative_normal(p: f64) -> f64 {
     const A: [f64; 6] = [
-        -39.6968302866538, 220.946098424521, -275.928510446969,
-        138.357751867269, -30.6647980661472, 2.50662827745924,
+        -39.6968302866538,
+        220.946098424521,
+        -275.928510446969,
+        138.357751867269,
+        -30.6647980661472,
+        2.50662827745924,
     ];
     const B: [f64; 5] = [
-        -54.4760987982241, 161.585836858041, -155.698979859887,
-        66.8013118877197, -13.2806815528857,
+        -54.4760987982241,
+        161.585836858041,
+        -155.698979859887,
+        66.8013118877197,
+        -13.2806815528857,
     ];
     const C: [f64; 6] = [
-        -0.00778489400243029, -0.322396458041136, -2.40075827716184,
-        -2.54973253934373, 4.37466414146497, 2.93816398269878,
+        -0.00778489400243029,
+        -0.322396458041136,
+        -2.40075827716184,
+        -2.54973253934373,
+        4.37466414146497,
+        2.93816398269878,
     ];
     const D: [f64; 4] = [
-        0.00778469570904146, 0.32246712907004, 2.445134137143, 3.75440866190742,
+        0.00778469570904146,
+        0.32246712907004,
+        2.445134137143,
+        3.75440866190742,
     ];
     const P_LOW: f64 = 0.02425;
     const P_HIGH: f64 = 1.0 - P_LOW;
@@ -215,7 +238,8 @@ pub fn portfolio_aware_lot_size(
     confidence: f64,
     equity: f64,
     var_pct_target: f64, // target total portfolio VaR as % of equity
-) -> Option<(f64, f64, f64)> { // (lots, marginal_var_per_lot, total_portfolio_var)
+) -> Option<(f64, f64, f64)> {
+    // (lots, marginal_var_per_lot, total_portfolio_var)
     if new_symbol_closes.len() < 2 || tick_size <= 0.0 || new_price <= 0.0 || equity <= 0.0 {
         return None;
     }
@@ -225,7 +249,9 @@ pub fn portfolio_aware_lot_size(
     let mut existing_return_series: Vec<Vec<f64>> = Vec::new();
 
     for (closes, size, price) in existing_positions {
-        if let Some(var_result) = calculate_var(closes, *size, tick_value, tick_size, *price, confidence) {
+        if let Some(var_result) =
+            calculate_var(closes, *size, tick_value, tick_size, *price, confidence)
+        {
             existing_total_var += var_result.var_dollars;
         }
         existing_return_series.push(compute_daily_returns(closes));
@@ -234,14 +260,20 @@ pub fn portfolio_aware_lot_size(
     // 2. Compute VaR for 1 lot of the new symbol
     let new_returns = compute_daily_returns(new_symbol_closes);
     let sd_new = std_dev(&new_returns);
-    if sd_new == 0.0 || !sd_new.is_finite() { return None; }
+    if sd_new == 0.0 || !sd_new.is_finite() {
+        return None;
+    }
 
     let z = inverse_cumulative_normal(confidence);
-    if z == 0.0 { return None; }
+    if z == 0.0 {
+        return None;
+    }
 
     let nominal_per_unit = tick_value / tick_size;
     let unit_var = z * sd_new * nominal_per_unit * new_price;
-    if unit_var < 1e-10 { return None; }
+    if unit_var < 1e-10 {
+        return None;
+    }
 
     // 3. Compute average correlation of new symbol with existing positions
     let avg_corr = if existing_return_series.is_empty() {
@@ -256,7 +288,11 @@ pub fn portfolio_aware_lot_size(
                 corr_count += 1;
             }
         }
-        if corr_count > 0 { corr_sum / corr_count as f64 } else { 0.0 }
+        if corr_count > 0 {
+            corr_sum / corr_count as f64
+        } else {
+            0.0
+        }
     };
 
     // 4. Marginal VaR per lot, adjusted for correlation
@@ -281,7 +317,9 @@ pub fn portfolio_aware_lot_size(
 /// Pearson correlation coefficient between two return series.
 fn pearson_correlation(x: &[f64], y: &[f64]) -> f64 {
     let n = x.len().min(y.len());
-    if n < 3 { return 0.0; }
+    if n < 3 {
+        return 0.0;
+    }
 
     let n_f = n as f64;
     let mut sum_x = 0.0;
@@ -299,7 +337,9 @@ fn pearson_correlation(x: &[f64], y: &[f64]) -> f64 {
     }
 
     let denom = ((n_f * sum_x2 - sum_x * sum_x) * (n_f * sum_y2 - sum_y * sum_y)).sqrt();
-    if denom < 1e-20 { return 0.0; }
+    if denom < 1e-20 {
+        return 0.0;
+    }
     (n_f * sum_xy - sum_x * sum_y) / denom
 }
 
@@ -309,15 +349,21 @@ fn pearson_correlation(x: &[f64], y: &[f64]) -> f64 {
 /// Returns ATR value (average of true ranges over `period` bars).
 pub fn calculate_atr(bars: &[(f64, f64, f64, f64)], period: usize) -> f64 {
     // bars = [(open, high, low, close), ...]
-    if bars.len() < period + 1 { return 0.0; }
+    if bars.len() < period + 1 {
+        return 0.0;
+    }
     let mut true_ranges = Vec::with_capacity(bars.len() - 1);
     for i in 1..bars.len() {
         let (_, h, l, _) = bars[i];
         let prev_close = bars[i - 1].3;
-        let tr = (h - l).max((h - prev_close).abs()).max((l - prev_close).abs());
+        let tr = (h - l)
+            .max((h - prev_close).abs())
+            .max((l - prev_close).abs());
         true_ranges.push(tr);
     }
-    if true_ranges.len() < period { return 0.0; }
+    if true_ranges.len() < period {
+        return 0.0;
+    }
     // Simple average of last `period` true ranges
     let start = true_ranges.len() - period;
     true_ranges[start..].iter().sum::<f64>() / period as f64
@@ -335,7 +381,7 @@ pub struct OutlierResult {
     pub sector_q1: f64,
     pub sector_q3: f64,
     pub z_score: f64,
-    pub tier: String, // "EXTREME", "HIGH", "NORMAL", "LOW"
+    pub tier: String,      // "EXTREME", "HIGH", "NORMAL", "LOW"
     pub direction: String, // "high" or "low"
 }
 
@@ -363,24 +409,32 @@ pub struct SectorStats {
 /// string is allocated once, then Arc::clone()'d (cheap refcount bump) per outlier.
 pub fn detect_outliers(
     data: &[(String, String, String, f64)], // (symbol, sector, industry, metric_value)
-    iqr_multiplier: f64, // typically 1.5 for standard, 3.0 for extreme
+    iqr_multiplier: f64,                    // typically 1.5 for standard, 3.0 for extreme
 ) -> (Vec<OutlierResult>, Vec<SectorStats>) {
     use std::sync::Arc;
     // Intern sector names — one allocation per unique sector
-    let mut sector_intern: std::collections::HashMap<&str, Arc<str>> = std::collections::HashMap::new();
-    let mut by_sector: std::collections::HashMap<Arc<str>, Vec<(&str, &str, f64)>> = std::collections::HashMap::new();
+    let mut sector_intern: std::collections::HashMap<&str, Arc<str>> =
+        std::collections::HashMap::new();
+    let mut by_sector: std::collections::HashMap<Arc<str>, Vec<(&str, &str, f64)>> =
+        std::collections::HashMap::new();
     for (sym, sector, industry, val) in data {
-        let arc = sector_intern.entry(sector.as_str())
+        let arc = sector_intern
+            .entry(sector.as_str())
             .or_insert_with(|| Arc::from(sector.as_str()))
             .clone();
-        by_sector.entry(arc).or_default().push((sym.as_str(), industry.as_str(), *val));
+        by_sector
+            .entry(arc)
+            .or_default()
+            .push((sym.as_str(), industry.as_str(), *val));
     }
 
     let mut outliers = Vec::new();
     let mut stats = Vec::new();
 
     for (sector, mut values) in by_sector {
-        if values.len() < 4 { continue; } // need enough data for IQR
+        if values.len() < 4 {
+            continue;
+        } // need enough data for IQR
         values.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
 
         let n = values.len();
@@ -412,14 +466,25 @@ pub fn detect_outliers(
         for (sym, industry, val) in &values {
             let is_high = *val > upper_bound;
             let is_low = *val < lower_bound;
-            if !is_high && !is_low { continue; }
+            if !is_high && !is_low {
+                continue;
+            }
 
-            let z = if sector_sd > 0.0 { (*val - mean) / sector_sd } else { 0.0 };
+            let z = if sector_sd > 0.0 {
+                (*val - mean) / sector_sd
+            } else {
+                0.0
+            };
             // PERF5: tier as &'static str literal — no allocation
-            let tier: &'static str = if z.abs() > 3.0 { "EXTREME" }
-                else if z.abs() > 2.0 { "HIGH" }
-                else if z.abs() > 1.0 { "ELEVATED" }
-                else { "MODERATE" };
+            let tier: &'static str = if z.abs() > 3.0 {
+                "EXTREME"
+            } else if z.abs() > 2.0 {
+                "HIGH"
+            } else if z.abs() > 1.0 {
+                "ELEVATED"
+            } else {
+                "MODERATE"
+            };
 
             outliers.push(OutlierResult {
                 symbol: (*sym).to_string(),
@@ -431,7 +496,11 @@ pub fn detect_outliers(
                 sector_q3: q3,
                 z_score: z,
                 tier: tier.to_string(),
-                direction: if is_high { "high".to_string() } else { "low".to_string() },
+                direction: if is_high {
+                    "high".to_string()
+                } else {
+                    "low".to_string()
+                },
             });
             sector_outliers += 1;
         }
@@ -450,7 +519,12 @@ pub fn detect_outliers(
     }
 
     // Sort outliers by |z_score| descending (most extreme first)
-    outliers.sort_by(|a, b| b.z_score.abs().partial_cmp(&a.z_score.abs()).unwrap_or(std::cmp::Ordering::Equal));
+    outliers.sort_by(|a, b| {
+        b.z_score
+            .abs()
+            .partial_cmp(&a.z_score.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     stats.sort_by(|a, b| b.outlier_count.cmp(&a.outlier_count));
 
     (outliers, stats)
@@ -464,10 +538,10 @@ pub struct MultiOutlierResult {
     pub sector: String,
     pub industry: String,
     /// Individual z-scores per dimension (0 = not anomalous)
-    pub var_z: f64,      // price risk outlier
-    pub ev_z: f64,       // valuation outlier
-    pub atr_z: f64,      // volatility outlier
-    pub sec_z: f64,      // SEC filing activity outlier
+    pub var_z: f64, // price risk outlier
+    pub ev_z: f64,  // valuation outlier
+    pub atr_z: f64, // volatility outlier
+    pub sec_z: f64, // SEC filing activity outlier
     /// Composite anomaly score (sum of |z-scores| for flagged dimensions)
     pub composite_score: f64,
     /// Number of dimensions flagging (1-4)
@@ -485,27 +559,34 @@ pub struct MultiOutlierResult {
 /// Each dimension is z-scored within its sector. Symbols flagging on multiple
 /// dimensions get higher composite scores.
 pub fn detect_multi_outliers(
-    symbols: &[(String, String, String)],  // (symbol, sector, industry)
-    var_map: &std::collections::HashMap<String, f64>,   // symbol → VaR 95%
-    ev_map: &std::collections::HashMap<String, f64>,    // symbol → MCap/EV ratio
-    atr_map: &std::collections::HashMap<String, f64>,   // symbol → ATR as % of price
-    sec_map: &std::collections::HashMap<String, i32>,   // symbol → filing count (recent)
-    threshold: f64,  // z-score threshold (typically 1.5-2.0)
+    symbols: &[(String, String, String)], // (symbol, sector, industry)
+    var_map: &std::collections::HashMap<String, f64>, // symbol → VaR 95%
+    ev_map: &std::collections::HashMap<String, f64>, // symbol → MCap/EV ratio
+    atr_map: &std::collections::HashMap<String, f64>, // symbol → ATR as % of price
+    sec_map: &std::collections::HashMap<String, i32>, // symbol → filing count (recent)
+    threshold: f64,                       // z-score threshold (typically 1.5-2.0)
 ) -> Vec<MultiOutlierResult> {
     // Industry lookup (symbol → industry) so we can attach industry to results.
-    let industry_by_sym: std::collections::HashMap<&str, &str> = symbols.iter()
+    let industry_by_sym: std::collections::HashMap<&str, &str> = symbols
+        .iter()
         .map(|(s, _, i)| (s.as_str(), i.as_str()))
         .collect();
     // Group by sector (IQR stays meaningful at sector granularity)
-    let mut by_sector: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut by_sector: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
     for (sym, sector, _industry) in symbols {
-        by_sector.entry(sector.clone()).or_default().push(sym.clone());
+        by_sector
+            .entry(sector.clone())
+            .or_default()
+            .push(sym.clone());
     }
 
     let mut results = Vec::new();
 
     for (sector, syms) in &by_sector {
-        if syms.len() < 4 { continue; }
+        if syms.len() < 4 {
+            continue;
+        }
 
         // Compute z-scores per dimension within this sector.
         // Single-pass mean + population std via sum + sum_sq. Was two passes
@@ -533,8 +614,10 @@ pub fn detect_multi_outliers(
         let ev_zs = z_scores(ev_map);
         let atr_zs = z_scores(atr_map);
         // SEC filings: convert i32 to f64 for z-scoring
-        let sec_f64: std::collections::HashMap<String, f64> = sec_map.iter()
-            .map(|(k, v)| (k.clone(), *v as f64)).collect();
+        let sec_f64: std::collections::HashMap<String, f64> = sec_map
+            .iter()
+            .map(|(k, v)| (k.clone(), *v as f64))
+            .collect();
         let sec_zs = z_scores(&sec_f64);
 
         for sym in syms {
@@ -544,22 +627,40 @@ pub fn detect_multi_outliers(
             let sz = sec_zs.get(sym).copied().unwrap_or(0.0);
 
             let mut dims = 0u8;
-            if vz.abs() > threshold { dims += 1; }
-            if ez.abs() > threshold { dims += 1; }
-            if az.abs() > threshold { dims += 1; }
-            if sz.abs() > threshold { dims += 1; }
+            if vz.abs() > threshold {
+                dims += 1;
+            }
+            if ez.abs() > threshold {
+                dims += 1;
+            }
+            if az.abs() > threshold {
+                dims += 1;
+            }
+            if sz.abs() > threshold {
+                dims += 1;
+            }
 
-            if dims == 0 { continue; } // not an outlier on any dimension
+            if dims == 0 {
+                continue;
+            } // not an outlier on any dimension
 
             let composite = vz.abs() + ez.abs() + az.abs() + sz.abs();
-            let tier = if dims >= 3 { "EXTREME" }
-                else if dims >= 2 { "HIGH" }
-                else { "ELEVATED" };
+            let tier = if dims >= 3 {
+                "EXTREME"
+            } else if dims >= 2 {
+                "HIGH"
+            } else {
+                "ELEVATED"
+            };
 
             results.push(MultiOutlierResult {
                 symbol: sym.clone(),
                 sector: sector.clone(),
-                industry: industry_by_sym.get(sym.as_str()).copied().unwrap_or("").to_string(),
+                industry: industry_by_sym
+                    .get(sym.as_str())
+                    .copied()
+                    .unwrap_or("")
+                    .to_string(),
                 var_z: vz,
                 ev_z: ez,
                 atr_z: az,
@@ -576,7 +677,11 @@ pub fn detect_multi_outliers(
     }
 
     // Sort by composite score descending (most anomalous first)
-    results.sort_by(|a, b| b.composite_score.partial_cmp(&a.composite_score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.composite_score
+            .partial_cmp(&a.composite_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results
 }
 
@@ -641,7 +746,9 @@ mod tests {
 
     #[test]
     fn test_var_99_greater_than_95() {
-        let prices: Vec<f64> = (0..100).map(|i| 100.0 + (i as f64 * 0.3).sin() * 5.0).collect();
+        let prices: Vec<f64> = (0..100)
+            .map(|i| 100.0 + (i as f64 * 0.3).sin() * 5.0)
+            .collect();
         let var95 = calculate_var(&prices, 1.0, 1.0, 0.01, 100.0, 0.95);
         let var99 = calculate_var(&prices, 1.0, 1.0, 0.01, 100.0, 0.99);
         if let (Some(v95), Some(v99)) = (var95, var99) {

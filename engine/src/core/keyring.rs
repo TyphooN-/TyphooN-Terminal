@@ -12,16 +12,17 @@ const SERVICE: &str = "typhoon-terminal";
 
 /// Store a credential in the system keyring.
 pub fn store(key: &str, value: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new(SERVICE, key)
-        .map_err(|e| format!("Keyring entry error: {e}"))?;
-    entry.set_password(value)
+    let entry =
+        keyring::Entry::new(SERVICE, key).map_err(|e| format!("Keyring entry error: {e}"))?;
+    entry
+        .set_password(value)
         .map_err(|e| format!("Keyring store error: {e}"))
 }
 
 /// Retrieve a credential from the system keyring.
 pub fn load(key: &str) -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new(SERVICE, key)
-        .map_err(|e| format!("Keyring entry error: {e}"))?;
+    let entry =
+        keyring::Entry::new(SERVICE, key).map_err(|e| format!("Keyring entry error: {e}"))?;
     match entry.get_password() {
         Ok(val) => Ok(Some(val)),
         Err(keyring::Error::NoEntry) => Ok(None),
@@ -31,8 +32,8 @@ pub fn load(key: &str) -> Result<Option<String>, String> {
 
 /// Delete a credential from the system keyring.
 pub fn delete(key: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new(SERVICE, key)
-        .map_err(|e| format!("Keyring entry error: {e}"))?;
+    let entry =
+        keyring::Entry::new(SERVICE, key).map_err(|e| format!("Keyring entry error: {e}"))?;
     match entry.delete_credential() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()), // already gone

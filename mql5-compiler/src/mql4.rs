@@ -93,7 +93,10 @@ pub fn rewrite_mql4_to_mql5(source: &str) -> (String, Vec<String>) {
                 continue;
             }
             match c {
-                '"' => { in_string = true; line.push(c); }
+                '"' => {
+                    in_string = true;
+                    line.push(c);
+                }
                 '/' if chars.peek() == Some(&'/') => {
                     in_line_comment = true;
                     line.push(c);
@@ -142,7 +145,10 @@ fn rewrite_line(line: &str, warnings: &mut Vec<String>) -> String {
         if in_string {
             buf.push(c);
             if c == '\\' {
-                if let Some(&n) = chars.peek() { buf.push(n); chars.next(); }
+                if let Some(&n) = chars.peek() {
+                    buf.push(n);
+                    chars.next();
+                }
             } else if c == '"' {
                 segments.push((false, std::mem::take(&mut buf)));
                 in_string = false;
@@ -215,25 +221,17 @@ fn rewrite_code_segment(code: &str, warnings: &mut Vec<String>) -> String {
 
     // 5. `Bid` / `Ask` bareword references that are NOT part of a longer
     //    identifier. Rewrite to the MQL5-style SymbolInfoDouble form.
-    out = replace_word(
-        &out,
-        "Bid",
-        "SymbolInfoDouble(_Symbol,SYMBOL_BID)",
-    );
-    out = replace_word(
-        &out,
-        "Ask",
-        "SymbolInfoDouble(_Symbol,SYMBOL_ASK)",
-    );
+    out = replace_word(&out, "Bid", "SymbolInfoDouble(_Symbol,SYMBOL_BID)");
+    out = replace_word(&out, "Ask", "SymbolInfoDouble(_Symbol,SYMBOL_ASK)");
 
     // 6. `Close[i]` / `Open[i]` / `High[i]` / `Low[i]` / `Volume[i]` / `Time[i]`
     //    →  `iClose(_Symbol,0,i)` etc. Scan for pattern `<Series>[<expr>]`.
-    out = rewrite_series_bracket(&out, "Close",  "iClose");
-    out = rewrite_series_bracket(&out, "Open",   "iOpen");
-    out = rewrite_series_bracket(&out, "High",   "iHigh");
-    out = rewrite_series_bracket(&out, "Low",    "iLow");
+    out = rewrite_series_bracket(&out, "Close", "iClose");
+    out = rewrite_series_bracket(&out, "Open", "iOpen");
+    out = rewrite_series_bracket(&out, "High", "iHigh");
+    out = rewrite_series_bracket(&out, "Low", "iLow");
     out = rewrite_series_bracket(&out, "Volume", "iVolume");
-    out = rewrite_series_bracket(&out, "Time",   "iTime");
+    out = rewrite_series_bracket(&out, "Time", "iTime");
 
     // 7. `Bars` bareword → `iBars(_Symbol,0)` (only when not followed by `(` — Bars() is valid MQL5 too)
     out = replace_word_not_followed_by_open_paren(&out, "Bars", "iBars(_Symbol,0)");
@@ -249,9 +247,7 @@ fn rewrite_code_segment(code: &str, warnings: &mut Vec<String>) -> String {
                 .into(),
         );
     }
-    if out.contains("OrderSelect(")
-        && !warnings.iter().any(|w| w.contains("OrderSelect"))
-    {
+    if out.contains("OrderSelect(") && !warnings.iter().any(|w| w.contains("OrderSelect")) {
         warnings.push(
             "MQL4 OrderSelect(...) has no textual 1:1 port to MQL5. \
              Use PositionGetTicket / HistoryOrderGetTicket manually."
@@ -289,7 +285,11 @@ fn replace_word(haystack: &str, needle: &str, replacement: &str) -> String {
 
 /// Like `replace_word`, but only fires when the next non-whitespace char is
 /// NOT an opening paren. Used so `Bars` (bareword) is rewritten but `Bars(` (MQL5 function call) is left alone.
-fn replace_word_not_followed_by_open_paren(haystack: &str, needle: &str, replacement: &str) -> String {
+fn replace_word_not_followed_by_open_paren(
+    haystack: &str,
+    needle: &str,
+    replacement: &str,
+) -> String {
     if !haystack.contains(needle) {
         return haystack.to_string();
     }
@@ -345,7 +345,9 @@ fn rewrite_series_bracket(haystack: &str, series: &str, ifunc: &str) -> String {
                         b']' => depth -= 1,
                         _ => {}
                     }
-                    if depth == 0 { break; }
+                    if depth == 0 {
+                        break;
+                    }
                     j += 1;
                 }
                 if depth == 0 {
@@ -379,7 +381,8 @@ mod tests {
 
     #[test]
     fn rewrites_init_start_deinit() {
-        let src = "int init() { return 0; }\nint start() { return 0; }\nint deinit() { return 0; }\n";
+        let src =
+            "int init() { return 0; }\nint start() { return 0; }\nint deinit() { return 0; }\n";
         let (out, _) = rewrite_mql4_to_mql5(src);
         assert!(out.contains("OnInit("));
         assert!(out.contains("OnTick("));

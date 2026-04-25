@@ -4,13 +4,13 @@
 //! Separate from `core/kraken.rs` which handles public OHLCV data only.
 //! See ADR-072 for the full integration plan.
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use hmac::{Hmac, Mac};
 use reqwest::Client;
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use zeroize::Zeroizing;
 
@@ -82,9 +82,7 @@ impl KrakenBroker {
         hmac_input.extend_from_slice(path.as_bytes());
         hmac_input.extend_from_slice(&sha256_hash);
 
-        let secret_bytes = BASE64
-            .decode(&self.api_secret)
-            .unwrap_or_default();
+        let secret_bytes = BASE64.decode(&self.api_secret).unwrap_or_default();
 
         let mut mac = match HmacSha512::new_from_slice(&secret_bytes) {
             Ok(m) => m,
@@ -198,7 +196,10 @@ impl KrakenBroker {
         for (posid, pos) in obj {
             let mut p = pos.clone();
             if let Some(obj) = p.as_object_mut() {
-                obj.insert("posid".to_string(), serde_json::Value::String(posid.clone()));
+                obj.insert(
+                    "posid".to_string(),
+                    serde_json::Value::String(posid.clone()),
+                );
             }
             positions.push(p);
         }
@@ -248,9 +249,9 @@ impl KrakenBroker {
 
     fn pair_matches(candidate: &str, target: &str) -> bool {
         let candidate = Self::normalized_pair_key(candidate);
-        Self::canonical_pair_forms(target)
-            .into_iter()
-            .any(|form| candidate == form || candidate.ends_with(&form) || form.ends_with(&candidate))
+        Self::canonical_pair_forms(target).into_iter().any(|form| {
+            candidate == form || candidate.ends_with(&form) || form.ends_with(&candidate)
+        })
     }
 
     fn net_position_volume(raw_positions: &[serde_json::Value], pair: &str) -> f64 {
@@ -296,7 +297,11 @@ impl KrakenBroker {
                 let value = Self::parse_f64_field(&pos["value"]);
                 let net = Self::parse_f64_field(&pos["net"]);
                 let avg_entry = if volume > 0.0 { cost / volume } else { 0.0 };
-                let side = if pos["type"].as_str().unwrap_or("").eq_ignore_ascii_case("sell") {
+                let side = if pos["type"]
+                    .as_str()
+                    .unwrap_or("")
+                    .eq_ignore_ascii_case("sell")
+                {
                     "short"
                 } else {
                     "long"
@@ -363,7 +368,9 @@ impl KrakenBroker {
 
         let exit_side = if net_volume > 0.0 { "sell" } else { "buy" };
         let order_pair = crate::core::kraken::to_kraken_pair(pair).unwrap_or(pair);
-        let cancelled = self.cancel_live_exit_orders_for_pair(pair, exit_side).await?;
+        let cancelled = self
+            .cancel_live_exit_orders_for_pair(pair, exit_side)
+            .await?;
         let mut placements = Vec::new();
         let qty_abs = net_volume.abs();
         if let Some(sl) = sl_price {
@@ -379,7 +386,8 @@ impl KrakenBroker {
         if placements.is_empty() {
             placements.push("cleared exits".to_string());
         } else if sl_price.is_some() && tp_price.is_some() {
-            placements.push("broker-native link unavailable; exits placed independently".to_string());
+            placements
+                .push("broker-native link unavailable; exits placed independently".to_string());
         }
 
         Ok(format!(
@@ -408,9 +416,12 @@ impl KrakenBroker {
         if qty_abs <= f64::EPSILON {
             return Err(format!("Close size for {pair} is zero"));
         }
-        let _ = self.cancel_live_exit_orders_for_pair(pair, close_side).await;
+        let _ = self
+            .cancel_live_exit_orders_for_pair(pair, close_side)
+            .await;
         let order_pair = crate::core::kraken::to_kraken_pair(pair).unwrap_or(pair);
-        self.place_order(order_pair, close_side, "market", qty_abs, None).await
+        self.place_order(order_pair, close_side, "market", qty_abs, None)
+            .await
     }
 
     pub async fn close_all_positions(&self) -> Result<usize, String> {
@@ -439,7 +450,8 @@ impl KrakenBroker {
         volume: f64,
         price: Option<f64>,
     ) -> Result<serde_json::Value, String> {
-        self.place_order_with_leverage(pair, side, order_type, volume, price, None).await
+        self.place_order_with_leverage(pair, side, order_type, volume, price, None)
+            .await
     }
 
     /// Place an order with optional leverage (margin trading).
@@ -661,6 +673,10 @@ mod tests {
         let broker = KrakenBroker::new(String::new(), String::new());
         let pairs = broker.get_tradeable_pairs().await.unwrap();
         assert!(!pairs.is_empty());
-        assert!(pairs.iter().any(|(name, _)| name.contains("BTC") || name.contains("XBT")));
+        assert!(
+            pairs
+                .iter()
+                .any(|(name, _)| name.contains("BTC") || name.contains("XBT"))
+        );
     }
 }

@@ -29,7 +29,9 @@ fn notification_client() -> &'static Client {
 /// - Checks HTTP 200/204 for success
 pub async fn send_discord(webhook_url: &str, message: &str) -> Result<(), String> {
     // Strict webhook URL validation: must be exactly discord.com, no path traversal
-    if webhook_url.is_empty() { return Err("Empty webhook URL".to_string()); }
+    if webhook_url.is_empty() {
+        return Err("Empty webhook URL".to_string());
+    }
     if !webhook_url.starts_with("https://discord.com/api/webhooks/") {
         return Err("Invalid Discord webhook URL".to_string());
     }
@@ -58,7 +60,10 @@ pub async fn send_discord(webhook_url: &str, message: &str) -> Result<(), String
 
     let status = resp.status().as_u16();
     if status == 200 || status == 204 {
-        info!("Discord notification sent: {}", &message[..message.len().min(80)]);
+        info!(
+            "Discord notification sent: {}",
+            &message[..message.len().min(80)]
+        );
         Ok(())
     } else {
         let err = format!("Discord returned HTTP {status}");
@@ -99,7 +104,10 @@ pub async fn send_pushover(token: &str, user: &str, message: &str) -> Result<(),
 
     let status = resp.status().as_u16();
     if status == 200 {
-        info!("Pushover notification sent: {}", &message[..message.len().min(80)]);
+        info!(
+            "Pushover notification sent: {}",
+            &message[..message.len().min(80)]
+        );
         Ok(())
     } else {
         let err = format!("Pushover returned HTTP {status}");
@@ -116,7 +124,10 @@ pub async fn send_ntfy(topic: &str, message: &str) -> Result<(), String> {
         return Err("Invalid ntfy topic".to_string());
     }
     // Validate topic: alphanumeric, hyphens, underscores only
-    if !topic.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if !topic
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return Err("Invalid ntfy topic characters".to_string());
     }
     if message.is_empty() || message.len() > 4096 {
@@ -135,7 +146,10 @@ pub async fn send_ntfy(topic: &str, message: &str) -> Result<(), String> {
 
     let status = resp.status().as_u16();
     if status == 200 {
-        info!("ntfy notification sent to {topic}: {}", &message[..message.len().min(80)]);
+        info!(
+            "ntfy notification sent to {topic}: {}",
+            &message[..message.len().min(80)]
+        );
         Ok(())
     } else {
         let err = format!("ntfy returned HTTP {status}");
@@ -165,8 +179,7 @@ mod tests {
     #[tokio::test]
     async fn discord_message_too_long_returns_err() {
         let long_msg = "a".repeat(2001);
-        let result =
-            send_discord("https://discord.com/api/webhooks/123/abc", &long_msg).await;
+        let result = send_discord("https://discord.com/api/webhooks/123/abc", &long_msg).await;
         assert!(result.is_err());
     }
 

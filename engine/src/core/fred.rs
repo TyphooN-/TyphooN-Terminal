@@ -1,7 +1,7 @@
 //! FRED (Federal Reserve Economic Data) — free API for economic indicators.
 //! Provides: Fed Funds Rate, CPI, GDP, Treasury Yields, VIX, M2 Money Supply, Unemployment.
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 const FRED_BASE: &str = "https://api.stlouisfed.org/fred";
 
@@ -34,14 +34,18 @@ pub async fn fetch_series(
         FRED_BASE, series_id, api_key, limit
     );
     tracing::debug!("FRED fetch series_id={} limit={}", series_id, limit);
-    let resp = client.get(&url)
+    let resp = client
+        .get(&url)
         .timeout(std::time::Duration::from_secs(15))
-        .send().await
+        .send()
+        .await
         .map_err(|e| format!("FRED request failed: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("FRED HTTP {}", resp.status()));
     }
-    let body: serde_json::Value = resp.json().await
+    let body: serde_json::Value = resp
+        .json()
+        .await
         .map_err(|e| format!("FRED parse failed: {e}"))?;
 
     let mut observations = Vec::new();
@@ -57,18 +61,35 @@ pub async fn fetch_series(
     observations.reverse(); // chronological order
 
     // Get series title (URL contains API key — do not log it)
-    let title_url = format!("{}/series?series_id={}&api_key={}&file_type=json", FRED_BASE, series_id, api_key);
+    let title_url = format!(
+        "{}/series?series_id={}&api_key={}&file_type=json",
+        FRED_BASE, series_id, api_key
+    );
     let title = if let Ok(resp) = client.get(&title_url).send().await {
         if let Ok(body) = resp.json::<serde_json::Value>().await {
-            body["seriess"][0]["title"].as_str().unwrap_or(series_id).to_string()
-        } else { series_id.to_string() }
-    } else { series_id.to_string() };
+            body["seriess"][0]["title"]
+                .as_str()
+                .unwrap_or(series_id)
+                .to_string()
+        } else {
+            series_id.to_string()
+        }
+    } else {
+        series_id.to_string()
+    };
 
-    Ok(FredSeries { id: series_id.to_string(), title, observations })
+    Ok(FredSeries {
+        id: series_id.to_string(),
+        title,
+        observations,
+    })
 }
 
 /// Fetch Treasury yield curve (2Y, 5Y, 10Y, 30Y rates).
-pub async fn fetch_yield_curve(client: &reqwest::Client, api_key: &str) -> Result<Vec<(String, f64)>, String> {
+pub async fn fetch_yield_curve(
+    client: &reqwest::Client,
+    api_key: &str,
+) -> Result<Vec<(String, f64)>, String> {
     let series = ["DGS2", "DGS5", "DGS10", "DGS30"];
     let labels = ["2Y", "5Y", "10Y", "30Y"];
     let mut curve = Vec::new();
@@ -137,8 +158,14 @@ mod tests {
             id: "DFF".to_string(),
             title: "Fed Funds Rate".to_string(),
             observations: vec![
-                FredObservation { date: "2024-01-01".to_string(), value: 5.33 },
-                FredObservation { date: "2024-01-02".to_string(), value: 5.33 },
+                FredObservation {
+                    date: "2024-01-01".to_string(),
+                    value: 5.33,
+                },
+                FredObservation {
+                    date: "2024-01-02".to_string(),
+                    value: 5.33,
+                },
             ],
         };
         let json = serde_json::to_string(&series).unwrap();
@@ -150,7 +177,10 @@ mod tests {
 
     #[test]
     fn fred_observation_empty_date() {
-        let obs = FredObservation { date: String::new(), value: 0.0 };
+        let obs = FredObservation {
+            date: String::new(),
+            value: 0.0,
+        };
         let json = serde_json::to_string(&obs).unwrap();
         let back: FredObservation = serde_json::from_str(&json).unwrap();
         assert!(back.date.is_empty());

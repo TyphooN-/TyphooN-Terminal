@@ -18,25 +18,23 @@
 //! Because of this common lowering, ANY source language can be
 //! transpiled into ANY other (IR → source backends — see ADR-090).
 
-pub mod parser;
-pub mod ast;
-pub mod ir;
-pub mod codegen;
-pub mod wgsl_codegen;
-pub mod error;
-pub mod runtime;
-pub mod pine;
-pub mod easylang;
-pub mod thinkscript;
-pub mod mql4;
-pub mod afl;
-pub mod probuilder;
-pub mod ninjascript;
-pub mod calgo;
 pub mod acsil;
+pub mod afl;
+pub mod ast;
+pub mod calgo;
+pub mod codegen;
+pub mod easylang;
+pub mod error;
+pub mod ir;
+pub mod mql4;
+pub mod ninjascript;
+pub mod parser;
+pub mod pine;
+pub mod probuilder;
+pub mod runtime;
+pub mod thinkscript;
 pub mod transpile;
-
-
+pub mod wgsl_codegen;
 
 /// Compilation result returned to Tauri frontend.
 #[derive(serde::Serialize)]
@@ -122,7 +120,11 @@ pub fn compile_mql5(source: &str) -> CompileResult {
             for e in errors {
                 diagnostics.push(e);
             }
-            return CompileResult { wasm: None, diagnostics, metadata: None };
+            return CompileResult {
+                wasm: None,
+                diagnostics,
+                metadata: None,
+            };
         }
     };
 
@@ -139,7 +141,11 @@ pub fn compile_mql5(source: &str) -> CompileResult {
                 line: 0,
                 col: 0,
             });
-            CompileResult { wasm: None, diagnostics, metadata: Some(metadata) }
+            CompileResult {
+                wasm: None,
+                diagnostics,
+                metadata: Some(metadata),
+            }
         }
     }
 }
@@ -295,7 +301,10 @@ indicator("Test", overlay=true)
 plot(close)
 "#;
         let result = compile_pine(src);
-        assert!(result.metadata.is_some(), "valid PineScript should produce metadata");
+        assert!(
+            result.metadata.is_some(),
+            "valid PineScript should produce metadata"
+        );
     }
 
     #[test]

@@ -21,9 +21,11 @@ fn next_or_err<'a>(
     iter: &mut pest::iterators::Pairs<'a, Rule>,
     context: &str,
 ) -> Result<pest::iterators::Pair<'a, Rule>, CompileError> {
-    iter.next().ok_or_else(|| CompileError::Internal(
-        format!("parser: expected child in {context}, got none — grammar/parser mismatch")
-    ))
+    iter.next().ok_or_else(|| {
+        CompileError::Internal(format!(
+            "parser: expected child in {context}, got none — grammar/parser mismatch"
+        ))
+    })
 }
 
 /// Parse MQL5 source into an AST.
@@ -57,12 +59,16 @@ pub fn parse_mql5(source: &str) -> Result<Program, CompileError> {
     Ok(Program { items })
 }
 
-fn parse_top_level(pair: pest::iterators::Pair<'_, Rule>) -> Result<Option<TopLevel>, CompileError> {
+fn parse_top_level(
+    pair: pest::iterators::Pair<'_, Rule>,
+) -> Result<Option<TopLevel>, CompileError> {
     let line = pair.line_col().0;
     match pair.as_rule() {
         Rule::property_directive => {
             let mut inner = pair.into_inner();
-            let name = next_or_err(&mut inner, "property_directive name")?.as_str().to_string();
+            let name = next_or_err(&mut inner, "property_directive name")?
+                .as_str()
+                .to_string();
             let value = if let Some(expr_pair) = inner.next() {
                 parse_expr(expr_pair)?
             } else {
@@ -74,12 +80,16 @@ fn parse_top_level(pair: pest::iterators::Pair<'_, Rule>) -> Result<Option<TopLe
             let inner = next_or_err(&mut pair.into_inner(), "preprocessor")?;
             match inner.as_rule() {
                 Rule::include_dir => {
-                    let path = next_or_err(&mut inner.into_inner(), "include_dir path")?.as_str().to_string();
+                    let path = next_or_err(&mut inner.into_inner(), "include_dir path")?
+                        .as_str()
+                        .to_string();
                     Ok(Some(TopLevel::Include(path)))
                 }
                 Rule::define_dir => {
                     let mut parts = inner.into_inner();
-                    let name = next_or_err(&mut parts, "define_dir name")?.as_str().to_string();
+                    let name = next_or_err(&mut parts, "define_dir name")?
+                        .as_str()
+                        .to_string();
                     let value = parts.next().map(|p| parse_expr(p)).transpose()?;
                     Ok(Some(TopLevel::Define(name, value)))
                 }
@@ -92,16 +102,30 @@ fn parse_top_level(pair: pest::iterators::Pair<'_, Rule>) -> Result<Option<TopLe
                 Rule::input_decl => {
                     let mut parts = inner.into_inner();
                     let type_name = parse_type_spec(next_or_err(&mut parts, "input_decl type")?);
-                    let name = next_or_err(&mut parts, "input_decl name")?.as_str().to_string();
+                    let name = next_or_err(&mut parts, "input_decl name")?
+                        .as_str()
+                        .to_string();
                     let default = parts.next().map(|p| parse_expr(p)).transpose()?;
-                    Ok(Some(TopLevel::Input(InputDecl { type_name, name, default, line })))
+                    Ok(Some(TopLevel::Input(InputDecl {
+                        type_name,
+                        name,
+                        default,
+                        line,
+                    })))
                 }
                 Rule::sinput_decl => {
                     let mut parts = inner.into_inner();
                     let type_name = parse_type_spec(next_or_err(&mut parts, "sinput_decl type")?);
-                    let name = next_or_err(&mut parts, "sinput_decl name")?.as_str().to_string();
+                    let name = next_or_err(&mut parts, "sinput_decl name")?
+                        .as_str()
+                        .to_string();
                     let default = parts.next().map(|p| parse_expr(p)).transpose()?;
-                    Ok(Some(TopLevel::Input(InputDecl { type_name, name, default, line })))
+                    Ok(Some(TopLevel::Input(InputDecl {
+                        type_name,
+                        name,
+                        default,
+                        line,
+                    })))
                 }
                 Rule::var_decl => {
                     let decl = parse_var_decl(inner, line)?;
@@ -116,21 +140,31 @@ fn parse_top_level(pair: pest::iterators::Pair<'_, Rule>) -> Result<Option<TopLe
         }
         Rule::enum_def => {
             let mut inner = pair.into_inner();
-            let name = next_or_err(&mut inner, "enum_def name")?.as_str().to_string();
+            let name = next_or_err(&mut inner, "enum_def name")?
+                .as_str()
+                .to_string();
             let mut members = Vec::new();
             for member in inner {
                 if member.as_rule() == Rule::enum_member {
                     let mut parts = member.into_inner();
-                    let mname = next_or_err(&mut parts, "enum_member name")?.as_str().to_string();
+                    let mname = next_or_err(&mut parts, "enum_member name")?
+                        .as_str()
+                        .to_string();
                     let value = parts.next().map(|p| parse_expr(p)).transpose()?;
                     members.push((mname, value));
                 }
             }
-            Ok(Some(TopLevel::Enum(EnumDef { name, members, line })))
+            Ok(Some(TopLevel::Enum(EnumDef {
+                name,
+                members,
+                line,
+            })))
         }
         Rule::struct_def => {
             let mut inner = pair.into_inner();
-            let name = next_or_err(&mut inner, "struct_def name")?.as_str().to_string();
+            let name = next_or_err(&mut inner, "struct_def name")?
+                .as_str()
+                .to_string();
             let mut fields = Vec::new();
             let mut methods = Vec::new();
             for item in inner {
@@ -145,7 +179,12 @@ fn parse_top_level(pair: pest::iterators::Pair<'_, Rule>) -> Result<Option<TopLe
                     _ => {}
                 }
             }
-            Ok(Some(TopLevel::Struct(StructDef { name, fields, methods, line })))
+            Ok(Some(TopLevel::Struct(StructDef {
+                name,
+                fields,
+                methods,
+                line,
+            })))
         }
         Rule::EOI => Ok(None),
         _ => Ok(None),
@@ -156,7 +195,10 @@ fn parse_type_spec(pair: pest::iterators::Pair<'_, Rule>) -> String {
     pair.as_str().trim().to_string()
 }
 
-fn parse_var_decl(pair: pest::iterators::Pair<'_, Rule>, line: usize) -> Result<VarDecl, CompileError> {
+fn parse_var_decl(
+    pair: pest::iterators::Pair<'_, Rule>,
+    line: usize,
+) -> Result<VarDecl, CompileError> {
     let text = pair.as_str();
     let is_static = text.starts_with("static");
     let is_const = text.contains("const");
@@ -168,7 +210,9 @@ fn parse_var_decl(pair: pest::iterators::Pair<'_, Rule>, line: usize) -> Result<
 
     let var_init = next_or_err(&mut inner, "var_decl var_init")?;
     let mut var_parts = var_init.into_inner();
-    let name = next_or_err(&mut var_parts, "var_decl name")?.as_str().to_string();
+    let name = next_or_err(&mut var_parts, "var_decl name")?
+        .as_str()
+        .to_string();
 
     let mut is_array = false;
     let mut array_size = None;
@@ -183,7 +227,8 @@ fn parse_var_decl(pair: pest::iterators::Pair<'_, Rule>, line: usize) -> Result<
                 }
             }
             Rule::array_init => {
-                let elems: Vec<Expr> = part.into_inner()
+                let elems: Vec<Expr> = part
+                    .into_inner()
                     .map(|p| parse_expr(p))
                     .collect::<Result<_, _>>()?;
                 init = Some(Expr::ArrayInit(elems));
@@ -194,7 +239,16 @@ fn parse_var_decl(pair: pest::iterators::Pair<'_, Rule>, line: usize) -> Result<
         }
     }
 
-    Ok(VarDecl { type_name, name, is_static, is_const, is_array, array_size, init, line })
+    Ok(VarDecl {
+        type_name,
+        name,
+        is_static,
+        is_const,
+        is_array,
+        array_size,
+        init,
+        line,
+    })
 }
 
 fn parse_function_def(pair: pest::iterators::Pair<'_, Rule>) -> Result<FunctionDef, CompileError> {
@@ -204,7 +258,9 @@ fn parse_function_def(pair: pest::iterators::Pair<'_, Rule>) -> Result<FunctionD
 
     let mut inner = pair.into_inner();
     let return_type = parse_type_spec(next_or_err(&mut inner, "function_def return_type")?);
-    let name = next_or_err(&mut inner, "function_def name")?.as_str().to_string();
+    let name = next_or_err(&mut inner, "function_def name")?
+        .as_str()
+        .to_string();
 
     let mut params = Vec::new();
     let mut body = Vec::new();
@@ -223,7 +279,14 @@ fn parse_function_def(pair: pest::iterators::Pair<'_, Rule>) -> Result<FunctionD
         }
     }
 
-    Ok(FunctionDef { return_type, name, params, body, is_static, line })
+    Ok(FunctionDef {
+        return_type,
+        name,
+        params,
+        body,
+        is_static,
+        line,
+    })
 }
 
 fn parse_param(pair: pest::iterators::Pair<'_, Rule>) -> Result<Param, CompileError> {
@@ -244,7 +307,13 @@ fn parse_param(pair: pest::iterators::Pair<'_, Rule>) -> Result<Param, CompileEr
         }
     }
 
-    Ok(Param { type_name, name, is_ref, is_array, default })
+    Ok(Param {
+        type_name,
+        name,
+        is_ref,
+        is_array,
+        default,
+    })
 }
 
 fn parse_block(pair: pest::iterators::Pair<'_, Rule>) -> Result<Vec<Stmt>, CompileError> {
@@ -268,7 +337,11 @@ fn parse_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<Stmt, CompileErro
             Ok(Stmt::Expr(parse_expr(expr_pair)?))
         }
         Rule::return_stmt => {
-            let expr = pair.into_inner().next().map(|p| parse_expr(p)).transpose()?;
+            let expr = pair
+                .into_inner()
+                .next()
+                .map(|p| parse_expr(p))
+                .transpose()?;
             Ok(Stmt::Return(expr))
         }
         Rule::if_stmt => {
@@ -279,7 +352,12 @@ fn parse_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<Stmt, CompileErro
                 Some(p) => Some(vec![parse_stmt(p)?]),
                 None => None,
             };
-            Ok(Stmt::If { cond, then, else_, line })
+            Ok(Stmt::If {
+                cond,
+                then,
+                else_,
+                line,
+            })
         }
         Rule::for_stmt => {
             let mut inner = pair.into_inner();
@@ -293,7 +371,13 @@ fn parse_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<Stmt, CompileErro
             let step = inner.next().map(|p| parse_expr(p)).transpose()?;
             let body_pair = next_or_err(&mut inner, "for_stmt body")?;
             let body = vec![parse_stmt(body_pair)?];
-            Ok(Stmt::For { init, cond, step, body, line })
+            Ok(Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+                line,
+            })
         }
         Rule::while_stmt => {
             let mut inner = pair.into_inner();
@@ -321,17 +405,26 @@ fn parse_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<Stmt, CompileErro
                     Rule::case_clause => {
                         let mut parts = clause.into_inner();
                         let val = parse_expr(next_or_err(&mut parts, "case_clause value")?)?;
-                        let stmts: Vec<Stmt> = parts.map(|p| parse_stmt(p)).collect::<Result<_, _>>()?;
+                        let stmts: Vec<Stmt> =
+                            parts.map(|p| parse_stmt(p)).collect::<Result<_, _>>()?;
                         cases.push((val, stmts));
                     }
                     Rule::default_clause => {
-                        let stmts: Vec<Stmt> = clause.into_inner().map(|p| parse_stmt(p)).collect::<Result<_, _>>()?;
+                        let stmts: Vec<Stmt> = clause
+                            .into_inner()
+                            .map(|p| parse_stmt(p))
+                            .collect::<Result<_, _>>()?;
                         default = Some(stmts);
                     }
                     _ => {}
                 }
             }
-            Ok(Stmt::Switch { expr, cases, default, line })
+            Ok(Stmt::Switch {
+                expr,
+                cases,
+                default,
+                line,
+            })
         }
         _ => Ok(Stmt::Empty),
     }
@@ -339,10 +432,19 @@ fn parse_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<Stmt, CompileErro
 
 fn parse_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Expr, CompileError> {
     match pair.as_rule() {
-        Rule::expr | Rule::assign_expr | Rule::ternary_expr |
-        Rule::or_expr | Rule::and_expr | Rule::bitor_expr | Rule::xor_expr |
-        Rule::bitand_expr | Rule::eq_expr | Rule::rel_expr | Rule::shift_expr |
-        Rule::add_expr | Rule::mul_expr => {
+        Rule::expr
+        | Rule::assign_expr
+        | Rule::ternary_expr
+        | Rule::or_expr
+        | Rule::and_expr
+        | Rule::bitor_expr
+        | Rule::xor_expr
+        | Rule::bitand_expr
+        | Rule::eq_expr
+        | Rule::rel_expr
+        | Rule::shift_expr
+        | Rule::add_expr
+        | Rule::mul_expr => {
             let mut inner = pair.into_inner();
             let first = next_or_err(&mut inner, "expr first operand")?;
             let mut result = parse_expr(first)?;
@@ -366,26 +468,44 @@ fn parse_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Expr, CompileErro
                             ">>=" => AssignOp::ShrAssign,
                             _ => AssignOp::Assign,
                         };
-                        result = Expr::Assign { target: Box::new(result), op, value: Box::new(rhs) };
+                        result = Expr::Assign {
+                            target: Box::new(result),
+                            op,
+                            value: Box::new(rhs),
+                        };
                     }
                     _ => {
                         // Check if this is an operator token (plain string like "+", "-", "<", etc.)
                         let token_str = op_or_next.as_str();
                         let maybe_op = match token_str {
-                            "+" => Some(BinOp::Add), "-" => Some(BinOp::Sub),
-                            "*" => Some(BinOp::Mul), "/" => Some(BinOp::Div), "%" => Some(BinOp::Mod),
-                            "==" => Some(BinOp::Eq), "!=" => Some(BinOp::Ne),
-                            "<" => Some(BinOp::Lt), "<=" => Some(BinOp::Le),
-                            ">" => Some(BinOp::Gt), ">=" => Some(BinOp::Ge),
-                            "&&" => Some(BinOp::And), "||" => Some(BinOp::Or),
-                            "&" => Some(BinOp::BitAnd), "|" => Some(BinOp::BitOr),
-                            "^" => Some(BinOp::BitXor), "<<" => Some(BinOp::Shl), ">>" => Some(BinOp::Shr),
+                            "+" => Some(BinOp::Add),
+                            "-" => Some(BinOp::Sub),
+                            "*" => Some(BinOp::Mul),
+                            "/" => Some(BinOp::Div),
+                            "%" => Some(BinOp::Mod),
+                            "==" => Some(BinOp::Eq),
+                            "!=" => Some(BinOp::Ne),
+                            "<" => Some(BinOp::Lt),
+                            "<=" => Some(BinOp::Le),
+                            ">" => Some(BinOp::Gt),
+                            ">=" => Some(BinOp::Ge),
+                            "&&" => Some(BinOp::And),
+                            "||" => Some(BinOp::Or),
+                            "&" => Some(BinOp::BitAnd),
+                            "|" => Some(BinOp::BitOr),
+                            "^" => Some(BinOp::BitXor),
+                            "<<" => Some(BinOp::Shl),
+                            ">>" => Some(BinOp::Shr),
                             _ => None,
                         };
                         if let Some(op) = maybe_op {
                             // Next token is the right-hand operand
                             let rhs = parse_expr(next_or_err(&mut inner, "binop rhs")?)?;
-                            result = Expr::BinOp { op, left: Box::new(result), right: Box::new(rhs) };
+                            result = Expr::BinOp {
+                                op,
+                                left: Box::new(result),
+                                right: Box::new(rhs),
+                            };
                         } else {
                             // Not an operator — treat as operand (fallback for nested expression rules)
                             let rhs = parse_expr(op_or_next)?;
@@ -413,7 +533,10 @@ fn parse_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Expr, CompileErro
                     "--" => UnaryOp::PreDecr,
                     _ => UnaryOp::Neg,
                 };
-                Ok(Expr::UnaryOp { op, operand: Box::new(operand) })
+                Ok(Expr::UnaryOp {
+                    op,
+                    operand: Box::new(operand),
+                })
             } else {
                 parse_expr(first)
             }
@@ -441,18 +564,34 @@ fn parse_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Expr, CompileErro
                             Expr::Member { field, .. } => field.clone(),
                             _ => "unknown".to_string(),
                         };
-                        let args: Vec<Expr> = actual_op.into_inner()
+                        let args: Vec<Expr> = actual_op
+                            .into_inner()
                             .map(|p| parse_expr(p))
                             .collect::<Result<_, _>>()?;
-                        result = Expr::Call { func: func_name, args };
+                        result = Expr::Call {
+                            func: func_name,
+                            args,
+                        };
                     }
                     Rule::index_access => {
-                        let idx = parse_expr(next_or_err(&mut actual_op.into_inner(), "index_access expr")?)?;
-                        result = Expr::Index { array: Box::new(result), index: Box::new(idx) };
+                        let idx = parse_expr(next_or_err(
+                            &mut actual_op.into_inner(),
+                            "index_access expr",
+                        )?)?;
+                        result = Expr::Index {
+                            array: Box::new(result),
+                            index: Box::new(idx),
+                        };
                     }
                     Rule::member_access => {
-                        let field = next_or_err(&mut actual_op.into_inner(), "member_access field")?.as_str().to_string();
-                        result = Expr::Member { object: Box::new(result), field };
+                        let field =
+                            next_or_err(&mut actual_op.into_inner(), "member_access field")?
+                                .as_str()
+                                .to_string();
+                        result = Expr::Member {
+                            object: Box::new(result),
+                            field,
+                        };
                     }
                     _ if actual_op.as_str() == "++" => {
                         result = Expr::PostIncr(Box::new(result));
@@ -481,7 +620,7 @@ fn parse_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Expr, CompileErro
         }
         Rule::string_literal => {
             let s = pair.as_str();
-            Ok(Expr::StringLit(s[1..s.len()-1].to_string()))
+            Ok(Expr::StringLit(s[1..s.len() - 1].to_string()))
         }
         Rule::bool_literal => Ok(Expr::BoolLit(pair.as_str() == "true")),
         Rule::null_literal => Ok(Expr::Null),
@@ -543,12 +682,10 @@ mod tests {
         let src = "int flags = 0xFF;";
         let program = parse_mql5(src).expect("should parse hex");
         match &program.items[0] {
-            TopLevel::GlobalVar(decl) => {
-                match &decl.init {
-                    Some(Expr::IntLit(n)) => assert_eq!(*n, 255),
-                    other => panic!("expected IntLit(255), got {:?}", other),
-                }
-            }
+            TopLevel::GlobalVar(decl) => match &decl.init {
+                Some(Expr::IntLit(n)) => assert_eq!(*n, 255),
+                other => panic!("expected IntLit(255), got {:?}", other),
+            },
             other => panic!("expected GlobalVar, got {:?}", other),
         }
     }
@@ -574,12 +711,10 @@ mod tests {
         let src = "bool flag = true;";
         let program = parse_mql5(src).expect("should parse bool var");
         match &program.items[0] {
-            TopLevel::GlobalVar(decl) => {
-                match &decl.init {
-                    Some(Expr::BoolLit(b)) => assert!(*b),
-                    other => panic!("expected BoolLit(true), got {:?}", other),
-                }
-            }
+            TopLevel::GlobalVar(decl) => match &decl.init {
+                Some(Expr::BoolLit(b)) => assert!(*b),
+                other => panic!("expected BoolLit(true), got {:?}", other),
+            },
             other => panic!("expected GlobalVar, got {:?}", other),
         }
     }
@@ -678,14 +813,12 @@ mod tests {
         "#;
         let program = parse_mql5(src).expect("should parse if/else");
         match &program.items[0] {
-            TopLevel::Function(func) => {
-                match &func.body[0] {
-                    Stmt::If { else_, .. } => {
-                        assert!(else_.is_some());
-                    }
-                    other => panic!("expected If, got {:?}", other),
+            TopLevel::Function(func) => match &func.body[0] {
+                Stmt::If { else_, .. } => {
+                    assert!(else_.is_some());
                 }
-            }
+                other => panic!("expected If, got {:?}", other),
+            },
             other => panic!("expected Function, got {:?}", other),
         }
     }
@@ -701,14 +834,12 @@ mod tests {
         "#;
         let program = parse_mql5(src).expect("should parse while");
         match &program.items[0] {
-            TopLevel::Function(func) => {
-                match &func.body[0] {
-                    Stmt::While { body, .. } => {
-                        assert_eq!(body.len(), 1);
-                    }
-                    other => panic!("expected While, got {:?}", other),
+            TopLevel::Function(func) => match &func.body[0] {
+                Stmt::While { body, .. } => {
+                    assert_eq!(body.len(), 1);
                 }
-            }
+                other => panic!("expected While, got {:?}", other),
+            },
             other => panic!("expected Function, got {:?}", other),
         }
     }
@@ -724,17 +855,21 @@ mod tests {
         "#;
         let program = parse_mql5(src).expect("should parse for loop");
         match &program.items[0] {
-            TopLevel::Function(func) => {
-                match &func.body[0] {
-                    Stmt::For { init, cond, step, body, .. } => {
-                        assert!(init.is_some());
-                        assert!(cond.is_some());
-                        assert!(step.is_some());
-                        assert_eq!(body.len(), 1);
-                    }
-                    other => panic!("expected For, got {:?}", other),
+            TopLevel::Function(func) => match &func.body[0] {
+                Stmt::For {
+                    init,
+                    cond,
+                    step,
+                    body,
+                    ..
+                } => {
+                    assert!(init.is_some());
+                    assert!(cond.is_some());
+                    assert!(step.is_some());
+                    assert_eq!(body.len(), 1);
                 }
-            }
+                other => panic!("expected For, got {:?}", other),
+            },
             other => panic!("expected Function, got {:?}", other),
         }
     }
@@ -832,26 +967,24 @@ mod tests {
         "#;
         let program = parse_mql5(src).expect("should parse var decl with call init");
         match &program.items[0] {
-            TopLevel::Function(func) => {
-                match &func.body[0] {
-                    Stmt::VarDecl(decl) => {
-                        assert_eq!(decl.type_name, "double");
-                        assert_eq!(decl.name, "x");
-                        match &decl.init {
-                            Some(Expr::Call { func: name, args }) => {
-                                assert_eq!(name, "MathSqrt");
-                                assert_eq!(args.len(), 1);
-                                match &args[0] {
-                                    Expr::FloatLit(f) => assert!((*f - 4.0).abs() < 1e-10),
-                                    other => panic!("expected FloatLit(4.0), got {:?}", other),
-                                }
+            TopLevel::Function(func) => match &func.body[0] {
+                Stmt::VarDecl(decl) => {
+                    assert_eq!(decl.type_name, "double");
+                    assert_eq!(decl.name, "x");
+                    match &decl.init {
+                        Some(Expr::Call { func: name, args }) => {
+                            assert_eq!(name, "MathSqrt");
+                            assert_eq!(args.len(), 1);
+                            match &args[0] {
+                                Expr::FloatLit(f) => assert!((*f - 4.0).abs() < 1e-10),
+                                other => panic!("expected FloatLit(4.0), got {:?}", other),
                             }
-                            other => panic!("expected Call(MathSqrt, [4.0]), got {:?}", other),
                         }
+                        other => panic!("expected Call(MathSqrt, [4.0]), got {:?}", other),
                     }
-                    other => panic!("expected VarDecl, got {:?}", other),
                 }
-            }
+                other => panic!("expected VarDecl, got {:?}", other),
+            },
             other => panic!("expected Function, got {:?}", other),
         }
     }
@@ -921,12 +1054,10 @@ mod tests {
         let src = "double val = 1.5e3;";
         let program = parse_mql5(src).expect("should parse scientific notation");
         match &program.items[0] {
-            TopLevel::GlobalVar(decl) => {
-                match &decl.init {
-                    Some(Expr::FloatLit(f)) => assert!((*f - 1500.0).abs() < 1e-10),
-                    other => panic!("expected FloatLit(1500.0), got {:?}", other),
-                }
-            }
+            TopLevel::GlobalVar(decl) => match &decl.init {
+                Some(Expr::FloatLit(f)) => assert!((*f - 1500.0).abs() < 1e-10),
+                other => panic!("expected FloatLit(1500.0), got {:?}", other),
+            },
             other => panic!("expected GlobalVar, got {:?}", other),
         }
     }
@@ -936,12 +1067,10 @@ mod tests {
         let src = "int handle = NULL;";
         let program = parse_mql5(src).expect("should parse NULL");
         match &program.items[0] {
-            TopLevel::GlobalVar(decl) => {
-                match &decl.init {
-                    Some(Expr::Null) => {}
-                    other => panic!("expected Null, got {:?}", other),
-                }
-            }
+            TopLevel::GlobalVar(decl) => match &decl.init {
+                Some(Expr::Null) => {}
+                other => panic!("expected Null, got {:?}", other),
+            },
             other => panic!("expected GlobalVar, got {:?}", other),
         }
     }
@@ -955,15 +1084,13 @@ mod tests {
         "#;
         let program = parse_mql5(src).expect("should parse static var");
         match &program.items[0] {
-            TopLevel::Function(func) => {
-                match &func.body[0] {
-                    Stmt::VarDecl(decl) => {
-                        assert!(decl.is_static);
-                        assert_eq!(decl.name, "counter");
-                    }
-                    other => panic!("expected VarDecl, got {:?}", other),
+            TopLevel::Function(func) => match &func.body[0] {
+                Stmt::VarDecl(decl) => {
+                    assert!(decl.is_static);
+                    assert_eq!(decl.name, "counter");
                 }
-            }
+                other => panic!("expected VarDecl, got {:?}", other),
+            },
             other => panic!("expected Function, got {:?}", other),
         }
     }
@@ -1013,21 +1140,19 @@ mod tests {
         "#;
         let program = parse_mql5(src).expect("should parse var decl with call init");
         match &program.items[0] {
-            TopLevel::Function(func) => {
-                match &func.body[0] {
-                    Stmt::VarDecl(decl) => {
-                        assert_eq!(decl.name, "x");
-                        match &decl.init {
-                            Some(Expr::Call { func: name, args }) => {
-                                assert_eq!(name, "MathSqrt");
-                                assert_eq!(args.len(), 1);
-                            }
-                            other => panic!("expected Call init, got {:?}", other),
+            TopLevel::Function(func) => match &func.body[0] {
+                Stmt::VarDecl(decl) => {
+                    assert_eq!(decl.name, "x");
+                    match &decl.init {
+                        Some(Expr::Call { func: name, args }) => {
+                            assert_eq!(name, "MathSqrt");
+                            assert_eq!(args.len(), 1);
                         }
+                        other => panic!("expected Call init, got {:?}", other),
                     }
-                    other => panic!("expected VarDecl, got {:?}", other),
                 }
-            }
+                other => panic!("expected VarDecl, got {:?}", other),
+            },
             other => panic!("expected Function, got {:?}", other),
         }
     }

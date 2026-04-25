@@ -31,27 +31,27 @@ pub struct RiskConfig {
     pub var_mode: VaRMode,
 
     // Standard mode
-    pub risk_pct: f64,           // Risk % of balance (default 0.5)
-    pub max_risk_pct: f64,       // Max risk cap (default 1.0)
+    pub risk_pct: f64,              // Risk % of balance (default 0.5)
+    pub max_risk_pct: f64,          // Max risk cap (default 1.0)
     pub additional_risk_ratio: f64, // Reduced risk if break-even (default 0.25)
 
     // Fixed mode
-    pub fixed_lots: f64,         // Fixed lot size (default 20)
-    pub fixed_orders: u32,       // Orders to place (default 2)
+    pub fixed_lots: f64,   // Fixed lot size (default 20)
+    pub fixed_orders: u32, // Orders to place (default 2)
 
     // Dynamic mode
-    pub min_balance: f64,        // Floor balance (default 96100)
-    pub losses_to_min: u32,      // Losses to reach floor (default 10)
+    pub min_balance: f64,   // Floor balance (default 96100)
+    pub losses_to_min: u32, // Losses to reach floor (default 10)
 
     // VaR mode
-    pub var_risk_pct: f64,       // VaR as % of equity (default 0.9)
-    pub var_notional: f64,       // Fixed $ VaR target (default 9001)
-    pub var_confidence: f64,     // Confidence level (default 0.95)
-    pub var_timeframe: String,   // Lookback timeframe (default "1Day")
-    pub var_periods: u32,        // StdDev periods (default 21)
+    pub var_risk_pct: f64,     // VaR as % of equity (default 0.9)
+    pub var_notional: f64,     // Fixed $ VaR target (default 9001)
+    pub var_confidence: f64,   // Confidence level (default 0.95)
+    pub var_timeframe: String, // Lookback timeframe (default "1Day")
+    pub var_periods: u32,      // StdDev periods (default 21)
 
     // Account protection
-    pub margin_buffer_pct: f64,  // Exclude % from usable margin (default 1.0)
+    pub margin_buffer_pct: f64, // Exclude % from usable margin (default 1.0)
 }
 
 impl Default for RiskConfig {
@@ -86,7 +86,7 @@ pub struct SymbolSpec {
     pub volume_max: f64,
     pub volume_step: f64,
     pub contract_size: f64,
-    pub margin_rate: f64,      // As fraction (0.20 for x5)
+    pub margin_rate: f64, // As fraction (0.20 for x5)
 }
 
 /// Calculate lot size from risk amount and SL distance.
@@ -138,7 +138,8 @@ pub fn dynamic_lots(
         return 0.0;
     }
     let risk_money = if has_break_even {
-        (balance - config.min_balance) / (config.losses_to_min as f64 / config.additional_risk_ratio)
+        (balance - config.min_balance)
+            / (config.losses_to_min as f64 / config.additional_risk_ratio)
     } else {
         (balance - config.min_balance) / config.losses_to_min as f64
     };
@@ -149,12 +150,7 @@ pub fn dynamic_lots(
 ///
 /// PercentVaR: lots to cap loss at var_risk_pct % of equity.
 /// NotionalVaR: lots for fixed $ VaR target.
-pub fn var_lots(
-    config: &RiskConfig,
-    spec: &SymbolSpec,
-    equity: f64,
-    var_per_lot: f64,
-) -> f64 {
+pub fn var_lots(config: &RiskConfig, spec: &SymbolSpec, equity: f64, var_per_lot: f64) -> f64 {
     if var_per_lot <= 0.0 {
         return 0.0;
     }
@@ -166,9 +162,7 @@ pub fn var_lots(
             let max_var = (config.var_risk_pct / 100.0) * equity;
             max_var / var_per_lot
         }
-        VaRMode::NotionalVaR => {
-            config.var_notional / var_per_lot
-        }
+        VaRMode::NotionalVaR => config.var_notional / var_per_lot,
     };
     normalize_lots(lots, spec)
 }
@@ -184,9 +178,15 @@ pub fn calculate_lots(
     var_per_lot: f64,
 ) -> (f64, u32) {
     match config.order_mode {
-        OrderMode::Standard => (standard_lots(config, spec, balance, sl_distance, has_break_even), 1),
+        OrderMode::Standard => (
+            standard_lots(config, spec, balance, sl_distance, has_break_even),
+            1,
+        ),
         OrderMode::Fixed => (config.fixed_lots, config.fixed_orders),
-        OrderMode::Dynamic => (dynamic_lots(config, spec, balance, sl_distance, has_break_even), 1),
+        OrderMode::Dynamic => (
+            dynamic_lots(config, spec, balance, sl_distance, has_break_even),
+            1,
+        ),
         OrderMode::VaR => (var_lots(config, spec, equity, var_per_lot), 1),
     }
 }
@@ -286,6 +286,9 @@ mod tests {
         let spec = test_spec();
         // 0.123 lots with step 0.01 → 0.12
         let normalized = normalize_lots(0.123, &spec);
-        assert!((normalized - 0.12).abs() < 0.001, "Should round down to lot step: {normalized}");
+        assert!(
+            (normalized - 0.12).abs() < 0.001,
+            "Should round down to lot step: {normalized}"
+        );
     }
 }

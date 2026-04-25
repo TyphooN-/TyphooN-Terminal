@@ -1,7 +1,7 @@
 pub mod alpaca;
+pub mod dxlink;
 pub mod kraken_broker;
 pub mod tastytrade;
-pub mod dxlink;
 
 use alpaca::{AccountInfo, AssetInfo, Bar, OrderInfo, OrderResult, PositionInfo};
 use async_trait::async_trait;
@@ -16,7 +16,8 @@ pub trait BrokerTrait: Send + Sync {
     async fn get_positions(&self) -> Result<Vec<PositionInfo>, String>;
 
     /// Place a market order.
-    async fn market_order(&self, symbol: &str, qty: f64, side: &str) -> Result<OrderResult, String>;
+    async fn market_order(&self, symbol: &str, qty: f64, side: &str)
+    -> Result<OrderResult, String>;
 
     /// Place a limit order.
     async fn limit_order(
@@ -32,7 +33,8 @@ pub trait BrokerTrait: Send + Sync {
     async fn close_position(&self, symbol: &str, qty: Option<f64>) -> Result<OrderResult, String>;
 
     /// Get historical bar data.
-    async fn get_bars(&self, symbol: &str, timeframe: &str, limit: u32) -> Result<Vec<Bar>, String>;
+    async fn get_bars(&self, symbol: &str, timeframe: &str, limit: u32)
+    -> Result<Vec<Bar>, String>;
 
     /// Get news for a symbol.
     async fn get_news(&self, symbol: &str, limit: u32) -> Result<Vec<serde_json::Value>, String>;
@@ -54,7 +56,12 @@ impl BrokerTrait for alpaca::AlpacaBroker {
         self.get_positions().await
     }
 
-    async fn market_order(&self, symbol: &str, qty: f64, side: &str) -> Result<OrderResult, String> {
+    async fn market_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+    ) -> Result<OrderResult, String> {
         self.market_order(symbol, qty, side).await
     }
 
@@ -73,7 +80,12 @@ impl BrokerTrait for alpaca::AlpacaBroker {
         self.close_position(symbol, qty).await
     }
 
-    async fn get_bars(&self, symbol: &str, timeframe: &str, limit: u32) -> Result<Vec<Bar>, String> {
+    async fn get_bars(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        limit: u32,
+    ) -> Result<Vec<Bar>, String> {
         self.get_bars(symbol, timeframe, limit).await
     }
 

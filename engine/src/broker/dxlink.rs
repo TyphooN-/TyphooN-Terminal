@@ -6,8 +6,8 @@
 //!
 //! Reference: https://developer.tastytrade.com/streaming-market-data/
 
-use serde::{Deserialize, Serialize};
 use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const DXLINK_VERSION: &str = "0.1-DXF-JS/0.3.0";
@@ -23,7 +23,7 @@ pub struct DxLinkToken {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DxCandle {
     pub symbol: String,
-    pub time: i64,       // epoch ms
+    pub time: i64, // epoch ms
     pub open: f64,
     pub high: f64,
     pub low: f64,
@@ -42,26 +42,37 @@ pub struct DxQuote {
 }
 
 /// Get the DXLink streaming token from tastytrade REST API.
-pub async fn get_streaming_token(base_url: &str, session_token: &str) -> Result<DxLinkToken, String> {
+pub async fn get_streaming_token(
+    base_url: &str,
+    session_token: &str,
+) -> Result<DxLinkToken, String> {
     let client = reqwest::Client::new();
     let url = format!("{}/api-quote-tokens", base_url);
 
-    let resp = client.get(&url)
+    let resp = client
+        .get(&url)
         .header("Authorization", session_token)
-        .send().await
+        .send()
+        .await
         .map_err(|e| format!("Get streaming token failed: {e}"))?;
 
     if !resp.status().is_success() {
         return Err(format!("Streaming token request failed: {}", resp.status()));
     }
 
-    let data: serde_json::Value = resp.json().await
+    let data: serde_json::Value = resp
+        .json()
+        .await
         .map_err(|e| format!("Parse streaming token failed: {e}"))?;
 
-    let token = data["data"]["token"].as_str()
-        .ok_or("No token in response")?.to_string();
-    let ws_url = data["data"]["dxlink-url"].as_str()
-        .ok_or("No dxlink-url in response")?.to_string();
+    let token = data["data"]["token"]
+        .as_str()
+        .ok_or("No token in response")?
+        .to_string();
+    let ws_url = data["data"]["dxlink-url"]
+        .as_str()
+        .ok_or("No dxlink-url in response")?
+        .to_string();
 
     Ok(DxLinkToken { token, url: ws_url })
 }
@@ -75,14 +86,17 @@ pub async fn fetch_candles(
     from_time_ms: i64,
 ) -> Result<Vec<DxCandle>, String> {
     // Connect
-    let (ws_stream, _) = connect_async(&dx_token.url).await
+    let (ws_stream, _) = connect_async(&dx_token.url)
+        .await
         .map_err(|e| format!("DXLink connect failed: {e}"))?;
     let (mut sink, mut stream) = ws_stream.split();
 
     // Inline helpers (closures with async borrow don't work)
     macro_rules! dx_send {
         ($sink:expr, $msg:expr) => {
-            $sink.send(Message::Text($msg.to_string().into())).await
+            $sink
+                .send(Message::Text($msg.to_string().into()))
+                .await
                 .map_err(|e| format!("DXLink send failed: {e}"))?
         };
     }
@@ -95,9 +109,15 @@ pub async fn fetch_candles(
                             .map_err(|e| format!("DXLink parse failed: {e}"));
                     }
                     Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => continue,
-                    Some(Ok(Message::Close(_))) => { break Err("DXLink closed".into()); }
-                    Some(Err(e)) => { break Err(format!("DXLink error: {e}")); }
-                    None => { break Err("DXLink ended".into()); }
+                    Some(Ok(Message::Close(_))) => {
+                        break Err("DXLink closed".into());
+                    }
+                    Some(Err(e)) => {
+                        break Err(format!("DXLink error: {e}"));
+                    }
+                    None => {
+                        break Err("DXLink ended".into());
+                    }
                     _ => continue,
                 }
             }
@@ -105,13 +125,16 @@ pub async fn fetch_candles(
     }
 
     // Step 1: Send SETUP
-    dx_send!(sink, serde_json::json!({
-        "type": "SETUP",
-        "channel": 0,
-        "version": DXLINK_VERSION,
-        "keepaliveTimeout": 60,
-        "acceptKeepaliveTimeout": 60
-    }));
+    dx_send!(
+        sink,
+        serde_json::json!({
+            "type": "SETUP",
+            "channel": 0,
+            "version": DXLINK_VERSION,
+            "keepaliveTimeout": 60,
+            "acceptKeepaliveTimeout": 60
+        })
+    );
 
     // Step 2: Wait for server SETUP
     let msg = dx_recv!(stream)?;
@@ -126,11 +149,14 @@ pub async fn fetch_candles(
     }
 
     // Step 4: Send AUTH
-    dx_send!(sink, serde_json::json!({
-        "type": "AUTH",
-        "channel": 0,
-        "token": dx_token.token
-    }));
+    dx_send!(
+        sink,
+        serde_json::json!({
+            "type": "AUTH",
+            "channel": 0,
+            "token": dx_token.token
+        })
+    );
 
     // Step 5: Wait for AUTH_STATE AUTHORIZED
     let msg = dx_recv!(stream)?;
@@ -139,17 +165,22 @@ pub async fn fetch_candles(
     }
 
     // Step 6: Open channel 1 for Candle data
-    dx_send!(sink, serde_json::json!({
-        "type": "CHANNEL_REQUEST",
-        "channel": 1,
-        "service": "FEED",
-        "parameters": { "contract": "AUTO" }
-    }));
+    dx_send!(
+        sink,
+        serde_json::json!({
+            "type": "CHANNEL_REQUEST",
+            "channel": 1,
+            "service": "FEED",
+            "parameters": { "contract": "AUTO" }
+        })
+    );
 
     // Wait for CHANNEL_OPENED
     loop {
         let msg = dx_recv!(stream)?;
-        if msg["type"] == "CHANNEL_OPENED" && msg["channel"] == 1 { break; }
+        if msg["type"] == "CHANNEL_OPENED" && msg["channel"] == 1 {
+            break;
+        }
         if msg["type"] == "ERROR" {
             return Err(format!("DXLink channel error: {}", msg["message"]));
         }
@@ -157,39 +188,62 @@ pub async fn fetch_candles(
 
     // Step 7: FEED_SETUP — request Candle fields
     let candle_fields = vec![
-        "eventSymbol", "eventTime", "eventFlags", "index", "time",
-        "sequence", "count", "volume", "vwap", "bidVolume",
-        "askVolume", "impVolatility", "openInterest",
-        "open", "high", "low", "close",
+        "eventSymbol",
+        "eventTime",
+        "eventFlags",
+        "index",
+        "time",
+        "sequence",
+        "count",
+        "volume",
+        "vwap",
+        "bidVolume",
+        "askVolume",
+        "impVolatility",
+        "openInterest",
+        "open",
+        "high",
+        "low",
+        "close",
     ];
-    dx_send!(sink, serde_json::json!({
-        "type": "FEED_SETUP",
-        "channel": 1,
-        "acceptAggregationPeriod": 0,
-        "acceptDataFormat": "COMPACT",
-        "acceptEventFields": {
-            "Candle": candle_fields
-        }
-    }));
+    dx_send!(
+        sink,
+        serde_json::json!({
+            "type": "FEED_SETUP",
+            "channel": 1,
+            "acceptAggregationPeriod": 0,
+            "acceptDataFormat": "COMPACT",
+            "acceptEventFields": {
+                "Candle": candle_fields
+            }
+        })
+    );
 
     // Wait for FEED_CONFIG
     loop {
         let msg = dx_recv!(stream)?;
-        if msg["type"] == "FEED_CONFIG" && msg["channel"] == 1 { break; }
-        if msg["type"] == "KEEPALIVE" { continue; }
+        if msg["type"] == "FEED_CONFIG" && msg["channel"] == 1 {
+            break;
+        }
+        if msg["type"] == "KEEPALIVE" {
+            continue;
+        }
     }
 
     // Step 8: Subscribe to candles
     let candle_symbol = format!("{}{{={}}}", symbol, interval);
-    dx_send!(sink, serde_json::json!({
-        "type": "FEED_SUBSCRIPTION",
-        "channel": 1,
-        "add": [{
-            "symbol": candle_symbol,
-            "type": "Candle",
-            "fromTime": from_time_ms
-        }]
-    }));
+    dx_send!(
+        sink,
+        serde_json::json!({
+            "type": "FEED_SUBSCRIPTION",
+            "channel": 1,
+            "add": [{
+                "symbol": candle_symbol,
+                "type": "Candle",
+                "fromTime": from_time_ms
+            }]
+        })
+    );
 
     // Step 9: Collect candle data until snapshot complete
     let mut candles: Vec<DxCandle> = Vec::new();
@@ -215,8 +269,12 @@ pub async fn fetch_candles(
         };
         let msg = msg_result?;
 
-        if msg["type"] == "KEEPALIVE" { continue; }
-        if msg["type"] != "FEED_DATA" || msg["channel"] != 1 { continue; }
+        if msg["type"] == "KEEPALIVE" {
+            continue;
+        }
+        if msg["type"] != "FEED_DATA" || msg["channel"] != 1 {
+            continue;
+        }
 
         if let Some(data) = msg["data"].as_array() {
             let mut i = 0;
@@ -243,7 +301,11 @@ pub async fn fetch_candles(
                                 candles.push(DxCandle {
                                     symbol: clean_sym,
                                     time: time_ms,
-                                    open, high, low, close, volume,
+                                    open,
+                                    high,
+                                    low,
+                                    close,
+                                    volume,
                                 });
                             }
 
@@ -279,13 +341,16 @@ pub async fn subscribe_quotes(
     symbols: Vec<String>,
 ) -> Result<tokio::sync::mpsc::Receiver<DxQuote>, String> {
     // Connect
-    let (ws_stream, _) = connect_async(&dx_token.url).await
+    let (ws_stream, _) = connect_async(&dx_token.url)
+        .await
         .map_err(|e| format!("DXLink connect failed: {e}"))?;
     let (mut sink, mut stream) = ws_stream.split();
 
     macro_rules! dx_send {
         ($sink:expr, $msg:expr) => {
-            $sink.send(Message::Text($msg.to_string().into())).await
+            $sink
+                .send(Message::Text($msg.to_string().into()))
+                .await
                 .map_err(|e| format!("DXLink send failed: {e}"))?
         };
     }
@@ -298,9 +363,15 @@ pub async fn subscribe_quotes(
                             .map_err(|e| format!("DXLink parse failed: {e}"));
                     }
                     Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => continue,
-                    Some(Ok(Message::Close(_))) => { break Err("DXLink closed".into()); }
-                    Some(Err(e)) => { break Err(format!("DXLink error: {e}")); }
-                    None => { break Err("DXLink ended".into()); }
+                    Some(Ok(Message::Close(_))) => {
+                        break Err("DXLink closed".into());
+                    }
+                    Some(Err(e)) => {
+                        break Err(format!("DXLink error: {e}"));
+                    }
+                    None => {
+                        break Err("DXLink ended".into());
+                    }
                     _ => continue,
                 }
             }
@@ -308,13 +379,16 @@ pub async fn subscribe_quotes(
     }
 
     // Step 1: SETUP
-    dx_send!(sink, serde_json::json!({
-        "type": "SETUP",
-        "channel": 0,
-        "version": DXLINK_VERSION,
-        "keepaliveTimeout": 60,
-        "acceptKeepaliveTimeout": 60
-    }));
+    dx_send!(
+        sink,
+        serde_json::json!({
+            "type": "SETUP",
+            "channel": 0,
+            "version": DXLINK_VERSION,
+            "keepaliveTimeout": 60,
+            "acceptKeepaliveTimeout": 60
+        })
+    );
 
     // Step 2: Wait for server SETUP
     let msg = dx_recv!(stream)?;
@@ -329,11 +403,14 @@ pub async fn subscribe_quotes(
     }
 
     // Step 4: AUTH
-    dx_send!(sink, serde_json::json!({
-        "type": "AUTH",
-        "channel": 0,
-        "token": dx_token.token
-    }));
+    dx_send!(
+        sink,
+        serde_json::json!({
+            "type": "AUTH",
+            "channel": 0,
+            "token": dx_token.token
+        })
+    );
 
     // Step 5: Wait for AUTH_STATE AUTHORIZED
     let msg = dx_recv!(stream)?;
@@ -342,16 +419,21 @@ pub async fn subscribe_quotes(
     }
 
     // Step 6: Open channel 1 for Quote data
-    dx_send!(sink, serde_json::json!({
-        "type": "CHANNEL_REQUEST",
-        "channel": 1,
-        "service": "FEED",
-        "parameters": { "contract": "AUTO" }
-    }));
+    dx_send!(
+        sink,
+        serde_json::json!({
+            "type": "CHANNEL_REQUEST",
+            "channel": 1,
+            "service": "FEED",
+            "parameters": { "contract": "AUTO" }
+        })
+    );
 
     loop {
         let msg = dx_recv!(stream)?;
-        if msg["type"] == "CHANNEL_OPENED" && msg["channel"] == 1 { break; }
+        if msg["type"] == "CHANNEL_OPENED" && msg["channel"] == 1 {
+            break;
+        }
         if msg["type"] == "ERROR" {
             return Err(format!("DXLink channel error: {}", msg["message"]));
         }
@@ -360,32 +442,43 @@ pub async fn subscribe_quotes(
     // Step 7: FEED_SETUP — request Quote fields
     let quote_fields = vec!["eventSymbol", "bidPrice", "askPrice", "bidSize", "askSize"];
     let field_count = quote_fields.len();
-    dx_send!(sink, serde_json::json!({
-        "type": "FEED_SETUP",
-        "channel": 1,
-        "acceptAggregationPeriod": 0,
-        "acceptDataFormat": "COMPACT",
-        "acceptEventFields": {
-            "Quote": quote_fields
-        }
-    }));
+    dx_send!(
+        sink,
+        serde_json::json!({
+            "type": "FEED_SETUP",
+            "channel": 1,
+            "acceptAggregationPeriod": 0,
+            "acceptDataFormat": "COMPACT",
+            "acceptEventFields": {
+                "Quote": quote_fields
+            }
+        })
+    );
 
     // Wait for FEED_CONFIG
     loop {
         let msg = dx_recv!(stream)?;
-        if msg["type"] == "FEED_CONFIG" && msg["channel"] == 1 { break; }
-        if msg["type"] == "KEEPALIVE" { continue; }
+        if msg["type"] == "FEED_CONFIG" && msg["channel"] == 1 {
+            break;
+        }
+        if msg["type"] == "KEEPALIVE" {
+            continue;
+        }
     }
 
     // Step 8: Subscribe to quotes for all symbols
-    let add_list: Vec<serde_json::Value> = symbols.iter().map(|s| {
-        serde_json::json!({ "symbol": s, "type": "Quote" })
-    }).collect();
-    dx_send!(sink, serde_json::json!({
-        "type": "FEED_SUBSCRIPTION",
-        "channel": 1,
-        "add": add_list
-    }));
+    let add_list: Vec<serde_json::Value> = symbols
+        .iter()
+        .map(|s| serde_json::json!({ "symbol": s, "type": "Quote" }))
+        .collect();
+    dx_send!(
+        sink,
+        serde_json::json!({
+            "type": "FEED_SUBSCRIPTION",
+            "channel": 1,
+            "add": add_list
+        })
+    );
 
     // Step 9: Spawn reader task that streams quotes through channel
     let (tx, rx) = tokio::sync::mpsc::channel::<DxQuote>(256);
@@ -405,8 +498,12 @@ pub async fn subscribe_quotes(
                 _ => continue,
             };
 
-            if msg_val["type"] == "KEEPALIVE" { continue; }
-            if msg_val["type"] != "FEED_DATA" || msg_val["channel"] != 1 { continue; }
+            if msg_val["type"] == "KEEPALIVE" {
+                continue;
+            }
+            if msg_val["type"] != "FEED_DATA" || msg_val["channel"] != 1 {
+                continue;
+            }
 
             if let Some(data) = msg_val["data"].as_array() {
                 let mut i = 0;
@@ -424,7 +521,13 @@ pub async fn subscribe_quotes(
                                 let ask_size = parse_f64(&values[off + 4]);
 
                                 if !symbol.is_empty() && !bid.is_nan() && !ask.is_nan() {
-                                    let quote = DxQuote { symbol, bid, ask, bid_size, ask_size };
+                                    let quote = DxQuote {
+                                        symbol,
+                                        bid,
+                                        ask,
+                                        bid_size,
+                                        ask_size,
+                                    };
                                     if tx.send(quote).await.is_err() {
                                         return; // receiver dropped
                                     }
@@ -504,7 +607,11 @@ mod tests {
         let candle = DxCandle {
             symbol: "SPY".to_string(),
             time: 100,
-            open: 1.0, high: 2.0, low: 0.5, close: 1.5, volume: 500.0,
+            open: 1.0,
+            high: 2.0,
+            low: 0.5,
+            close: 1.5,
+            volume: 500.0,
         };
         let cloned = candle.clone();
         assert_eq!(cloned.symbol, "SPY");
@@ -531,7 +638,10 @@ mod tests {
     fn dx_quote_clone() {
         let quote = DxQuote {
             symbol: "MSFT".to_string(),
-            bid: 300.0, ask: 301.0, bid_size: 50.0, ask_size: 75.0,
+            bid: 300.0,
+            ask: 301.0,
+            bid_size: 50.0,
+            ask_size: 75.0,
         };
         let cloned = quote.clone();
         assert_eq!(cloned.symbol, "MSFT");

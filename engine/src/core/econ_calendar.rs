@@ -31,42 +31,51 @@ pub enum EconImpact {
 impl EconImpact {
     pub fn parse(s: &str) -> Self {
         match s.to_ascii_lowercase().as_str() {
-            "high"   => Self::High,
+            "high" => Self::High,
             "medium" => Self::Medium,
-            "low"    => Self::Low,
-            _        => Self::Holiday,
+            "low" => Self::Low,
+            _ => Self::Holiday,
         }
     }
     pub fn label(&self) -> &'static str {
-        match self { Self::High => "High", Self::Medium => "Medium", Self::Low => "Low", Self::Holiday => "Holiday" }
+        match self {
+            Self::High => "High",
+            Self::Medium => "Medium",
+            Self::Low => "Low",
+            Self::Holiday => "Holiday",
+        }
     }
 }
 
 /// One economic calendar event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EconEvent {
-    pub title:    String,
-    pub country:  String,  // Currency code: USD, EUR, GBP, JPY, CHF, CAD, AUD, NZD, CNY
-    pub date:     String,  // MM-DD-YYYY (as-published) — consumer should normalize
-    pub time:     String,  // "8:30am" | "All Day" | "Tentative"
-    pub impact:   EconImpact,
+    pub title: String,
+    pub country: String, // Currency code: USD, EUR, GBP, JPY, CHF, CAD, AUD, NZD, CNY
+    pub date: String,    // MM-DD-YYYY (as-published) — consumer should normalize
+    pub time: String,    // "8:30am" | "All Day" | "Tentative"
+    pub impact: EconImpact,
     pub forecast: String,
     pub previous: String,
-    pub url:      String,
+    pub url: String,
 }
 
 /// Fetch + parse the ForexFactory weekly feed.
 /// Returns events in chronological order (as delivered by FF).
 pub async fn fetch_forexfactory_week(client: &reqwest::Client) -> Result<Vec<EconEvent>, String> {
     let url = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml";
-    let resp = client.get(url)
+    let resp = client
+        .get(url)
         .header("User-Agent", "TyphooN-Terminal/1.0 (+econ-calendar)")
-        .send().await
+        .send()
+        .await
         .map_err(|e| format!("ForexFactory fetch failed: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("ForexFactory returned HTTP {}", resp.status()));
     }
-    let xml = resp.text().await
+    let xml = resp
+        .text()
+        .await
         .map_err(|e| format!("ForexFactory response read failed: {e}"))?;
     parse_xml(&xml)
 }
@@ -93,7 +102,10 @@ pub fn parse_xml(xml: &str) -> Result<Vec<EconEvent>, String> {
                     let raw = &block[o..o + c];
                     // Strip CDATA wrapping
                     let trimmed = raw.trim();
-                    return if let Some(inner) = trimmed.strip_prefix("<![CDATA[").and_then(|s| s.strip_suffix("]]>")) {
+                    return if let Some(inner) = trimmed
+                        .strip_prefix("<![CDATA[")
+                        .and_then(|s| s.strip_suffix("]]>"))
+                    {
                         inner.trim().to_string()
                     } else {
                         trimmed.to_string()
@@ -103,20 +115,25 @@ pub fn parse_xml(xml: &str) -> Result<Vec<EconEvent>, String> {
             String::new()
         };
 
-        let title    = get_tag("title");
-        let country  = get_tag("country");
-        let date     = get_tag("date");
-        let time     = get_tag("time");
+        let title = get_tag("title");
+        let country = get_tag("country");
+        let date = get_tag("date");
+        let time = get_tag("time");
         let impact_s = get_tag("impact");
         let forecast = get_tag("forecast");
         let previous = get_tag("previous");
-        let url      = get_tag("url");
+        let url = get_tag("url");
 
         if !title.is_empty() {
             events.push(EconEvent {
-                title, country, date, time,
+                title,
+                country,
+                date,
+                time,
                 impact: EconImpact::parse(&impact_s),
-                forecast, previous, url,
+                forecast,
+                previous,
+                url,
             });
         }
 
@@ -128,14 +145,22 @@ pub fn parse_xml(xml: &str) -> Result<Vec<EconEvent>, String> {
 /// Parse "MM-DD-YYYY" "h:mmam|pm" into a UTC-ish sortable key.
 /// Returns None for "All Day" / "Tentative" entries.
 pub fn event_sort_key(e: &EconEvent) -> Option<i64> {
-    use chrono::{NaiveDate, NaiveTime, NaiveDateTime};
+    use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
     let d = NaiveDate::parse_from_str(&e.date, "%m-%d-%Y").ok()?;
     // FF time format: "8:30am" or "All Day" or "Tentative"
     let t_raw = e.time.trim();
-    if t_raw.eq_ignore_ascii_case("all day") || t_raw.eq_ignore_ascii_case("tentative") || t_raw.is_empty() {
-        return Some(NaiveDateTime::new(d, NaiveTime::from_hms_opt(0, 0, 0)?).and_utc().timestamp());
+    if t_raw.eq_ignore_ascii_case("all day")
+        || t_raw.eq_ignore_ascii_case("tentative")
+        || t_raw.is_empty()
+    {
+        return Some(
+            NaiveDateTime::new(d, NaiveTime::from_hms_opt(0, 0, 0)?)
+                .and_utc()
+                .timestamp(),
+        );
     }
-    let t = NaiveTime::parse_from_str(t_raw, "%l:%M%P").ok()
+    let t = NaiveTime::parse_from_str(t_raw, "%l:%M%P")
+        .ok()
         .or_else(|| NaiveTime::parse_from_str(t_raw, "%-l:%M%p").ok())?;
     Some(NaiveDateTime::new(d, t).and_utc().timestamp())
 }
@@ -218,7 +243,10 @@ mod tests {
         let k0 = event_sort_key(&events[0]);
         let k1 = event_sort_key(&events[1]);
         assert!(k0.is_some() && k1.is_some());
-        assert!(k0.unwrap() < k1.unwrap(), "NFP on Dec 5 should sort before holiday on Dec 7");
+        assert!(
+            k0.unwrap() < k1.unwrap(),
+            "NFP on Dec 5 should sort before holiday on Dec 7"
+        );
     }
 
     #[test]

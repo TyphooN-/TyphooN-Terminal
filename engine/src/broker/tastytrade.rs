@@ -46,9 +46,9 @@ pub struct TastyAccount {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TastyPosition {
     pub symbol: String,
-    pub instrument_type: String,  // "Equity", "Equity Option", "Future", etc.
+    pub instrument_type: String, // "Equity", "Equity Option", "Future", etc.
     pub quantity: f64,
-    pub quantity_direction: String,  // "Long" or "Short"
+    pub quantity_direction: String, // "Long" or "Short"
     pub close_price: f64,
     pub average_open_price: f64,
     pub mark_price: Option<f64>,
@@ -70,7 +70,7 @@ pub struct TastyOrder {
 pub struct TastyOrderLeg {
     pub instrument_type: String,
     pub symbol: String,
-    pub action: String,  // "Buy to Open", "Sell to Close", etc.
+    pub action: String, // "Buy to Open", "Sell to Close", etc.
     pub quantity: i64,
 }
 
@@ -126,10 +126,13 @@ impl TastytradeBroker {
             "password": password,
         });
 
-        let resp = self.client.post(&url)
+        let resp = self
+            .client
+            .post(&url)
             .header("Content-Type", "application/json")
             .json(&body)
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("tastytrade login failed: {e}"))?;
 
         if !resp.status().is_success() {
@@ -143,12 +146,20 @@ impl TastytradeBroker {
                     .join(" ")
                     .trim()
                     .to_string()
-            } else { text };
-            let msg = if clean.is_empty() { status.to_string() } else { clean };
+            } else {
+                text
+            };
+            let msg = if clean.is_empty() {
+                status.to_string()
+            } else {
+                clean
+            };
             return Err(format!("tastytrade login returned {} — {}", status, msg));
         }
 
-        let data: serde_json::Value = resp.json().await
+        let data: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("tastytrade parse failed: {e}"))?;
 
         let session_token = data["data"]["session-token"]
@@ -167,7 +178,9 @@ impl TastytradeBroker {
 
         Ok(TastySession {
             session_token,
-            remember_token: data["data"]["remember-token"].as_str().map(|s| s.to_string()),
+            remember_token: data["data"]["remember-token"]
+                .as_str()
+                .map(|s| s.to_string()),
         })
     }
 
@@ -181,15 +194,21 @@ impl TastytradeBroker {
         let token = self.auth_header().ok_or("Not authenticated")?;
         let url = format!("{}/customers/me/accounts", self.base_url);
 
-        let resp = self.client.get(&url)
+        let resp = self
+            .client
+            .get(&url)
             .header("Authorization", &token)
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("Get accounts failed: {e}"))?;
 
-        let data: serde_json::Value = resp.json().await
+        let data: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Parse accounts failed: {e}"))?;
 
-        let items = data["data"]["items"].as_array()
+        let items = data["data"]["items"]
+            .as_array()
             .ok_or_else(|| "No accounts array".to_string())?;
 
         let mut accounts = Vec::new();
@@ -199,7 +218,10 @@ impl TastytradeBroker {
                 account_number: acct["account-number"].as_str().unwrap_or("").to_string(),
                 account_type: acct["account-type-name"].as_str().unwrap_or("").to_string(),
                 nickname: acct["nickname"].as_str().map(|s| s.to_string()),
-                margin_or_cash: acct["margin-or-cash"].as_str().unwrap_or("Cash").to_string(),
+                margin_or_cash: acct["margin-or-cash"]
+                    .as_str()
+                    .unwrap_or("Cash")
+                    .to_string(),
                 is_closed: acct["is-closed"].as_bool().unwrap_or(false),
             });
         }
@@ -212,15 +234,21 @@ impl TastytradeBroker {
         let acct = self.account_number.as_ref().ok_or("No account selected")?;
         let url = format!("{}/accounts/{}/positions", self.base_url, acct);
 
-        let resp = self.client.get(&url)
+        let resp = self
+            .client
+            .get(&url)
             .header("Authorization", &token)
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("Get positions failed: {e}"))?;
 
-        let data: serde_json::Value = resp.json().await
+        let data: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Parse positions failed: {e}"))?;
 
-        let items = data["data"]["items"].as_array()
+        let items = data["data"]["items"]
+            .as_array()
             .ok_or_else(|| "No positions array".to_string())?;
 
         let mut positions = Vec::new();
@@ -229,9 +257,18 @@ impl TastytradeBroker {
                 symbol: item["symbol"].as_str().unwrap_or("").to_string(),
                 instrument_type: item["instrument-type"].as_str().unwrap_or("").to_string(),
                 quantity: item["quantity"].as_f64().unwrap_or(0.0),
-                quantity_direction: item["quantity-direction"].as_str().unwrap_or("").to_string(),
-                close_price: item["close-price"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0),
-                average_open_price: item["average-open-price"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                quantity_direction: item["quantity-direction"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+                close_price: item["close-price"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0),
+                average_open_price: item["average-open-price"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0),
                 mark_price: item["mark-price"].as_str().and_then(|s| s.parse().ok()),
                 unrealized_pnl: None, // Computed client-side
             });
@@ -243,17 +280,26 @@ impl TastytradeBroker {
     pub async fn get_orders(&self, status: &str) -> Result<Vec<TastyOrder>, String> {
         let token = self.auth_header().ok_or("Not authenticated")?;
         let acct = self.account_number.as_ref().ok_or("No account selected")?;
-        let url = format!("{}/accounts/{}/orders?status={}", self.base_url, acct, status);
+        let url = format!(
+            "{}/accounts/{}/orders?status={}",
+            self.base_url, acct, status
+        );
 
-        let resp = self.client.get(&url)
+        let resp = self
+            .client
+            .get(&url)
             .header("Authorization", &token)
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("Get orders failed: {e}"))?;
 
-        let data: serde_json::Value = resp.json().await
+        let data: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Parse orders failed: {e}"))?;
 
-        let items = data["data"]["items"].as_array()
+        let items = data["data"]["items"]
+            .as_array()
             .ok_or_else(|| "No orders array".to_string())?;
 
         let mut orders = Vec::new();
@@ -270,7 +316,11 @@ impl TastytradeBroker {
                 }
             }
             orders.push(TastyOrder {
-                id: item["id"].as_str().or(item["id"].as_i64().map(|_| "")).unwrap_or("").to_string(),
+                id: item["id"]
+                    .as_str()
+                    .or(item["id"].as_i64().map(|_| ""))
+                    .unwrap_or("")
+                    .to_string(),
                 order_type: item["order-type"].as_str().unwrap_or("").to_string(),
                 time_in_force: item["time-in-force"].as_str().unwrap_or("").to_string(),
                 status: item["status"].as_str().unwrap_or("").to_string(),
@@ -308,7 +358,13 @@ impl TastytradeBroker {
 
     /// Place an equity order.
     pub async fn place_equity_order(
-        &self, symbol: &str, qty: i64, action: &str, order_type: &str, price: Option<f64>, tif: &str,
+        &self,
+        symbol: &str,
+        qty: i64,
+        action: &str,
+        order_type: &str,
+        price: Option<f64>,
+        tif: &str,
     ) -> Result<String, String> {
         let token = self.auth_header().ok_or("Not authenticated")?;
         let acct = self.account_number.as_ref().ok_or("No account selected")?;
@@ -328,11 +384,14 @@ impl TastytradeBroker {
             order["price"] = serde_json::json!(format_equity_order_price(p));
         }
 
-        let resp = self.client.post(&url)
+        let resp = self
+            .client
+            .post(&url)
             .header("Authorization", &token)
             .header("Content-Type", "application/json")
             .json(&order)
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("Place order failed: {e}"))?;
 
         if !resp.status().is_success() {
@@ -341,16 +400,19 @@ impl TastytradeBroker {
         }
 
         let data: serde_json::Value = resp.json().await.unwrap_or_default();
-        Ok(data["data"]["order"]["id"].as_str().unwrap_or("ok").to_string())
+        Ok(data["data"]["order"]["id"]
+            .as_str()
+            .unwrap_or("ok")
+            .to_string())
     }
 
     pub async fn cancel_live_exit_orders_for_symbol(&self, symbol: &str) -> Result<usize, String> {
         let orders = self.get_orders("Live").await?;
         let ids = Self::collect_live_exit_order_ids_for_symbol(&orders, symbol);
         for order_id in &ids {
-            self.cancel_order(order_id)
-                .await
-                .map_err(|e| format!("Cancel live exit order {order_id} for {symbol} failed: {e}"))?;
+            self.cancel_order(order_id).await.map_err(|e| {
+                format!("Cancel live exit order {order_id} for {symbol} failed: {e}")
+            })?;
         }
         Ok(ids.len())
     }
@@ -391,7 +453,8 @@ impl TastytradeBroker {
         if placements.is_empty() {
             placements.push("cleared exits".to_string());
         } else if sl_price.is_some() && tp_price.is_some() {
-            placements.push("broker-native link unavailable; exits placed independently".to_string());
+            placements
+                .push("broker-native link unavailable; exits placed independently".to_string());
         }
 
         Ok(format!(
@@ -409,9 +472,12 @@ impl TastytradeBroker {
         let token = self.auth_header().ok_or("Not authenticated")?;
         let acct = self.account_number.as_ref().ok_or("No account selected")?;
         let url = format!("{}/accounts/{}/orders/{}", self.base_url, acct, order_id);
-        let resp = self.client.delete(&url)
+        let resp = self
+            .client
+            .delete(&url)
             .header("Authorization", &token)
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("Cancel order failed: {e}"))?;
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
@@ -429,7 +495,8 @@ impl TastytradeBroker {
     /// lookup + order submission here so callers don't have to replicate it.
     pub async fn close_equity_position(&self, symbol: &str) -> Result<String, String> {
         let positions = self.get_positions().await?;
-        let pos = positions.iter()
+        let pos = positions
+            .iter()
             .find(|p| p.symbol.eq_ignore_ascii_case(symbol))
             .ok_or_else(|| format!("No open tastytrade position for {symbol}"))?;
 
@@ -442,9 +509,14 @@ impl TastytradeBroker {
         self.close_equity_position_qty(symbol, qty_abs).await
     }
 
-    pub async fn close_equity_position_qty(&self, symbol: &str, qty: i64) -> Result<String, String> {
+    pub async fn close_equity_position_qty(
+        &self,
+        symbol: &str,
+        qty: i64,
+    ) -> Result<String, String> {
         let positions = self.get_positions().await?;
-        let pos = positions.iter()
+        let pos = positions
+            .iter()
             .find(|p| p.symbol.eq_ignore_ascii_case(symbol))
             .ok_or_else(|| format!("No open tastytrade position for {symbol}"))?;
 
@@ -462,7 +534,8 @@ impl TastytradeBroker {
             "Buy to Close"
         };
         let _ = self.cancel_live_exit_orders_for_symbol(symbol).await;
-        self.place_equity_order(symbol, close_qty, action, "Market", None, "Day").await
+        self.place_equity_order(symbol, close_qty, action, "Market", None, "Day")
+            .await
     }
 
     pub async fn close_all_equity_positions(&self) -> Result<usize, String> {
@@ -479,16 +552,24 @@ impl TastytradeBroker {
     pub async fn search_symbols(&self, query: &str) -> Result<Vec<serde_json::Value>, String> {
         let token = self.auth_header().ok_or("Not authenticated")?;
         let url = format!("{}/symbols/search/{}", self.base_url, query);
-        let resp = self.client.get(&url)
+        let resp = self
+            .client
+            .get(&url)
             .header("Authorization", &token)
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("tastytrade search failed: {e}"))?;
         if !resp.status().is_success() {
             return Err(format!("tastytrade search: HTTP {}", resp.status()));
         }
-        let json: serde_json::Value = resp.json().await
+        let json: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("tastytrade search parse: {e}"))?;
-        Ok(json["data"]["items"].as_array().cloned().unwrap_or_default())
+        Ok(json["data"]["items"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default())
     }
 
     /// Get option chain for a symbol.
@@ -496,15 +577,21 @@ impl TastytradeBroker {
         let token = self.auth_header().ok_or("Not authenticated")?;
         let url = format!("{}/option-chains/{}/nested", self.base_url, symbol);
 
-        let resp = self.client.get(&url)
+        let resp = self
+            .client
+            .get(&url)
             .header("Authorization", &token)
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("Get option chain failed: {e}"))?;
 
-        let data: serde_json::Value = resp.json().await
+        let data: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Parse chain failed: {e}"))?;
 
-        let items = data["data"]["items"].as_array()
+        let items = data["data"]["items"]
+            .as_array()
             .ok_or_else(|| "No chain data".to_string())?;
 
         let mut expirations = Vec::new();
@@ -515,7 +602,10 @@ impl TastytradeBroker {
                     if let Some(strike_arr) = exp["strikes"].as_array() {
                         for s in strike_arr {
                             strikes.push(TastyStrike {
-                                strike_price: s["strike-price"].as_str().and_then(|p| p.parse().ok()).unwrap_or(0.0),
+                                strike_price: s["strike-price"]
+                                    .as_str()
+                                    .and_then(|p| p.parse().ok())
+                                    .unwrap_or(0.0),
                                 call_symbol: s["call"].as_str().unwrap_or("").to_string(),
                                 put_symbol: s["put"].as_str().unwrap_or("").to_string(),
                             });
@@ -539,9 +629,12 @@ impl TastytradeBroker {
         let sym_param = symbols.join(",");
         let url = format!("{}/market-data?symbols={}", self.base_url, sym_param);
 
-        let resp = self.client.get(&url)
+        let resp = self
+            .client
+            .get(&url)
             .header("Authorization", &token)
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("Get quotes failed: {e}"))?;
 
         if !resp.status().is_success() {
@@ -549,12 +642,13 @@ impl TastytradeBroker {
             return Err(format!("Quotes request failed: {text}"));
         }
 
-        let data: serde_json::Value = resp.json().await
+        let data: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Parse quotes failed: {e}"))?;
 
         let empty = vec![];
-        let items = data["data"]["items"].as_array()
-            .unwrap_or(&empty);
+        let items = data["data"]["items"].as_array().unwrap_or(&empty);
 
         let mut quotes = Vec::new();
         for item in items {
@@ -577,14 +671,20 @@ impl TastytradeBroker {
     }
 
     /// Get market metrics (IV rank, IV percentile, liquidity) for symbols.
-    pub async fn get_market_metrics(&self, symbols: &[String]) -> Result<Vec<TastyMarketMetric>, String> {
+    pub async fn get_market_metrics(
+        &self,
+        symbols: &[String],
+    ) -> Result<Vec<TastyMarketMetric>, String> {
         let token = self.auth_header().ok_or("Not authenticated")?;
         let sym_param = symbols.join(",");
         let url = format!("{}/market-metrics?symbols={}", self.base_url, sym_param);
 
-        let resp = self.client.get(&url)
+        let resp = self
+            .client
+            .get(&url)
             .header("Authorization", &token)
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("Get metrics failed: {e}"))?;
 
         if !resp.status().is_success() {
@@ -592,12 +692,13 @@ impl TastytradeBroker {
             return Err(format!("Metrics request failed: {text}"));
         }
 
-        let data: serde_json::Value = resp.json().await
+        let data: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Parse metrics failed: {e}"))?;
 
         let empty = vec![];
-        let items = data["data"]["items"].as_array()
-            .unwrap_or(&empty);
+        let items = data["data"]["items"].as_array().unwrap_or(&empty);
 
         let mut metrics = Vec::new();
         for item in items {
@@ -609,7 +710,9 @@ impl TastytradeBroker {
                 liquidity_rating: item["liquidity-rating"].as_i64().unwrap_or(0) as i32,
                 liquidity_rank: parse_num(&item["liquidity-rank"]),
                 beta: parse_num(&item["beta"]),
-                earnings_date: item["earnings"]["expected-report-date"].as_str().map(|s| s.to_string()),
+                earnings_date: item["earnings"]["expected-report-date"]
+                    .as_str()
+                    .map(|s| s.to_string()),
             });
         }
         Ok(metrics)
@@ -621,12 +724,17 @@ impl TastytradeBroker {
         let acct = self.account_number.as_ref().ok_or("No account selected")?;
         let url = format!("{}/accounts/{}/balances", self.base_url, acct);
 
-        let resp = self.client.get(&url)
+        let resp = self
+            .client
+            .get(&url)
             .header("Authorization", &token)
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("Get balances failed: {e}"))?;
 
-        let data: serde_json::Value = resp.json().await
+        let data: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Parse balances failed: {e}"))?;
 
         let b = &data["data"];
@@ -645,8 +753,12 @@ impl TastytradeBroker {
         super::dxlink::get_streaming_token(&self.base_url, &token).await
     }
 
-    pub fn is_authenticated(&self) -> bool { self.session_token.is_some() }
-    pub fn account_number(&self) -> Option<&str> { self.account_number.as_deref() }
+    pub fn is_authenticated(&self) -> bool {
+        self.session_token.is_some()
+    }
+    pub fn account_number(&self) -> Option<&str> {
+        self.account_number.as_deref()
+    }
 }
 
 /// Quote snapshot from tastytrade REST API.
@@ -941,12 +1053,10 @@ mod tests {
     fn tasty_option_chain_construction() {
         let chain = TastyOptionChain {
             underlying_symbol: "AAPL".to_string(),
-            expirations: vec![
-                TastyExpiration {
-                    expiration_date: "2026-04-18".to_string(),
-                    strikes: vec![],
-                },
-            ],
+            expirations: vec![TastyExpiration {
+                expiration_date: "2026-04-18".to_string(),
+                strikes: vec![],
+            }],
         };
         assert_eq!(chain.underlying_symbol, "AAPL");
         assert_eq!(chain.expirations.len(), 1);

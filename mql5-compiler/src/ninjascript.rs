@@ -23,7 +23,7 @@
 //! - DataSeries arithmetic outside `[0]` indexing
 
 use crate::ir::*;
-use crate::{IndicatorMeta, InputParam, CompileResult, Diagnostic, DiagLevel, DrawType, PlotDef};
+use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, InputParam, PlotDef};
 
 pub fn parse_ninjascript(source: &str) -> CompileResult {
     let (ir_module, meta) = build_ir(source);
@@ -32,19 +32,32 @@ pub fn parse_ninjascript(source: &str) -> CompileResult {
         Ok(wasm) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Info,
-                message: format!("NinjaScript compiled: {} inputs, {} plots",
-                    meta.inputs.len(), meta.plots.len()),
-                line: 0, col: 0,
+                message: format!(
+                    "NinjaScript compiled: {} inputs, {} plots",
+                    meta.inputs.len(),
+                    meta.plots.len()
+                ),
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: Some(wasm), diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: Some(wasm),
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
         Err(e) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Error,
                 message: format!("NinjaScript codegen failed: {e}"),
-                line: 0, col: 0,
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: None, diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: None,
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
     }
 }
@@ -70,7 +83,8 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         let t = line.trim();
         if let Some(pos) = t.find("class ") {
             let rest = &t[pos + 6..];
-            let name: String = rest.chars()
+            let name: String = rest
+                .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
                 .collect();
             if !name.is_empty() {
@@ -92,7 +106,9 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         if line.starts_with("[NinjaScriptProperty") {
             // look at next non-empty line for the property declaration
             let mut j = i + 1;
-            while j < lines.len() && lines[j].trim().is_empty() { j += 1; }
+            while j < lines.len() && lines[j].trim().is_empty() {
+                j += 1;
+            }
             if j < lines.len() {
                 if let Some((name, ty, default)) = parse_csharp_property(lines[j].trim()) {
                     let (ir_ty, val) = match ty.as_str() {
@@ -122,13 +138,16 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             let args = extract_parens_balanced(line);
             let parts = split_top_level_commas(&args);
             // Label is the last quoted string arg, or last arg
-            let label = parts.iter()
+            let label = parts
+                .iter()
                 .rev()
                 .filter_map(|p| {
                     let t = p.trim();
                     if t.starts_with('"') && t.ends_with('"') && t.len() >= 2 {
                         Some(t[1..t.len() - 1].to_string())
-                    } else { None }
+                    } else {
+                        None
+                    }
                 })
                 .next()
                 .unwrap_or_else(|| format!("Plot{}", plot_count));
@@ -208,7 +227,11 @@ fn parse_csharp_property(line: &str) -> Option<(String, String, String)> {
     let name = parts.next()?.to_string();
     // After the name there should be `{ get; set; } = default`
     let eq_pos = line.find('=')?;
-    let default = line[eq_pos + 1..].trim().trim_end_matches(';').trim().to_string();
+    let default = line[eq_pos + 1..]
+        .trim()
+        .trim_end_matches(';')
+        .trim()
+        .to_string();
     Some((name, ty, default))
 }
 
@@ -219,7 +242,9 @@ fn try_parse_plot_assignment(line: &str) -> Option<(IrExpr, usize)> {
     let eq_pos = line.find('=')?;
     // Must not be ==, !=, <=, >=
     let prev = line[..eq_pos].chars().last();
-    if matches!(prev, Some('!' | '<' | '>' | '=')) { return None; }
+    if matches!(prev, Some('!' | '<' | '>' | '=')) {
+        return None;
+    }
     let lhs = line[..eq_pos].trim();
     let rhs = line[eq_pos + 1..].trim();
 
@@ -247,7 +272,9 @@ fn try_parse_plot_assignment(line: &str) -> Option<(IrExpr, usize)> {
 
 fn try_parse_local_assignment(line: &str) -> Option<(String, String)> {
     let line = line.trim().trim_end_matches(';');
-    if line.is_empty() { return None; }
+    if line.is_empty() {
+        return None;
+    }
     // Skip lines that are control flow, method headers, brackets
     if line.starts_with("if")
         || line.starts_with("for")
@@ -259,11 +286,15 @@ fn try_parse_local_assignment(line: &str) -> Option<(String, String)> {
         || line.starts_with("public")
         || line.starts_with("private")
         || line.starts_with("protected")
-    { return None; }
+    {
+        return None;
+    }
 
     let eq_pos = line.find('=')?;
     let prev = line[..eq_pos].chars().last();
-    if matches!(prev, Some('!' | '<' | '>' | '=')) { return None; }
+    if matches!(prev, Some('!' | '<' | '>' | '=')) {
+        return None;
+    }
     let lhs = line[..eq_pos].trim();
     let rhs = line[eq_pos + 1..].trim().to_string();
 
@@ -284,7 +315,9 @@ fn try_parse_local_assignment(line: &str) -> Option<(String, String)> {
 /// numeric literals, `Math.X(...)`, and basic arithmetic.
 fn parse_ns_expr(expr: &str) -> Option<IrExpr> {
     let expr = expr.trim().trim_end_matches(';').trim();
-    if expr.is_empty() { return None; }
+    if expr.is_empty() {
+        return None;
+    }
     if expr.starts_with('(') && expr.ends_with(')') && matched_parens(expr) {
         return parse_ns_expr(&expr[1..expr.len() - 1]);
     }
@@ -301,16 +334,22 @@ fn parse_ns_expr(expr: &str) -> Option<IrExpr> {
             let inner = &expr[last_open + 1..expr.len() - 1];
             if inner.trim() == "0" {
                 &expr[..last_open]
-            } else { expr }
-        } else { expr }
-    } else { expr };
+            } else {
+                expr
+            }
+        } else {
+            expr
+        }
+    } else {
+        expr
+    };
 
     // Built-in series
     match expr_core.trim() {
         "Close" => return Some(IrExpr::IClose(Box::new(IrExpr::I32Const(0)))),
-        "Open"  => return Some(IrExpr::IOpen(Box::new(IrExpr::I32Const(0)))),
-        "High"  => return Some(IrExpr::IHigh(Box::new(IrExpr::I32Const(0)))),
-        "Low"   => return Some(IrExpr::ILow(Box::new(IrExpr::I32Const(0)))),
+        "Open" => return Some(IrExpr::IOpen(Box::new(IrExpr::I32Const(0)))),
+        "High" => return Some(IrExpr::IHigh(Box::new(IrExpr::I32Const(0)))),
+        "Low" => return Some(IrExpr::ILow(Box::new(IrExpr::I32Const(0)))),
         "Volume" => return Some(IrExpr::IVolume(Box::new(IrExpr::I32Const(0)))),
         "CurrentBar" => return Some(IrExpr::IBars),
         _ => {}
@@ -324,9 +363,8 @@ fn parse_ns_expr(expr: &str) -> Option<IrExpr> {
             let func = func_raw.strip_prefix("Math.").unwrap_or(func_raw);
             let args_str = &expr_core[open + 1..expr_core.len() - 1];
             let parts = split_top_level_commas(args_str);
-            let ir_args: Option<Vec<IrExpr>> = parts.iter()
-                .map(|a| parse_ns_expr(a.trim()))
-                .collect();
+            let ir_args: Option<Vec<IrExpr>> =
+                parts.iter().map(|a| parse_ns_expr(a.trim())).collect();
             if let Some(ir_args) = ir_args {
                 let mapped: Option<&str> = match func {
                     "SMA" | "Sma" => Some("ta_sma"),
@@ -351,7 +389,9 @@ fn parse_ns_expr(expr: &str) -> Option<IrExpr> {
     }
 
     // Arithmetic and comparison
-    for op_str in &[" + ", " - ", " * ", " / ", " >= ", " <= ", " > ", " < ", " == ", " != "] {
+    for op_str in &[
+        " + ", " - ", " * ", " / ", " >= ", " <= ", " > ", " < ", " == ", " != ",
+    ] {
         if let Some(pos) = expr_core.find(op_str) {
             let left = parse_ns_expr(&expr_core[..pos])?;
             let right = parse_ns_expr(&expr_core[pos + op_str.len()..])?;
@@ -366,7 +406,7 @@ fn parse_ns_expr(expr: &str) -> Option<IrExpr> {
                 " <= " => IrBinOp::LeF64,
                 " == " => IrBinOp::EqF64,
                 " != " => IrBinOp::NeF64,
-                _      => IrBinOp::AddF64,
+                _ => IrBinOp::AddF64,
             };
             return Some(IrExpr::BinOp(ir_op, Box::new(left), Box::new(right)));
         }
@@ -386,7 +426,9 @@ fn matched_parens(s: &str) -> bool {
             '(' => depth += 1,
             ')' => {
                 depth -= 1;
-                if depth == 0 && i < s.len() - 1 { return false; }
+                if depth == 0 && i < s.len() - 1 {
+                    return false;
+                }
             }
             _ => {}
         }
@@ -395,13 +437,22 @@ fn matched_parens(s: &str) -> bool {
 }
 
 fn extract_parens_balanced(s: &str) -> String {
-    let start = match s.find('(') { Some(i) => i + 1, None => return String::new() };
+    let start = match s.find('(') {
+        Some(i) => i + 1,
+        None => return String::new(),
+    };
     let mut depth = 1i32;
     let mut end = start;
     for (i, c) in s[start..].char_indices() {
         match c {
             '(' => depth += 1,
-            ')' => { depth -= 1; if depth == 0 { end = start + i; break; } }
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = start + i;
+                    break;
+                }
+            }
             _ => {}
         }
     }
@@ -423,7 +474,9 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
             _ => {}
         }
     }
-    if start < s.len() { parts.push(&s[start..]); }
+    if start < s.len() {
+        parts.push(&s[start..]);
+    }
     parts
 }
 
@@ -435,7 +488,10 @@ fn strip_comments(src: &str) -> String {
             // skip to EOL
             while let Some(&d) = chars.peek() {
                 chars.next();
-                if d == '\n' { out.push('\n'); break; }
+                if d == '\n' {
+                    out.push('\n');
+                    break;
+                }
             }
         } else if c == '/' && chars.peek() == Some(&'*') {
             chars.next();
@@ -564,7 +620,8 @@ public class X : Indicator {}
 
     #[test]
     fn test_ns_parse_csharp_property_double() {
-        let (_, t, d) = parse_csharp_property("public double Multiplier { get; set; } = 2.5;").unwrap();
+        let (_, t, d) =
+            parse_csharp_property("public double Multiplier { get; set; } = 2.5;").unwrap();
         assert_eq!(t, "double");
         assert_eq!(d, "2.5");
     }

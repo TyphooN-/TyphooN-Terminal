@@ -89,7 +89,10 @@ pub async fn fetch_binance_klines(
 ) -> Result<Vec<serde_json::Value>, String> {
     // Handle 1Month by fetching daily and aggregating
     if timeframe == "1Month" {
-        let daily = Box::pin(fetch_binance_klines(client, symbol, "1Day", start_ms, end_ms)).await?;
+        let daily = Box::pin(fetch_binance_klines(
+            client, symbol, "1Day", start_ms, end_ms,
+        ))
+        .await?;
         return Ok(aggregate_to_monthly(&daily));
     }
 
@@ -107,7 +110,8 @@ pub async fn fetch_binance_klines(
             kraken_pair, interval, since
         );
 
-        let resp = client.get(&url)
+        let resp = client
+            .get(&url)
             .timeout(std::time::Duration::from_secs(30))
             .send()
             .await
@@ -119,13 +123,16 @@ pub async fn fetch_binance_klines(
             return Err(format!("Kraken API error {}: {}", status, body));
         }
 
-        let body: serde_json::Value = resp.json().await
+        let body: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("Kraken JSON parse failed: {e}"))?;
 
         // Check for errors
         if let Some(errors) = body["error"].as_array() {
             if !errors.is_empty() {
-                let err_msg = errors.iter()
+                let err_msg = errors
+                    .iter()
                     .filter_map(|e| e.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -142,23 +149,46 @@ pub async fn fetch_binance_klines(
         // Find the data array (key varies by pair)
         let mut bars_in_page = Vec::new();
         for (key, val) in result.as_object().unwrap_or(&serde_json::Map::new()) {
-            if key == "last" { continue; }
+            if key == "last" {
+                continue;
+            }
             if let Some(arr) = val.as_array() {
                 for kline in arr {
                     if let Some(k) = kline.as_array() {
                         // Kraken OHLCVT: [timestamp, open, high, low, close, vwap, volume, count]
-                        if k.len() < 7 { continue; }
+                        if k.len() < 7 {
+                            continue;
+                        }
                         let ts = k[0].as_i64().unwrap_or(0);
-                        if ts == 0 { continue; }
+                        if ts == 0 {
+                            continue;
+                        }
                         let ts_ms = ts * 1000;
-                        if ts_ms < start_ms || ts_ms > end_ms { continue; }
+                        if ts_ms < start_ms || ts_ms > end_ms {
+                            continue;
+                        }
 
                         let dt = chrono::DateTime::from_timestamp(ts, 0).unwrap_or_default();
-                        let open = k[1].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                        let high = k[2].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                        let low = k[3].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                        let close = k[4].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                        let volume = k[6].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                        let open = k[1]
+                            .as_str()
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(0.0);
+                        let high = k[2]
+                            .as_str()
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(0.0);
+                        let low = k[3]
+                            .as_str()
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(0.0);
+                        let close = k[4]
+                            .as_str()
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(0.0);
+                        let volume = k[6]
+                            .as_str()
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(0.0);
 
                         if open > 0.0 {
                             bars_in_page.push(serde_json::json!({
@@ -198,34 +228,48 @@ pub async fn fetch_binance_klines(
 
 /// Aggregate daily bars into monthly OHLCV.
 fn aggregate_to_monthly(daily: &[serde_json::Value]) -> Vec<serde_json::Value> {
-    let mut monthly: std::collections::BTreeMap<String, (f64, f64, f64, f64, f64, String)> = std::collections::BTreeMap::new();
+    let mut monthly: std::collections::BTreeMap<String, (f64, f64, f64, f64, f64, String)> =
+        std::collections::BTreeMap::new();
     // key = "YYYY-MM", value = (open, high, low, close, volume, first_timestamp)
 
     for bar in daily {
         let ts = bar["timestamp"].as_str().unwrap_or("");
-        if ts.len() < 7 { continue; }
+        if ts.len() < 7 {
+            continue;
+        }
         let o = bar["open"].as_f64().unwrap_or(0.0);
         let h = bar["high"].as_f64().unwrap_or(0.0);
         let l = bar["low"].as_f64().unwrap_or(0.0);
         let c = bar["close"].as_f64().unwrap_or(0.0);
         let v = bar["volume"].as_f64().unwrap_or(0.0);
         // Skip bars with invalid prices
-        if o <= 0.0 || h <= 0.0 || l <= 0.0 || c <= 0.0 || h < l { continue; }
+        if o <= 0.0 || h <= 0.0 || l <= 0.0 || c <= 0.0 || h < l {
+            continue;
+        }
         let month_key = ts[..7].to_string(); // "2024-06"
 
-        let entry = monthly.entry(month_key).or_insert((o, h, l, c, 0.0, ts.to_string()));
-        if h > entry.1 { entry.1 = h; }
-        if l < entry.2 { entry.2 = l; }
+        let entry = monthly
+            .entry(month_key)
+            .or_insert((o, h, l, c, 0.0, ts.to_string()));
+        if h > entry.1 {
+            entry.1 = h;
+        }
+        if l < entry.2 {
+            entry.2 = l;
+        }
         entry.3 = c; // close = last day's close
         entry.4 += v;
     }
 
-    monthly.into_iter().map(|(_, (o, h, l, c, v, ts))| {
-        serde_json::json!({
-            "timestamp": ts,
-            "open": o, "high": h, "low": l, "close": c, "volume": v,
+    monthly
+        .into_iter()
+        .map(|(_, (o, h, l, c, v, ts))| {
+            serde_json::json!({
+                "timestamp": ts,
+                "open": o, "high": h, "low": l, "close": c, "volume": v,
+            })
         })
-    }).collect()
+        .collect()
 }
 
 /// Check if a symbol is supported by Kraken.
@@ -235,7 +279,8 @@ pub fn is_binance_supported(symbol: &str) -> bool {
 
 /// Get all supported crypto symbols from a list.
 pub fn get_binance_crypto_symbols(symbols: &[String]) -> Vec<String> {
-    symbols.iter()
+    symbols
+        .iter()
         .filter(|s| is_binance_supported(s))
         .cloned()
         .collect()
@@ -358,9 +403,30 @@ mod tests {
     #[test]
     fn monthly_aggregation_basic() {
         let daily = vec![
-            make_bar("2024-03-01T00:00:00Z", 60000.0, 62000.0, 58000.0, 61000.0, 100.0),
-            make_bar("2024-03-15T00:00:00Z", 61000.0, 65000.0, 59000.0, 64000.0, 200.0),
-            make_bar("2024-04-01T00:00:00Z", 64000.0, 70000.0, 63000.0, 68000.0, 300.0),
+            make_bar(
+                "2024-03-01T00:00:00Z",
+                60000.0,
+                62000.0,
+                58000.0,
+                61000.0,
+                100.0,
+            ),
+            make_bar(
+                "2024-03-15T00:00:00Z",
+                61000.0,
+                65000.0,
+                59000.0,
+                64000.0,
+                200.0,
+            ),
+            make_bar(
+                "2024-04-01T00:00:00Z",
+                64000.0,
+                70000.0,
+                63000.0,
+                68000.0,
+                300.0,
+            ),
         ];
         let result = aggregate_to_monthly(&daily);
         assert_eq!(result.len(), 2);
@@ -395,9 +461,14 @@ mod tests {
 
     #[test]
     fn monthly_aggregation_single_day() {
-        let daily = vec![
-            make_bar("2024-06-15T00:00:00Z", 50.0, 55.0, 45.0, 52.0, 100.0),
-        ];
+        let daily = vec![make_bar(
+            "2024-06-15T00:00:00Z",
+            50.0,
+            55.0,
+            45.0,
+            52.0,
+            100.0,
+        )];
         let result = aggregate_to_monthly(&daily);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["open"].as_f64().unwrap(), 50.0);
@@ -429,17 +500,36 @@ mod tests {
         let mut parsed_bars = Vec::new();
 
         for (key, val) in result.as_object().unwrap() {
-            if key == "last" { continue; }
+            if key == "last" {
+                continue;
+            }
             if let Some(arr) = val.as_array() {
                 for kline in arr {
                     if let Some(k) = kline.as_array() {
-                        if k.len() < 7 { continue; }
+                        if k.len() < 7 {
+                            continue;
+                        }
                         let ts = k[0].as_i64().unwrap_or(0);
-                        let open = k[1].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                        let high = k[2].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                        let low = k[3].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                        let close = k[4].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                        let volume = k[6].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                        let open = k[1]
+                            .as_str()
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(0.0);
+                        let high = k[2]
+                            .as_str()
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(0.0);
+                        let low = k[3]
+                            .as_str()
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(0.0);
+                        let close = k[4]
+                            .as_str()
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(0.0);
+                        let volume = k[6]
+                            .as_str()
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(0.0);
 
                         if open > 0.0 {
                             parsed_bars.push(json!({
@@ -471,9 +561,7 @@ mod tests {
         });
         let errors = mock_response["error"].as_array().unwrap();
         assert!(!errors.is_empty());
-        let err_msg: Vec<&str> = errors.iter()
-            .filter_map(|e| e.as_str())
-            .collect();
+        let err_msg: Vec<&str> = errors.iter().filter_map(|e| e.as_str()).collect();
         assert_eq!(err_msg[0], "EGeneral:Too many requests");
     }
 
@@ -494,11 +582,15 @@ mod tests {
         let result = &mock_response["result"];
         let mut count = 0;
         for (key, val) in result.as_object().unwrap() {
-            if key == "last" { continue; }
+            if key == "last" {
+                continue;
+            }
             if let Some(arr) = val.as_array() {
                 for kline in arr {
                     if let Some(k) = kline.as_array() {
-                        if k.len() < 7 { continue; }
+                        if k.len() < 7 {
+                            continue;
+                        }
                         count += 1;
                     }
                 }
@@ -523,13 +615,22 @@ mod tests {
         let result = &mock_response["result"];
         let mut parsed = Vec::new();
         for (key, val) in result.as_object().unwrap() {
-            if key == "last" { continue; }
+            if key == "last" {
+                continue;
+            }
             if let Some(arr) = val.as_array() {
                 for kline in arr {
                     if let Some(k) = kline.as_array() {
-                        if k.len() < 7 { continue; }
-                        let open = k[1].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                        if open > 0.0 { parsed.push(open); }
+                        if k.len() < 7 {
+                            continue;
+                        }
+                        let open = k[1]
+                            .as_str()
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(0.0);
+                        if open > 0.0 {
+                            parsed.push(open);
+                        }
                     }
                 }
             }
@@ -549,7 +650,9 @@ mod tests {
         let result = &mock_response["result"];
         let mut count = 0;
         for (key, val) in result.as_object().unwrap() {
-            if key == "last" { continue; }
+            if key == "last" {
+                continue;
+            }
             if let Some(arr) = val.as_array() {
                 count += arr.len();
             }

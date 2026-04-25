@@ -19,26 +19,17 @@ const RATE_LIMIT_MS: u64 = 250; // SEC EDGAR fair use: max 10 req/sec, use 4/sec
 /// All SEC filing types we track — comprehensive coverage for trading signals.
 const RELEVANT_FORMS: &[&str] = &[
     // Core financials
-    "10-K", "10-Q", "20-F", "8-K",
-    // Amended (restated = red flag)
-    "10-K/A", "10-Q/A", "8-K/A",
-    // Late filing (distress signal)
-    "NT 10-K", "NT 10-Q",
-    // Insider trades
-    "4", "3", "5",
-    // Proxy/governance
+    "10-K", "10-Q", "20-F", "8-K", // Amended (restated = red flag)
+    "10-K/A", "10-Q/A", "8-K/A", // Late filing (distress signal)
+    "NT 10-K", "NT 10-Q", // Insider trades
+    "4", "3", "5", // Proxy/governance
     "DEF 14A", "DEFA14A", "PREM14A",
     // Shareholder disclosures (activist/institutional)
-    "SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A", "13F-HR",
-    // Offerings/dilution
-    "S-1", "S-3", "S-4", "424B5", "424B2", "424B4",
-    // M&A
-    "SC TO-T", "SC TO-I", "SC 14D9",
-    // Deregistration (delisting risk)
-    "15-12B", "15-12G",
-    // SEC scrutiny
-    "CORRESP",
-    // Employee plans
+    "SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A", "13F-HR", // Offerings/dilution
+    "S-1", "S-3", "S-4", "424B5", "424B2", "424B4", // M&A
+    "SC TO-T", "SC TO-I", "SC 14D9", // Deregistration (delisting risk)
+    "15-12B", "15-12G", // SEC scrutiny
+    "CORRESP", // Employee plans
     "11-K",
 ];
 
@@ -117,8 +108,7 @@ struct PendingFiling {
 // ── Helper: open a WAL connection ───────────────────────────────────
 
 fn open_conn(db_path: &Path) -> Result<Connection, String> {
-    let conn = Connection::open(db_path)
-        .map_err(|e| format!("SQLite open failed: {e}"))?;
+    let conn = Connection::open(db_path).map_err(|e| format!("SQLite open failed: {e}"))?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
         .map_err(|e| format!("Pragma failed: {e}"))?;
     Ok(conn)
@@ -185,11 +175,18 @@ pub fn create_sec_tables(conn: &Connection) -> Result<(), String> {
     ").map_err(|e| format!("Failed to create SEC tables: {e}"))?;
 
     // Schema migration: add updated_at column for incremental LAN sync
-    let _ = conn.execute("ALTER TABLE sec_scrape_index ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute(
+        "ALTER TABLE sec_scrape_index ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
 
     // Schema migration: filing content storage (indefinite, growing database)
-    let _ = conn.execute("ALTER TABLE sec_filings ADD COLUMN content_fetched BOOLEAN DEFAULT FALSE", []);
-    conn.execute_batch("
+    let _ = conn.execute(
+        "ALTER TABLE sec_filings ADD COLUMN content_fetched BOOLEAN DEFAULT FALSE",
+        [],
+    );
+    conn.execute_batch(
+        "
         CREATE TABLE IF NOT EXISTS sec_filing_content (
             accession_number TEXT PRIMARY KEY,
             content_plain TEXT NOT NULL,
@@ -201,15 +198,19 @@ pub fn create_sec_tables(conn: &Connection) -> Result<(), String> {
             keyword TEXT NOT NULL UNIQUE,
             created_at INTEGER NOT NULL
         );
-    ").map_err(|e| format!("Failed to create SEC content tables: {e}"))?;
+    ",
+    )
+    .map_err(|e| format!("Failed to create SEC content tables: {e}"))?;
 
     // FTS5 full-text search index (porter stemming + unicode)
-    let _ = conn.execute_batch("
+    let _ = conn.execute_batch(
+        "
         CREATE VIRTUAL TABLE IF NOT EXISTS sec_fts USING fts5(
             accession_number, ticker, form_type, company_name, content,
             tokenize='porter unicode61'
         );
-    ");
+    ",
+    );
 
     Ok(())
 }
@@ -219,7 +220,9 @@ pub fn create_sec_tables(conn: &Connection) -> Result<(), String> {
 pub fn compute_importance(form_type: &str, is_insider_sell: bool, _is_late: bool) -> i32 {
     let (base, _cat) = importance_and_category(form_type);
     let mut score = base;
-    if is_insider_sell { score += 15; }
+    if is_insider_sell {
+        score += 15;
+    }
     score.min(100)
 }
 
@@ -266,14 +269,17 @@ async fn lookup_cik_online(client: &reqwest::Client, ticker: &str) -> Result<Str
         .await
         .map_err(|e| format!("SEC ticker map request failed: {e}"))?;
 
-    let tickers_json: serde_json::Value = resp.json().await
+    let tickers_json: serde_json::Value = resp
+        .json()
+        .await
         .map_err(|e| format!("SEC ticker map parse failed: {e}"))?;
 
     let upper_ticker = ticker.to_uppercase();
     if let Some(obj) = tickers_json.as_object() {
         for (_, v) in obj {
             if v["ticker"].as_str() == Some(upper_ticker.as_str()) {
-                if let Some(cik) = v["cik_str"].as_u64()
+                if let Some(cik) = v["cik_str"]
+                    .as_u64()
                     .or_else(|| v["cik_str"].as_str().and_then(|s| s.parse().ok()))
                 {
                     return Ok(format!("{:010}", cik));
@@ -295,13 +301,18 @@ async fn get_cik(db_path: &Path, client: &reqwest::Client, ticker: &str) -> Resu
         let t2 = t.clone();
         tokio::task::spawn_blocking(move || {
             let conn = open_conn(&db2)?;
-            let cik: Option<String> = conn.query_row(
-                "SELECT cik FROM sec_scrape_index WHERE ticker = ?1",
-                params![t2],
-                |row| row.get(0),
-            ).ok().flatten();
+            let cik: Option<String> = conn
+                .query_row(
+                    "SELECT cik FROM sec_scrape_index WHERE ticker = ?1",
+                    params![t2],
+                    |row| row.get(0),
+                )
+                .ok()
+                .flatten();
             Ok::<_, String>(cik)
-        }).await.map_err(|e| format!("spawn_blocking: {e}"))??
+        })
+        .await
+        .map_err(|e| format!("spawn_blocking: {e}"))??
     };
 
     if let Some(ref cik) = cached {
@@ -353,10 +364,15 @@ pub async fn scrape_filings_for_ticker(
         .map_err(|e| format!("SEC submissions fetch failed for {ticker}: {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!("SEC submissions HTTP {} for {ticker}", resp.status()));
+        return Err(format!(
+            "SEC submissions HTTP {} for {ticker}",
+            resp.status()
+        ));
     }
 
-    let body: serde_json::Value = resp.json().await
+    let body: serde_json::Value = resp
+        .json()
+        .await
         .map_err(|e| format!("SEC submissions parse failed for {ticker}: {e}"))?;
 
     let company_name = body["name"].as_str().unwrap_or("").to_string();
@@ -377,7 +393,12 @@ pub async fn scrape_filings_for_ticker(
     let cik_trimmed = cik.trim_start_matches('0');
     let mut pending: Vec<PendingFiling> = Vec::new();
 
-    for i in 0..forms.len().min(dates.len()).min(accessions.len()).min(primary_docs.len()) {
+    for i in 0..forms
+        .len()
+        .min(dates.len())
+        .min(accessions.len())
+        .min(primary_docs.len())
+    {
         let form = forms[i].as_str().unwrap_or("");
         let date = dates[i].as_str().unwrap_or("");
         let accession = accessions[i].as_str().unwrap_or("");
@@ -519,7 +540,9 @@ pub async fn scrape_filings_for_ticker(
 
     // Step 4: For each new Form 4, fetch and parse insider trades
     for f in &new_filings {
-        if !f.insider_flag { continue; }
+        if !f.insider_flag {
+            continue;
+        }
 
         tokio::time::sleep(std::time::Duration::from_millis(RATE_LIMIT_MS)).await;
 
@@ -529,7 +552,11 @@ pub async fn scrape_filings_for_ticker(
                 total_alerts += alerts;
             }
             Err(e) => {
-                tracing::warn!("Form 4 parse failed for {} {}: {e}", f.ticker, f.accession_number);
+                tracing::warn!(
+                    "Form 4 parse failed for {} {}: {e}",
+                    f.ticker,
+                    f.accession_number
+                );
             }
         }
     }
@@ -591,7 +618,9 @@ async fn fetch_and_parse_form4(
             return Err(format!("Form 4 HTTP {}", resp.status()));
         }
 
-        body = resp.text().await
+        body = resp
+            .text()
+            .await
             .map_err(|e| format!("Form 4 read failed: {e}"))?;
         break;
     }
@@ -600,12 +629,11 @@ async fn fetch_and_parse_form4(
     }
 
     // Parse in-memory (no DB needed)
-    let insider_name = extract_xml_value(&body, "rptOwnerName")
-        .unwrap_or_else(|| "Unknown".to_string());
-    let insider_title = extract_xml_value(&body, "officerTitle")
-        .unwrap_or_default();
-    let is_officer = body.contains("<isOfficer>true</isOfficer>")
-        || body.contains("<isOfficer>1</isOfficer>");
+    let insider_name =
+        extract_xml_value(&body, "rptOwnerName").unwrap_or_else(|| "Unknown".to_string());
+    let insider_title = extract_xml_value(&body, "officerTitle").unwrap_or_default();
+    let is_officer =
+        body.contains("<isOfficer>true</isOfficer>") || body.contains("<isOfficer>1</isOfficer>");
     let is_director = body.contains("<isDirector>true</isDirector>")
         || body.contains("<isDirector>1</isDirector>");
 
@@ -695,16 +723,14 @@ fn extract_transactions(body: &str) -> Vec<ParsedTransaction> {
             if let Some(end) = body[abs_start..].find(&close_tag) {
                 let block = &body[abs_start..abs_start + end + close_tag.len()];
 
-                let code = extract_xml_value(block, "transactionCode")
-                    .unwrap_or_default();
+                let code = extract_xml_value(block, "transactionCode").unwrap_or_default();
                 let shares = extract_xml_value(block, "transactionShares")
                     .and_then(|s| s.trim().parse::<f64>().ok())
                     .unwrap_or(0.0);
                 let price = extract_xml_value(block, "transactionPricePerShare")
                     .and_then(|s| s.trim().parse::<f64>().ok())
                     .unwrap_or(0.0);
-                let date = extract_xml_value(block, "transactionDate")
-                    .unwrap_or_default();
+                let date = extract_xml_value(block, "transactionDate").unwrap_or_default();
 
                 if !code.is_empty() {
                     transactions.push(ParsedTransaction {
@@ -755,12 +781,13 @@ pub async fn scrape_all_portfolio_symbols(db_path: PathBuf) -> Result<ScrapeStat
 
     // Step 1: Collect portfolio symbols (blocking)
     let db = db_path.clone();
-    let symbols: Vec<String> = tokio::task::spawn_blocking(move || {
-        let conn = open_conn(&db)?;
-        let mut sym_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let symbols: Vec<String> =
+        tokio::task::spawn_blocking(move || {
+            let conn = open_conn(&db)?;
+            let mut sym_set: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        // From darwin_deals
-        if let Ok(mut stmt) = conn.prepare(
+            // From darwin_deals
+            if let Ok(mut stmt) = conn.prepare(
             "SELECT DISTINCT symbol FROM darwin_deals WHERE symbol != '' AND symbol IS NOT NULL"
         ) {
             if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
@@ -771,34 +798,48 @@ pub async fn scrape_all_portfolio_symbols(db_path: PathBuf) -> Result<ScrapeStat
             }
         }
 
-        // From bar_cache mt5 keys. BarCacheWriter has always produced 3-part
-        // keys `mt5:{SYM}:{TF}`; metadata lives under `mt5:__NAME__[:…]` and
-        // gets filtered out by the `__` guard below. Fixed-shape parse, no
-        // legacy 4-part arm.
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT DISTINCT key FROM bar_cache WHERE key LIKE 'mt5:%'"
-        ) {
-            if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
-                for row in rows.flatten() {
-                    let rest = match row.strip_prefix("mt5:") {
-                        Some(r) => r,
-                        None => continue,
-                    };
-                    if rest.starts_with("__") { continue; }
-                    let mut it = rest.split(':');
-                    let sym = match it.next() { Some(s) if !s.is_empty() => s, _ => continue };
-                    let tf = match it.next() { Some(s) if !s.is_empty() => s, _ => continue };
-                    if it.next().is_some() { continue; }
-                    let _ = tf;
-                    let sym = sym.to_uppercase();
-                    if is_equity_symbol(&sym) { sym_set.insert(sym); }
+            // From bar_cache mt5 keys. BarCacheWriter has always produced 3-part
+            // keys `mt5:{SYM}:{TF}`; metadata lives under `mt5:__NAME__[:…]` and
+            // gets filtered out by the `__` guard below. Fixed-shape parse, no
+            // legacy 4-part arm.
+            if let Ok(mut stmt) =
+                conn.prepare("SELECT DISTINCT key FROM bar_cache WHERE key LIKE 'mt5:%'")
+            {
+                if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                    for row in rows.flatten() {
+                        let rest = match row.strip_prefix("mt5:") {
+                            Some(r) => r,
+                            None => continue,
+                        };
+                        if rest.starts_with("__") {
+                            continue;
+                        }
+                        let mut it = rest.split(':');
+                        let sym = match it.next() {
+                            Some(s) if !s.is_empty() => s,
+                            _ => continue,
+                        };
+                        let tf = match it.next() {
+                            Some(s) if !s.is_empty() => s,
+                            _ => continue,
+                        };
+                        if it.next().is_some() {
+                            continue;
+                        }
+                        let _ = tf;
+                        let sym = sym.to_uppercase();
+                        if is_equity_symbol(&sym) {
+                            sym_set.insert(sym);
+                        }
+                    }
                 }
             }
-        }
-        let syms: Vec<String> = sym_set.into_iter().collect();
+            let syms: Vec<String> = sym_set.into_iter().collect();
 
-        Ok::<_, String>(syms)
-    }).await.map_err(|e| format!("spawn_blocking: {e}"))??;
+            Ok::<_, String>(syms)
+        })
+        .await
+        .map_err(|e| format!("spawn_blocking: {e}"))??;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
@@ -888,7 +929,8 @@ pub fn get_recent_filings(
     limit: usize,
 ) -> Result<Vec<SecFiling>, String> {
     let limit = limit.min(1000);
-    let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(t) = ticker {
+    let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(t) = ticker
+    {
         (
             "SELECT id, ticker, form_type, accession_number, filing_date, url, company_name, importance_score, category, summary, insider_flag, created_at
              FROM sec_filings WHERE ticker = ?1 ORDER BY filing_date DESC LIMIT ?2".to_string(),
@@ -902,24 +944,29 @@ pub fn get_recent_filings(
         )
     };
 
-    let mut stmt = conn.prepare(&sql).map_err(|e| format!("Prepare failed: {e}"))?;
-    let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
-    let rows = stmt.query_map(params_refs.as_slice(), |row| {
-        Ok(SecFiling {
-            id: row.get(0)?,
-            ticker: row.get(1)?,
-            form_type: row.get(2)?,
-            accession_number: row.get(3)?,
-            filing_date: row.get(4)?,
-            url: row.get(5)?,
-            company_name: row.get(6)?,
-            importance_score: row.get(7)?,
-            category: row.get(8)?,
-            summary: row.get(9)?,
-            insider_flag: row.get(10)?,
-            created_at: row.get(11)?,
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("Prepare failed: {e}"))?;
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params_vec.iter().map(|p| p.as_ref()).collect();
+    let rows = stmt
+        .query_map(params_refs.as_slice(), |row| {
+            Ok(SecFiling {
+                id: row.get(0)?,
+                ticker: row.get(1)?,
+                form_type: row.get(2)?,
+                accession_number: row.get(3)?,
+                filing_date: row.get(4)?,
+                url: row.get(5)?,
+                company_name: row.get(6)?,
+                importance_score: row.get(7)?,
+                category: row.get(8)?,
+                summary: row.get(9)?,
+                insider_flag: row.get(10)?,
+                created_at: row.get(11)?,
+            })
         })
-    }).map_err(|e| format!("Query failed: {e}"))?;
+        .map_err(|e| format!("Query failed: {e}"))?;
 
     let mut results = Vec::new();
     for row in rows {
@@ -937,9 +984,11 @@ pub fn get_insider_trades(
     days: i32,
 ) -> Result<Vec<InsiderTrade>, String> {
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64))
-        .format("%Y-%m-%d").to_string();
+        .format("%Y-%m-%d")
+        .to_string();
 
-    let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(t) = ticker {
+    let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(t) = ticker
+    {
         (
             "SELECT id, ticker, accession_number, insider_name, insider_title, transaction_date, transaction_type, shares, price, aggregate_value, is_officer, is_director, created_at
              FROM sec_insider_trades WHERE ticker = ?1 AND transaction_date >= ?2 ORDER BY transaction_date DESC".to_string(),
@@ -953,25 +1002,30 @@ pub fn get_insider_trades(
         )
     };
 
-    let mut stmt = conn.prepare(&sql).map_err(|e| format!("Prepare failed: {e}"))?;
-    let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
-    let rows = stmt.query_map(params_refs.as_slice(), |row| {
-        Ok(InsiderTrade {
-            id: row.get(0)?,
-            ticker: row.get(1)?,
-            accession_number: row.get(2)?,
-            insider_name: row.get(3)?,
-            insider_title: row.get(4)?,
-            transaction_date: row.get(5)?,
-            transaction_type: row.get(6)?,
-            shares: row.get(7)?,
-            price: row.get(8)?,
-            aggregate_value: row.get(9)?,
-            is_officer: row.get(10)?,
-            is_director: row.get(11)?,
-            created_at: row.get(12)?,
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("Prepare failed: {e}"))?;
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params_vec.iter().map(|p| p.as_ref()).collect();
+    let rows = stmt
+        .query_map(params_refs.as_slice(), |row| {
+            Ok(InsiderTrade {
+                id: row.get(0)?,
+                ticker: row.get(1)?,
+                accession_number: row.get(2)?,
+                insider_name: row.get(3)?,
+                insider_title: row.get(4)?,
+                transaction_date: row.get(5)?,
+                transaction_type: row.get(6)?,
+                shares: row.get(7)?,
+                price: row.get(8)?,
+                aggregate_value: row.get(9)?,
+                is_officer: row.get(10)?,
+                is_director: row.get(11)?,
+                created_at: row.get(12)?,
+            })
         })
-    }).map_err(|e| format!("Query failed: {e}"))?;
+        .map_err(|e| format!("Query failed: {e}"))?;
 
     let mut results = Vec::new();
     for row in rows {
@@ -990,19 +1044,21 @@ pub fn get_filing_alerts(conn: &Connection, dismissed: bool) -> Result<Vec<Filin
          FROM sec_filing_alerts WHERE dismissed = ?1 ORDER BY created_at DESC"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
-    let rows = stmt.query_map(params![dismissed], |row| {
-        Ok(FilingAlert {
-            id: row.get(0)?,
-            ticker: row.get(1)?,
-            alert_type: row.get(2)?,
-            message: row.get(3)?,
-            filing_accession: row.get(4)?,
-            importance: row.get(5)?,
-            created_at: row.get(6)?,
-            dismissed: row.get(7)?,
-            dismissed_reason: row.get(8)?,
+    let rows = stmt
+        .query_map(params![dismissed], |row| {
+            Ok(FilingAlert {
+                id: row.get(0)?,
+                ticker: row.get(1)?,
+                alert_type: row.get(2)?,
+                message: row.get(3)?,
+                filing_accession: row.get(4)?,
+                importance: row.get(5)?,
+                created_at: row.get(6)?,
+                dismissed: row.get(7)?,
+                dismissed_reason: row.get(8)?,
+            })
         })
-    }).map_err(|e| format!("Query failed: {e}"))?;
+        .map_err(|e| format!("Query failed: {e}"))?;
 
     let mut results = Vec::new();
     for row in rows {
@@ -1018,7 +1074,8 @@ pub fn dismiss_alert(conn: &Connection, alert_id: i64, reason: &str) -> Result<(
     conn.execute(
         "UPDATE sec_filing_alerts SET dismissed = TRUE, dismissed_reason = ?1 WHERE id = ?2",
         params![reason, alert_id],
-    ).map_err(|e| format!("Dismiss alert failed: {e}"))?;
+    )
+    .map_err(|e| format!("Dismiss alert failed: {e}"))?;
     Ok(())
 }
 
@@ -1032,22 +1089,24 @@ pub fn get_all_filings(conn: &Connection) -> Result<Vec<SecFiling>, String> {
          FROM sec_filings ORDER BY filing_date DESC"
     ).map_err(|e| format!("Prepare all filings failed: {e}"))?;
 
-    let rows = stmt.query_map([], |row| {
-        Ok(SecFiling {
-            id: row.get(0)?,
-            ticker: row.get(1)?,
-            form_type: row.get(2)?,
-            accession_number: row.get(3)?,
-            filing_date: row.get(4)?,
-            url: row.get(5)?,
-            company_name: row.get(6)?,
-            importance_score: row.get(7)?,
-            category: row.get(8)?,
-            summary: row.get(9)?,
-            insider_flag: row.get(10)?,
-            created_at: row.get(11)?,
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(SecFiling {
+                id: row.get(0)?,
+                ticker: row.get(1)?,
+                form_type: row.get(2)?,
+                accession_number: row.get(3)?,
+                filing_date: row.get(4)?,
+                url: row.get(5)?,
+                company_name: row.get(6)?,
+                importance_score: row.get(7)?,
+                category: row.get(8)?,
+                summary: row.get(9)?,
+                insider_flag: row.get(10)?,
+                created_at: row.get(11)?,
+            })
         })
-    }).map_err(|e| format!("Query all filings failed: {e}"))?;
+        .map_err(|e| format!("Query all filings failed: {e}"))?;
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Collect filings failed: {e}"))
@@ -1058,30 +1117,33 @@ pub fn get_all_insider_trades(conn: &Connection) -> Result<Vec<InsiderTrade>, St
     // Memory optimization: limit to last 5 years (1825 days) to bound BG memory footprint.
     // Older trades remain in DB and accessible via get_insider_trades(ticker, days).
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(1825))
-        .format("%Y-%m-%d").to_string();
+        .format("%Y-%m-%d")
+        .to_string();
     // prepare_cached: called every BG cycle.
     let mut stmt = conn.prepare_cached(
         "SELECT id, ticker, accession_number, insider_name, insider_title, transaction_date, transaction_type, shares, price, aggregate_value, is_officer, is_director, created_at
          FROM sec_insider_trades WHERE transaction_date >= ?1 ORDER BY transaction_date DESC"
     ).map_err(|e| format!("Prepare all insider trades failed: {e}"))?;
 
-    let rows = stmt.query_map(params![cutoff], |row| {
-        Ok(InsiderTrade {
-            id: row.get(0)?,
-            ticker: row.get(1)?,
-            accession_number: row.get(2)?,
-            insider_name: row.get(3)?,
-            insider_title: row.get(4)?,
-            transaction_date: row.get(5)?,
-            transaction_type: row.get(6)?,
-            shares: row.get(7)?,
-            price: row.get(8)?,
-            aggregate_value: row.get(9)?,
-            is_officer: row.get(10)?,
-            is_director: row.get(11)?,
-            created_at: row.get(12)?,
+    let rows = stmt
+        .query_map(params![cutoff], |row| {
+            Ok(InsiderTrade {
+                id: row.get(0)?,
+                ticker: row.get(1)?,
+                accession_number: row.get(2)?,
+                insider_name: row.get(3)?,
+                insider_title: row.get(4)?,
+                transaction_date: row.get(5)?,
+                transaction_type: row.get(6)?,
+                shares: row.get(7)?,
+                price: row.get(8)?,
+                aggregate_value: row.get(9)?,
+                is_officer: row.get(10)?,
+                is_director: row.get(11)?,
+                created_at: row.get(12)?,
+            })
         })
-    }).map_err(|e| format!("Query all insider trades failed: {e}"))?;
+        .map_err(|e| format!("Query all insider trades failed: {e}"))?;
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Collect insider trades failed: {e}"))
@@ -1089,8 +1151,12 @@ pub fn get_all_insider_trades(conn: &Connection) -> Result<Vec<InsiderTrade>, St
 
 /// Count total filings and how many have content fetched.
 pub fn filing_content_stats(conn: &Connection) -> (usize, usize) {
-    let total: i64 = conn.query_row("SELECT COUNT(*) FROM sec_filings", [], |r| r.get(0)).unwrap_or(0);
-    let indexed: i64 = conn.query_row("SELECT COUNT(*) FROM sec_filing_content", [], |r| r.get(0)).unwrap_or(0);
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sec_filings", [], |r| r.get(0))
+        .unwrap_or(0);
+    let indexed: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sec_filing_content", [], |r| r.get(0))
+        .unwrap_or(0);
     (total as usize, indexed as usize)
 }
 
@@ -1110,13 +1176,26 @@ pub fn strip_html_to_text(html: &str) -> String {
         }
     }
     // Convert structural HTML to whitespace
-    text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n");
+    text = text
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n");
     text = text.replace("</p>", "\n\n").replace("</div>", "\n");
-    text = text.replace("</tr>", "\n").replace("</td>", " | ").replace("</th>", " | ");
+    text = text
+        .replace("</tr>", "\n")
+        .replace("</td>", " | ")
+        .replace("</th>", " | ");
     text = text.replace("</li>", "\n").replace("<li>", "  - ");
     // HTML entities
-    text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">");
-    text = text.replace("&nbsp;", " ").replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'");
+    text = text
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">");
+    text = text
+        .replace("&nbsp;", " ")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'");
     // Strip remaining tags
     let mut result = String::with_capacity(text.len());
     let mut in_tag = false;
@@ -1129,7 +1208,8 @@ pub fn strip_html_to_text(html: &str) -> String {
         }
     }
     // Collapse whitespace
-    let lines: Vec<&str> = result.lines()
+    let lines: Vec<&str> = result
+        .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
         .collect();
@@ -1140,14 +1220,27 @@ pub fn strip_html_to_text(html: &str) -> String {
 /// Filings are typically 80KB plain text → ~8KB compressed (10x reduction).
 /// MEM: Cap at 500KB plain text — extremely large filings (multi-MB 10-Ks) are
 /// truncated to keep DB size bounded. Truncation marker appended.
-pub fn store_filing_content(conn: &Connection, accession: &str, ticker: &str, form_type: &str, company: &str, content: &str) -> Result<(), String> {
+pub fn store_filing_content(
+    conn: &Connection,
+    accession: &str,
+    ticker: &str,
+    form_type: &str,
+    company: &str,
+    content: &str,
+) -> Result<(), String> {
     let now = chrono::Utc::now().timestamp();
     const MAX_PLAIN_BYTES: usize = 500_000;
     let stored: std::borrow::Cow<str> = if content.len() > MAX_PLAIN_BYTES {
         // Find a UTF-8 char boundary at or before the limit
         let mut cut = MAX_PLAIN_BYTES;
-        while cut > 0 && !content.is_char_boundary(cut) { cut -= 1; }
-        std::borrow::Cow::Owned(format!("{}\n\n[Truncated at 500KB — original {} bytes]", &content[..cut], content.len()))
+        while cut > 0 && !content.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        std::borrow::Cow::Owned(format!(
+            "{}\n\n[Truncated at 500KB — original {} bytes]",
+            &content[..cut],
+            content.len()
+        ))
     } else {
         std::borrow::Cow::Borrowed(content)
     };
@@ -1207,30 +1300,35 @@ pub fn search_filings_fts(
          LIMIT ?2".to_string()
     };
 
-    let mut stmt = conn.prepare(&sql).map_err(|e| format!("FTS prepare failed: {e}"))?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("FTS prepare failed: {e}"))?;
     let limit_i64 = limit as i64;
-    let rows = stmt.query_map(params![fts_query, limit_i64], |row| {
-        Ok(SecFiling {
-            id: row.get(0)?,
-            ticker: row.get(1)?,
-            form_type: row.get(2)?,
-            accession_number: row.get(3)?,
-            filing_date: row.get(4)?,
-            url: row.get(5)?,
-            company_name: row.get(6)?,
-            importance_score: row.get(7)?,
-            category: row.get(8)?,
-            summary: row.get(9)?,
-            insider_flag: row.get(10)?,
-            created_at: row.get(11)?,
+    let rows = stmt
+        .query_map(params![fts_query, limit_i64], |row| {
+            Ok(SecFiling {
+                id: row.get(0)?,
+                ticker: row.get(1)?,
+                form_type: row.get(2)?,
+                accession_number: row.get(3)?,
+                filing_date: row.get(4)?,
+                url: row.get(5)?,
+                company_name: row.get(6)?,
+                importance_score: row.get(7)?,
+                category: row.get(8)?,
+                summary: row.get(9)?,
+                insider_flag: row.get(10)?,
+                created_at: row.get(11)?,
+            })
         })
-    }).map_err(|e| format!("FTS query failed: {e}"))?;
+        .map_err(|e| format!("FTS query failed: {e}"))?;
 
     let mut results: Vec<SecFiling> = rows.filter_map(|r| r.ok()).collect();
 
     // Post-filter by tickers if provided (FTS5 doesn't natively support IN-clause on separate column)
     if let Some(ticker_set) = tickers {
-        let set: std::collections::HashSet<String> = ticker_set.iter().map(|t| t.to_uppercase()).collect();
+        let set: std::collections::HashSet<String> =
+            ticker_set.iter().map(|t| t.to_uppercase()).collect();
         results.retain(|f| set.contains(&f.ticker.to_uppercase()));
     }
 
@@ -1239,11 +1337,14 @@ pub fn search_filings_fts(
 
 /// Get filing content for display / diff (decompresses zstd blob).
 pub fn get_filing_content(conn: &Connection, accession: &str) -> Result<Option<String>, String> {
-    let blob: Option<Vec<u8>> = conn.query_row(
-        "SELECT content_plain FROM sec_filing_content WHERE accession_number = ?1",
-        params![accession],
-        |row| row.get(0),
-    ).optional().map_err(|e| format!("Get content failed: {e}"))?;
+    let blob: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT content_plain FROM sec_filing_content WHERE accession_number = ?1",
+            params![accession],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("Get content failed: {e}"))?;
     match blob {
         Some(bytes) => {
             // Try zstd decompress; fallback to UTF-8 string for legacy uncompressed entries
@@ -1266,22 +1367,24 @@ pub fn get_unfetched_filings(conn: &Connection, limit: usize) -> Result<Vec<SecF
          ORDER BY filing_date DESC LIMIT ?1"
     ).map_err(|e| format!("Prepare unfetched failed: {e}"))?;
 
-    let rows = stmt.query_map(params![limit as i64], |row| {
-        Ok(SecFiling {
-            id: row.get(0)?,
-            ticker: row.get(1)?,
-            form_type: row.get(2)?,
-            accession_number: row.get(3)?,
-            filing_date: row.get(4)?,
-            url: row.get(5)?,
-            company_name: row.get(6)?,
-            importance_score: row.get(7)?,
-            category: row.get(8)?,
-            summary: row.get(9)?,
-            insider_flag: row.get(10)?,
-            created_at: row.get(11)?,
+    let rows = stmt
+        .query_map(params![limit as i64], |row| {
+            Ok(SecFiling {
+                id: row.get(0)?,
+                ticker: row.get(1)?,
+                form_type: row.get(2)?,
+                accession_number: row.get(3)?,
+                filing_date: row.get(4)?,
+                url: row.get(5)?,
+                company_name: row.get(6)?,
+                importance_score: row.get(7)?,
+                category: row.get(8)?,
+                summary: row.get(9)?,
+                insider_flag: row.get(10)?,
+                created_at: row.get(11)?,
+            })
         })
-    }).map_err(|e| format!("Query unfetched failed: {e}"))?;
+        .map_err(|e| format!("Query unfetched failed: {e}"))?;
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Collect unfetched failed: {e}"))
@@ -1294,7 +1397,8 @@ pub fn add_keyword(conn: &Connection, keyword: &str) -> Result<(), String> {
     conn.execute(
         "INSERT OR IGNORE INTO sec_keyword_watchlist (keyword, created_at) VALUES (?1, ?2)",
         params![keyword.to_lowercase(), chrono::Utc::now().timestamp()],
-    ).map_err(|e| format!("Add keyword failed: {e}"))?;
+    )
+    .map_err(|e| format!("Add keyword failed: {e}"))?;
     Ok(())
 }
 
@@ -1303,15 +1407,18 @@ pub fn remove_keyword(conn: &Connection, keyword: &str) -> Result<(), String> {
     conn.execute(
         "DELETE FROM sec_keyword_watchlist WHERE keyword = ?1",
         params![keyword.to_lowercase()],
-    ).map_err(|e| format!("Remove keyword failed: {e}"))?;
+    )
+    .map_err(|e| format!("Remove keyword failed: {e}"))?;
     Ok(())
 }
 
 /// Get all keywords.
 pub fn get_keywords(conn: &Connection) -> Result<Vec<String>, String> {
-    let mut stmt = conn.prepare("SELECT keyword FROM sec_keyword_watchlist ORDER BY keyword")
+    let mut stmt = conn
+        .prepare("SELECT keyword FROM sec_keyword_watchlist ORDER BY keyword")
         .map_err(|e| format!("Prepare keywords failed: {e}"))?;
-    let rows = stmt.query_map([], |row| row.get(0))
+    let rows = stmt
+        .query_map([], |row| row.get(0))
         .map_err(|e| format!("Query keywords failed: {e}"))?;
     rows.collect::<Result<Vec<String>, _>>()
         .map_err(|e| format!("Collect keywords failed: {e}"))
@@ -1322,7 +1429,8 @@ pub fn get_keywords(conn: &Connection) -> Result<Vec<String>, String> {
 /// re-query the DB once per filing.
 pub fn check_keywords_in(keywords: &[String], content: &str) -> Vec<String> {
     let content_lower = content.to_lowercase();
-    keywords.iter()
+    keywords
+        .iter()
         .filter(|kw| content_lower.contains(kw.as_str()))
         .cloned()
         .collect()
@@ -1346,8 +1454,16 @@ pub enum DiffChunk {
 
 /// Compare two filings by paragraph. Returns a list of diff chunks.
 pub fn diff_filing_content(old: &str, new: &str) -> Vec<DiffChunk> {
-    let old_paras: Vec<&str> = old.split("\n\n").map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
-    let new_paras: Vec<&str> = new.split("\n\n").map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let old_paras: Vec<&str> = old
+        .split("\n\n")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let new_paras: Vec<&str> = new
+        .split("\n\n")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
 
     // Simple LCS-based diff at paragraph level
     let m = old_paras.len();
@@ -1386,7 +1502,12 @@ pub fn diff_filing_content(old: &str, new: &str) -> Vec<DiffChunk> {
 }
 
 /// Find the previous filing of the same type for the same ticker.
-pub fn find_previous_filing(conn: &Connection, ticker: &str, form_type: &str, current_date: &str) -> Result<Option<SecFiling>, String> {
+pub fn find_previous_filing(
+    conn: &Connection,
+    ticker: &str,
+    form_type: &str,
+    current_date: &str,
+) -> Result<Option<SecFiling>, String> {
     let mut stmt = conn.prepare(
         "SELECT id, ticker, form_type, accession_number, filing_date, url, company_name, importance_score, category, summary, insider_flag, created_at
          FROM sec_filings WHERE ticker = ?1 AND form_type = ?2 AND filing_date < ?3
@@ -1411,7 +1532,9 @@ pub fn find_previous_filing(conn: &Connection, ticker: &str, form_type: &str, cu
                 created_at: row.get(11)?,
             })
         },
-    ).optional().map_err(|e| format!("Query previous filing failed: {e}"))
+    )
+    .optional()
+    .map_err(|e| format!("Query previous filing failed: {e}"))
 }
 
 // ── Heuristic filing summarizer ─────────────────────────────────────
@@ -1446,14 +1569,17 @@ fn canonical_form(form_type: &str) -> String {
 /// Find first `n` non-empty paragraphs from `text` starting at `start_offset`.
 fn first_paragraphs(text: &str, start_offset: usize, n: usize, max_len: usize) -> Vec<String> {
     let slice = &text[start_offset.min(text.len())..];
-    slice.split("\n\n")
+    slice
+        .split("\n\n")
         .map(|p| p.trim())
         .filter(|p| p.len() > 40) // skip stubs / section headers
         .take(n)
         .map(|p| {
             if p.len() > max_len {
                 let mut cut = max_len;
-                while cut > 0 && !p.is_char_boundary(cut) { cut -= 1; }
+                while cut > 0 && !p.is_char_boundary(cut) {
+                    cut -= 1;
+                }
                 format!("{}…", &p[..cut])
             } else {
                 p.to_string()
@@ -1488,8 +1614,9 @@ fn extract_8k_items(text: &str) -> Vec<(String, String)> {
         if lower.starts_with("item ") && line.len() > 5 {
             let rest = &line[5..];
             // Take leading digits + dot + digits
-            let code: String = rest.chars()
-                .take_while(|c| c.is_ascii_digit() || *c == '.' )
+            let code: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
                 .collect();
             if code.contains('.') && code.len() >= 3 {
                 // Next ~8 lines of body
@@ -1500,11 +1627,17 @@ fn extract_8k_items(text: &str) -> Vec<(String, String)> {
                     let l = lines[j].trim();
                     // Stop at next item
                     if l.to_lowercase().starts_with("item ")
-                        && l.chars().nth(5).map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                        && l.chars()
+                            .nth(5)
+                            .map(|c| c.is_ascii_digit())
+                            .unwrap_or(false)
+                    {
                         break;
                     }
                     if !l.is_empty() {
-                        if !body.is_empty() { body.push(' '); }
+                        if !body.is_empty() {
+                            body.push(' ');
+                        }
                         body.push_str(l);
                         collected += 1;
                     }
@@ -1513,7 +1646,9 @@ fn extract_8k_items(text: &str) -> Vec<(String, String)> {
                 let title = format!("Item {}", code);
                 // Rest of the header line after the code (often the item description)
                 let after_code = &rest[code.len()..];
-                let header_tail = after_code.trim_start_matches(|c: char| c == '.' || c.is_whitespace()).trim();
+                let header_tail = after_code
+                    .trim_start_matches(|c: char| c == '.' || c.is_whitespace())
+                    .trim();
                 let display_title = if !header_tail.is_empty() {
                     format!("{} — {}", title, header_tail)
                 } else {
@@ -1522,7 +1657,9 @@ fn extract_8k_items(text: &str) -> Vec<(String, String)> {
                 // Trim body to ~500 chars
                 if body.len() > 500 {
                     let mut cut = 500;
-                    while cut > 0 && !body.is_char_boundary(cut) { cut -= 1; }
+                    while cut > 0 && !body.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
                     body = format!("{}…", &body[..cut]);
                 }
                 out.push((display_title, body));
@@ -1539,11 +1676,23 @@ fn extract_8k_items(text: &str) -> Vec<(String, String)> {
 fn summarize_10kq(text: &str) -> FilingSummary {
     let mut summary = FilingSummary::default();
     let candidates: &[(&str, &[&str])] = &[
-        ("Business Overview",     &["Item 1.", "ITEM 1.", "BUSINESS OVERVIEW"]),
-        ("Risk Factors",          &["Item 1A.", "ITEM 1A.", "RISK FACTORS"]),
-        ("Management's Discussion", &["Item 7.", "ITEM 7.", "MANAGEMENT'S DISCUSSION"]),
-        ("Quantitative & Qualitative Disclosures", &["Item 7A.", "ITEM 7A."]),
-        ("Legal Proceedings",     &["Item 3.", "ITEM 3.", "LEGAL PROCEEDINGS"]),
+        (
+            "Business Overview",
+            &["Item 1.", "ITEM 1.", "BUSINESS OVERVIEW"],
+        ),
+        ("Risk Factors", &["Item 1A.", "ITEM 1A.", "RISK FACTORS"]),
+        (
+            "Management's Discussion",
+            &["Item 7.", "ITEM 7.", "MANAGEMENT'S DISCUSSION"],
+        ),
+        (
+            "Quantitative & Qualitative Disclosures",
+            &["Item 7A.", "ITEM 7A."],
+        ),
+        (
+            "Legal Proceedings",
+            &["Item 3.", "ITEM 3.", "LEGAL PROCEEDINGS"],
+        ),
     ];
     for (label, needles) in candidates {
         if let Some((_, off)) = find_section(text, needles) {
@@ -1561,7 +1710,9 @@ fn summarize_10kq(text: &str) -> FilingSummary {
         if let Some(first) = s.body.split("\n\n").next() {
             let short = if first.len() > 200 {
                 let mut cut = 200;
-                while cut > 0 && !first.is_char_boundary(cut) { cut -= 1; }
+                while cut > 0 && !first.is_char_boundary(cut) {
+                    cut -= 1;
+                }
                 format!("{}…", &first[..cut])
             } else {
                 first.to_string()
@@ -1576,16 +1727,35 @@ fn summarize_10kq(text: &str) -> FilingSummary {
 fn summarize_def14a(text: &str) -> FilingSummary {
     let mut summary = FilingSummary::default();
     let candidates: &[(&str, &[&str])] = &[
-        ("Proposals",            &["PROPOSAL 1", "PROPOSAL NO. 1", "PROPOSALS TO BE VOTED"]),
-        ("Executive Compensation", &["EXECUTIVE COMPENSATION", "COMPENSATION DISCUSSION"]),
-        ("Director Nominees",    &["DIRECTOR NOMINEES", "NOMINEES FOR DIRECTOR", "ELECTION OF DIRECTORS"]),
-        ("Auditor Ratification", &["RATIFICATION", "INDEPENDENT REGISTERED PUBLIC ACCOUNTING"]),
+        (
+            "Proposals",
+            &["PROPOSAL 1", "PROPOSAL NO. 1", "PROPOSALS TO BE VOTED"],
+        ),
+        (
+            "Executive Compensation",
+            &["EXECUTIVE COMPENSATION", "COMPENSATION DISCUSSION"],
+        ),
+        (
+            "Director Nominees",
+            &[
+                "DIRECTOR NOMINEES",
+                "NOMINEES FOR DIRECTOR",
+                "ELECTION OF DIRECTORS",
+            ],
+        ),
+        (
+            "Auditor Ratification",
+            &["RATIFICATION", "INDEPENDENT REGISTERED PUBLIC ACCOUNTING"],
+        ),
     ];
     for (label, needles) in candidates {
         if let Some((_, off)) = find_section(text, needles) {
             let paras = first_paragraphs(text, off, 1, 500);
             if !paras.is_empty() {
-                summary.sections.push(FilingSection { title: label.to_string(), body: paras.join("\n\n") });
+                summary.sections.push(FilingSection {
+                    title: label.to_string(),
+                    body: paras.join("\n\n"),
+                });
                 summary.bullets.push(format!("{}: found", label));
             }
         }
@@ -1597,17 +1767,20 @@ fn summarize_def14a(text: &str) -> FilingSummary {
 fn summarize_s1(text: &str) -> FilingSummary {
     let mut summary = FilingSummary::default();
     let candidates: &[(&str, &[&str])] = &[
-        ("Use of Proceeds",      &["USE OF PROCEEDS"]),
-        ("Risk Factors",         &["RISK FACTORS"]),
-        ("Prospectus Summary",   &["PROSPECTUS SUMMARY", "SUMMARY"]),
-        ("Business",             &["BUSINESS OVERVIEW", "OUR BUSINESS"]),
-        ("Dilution",             &["DILUTION"]),
+        ("Use of Proceeds", &["USE OF PROCEEDS"]),
+        ("Risk Factors", &["RISK FACTORS"]),
+        ("Prospectus Summary", &["PROSPECTUS SUMMARY", "SUMMARY"]),
+        ("Business", &["BUSINESS OVERVIEW", "OUR BUSINESS"]),
+        ("Dilution", &["DILUTION"]),
     ];
     for (label, needles) in candidates {
         if let Some((_, off)) = find_section(text, needles) {
             let paras = first_paragraphs(text, off, 1, 600);
             if !paras.is_empty() {
-                summary.sections.push(FilingSection { title: label.to_string(), body: paras.join("\n\n") });
+                summary.sections.push(FilingSection {
+                    title: label.to_string(),
+                    body: paras.join("\n\n"),
+                });
                 summary.bullets.push(format!("{}: extracted", label));
             }
         }
@@ -1619,11 +1792,17 @@ fn summarize_s1(text: &str) -> FilingSummary {
 fn summarize_13f(text: &str) -> FilingSummary {
     let mut summary = FilingSummary::default();
     // 13F info tables have many lines with dollar amounts. Count lines with " | " (from <td>).
-    let row_count = text.lines().filter(|l| l.matches(" | ").count() >= 3).count();
+    let row_count = text
+        .lines()
+        .filter(|l| l.matches(" | ").count() >= 3)
+        .count();
     summary.headline = format!("13F — ~{} holdings (approx. from table rows)", row_count);
     summary.bullets.push(summary.headline.clone());
     if row_count == 0 {
-        summary.bullets.push("No holdings table detected in stripped text — data may be in XML attachment.".to_string());
+        summary.bullets.push(
+            "No holdings table detected in stripped text — data may be in XML attachment."
+                .to_string(),
+        );
     }
     summary
 }
@@ -1637,7 +1816,10 @@ fn summarize_form4(text: &str) -> FilingSummary {
     let mentions = |needle: &str| lower.matches(needle).count();
     let sold = mentions("disposition") + mentions("sold");
     let bought = mentions("acquisition") + mentions("purchased");
-    summary.headline = format!("Form 4 — {} acquisition / {} disposition mention(s)", bought, sold);
+    summary.headline = format!(
+        "Form 4 — {} acquisition / {} disposition mention(s)",
+        bought, sold
+    );
     summary.bullets.push(summary.headline.clone());
     // Pull the first paragraph with a dollar amount.
     for para in text.split("\n\n").take(40) {
@@ -1665,7 +1847,10 @@ pub fn summarize_filing(form_type: &str, content: &str) -> FilingSummary {
             }
             for (title, body) in items.iter().take(8) {
                 s.bullets.push(title.clone());
-                s.sections.push(FilingSection { title: title.clone(), body: body.clone() });
+                s.sections.push(FilingSection {
+                    title: title.clone(),
+                    body: body.clone(),
+                });
             }
             s
         }
@@ -1715,7 +1900,13 @@ mod tests {
         conn
     }
 
-    fn insert_filing(conn: &Connection, ticker: &str, form_type: &str, accession: &str, date: &str) {
+    fn insert_filing(
+        conn: &Connection,
+        ticker: &str,
+        form_type: &str,
+        accession: &str,
+        date: &str,
+    ) {
         let now = chrono::Utc::now().timestamp();
         conn.execute(
             "INSERT INTO sec_filings (ticker, form_type, accession_number, filing_date, url, company_name, importance_score, category, summary, insider_flag, created_at)
@@ -1727,7 +1918,16 @@ mod tests {
         ).unwrap();
     }
 
-    fn insert_insider_trade(conn: &Connection, ticker: &str, accession: &str, name: &str, txn_type: &str, date: &str, shares: f64, price: f64) {
+    fn insert_insider_trade(
+        conn: &Connection,
+        ticker: &str,
+        accession: &str,
+        name: &str,
+        txn_type: &str,
+        date: &str,
+        shares: f64,
+        price: f64,
+    ) {
         let now = chrono::Utc::now().timestamp();
         conn.execute(
             "INSERT INTO sec_insider_trades (ticker, accession_number, insider_name, insider_title, transaction_date, transaction_type, shares, price, aggregate_value, is_officer, is_director, created_at)
@@ -1736,7 +1936,13 @@ mod tests {
         ).unwrap();
     }
 
-    fn insert_alert(conn: &Connection, ticker: &str, alert_type: &str, message: &str, dismissed: bool) -> i64 {
+    fn insert_alert(
+        conn: &Connection,
+        ticker: &str,
+        alert_type: &str,
+        message: &str,
+        dismissed: bool,
+    ) -> i64 {
         let now = chrono::Utc::now().timestamp();
         conn.execute(
             "INSERT INTO sec_filing_alerts (ticker, alert_type, message, filing_accession, importance, created_at, dismissed, dismissed_reason)
@@ -1804,25 +2010,25 @@ mod tests {
         assert!(is_equity_symbol("AAPL"));
         assert!(is_equity_symbol("MSFT"));
         assert!(is_equity_symbol("GOOG"));
-        assert!(is_equity_symbol("A"));    // single letter tickers exist
+        assert!(is_equity_symbol("A")); // single letter tickers exist
     }
 
     #[test]
     fn is_equity_symbol_invalid() {
-        assert!(!is_equity_symbol(""));         // empty
-        assert!(!is_equity_symbol("EUR/USD"));  // forex with slash
-        assert!(!is_equity_symbol("XAUUSD"));   // gold
-        assert!(!is_equity_symbol("XAGUSD"));   // silver
-        assert!(!is_equity_symbol("XNGUSD"));   // natural gas
-        assert!(!is_equity_symbol("TOOLONG"));  // > 5 chars
-        assert!(!is_equity_symbol("AB123"));    // contains digits
+        assert!(!is_equity_symbol("")); // empty
+        assert!(!is_equity_symbol("EUR/USD")); // forex with slash
+        assert!(!is_equity_symbol("XAUUSD")); // gold
+        assert!(!is_equity_symbol("XAGUSD")); // silver
+        assert!(!is_equity_symbol("XNGUSD")); // natural gas
+        assert!(!is_equity_symbol("TOOLONG")); // > 5 chars
+        assert!(!is_equity_symbol("AB123")); // contains digits
     }
 
     #[test]
     fn is_equity_symbol_boundary_cases() {
-        assert!(is_equity_symbol("ABCDE"));   // exactly 5 chars (max)
+        assert!(is_equity_symbol("ABCDE")); // exactly 5 chars (max)
         assert!(!is_equity_symbol("ABCDEF")); // 6 chars (too long)
-        assert!(is_equity_symbol("A"));       // single letter
+        assert!(is_equity_symbol("A")); // single letter
         assert!(!is_equity_symbol("XBRUSD")); // XBR prefix
         assert!(!is_equity_symbol("XTIUSD")); // XTI prefix
     }
@@ -1854,13 +2060,19 @@ mod tests {
     #[test]
     fn extract_xml_value_simple() {
         let xml = "<ownershipDocument><rptOwnerName>John Doe</rptOwnerName></ownershipDocument>";
-        assert_eq!(extract_xml_value(xml, "rptOwnerName"), Some("John Doe".to_string()));
+        assert_eq!(
+            extract_xml_value(xml, "rptOwnerName"),
+            Some("John Doe".to_string())
+        );
     }
 
     #[test]
     fn extract_xml_value_nested_value_tag() {
         let xml = "<transactionShares><value>10000</value></transactionShares>";
-        assert_eq!(extract_xml_value(xml, "transactionShares"), Some("10000".to_string()));
+        assert_eq!(
+            extract_xml_value(xml, "transactionShares"),
+            Some("10000".to_string())
+        );
     }
 
     #[test]
@@ -1975,7 +2187,13 @@ mod tests {
     fn get_recent_filings_respects_limit() {
         let conn = setup_test_db();
         for i in 0..10 {
-            insert_filing(&conn, "AAPL", "10-Q", &format!("acc-{i:03}"), &format!("2024-{:02}-01", i + 1));
+            insert_filing(
+                &conn,
+                "AAPL",
+                "10-Q",
+                &format!("acc-{i:03}"),
+                &format!("2024-{:02}-01", i + 1),
+            );
         }
 
         let filings = get_recent_filings(&conn, None, 3).unwrap();
@@ -1995,8 +2213,19 @@ mod tests {
     fn get_insider_trades_recent() {
         let conn = setup_test_db();
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        insert_insider_trade(&conn, "AAPL", "acc-001", "Tim Cook", "S", &today, 10000.0, 195.0);
-        insert_insider_trade(&conn, "AAPL", "acc-002", "Jeff Williams", "P", &today, 5000.0, 190.0);
+        insert_insider_trade(
+            &conn, "AAPL", "acc-001", "Tim Cook", "S", &today, 10000.0, 195.0,
+        );
+        insert_insider_trade(
+            &conn,
+            "AAPL",
+            "acc-002",
+            "Jeff Williams",
+            "P",
+            &today,
+            5000.0,
+            190.0,
+        );
 
         let trades = get_insider_trades(&conn, Some("AAPL"), 30).unwrap();
         assert_eq!(trades.len(), 2);
@@ -2007,8 +2236,19 @@ mod tests {
     fn get_insider_trades_all_tickers() {
         let conn = setup_test_db();
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        insert_insider_trade(&conn, "AAPL", "acc-001", "Tim Cook", "S", &today, 10000.0, 195.0);
-        insert_insider_trade(&conn, "MSFT", "acc-002", "Satya Nadella", "S", &today, 5000.0, 420.0);
+        insert_insider_trade(
+            &conn, "AAPL", "acc-001", "Tim Cook", "S", &today, 10000.0, 195.0,
+        );
+        insert_insider_trade(
+            &conn,
+            "MSFT",
+            "acc-002",
+            "Satya Nadella",
+            "S",
+            &today,
+            5000.0,
+            420.0,
+        );
 
         let trades = get_insider_trades(&conn, None, 30).unwrap();
         assert_eq!(trades.len(), 2);
@@ -2019,8 +2259,11 @@ mod tests {
         let conn = setup_test_db();
         // Insert a trade from 60 days ago
         let old_date = (chrono::Utc::now() - chrono::Duration::days(60))
-            .format("%Y-%m-%d").to_string();
-        insert_insider_trade(&conn, "AAPL", "acc-001", "Tim Cook", "S", &old_date, 10000.0, 195.0);
+            .format("%Y-%m-%d")
+            .to_string();
+        insert_insider_trade(
+            &conn, "AAPL", "acc-001", "Tim Cook", "S", &old_date, 10000.0, 195.0,
+        );
 
         let trades = get_insider_trades(&conn, None, 30).unwrap();
         assert!(trades.is_empty());

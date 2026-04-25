@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::margin::{max_safe_lots, protect_urgency, protect_lot_count};
+use crate::core::margin::{max_safe_lots, protect_lot_count, protect_urgency};
 use crate::core::position::HedgedPosition;
 
 /// Martingale mode — matches MQL5 MartingaleState enum.
@@ -70,11 +70,11 @@ pub enum Action {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MartingaleConfig {
     pub enabled: bool,
-    pub trim_pct: f64,              // TRIM threshold (default 65, 80 for CFD)
-    pub protect_pct: f64,           // PROTECT threshold (default 56)
-    pub hard_floor_pct: f64,        // Hard floor (default 10)
-    pub spread_tolerance: f64,      // $ per lot for Open MG sizing
-    pub equity_tp: f64,             // $ profit target (0 = disabled)
+    pub trim_pct: f64,         // TRIM threshold (default 65, 80 for CFD)
+    pub protect_pct: f64,      // PROTECT threshold (default 56)
+    pub hard_floor_pct: f64,   // Hard floor (default 10)
+    pub spread_tolerance: f64, // $ per lot for Open MG sizing
+    pub equity_tp: f64,        // $ profit target (0 = disabled)
 }
 
 impl Default for MartingaleConfig {
@@ -265,7 +265,11 @@ impl MartingaleState {
             close_qty,
             reason: format!(
                 "ML {:.1}% > TRIM {:.1}% — close {:.0} {} (maxSafe={})",
-                ml, self.config.trim_pct, close_qty, position.hedge_side(), safe_lots
+                ml,
+                self.config.trim_pct,
+                close_qty,
+                position.hedge_side(),
+                safe_lots
             ),
         }
     }
@@ -317,10 +321,14 @@ mod tests {
     #[test]
     fn mode_cycles_off_long_short_unwind_off() {
         let m = MartingaleMode::Off;
-        let m = m.next(); assert_eq!(m, MartingaleMode::Long);
-        let m = m.next(); assert_eq!(m, MartingaleMode::Short);
-        let m = m.next(); assert_eq!(m, MartingaleMode::Unwind);
-        let m = m.next(); assert_eq!(m, MartingaleMode::Off);
+        let m = m.next();
+        assert_eq!(m, MartingaleMode::Long);
+        let m = m.next();
+        assert_eq!(m, MartingaleMode::Short);
+        let m = m.next();
+        assert_eq!(m, MartingaleMode::Unwind);
+        let m = m.next();
+        assert_eq!(m, MartingaleMode::Off);
     }
 
     // ── Mode labels ────────────────────────────────────────────────

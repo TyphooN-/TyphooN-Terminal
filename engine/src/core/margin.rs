@@ -155,7 +155,10 @@ mod tests {
     fn test_protect_urgency_at_threshold() {
         let u = protect_urgency(56.0, 56.0);
         // At threshold: (1.0 - 1.0).max(0.01) = 0.01 (minimum urgency)
-        assert!((u - 0.01).abs() < 0.001, "At threshold, urgency should be minimum 0.01, got {u}");
+        assert!(
+            (u - 0.01).abs() < 0.001,
+            "At threshold, urgency should be minimum 0.01, got {u}"
+        );
     }
 
     #[test]

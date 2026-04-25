@@ -34,7 +34,7 @@ pub struct BrokerPosition {
     pub id: String,
     pub symbol: String,
     pub qty: f64,
-    pub side: String,       // "long" or "short"
+    pub side: String, // "long" or "short"
     pub avg_entry: f64,
     pub current_price: f64,
     pub unrealized_pl: f64,
@@ -194,9 +194,16 @@ mod tests {
     #[test]
     fn is_break_even_true() {
         let pos = BrokerPosition {
-            id: "1".into(), symbol: "AAPL".into(), qty: 10.0, side: "long".into(),
-            avg_entry: 150.0, current_price: 155.0, unrealized_pl: 50.0, market_value: 1550.0,
-            sl: Some(150.0), tp: Some(160.0),
+            id: "1".into(),
+            symbol: "AAPL".into(),
+            qty: 10.0,
+            side: "long".into(),
+            avg_entry: 150.0,
+            current_price: 155.0,
+            unrealized_pl: 50.0,
+            market_value: 1550.0,
+            sl: Some(150.0),
+            tp: Some(160.0),
         };
         assert!(pos.is_break_even(0.01)); // SL == entry within 0.005 tolerance
     }
@@ -204,9 +211,16 @@ mod tests {
     #[test]
     fn is_break_even_false_no_sl() {
         let pos = BrokerPosition {
-            id: "1".into(), symbol: "AAPL".into(), qty: 10.0, side: "long".into(),
-            avg_entry: 150.0, current_price: 155.0, unrealized_pl: 50.0, market_value: 1550.0,
-            sl: None, tp: Some(160.0),
+            id: "1".into(),
+            symbol: "AAPL".into(),
+            qty: 10.0,
+            side: "long".into(),
+            avg_entry: 150.0,
+            current_price: 155.0,
+            unrealized_pl: 50.0,
+            market_value: 1550.0,
+            sl: None,
+            tp: Some(160.0),
         };
         assert!(!pos.is_break_even(0.01));
     }
@@ -214,9 +228,16 @@ mod tests {
     #[test]
     fn is_break_even_false_sl_far() {
         let pos = BrokerPosition {
-            id: "1".into(), symbol: "AAPL".into(), qty: 10.0, side: "long".into(),
-            avg_entry: 150.0, current_price: 155.0, unrealized_pl: 50.0, market_value: 1550.0,
-            sl: Some(145.0), tp: Some(160.0),
+            id: "1".into(),
+            symbol: "AAPL".into(),
+            qty: 10.0,
+            side: "long".into(),
+            avg_entry: 150.0,
+            current_price: 155.0,
+            unrealized_pl: 50.0,
+            market_value: 1550.0,
+            sl: Some(145.0),
+            tp: Some(160.0),
         };
         assert!(!pos.is_break_even(0.01));
     }
@@ -224,9 +245,16 @@ mod tests {
     #[test]
     fn sl_pl_long_position() {
         let pos = BrokerPosition {
-            id: "1".into(), symbol: "AAPL".into(), qty: 100.0, side: "long".into(),
-            avg_entry: 150.0, current_price: 155.0, unrealized_pl: 500.0, market_value: 15500.0,
-            sl: Some(145.0), tp: Some(160.0),
+            id: "1".into(),
+            symbol: "AAPL".into(),
+            qty: 100.0,
+            side: "long".into(),
+            avg_entry: 150.0,
+            current_price: 155.0,
+            unrealized_pl: 500.0,
+            market_value: 15500.0,
+            sl: Some(145.0),
+            tp: Some(160.0),
         };
         // SL loss = (145 - 150) * 100 = -500
         assert!((pos.sl_pl() - (-500.0)).abs() < 1e-10);
@@ -235,9 +263,16 @@ mod tests {
     #[test]
     fn sl_pl_short_position() {
         let pos = BrokerPosition {
-            id: "1".into(), symbol: "AAPL".into(), qty: 100.0, side: "short".into(),
-            avg_entry: 150.0, current_price: 145.0, unrealized_pl: 500.0, market_value: 14500.0,
-            sl: Some(155.0), tp: Some(140.0),
+            id: "1".into(),
+            symbol: "AAPL".into(),
+            qty: 100.0,
+            side: "short".into(),
+            avg_entry: 150.0,
+            current_price: 145.0,
+            unrealized_pl: 500.0,
+            market_value: 14500.0,
+            sl: Some(155.0),
+            tp: Some(140.0),
         };
         // SL loss = (150 - 155) * 100 = -500
         assert!((pos.sl_pl() - (-500.0)).abs() < 1e-10);
@@ -246,9 +281,16 @@ mod tests {
     #[test]
     fn sl_pl_no_sl() {
         let pos = BrokerPosition {
-            id: "1".into(), symbol: "AAPL".into(), qty: 100.0, side: "long".into(),
-            avg_entry: 150.0, current_price: 155.0, unrealized_pl: 500.0, market_value: 15500.0,
-            sl: None, tp: Some(160.0),
+            id: "1".into(),
+            symbol: "AAPL".into(),
+            qty: 100.0,
+            side: "long".into(),
+            avg_entry: 150.0,
+            current_price: 155.0,
+            unrealized_pl: 500.0,
+            market_value: 15500.0,
+            sl: None,
+            tp: Some(160.0),
         };
         assert_eq!(pos.sl_pl(), 0.0);
     }
@@ -256,9 +298,16 @@ mod tests {
     #[test]
     fn tp_pl_long_position() {
         let pos = BrokerPosition {
-            id: "1".into(), symbol: "AAPL".into(), qty: 100.0, side: "long".into(),
-            avg_entry: 150.0, current_price: 155.0, unrealized_pl: 500.0, market_value: 15500.0,
-            sl: Some(145.0), tp: Some(160.0),
+            id: "1".into(),
+            symbol: "AAPL".into(),
+            qty: 100.0,
+            side: "long".into(),
+            avg_entry: 150.0,
+            current_price: 155.0,
+            unrealized_pl: 500.0,
+            market_value: 15500.0,
+            sl: Some(145.0),
+            tp: Some(160.0),
         };
         // TP profit = (160 - 150) * 100 = 1000
         assert!((pos.tp_pl() - 1000.0).abs() < 1e-10);
@@ -267,9 +316,16 @@ mod tests {
     #[test]
     fn tp_pl_short_position() {
         let pos = BrokerPosition {
-            id: "1".into(), symbol: "AAPL".into(), qty: 100.0, side: "short".into(),
-            avg_entry: 150.0, current_price: 145.0, unrealized_pl: 500.0, market_value: 14500.0,
-            sl: Some(155.0), tp: Some(140.0),
+            id: "1".into(),
+            symbol: "AAPL".into(),
+            qty: 100.0,
+            side: "short".into(),
+            avg_entry: 150.0,
+            current_price: 145.0,
+            unrealized_pl: 500.0,
+            market_value: 14500.0,
+            sl: Some(155.0),
+            tp: Some(140.0),
         };
         // TP profit = (150 - 140) * 100 = 1000
         assert!((pos.tp_pl() - 1000.0).abs() < 1e-10);
@@ -331,8 +387,13 @@ mod tests {
     fn risk_reward_ratio_normal() {
         let ps = PositionSummary {
             symbol: "AAPL".into(),
-            long_lots: 100.0, short_lots: 0.0, net_lots: 100.0, gross_lots: 100.0,
-            total_unrealized_pl: 500.0, total_sl_pl: -500.0, total_tp_pl: 1000.0,
+            long_lots: 100.0,
+            short_lots: 0.0,
+            net_lots: 100.0,
+            gross_lots: 100.0,
+            total_unrealized_pl: 500.0,
+            total_sl_pl: -500.0,
+            total_tp_pl: 1000.0,
             break_even: BreakEvenState::default(),
         };
         assert!((ps.risk_reward_ratio() - 2.0).abs() < 1e-10);
@@ -342,8 +403,13 @@ mod tests {
     fn risk_reward_ratio_zero_sl() {
         let ps = PositionSummary {
             symbol: "AAPL".into(),
-            long_lots: 100.0, short_lots: 0.0, net_lots: 100.0, gross_lots: 100.0,
-            total_unrealized_pl: 500.0, total_sl_pl: 0.0, total_tp_pl: 1000.0,
+            long_lots: 100.0,
+            short_lots: 0.0,
+            net_lots: 100.0,
+            gross_lots: 100.0,
+            total_unrealized_pl: 500.0,
+            total_sl_pl: 0.0,
+            total_tp_pl: 1000.0,
             break_even: BreakEvenState::default(),
         };
         assert_eq!(ps.risk_reward_ratio(), 0.0); // avoid divide by zero

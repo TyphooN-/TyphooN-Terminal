@@ -22,24 +22,24 @@
 //! See ADR-162 for the full design.
 
 use crate::core::cache::SqliteCache as Cache;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// One cached AI response.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AiResponseCacheEntry {
-    pub prompt_hash: String,           // hex sha256 over the normalised prompt tuple
-    pub provider: String,              // "claude_http" | "openai" | "gemini" | "grok" | "mistral" | "perplexity" | "local" | "claude_cli" | "gemini_cli" | "codex_cli"
-    pub model: String,                 // provider-specific model id at call time
-    pub prompt_preview: String,        // last-user-message trimmed to ~400 chars for the stats window
-    pub response: String,              // the assistant reply in full
-    pub token_count_prompt: i64,       // best-effort estimate; 0 if unknown
-    pub token_count_completion: i64,   // best-effort estimate; 0 if unknown
-    pub created_at: i64,               // unix seconds — when the entry was first inserted
-    pub updated_at: i64,               // unix seconds — touched by each hit (used for LAN sync timestamp)
-    pub hit_count: i64,                // incremented on every cache-hit; the original insertion counts as 0
-    pub source_client: String,         // hostname of the client that originated this entry; empty if unknown
+    pub prompt_hash: String,     // hex sha256 over the normalised prompt tuple
+    pub provider: String, // "claude_http" | "openai" | "gemini" | "grok" | "mistral" | "perplexity" | "local" | "claude_cli" | "gemini_cli" | "codex_cli"
+    pub model: String,    // provider-specific model id at call time
+    pub prompt_preview: String, // last-user-message trimmed to ~400 chars for the stats window
+    pub response: String, // the assistant reply in full
+    pub token_count_prompt: i64, // best-effort estimate; 0 if unknown
+    pub token_count_completion: i64, // best-effort estimate; 0 if unknown
+    pub created_at: i64,  // unix seconds — when the entry was first inserted
+    pub updated_at: i64,  // unix seconds — touched by each hit (used for LAN sync timestamp)
+    pub hit_count: i64,   // incremented on every cache-hit; the original insertion counts as 0
+    pub source_client: String, // hostname of the client that originated this entry; empty if unknown
 }
 
 /// Canonicalise a prompt tuple and produce a deterministic hash.
@@ -83,7 +83,9 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-fn now_ts() -> i64 { chrono::Utc::now().timestamp() }
+fn now_ts() -> i64 {
+    chrono::Utc::now().timestamp()
+}
 
 /// Create the table if it doesn't yet exist. Idempotent.
 pub fn create_ai_response_cache_table(conn: &Connection) -> Result<(), String> {
@@ -105,7 +107,8 @@ pub fn create_ai_response_cache_table(conn: &Connection) -> Result<(), String> {
             ON ai_response_cache (updated_at DESC);
          CREATE INDEX IF NOT EXISTS idx_ai_response_cache_provider_model
             ON ai_response_cache (provider, model);",
-    ).map_err(|e| format!("create ai_response_cache: {e}"))
+    )
+    .map_err(|e| format!("create ai_response_cache: {e}"))
 }
 
 /// Insert a fresh response into the cache.
@@ -114,14 +117,15 @@ pub fn create_ai_response_cache_table(conn: &Connection) -> Result<(), String> {
 /// for local-only testing. If an entry for the same `prompt_hash` already
 /// exists it is replaced — this lets later (presumably better-token-counted)
 /// insertions supersede earlier ones.
-pub fn upsert_response(
-    cache: &Cache,
-    entry: &AiResponseCacheEntry,
-) -> Result<(), String> {
+pub fn upsert_response(cache: &Cache, entry: &AiResponseCacheEntry) -> Result<(), String> {
     let conn = cache.connection()?;
     create_ai_response_cache_table(&conn)?;
     let now = now_ts();
-    let created_at = if entry.created_at > 0 { entry.created_at } else { now };
+    let created_at = if entry.created_at > 0 {
+        entry.created_at
+    } else {
+        now
+    };
     conn.execute(
         "INSERT INTO ai_response_cache
             (prompt_hash, provider, model, prompt_preview, response,
@@ -150,7 +154,8 @@ pub fn upsert_response(
             entry.hit_count,
             entry.source_client,
         ],
-    ).map_err(|e| format!("upsert ai_response_cache: {e}"))?;
+    )
+    .map_err(|e| format!("upsert ai_response_cache: {e}"))?;
     Ok(())
 }
 
@@ -165,26 +170,31 @@ pub fn lookup_response(
 ) -> Result<Option<AiResponseCacheEntry>, String> {
     let conn = cache.connection()?;
     create_ai_response_cache_table(&conn)?;
-    let row: Option<AiResponseCacheEntry> = conn.query_row(
-        "SELECT prompt_hash, provider, model, prompt_preview, response,
+    let row: Option<AiResponseCacheEntry> = conn
+        .query_row(
+            "SELECT prompt_hash, provider, model, prompt_preview, response,
                 token_count_prompt, token_count_completion,
                 created_at, updated_at, hit_count, source_client
          FROM ai_response_cache WHERE prompt_hash = ?1",
-        params![prompt_hash],
-        |r| Ok(AiResponseCacheEntry {
-            prompt_hash: r.get(0)?,
-            provider: r.get(1)?,
-            model: r.get(2)?,
-            prompt_preview: r.get(3)?,
-            response: r.get(4)?,
-            token_count_prompt: r.get(5)?,
-            token_count_completion: r.get(6)?,
-            created_at: r.get(7)?,
-            updated_at: r.get(8)?,
-            hit_count: r.get(9)?,
-            source_client: r.get(10)?,
-        }),
-    ).optional().map_err(|e| format!("lookup ai_response_cache: {e}"))?;
+            params![prompt_hash],
+            |r| {
+                Ok(AiResponseCacheEntry {
+                    prompt_hash: r.get(0)?,
+                    provider: r.get(1)?,
+                    model: r.get(2)?,
+                    prompt_preview: r.get(3)?,
+                    response: r.get(4)?,
+                    token_count_prompt: r.get(5)?,
+                    token_count_completion: r.get(6)?,
+                    created_at: r.get(7)?,
+                    updated_at: r.get(8)?,
+                    hit_count: r.get(9)?,
+                    source_client: r.get(10)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| format!("lookup ai_response_cache: {e}"))?;
 
     if let Some(ref _hit) = row {
         let now = now_ts();
@@ -207,12 +217,12 @@ pub fn lookup_response(
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AiResponseCacheStats {
     pub entry_count: i64,
-    pub total_hits: i64,                   // sum of hit_count over all entries
-    pub tokens_saved_prompt: i64,          // sum(token_count_prompt * hit_count)
-    pub tokens_saved_completion: i64,      // sum(token_count_completion * hit_count)
-    pub oldest_created_at: i64,            // 0 when empty
-    pub newest_updated_at: i64,            // 0 when empty
-    pub providers: Vec<(String, i64)>,     // (provider, entry_count) sorted desc by count
+    pub total_hits: i64,               // sum of hit_count over all entries
+    pub tokens_saved_prompt: i64,      // sum(token_count_prompt * hit_count)
+    pub tokens_saved_completion: i64,  // sum(token_count_completion * hit_count)
+    pub oldest_created_at: i64,        // 0 when empty
+    pub newest_updated_at: i64,        // 0 when empty
+    pub providers: Vec<(String, i64)>, // (provider, entry_count) sorted desc by count
 }
 
 /// Read aggregate stats across all entries. Cheap — single table scan.
@@ -241,13 +251,18 @@ pub fn stats(cache: &Cache) -> Result<AiResponseCacheStats, String> {
         },
     );
 
-    let mut stmt = conn.prepare(
-        "SELECT provider, COUNT(*) c FROM ai_response_cache GROUP BY provider ORDER BY c DESC"
-    ).map_err(|e| format!("prepare stats provider agg: {e}"))?;
-    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+    let mut stmt = conn
+        .prepare(
+            "SELECT provider, COUNT(*) c FROM ai_response_cache GROUP BY provider ORDER BY c DESC",
+        )
+        .map_err(|e| format!("prepare stats provider agg: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
         .map_err(|e| format!("run stats provider agg: {e}"))?;
     for row in rows {
-        if let Ok((p, c)) = row { out.providers.push((p, c)); }
+        if let Ok((p, c)) = row {
+            out.providers.push((p, c));
+        }
     }
     Ok(out)
 }
@@ -258,31 +273,39 @@ pub fn recent_entries(cache: &Cache, limit: usize) -> Result<Vec<AiResponseCache
     let conn = cache.connection()?;
     create_ai_response_cache_table(&conn)?;
     let limit_i = limit as i64;
-    let mut stmt = conn.prepare(
-        "SELECT prompt_hash, provider, model, prompt_preview, response,
+    let mut stmt = conn
+        .prepare(
+            "SELECT prompt_hash, provider, model, prompt_preview, response,
                 token_count_prompt, token_count_completion,
                 created_at, updated_at, hit_count, source_client
          FROM ai_response_cache
          ORDER BY updated_at DESC
-         LIMIT ?1"
-    ).map_err(|e| format!("prepare recent_entries: {e}"))?;
-    let rows = stmt.query_map(params![limit_i], |r| Ok(AiResponseCacheEntry {
-        prompt_hash: r.get(0)?,
-        provider: r.get(1)?,
-        model: r.get(2)?,
-        prompt_preview: r.get(3)?,
-        response: r.get(4)?,
-        token_count_prompt: r.get(5)?,
-        token_count_completion: r.get(6)?,
-        created_at: r.get(7)?,
-        updated_at: r.get(8)?,
-        hit_count: r.get(9)?,
-        source_client: r.get(10)?,
-    })).map_err(|e| format!("run recent_entries: {e}"))?;
+         LIMIT ?1",
+        )
+        .map_err(|e| format!("prepare recent_entries: {e}"))?;
+    let rows = stmt
+        .query_map(params![limit_i], |r| {
+            Ok(AiResponseCacheEntry {
+                prompt_hash: r.get(0)?,
+                provider: r.get(1)?,
+                model: r.get(2)?,
+                prompt_preview: r.get(3)?,
+                response: r.get(4)?,
+                token_count_prompt: r.get(5)?,
+                token_count_completion: r.get(6)?,
+                created_at: r.get(7)?,
+                updated_at: r.get(8)?,
+                hit_count: r.get(9)?,
+                source_client: r.get(10)?,
+            })
+        })
+        .map_err(|e| format!("run recent_entries: {e}"))?;
 
     let mut out = Vec::new();
     for row in rows {
-        if let Ok(e) = row { out.push(e); }
+        if let Ok(e) = row {
+            out.push(e);
+        }
     }
     Ok(out)
 }
@@ -300,14 +323,18 @@ pub fn estimate_tokens(text: &str) -> i64 {
 /// the number of rows deleted. Callers decide the policy; `0` means never
 /// prune.
 pub fn prune_older_than(cache: &Cache, max_age_secs: i64) -> Result<usize, String> {
-    if max_age_secs <= 0 { return Ok(0); }
+    if max_age_secs <= 0 {
+        return Ok(0);
+    }
     let conn = cache.connection()?;
     create_ai_response_cache_table(&conn)?;
     let cutoff = now_ts() - max_age_secs;
-    let n = conn.execute(
-        "DELETE FROM ai_response_cache WHERE created_at < ?1",
-        params![cutoff],
-    ).map_err(|e| format!("prune ai_response_cache: {e}"))?;
+    let n = conn
+        .execute(
+            "DELETE FROM ai_response_cache WHERE created_at < ?1",
+            params![cutoff],
+        )
+        .map_err(|e| format!("prune ai_response_cache: {e}"))?;
     Ok(n)
 }
 
@@ -328,7 +355,11 @@ mod tests {
 
     fn rand_suffix() -> u64 {
         use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_nanos() as u64).unwrap_or(0) % 10_000
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() as u64)
+            .unwrap_or(0)
+            % 10_000
     }
 
     #[test]
@@ -342,13 +373,35 @@ mod tests {
     #[test]
     fn hash_changes_on_any_input_change() {
         let h = hash_ai_prompt("claude_http", "claude-opus-4-5", "sys", &[], "hi");
-        assert_ne!(h, hash_ai_prompt("openai", "claude-opus-4-5", "sys", &[], "hi"), "provider");
-        assert_ne!(h, hash_ai_prompt("claude_http", "claude-sonnet-4-6", "sys", &[], "hi"), "model");
-        assert_ne!(h, hash_ai_prompt("claude_http", "claude-opus-4-5", "sys2", &[], "hi"), "system");
-        assert_ne!(h, hash_ai_prompt("claude_http", "claude-opus-4-5", "sys", &[], "bye"), "message");
         assert_ne!(
             h,
-            hash_ai_prompt("claude_http", "claude-opus-4-5", "sys", &[(true, "prev".into())], "hi"),
+            hash_ai_prompt("openai", "claude-opus-4-5", "sys", &[], "hi"),
+            "provider"
+        );
+        assert_ne!(
+            h,
+            hash_ai_prompt("claude_http", "claude-sonnet-4-6", "sys", &[], "hi"),
+            "model"
+        );
+        assert_ne!(
+            h,
+            hash_ai_prompt("claude_http", "claude-opus-4-5", "sys2", &[], "hi"),
+            "system"
+        );
+        assert_ne!(
+            h,
+            hash_ai_prompt("claude_http", "claude-opus-4-5", "sys", &[], "bye"),
+            "message"
+        );
+        assert_ne!(
+            h,
+            hash_ai_prompt(
+                "claude_http",
+                "claude-opus-4-5",
+                "sys",
+                &[(true, "prev".into())],
+                "hi"
+            ),
             "history"
         );
     }
@@ -419,17 +472,23 @@ mod tests {
             ("h2", "claude_http", 200, 100),
             ("h3", "openai", 300, 150),
         ] {
-            upsert_response(&cache, &AiResponseCacheEntry {
-                prompt_hash: hash.into(),
-                provider: prov.into(),
-                model: "m".into(),
-                prompt_preview: "p".into(),
-                response: "r".into(),
-                token_count_prompt: tp,
-                token_count_completion: tc,
-                created_at: 0, updated_at: 0, hit_count: 0,
-                source_client: "host".into(),
-            }).unwrap();
+            upsert_response(
+                &cache,
+                &AiResponseCacheEntry {
+                    prompt_hash: hash.into(),
+                    provider: prov.into(),
+                    model: "m".into(),
+                    prompt_preview: "p".into(),
+                    response: "r".into(),
+                    token_count_prompt: tp,
+                    token_count_completion: tc,
+                    created_at: 0,
+                    updated_at: 0,
+                    hit_count: 0,
+                    source_client: "host".into(),
+                },
+            )
+            .unwrap();
         }
         // Hit h1 twice, h2 once, h3 zero
         let _ = lookup_response(&cache, "h1").unwrap();
@@ -452,13 +511,23 @@ mod tests {
     fn recent_entries_are_ordered_by_updated_at_desc() {
         let cache = tmp_cache();
         for (hash, _) in [("a", 0), ("b", 0), ("c", 0)] {
-            upsert_response(&cache, &AiResponseCacheEntry {
-                prompt_hash: hash.into(),
-                provider: "claude_http".into(),
-                model: "m".into(), prompt_preview: "p".into(), response: "r".into(),
-                token_count_prompt: 0, token_count_completion: 0,
-                created_at: 0, updated_at: 0, hit_count: 0, source_client: "h".into(),
-            }).unwrap();
+            upsert_response(
+                &cache,
+                &AiResponseCacheEntry {
+                    prompt_hash: hash.into(),
+                    provider: "claude_http".into(),
+                    model: "m".into(),
+                    prompt_preview: "p".into(),
+                    response: "r".into(),
+                    token_count_prompt: 0,
+                    token_count_completion: 0,
+                    created_at: 0,
+                    updated_at: 0,
+                    hit_count: 0,
+                    source_client: "h".into(),
+                },
+            )
+            .unwrap();
             std::thread::sleep(std::time::Duration::from_millis(1050));
         }
         // Re-hit `a` so it becomes most recent by updated_at
@@ -476,10 +545,15 @@ mod tests {
         let mut e = AiResponseCacheEntry {
             prompt_hash: "same".into(),
             provider: "claude_http".into(),
-            model: "m".into(), prompt_preview: "p".into(),
+            model: "m".into(),
+            prompt_preview: "p".into(),
             response: "old".into(),
-            token_count_prompt: 100, token_count_completion: 50,
-            created_at: 0, updated_at: 0, hit_count: 0, source_client: "h1".into(),
+            token_count_prompt: 100,
+            token_count_completion: 50,
+            created_at: 0,
+            updated_at: 0,
+            hit_count: 0,
+            source_client: "h1".into(),
         };
         upsert_response(&cache, &e).unwrap();
         e.response = "new".into();
@@ -504,18 +578,40 @@ mod tests {
     fn prune_removes_old_entries_only() {
         let cache = tmp_cache();
         let long_ago = now_ts() - 100_000;
-        upsert_response(&cache, &AiResponseCacheEntry {
-            prompt_hash: "old".into(),
-            provider: "p".into(), model: "m".into(), prompt_preview: "".into(), response: "r".into(),
-            token_count_prompt: 0, token_count_completion: 0,
-            created_at: long_ago, updated_at: long_ago, hit_count: 0, source_client: "".into(),
-        }).unwrap();
-        upsert_response(&cache, &AiResponseCacheEntry {
-            prompt_hash: "new".into(),
-            provider: "p".into(), model: "m".into(), prompt_preview: "".into(), response: "r".into(),
-            token_count_prompt: 0, token_count_completion: 0,
-            created_at: 0, updated_at: 0, hit_count: 0, source_client: "".into(),
-        }).unwrap();
+        upsert_response(
+            &cache,
+            &AiResponseCacheEntry {
+                prompt_hash: "old".into(),
+                provider: "p".into(),
+                model: "m".into(),
+                prompt_preview: "".into(),
+                response: "r".into(),
+                token_count_prompt: 0,
+                token_count_completion: 0,
+                created_at: long_ago,
+                updated_at: long_ago,
+                hit_count: 0,
+                source_client: "".into(),
+            },
+        )
+        .unwrap();
+        upsert_response(
+            &cache,
+            &AiResponseCacheEntry {
+                prompt_hash: "new".into(),
+                provider: "p".into(),
+                model: "m".into(),
+                prompt_preview: "".into(),
+                response: "r".into(),
+                token_count_prompt: 0,
+                token_count_completion: 0,
+                created_at: 0,
+                updated_at: 0,
+                hit_count: 0,
+                source_client: "".into(),
+            },
+        )
+        .unwrap();
 
         let pruned = prune_older_than(&cache, 50_000).unwrap();
         assert_eq!(pruned, 1);

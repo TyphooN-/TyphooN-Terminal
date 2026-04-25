@@ -30,7 +30,9 @@ pub fn rate_limited_for_secs() -> Option<i64> {
 }
 
 fn mark_rate_limited() {
-    let until = chrono::Utc::now().timestamp().saturating_add(RATE_LIMIT_BACKOFF_SECS);
+    let until = chrono::Utc::now()
+        .timestamp()
+        .saturating_add(RATE_LIMIT_BACKOFF_SECS);
     RATE_LIMITED_UNTIL_SECS.store(until, Ordering::Relaxed);
 }
 
@@ -38,13 +40,13 @@ fn mark_rate_limited() {
 fn endpoint_for_tf(tf: &str) -> Option<(&'static str, u32)> {
     match tf {
         "1Min" => Some(("histominute", 1)),
-        "5Min" => None, // CryptoCompare doesn't have 5min; use 1min and aggregate
+        "5Min" => None,  // CryptoCompare doesn't have 5min; use 1min and aggregate
         "15Min" => None, // same
         "30Min" => None,
         "1Hour" => Some(("histohour", 1)),
         "4Hour" => None, // aggregate from hourly
         "1Day" => Some(("histoday", 1)),
-        "1Week" => None, // aggregate from daily
+        "1Week" => None,  // aggregate from daily
         "1Month" => None, // aggregate from daily
         _ => None,
     }
@@ -77,27 +79,33 @@ pub async fn fetch_ohlcv(
             // Aggregate: 4Hour from hourly, 1Week from daily, etc.
             match timeframe {
                 "5Min" => {
-                    let minutely = Box::pin(fetch_ohlcv(client, symbol, "1Min", start_ms, end_ms)).await?;
+                    let minutely =
+                        Box::pin(fetch_ohlcv(client, symbol, "1Min", start_ms, end_ms)).await?;
                     return Ok(aggregate_bars(&minutely, 5));
                 }
                 "15Min" => {
-                    let minutely = Box::pin(fetch_ohlcv(client, symbol, "1Min", start_ms, end_ms)).await?;
+                    let minutely =
+                        Box::pin(fetch_ohlcv(client, symbol, "1Min", start_ms, end_ms)).await?;
                     return Ok(aggregate_bars(&minutely, 15));
                 }
                 "30Min" => {
-                    let minutely = Box::pin(fetch_ohlcv(client, symbol, "1Min", start_ms, end_ms)).await?;
+                    let minutely =
+                        Box::pin(fetch_ohlcv(client, symbol, "1Min", start_ms, end_ms)).await?;
                     return Ok(aggregate_bars(&minutely, 30));
                 }
                 "4Hour" => {
-                    let hourly = Box::pin(fetch_ohlcv(client, symbol, "1Hour", start_ms, end_ms)).await?;
+                    let hourly =
+                        Box::pin(fetch_ohlcv(client, symbol, "1Hour", start_ms, end_ms)).await?;
                     return Ok(aggregate_bars(&hourly, 4));
                 }
                 "1Week" => {
-                    let daily = Box::pin(fetch_ohlcv(client, symbol, "1Day", start_ms, end_ms)).await?;
+                    let daily =
+                        Box::pin(fetch_ohlcv(client, symbol, "1Day", start_ms, end_ms)).await?;
                     return Ok(aggregate_bars(&daily, 7));
                 }
                 "1Month" => {
-                    let daily = Box::pin(fetch_ohlcv(client, symbol, "1Day", start_ms, end_ms)).await?;
+                    let daily =
+                        Box::pin(fetch_ohlcv(client, symbol, "1Day", start_ms, end_ms)).await?;
                     return Ok(aggregate_to_monthly(&daily));
                 }
                 _ => return Err(format!("Unsupported timeframe: {}", timeframe)),
@@ -124,9 +132,12 @@ pub async fn fetch_ohlcv(
         // the terminal appeared hung for minutes. Now the first 429
         // returns immediately; callers check `rate_limited_for_secs()`
         // up front on the next pass and route to Kraken instead.
-        let resp = match client.get(&url)
+        let resp = match client
+            .get(&url)
             .timeout(std::time::Duration::from_secs(30))
-            .send().await {
+            .send()
+            .await
+        {
             Ok(r) => {
                 if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
                     mark_rate_limited();
@@ -145,7 +156,9 @@ pub async fn fetch_ohlcv(
             return Err(format!("CryptoCompare HTTP {}", resp.status()));
         }
 
-        let body: serde_json::Value = resp.json().await
+        let body: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| format!("CryptoCompare JSON parse failed: {e}"))?;
 
         if body["Response"].as_str() != Some("Success") {
@@ -160,7 +173,8 @@ pub async fn fetch_ohlcv(
                 mark_rate_limited();
                 tracing::warn!(
                     "CryptoCompare rate limit in response body — entering {}s back-off; caller should fall back to Kraken (collected {} bars before the cap)",
-                    RATE_LIMIT_BACKOFF_SECS, all_bars.len()
+                    RATE_LIMIT_BACKOFF_SECS,
+                    all_bars.len()
                 );
                 break;
             }
@@ -169,19 +183,26 @@ pub async fn fetch_ohlcv(
 
         // (Success already verified above)
 
-        let data = body["Data"]["Data"].as_array()
+        let data = body["Data"]["Data"]
+            .as_array()
             .ok_or_else(|| "No data array in response".to_string())?;
 
         let mut page_bars = Vec::new();
         let mut earliest_ts = i64::MAX;
         for bar in data {
             let ts = bar["time"].as_i64().unwrap_or(0);
-            if ts == 0 { continue; }
+            if ts == 0 {
+                continue;
+            }
             let open = bar["open"].as_f64().unwrap_or(0.0);
-            if open <= 0.0 { continue; } // skip zero-price bars (before trading started)
+            if open <= 0.0 {
+                continue;
+            } // skip zero-price bars (before trading started)
 
             let ts_ms = ts * 1000;
-            if ts_ms < start_ms || ts_ms > end_ms { continue; }
+            if ts_ms < start_ms || ts_ms > end_ms {
+                continue;
+            }
 
             let dt = chrono::DateTime::from_timestamp(ts, 0).unwrap_or_default();
             page_bars.push(serde_json::json!({
@@ -193,7 +214,9 @@ pub async fn fetch_ohlcv(
                 "volume": bar["volumefrom"].as_f64().unwrap_or(0.0),
             }));
 
-            if ts < earliest_ts { earliest_ts = ts; }
+            if ts < earliest_ts {
+                earliest_ts = ts;
+            }
         }
 
         let page_count = page_bars.len();
@@ -210,7 +233,12 @@ pub async fn fetch_ohlcv(
     }
 
     // Sort by timestamp ascending and deduplicate
-    all_bars.sort_by(|a, b| a["timestamp"].as_str().unwrap_or("").cmp(b["timestamp"].as_str().unwrap_or("")));
+    all_bars.sort_by(|a, b| {
+        a["timestamp"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["timestamp"].as_str().unwrap_or(""))
+    });
     all_bars.dedup_by(|a, b| a["timestamp"] == b["timestamp"]);
 
     Ok(all_bars)
@@ -220,51 +248,70 @@ pub async fn fetch_ohlcv(
 /// The last chunk may be incomplete (fewer than `period` bars); this is fine —
 /// it produces a shorter-period bar for the most recent partial window.
 fn aggregate_bars(bars: &[serde_json::Value], period: usize) -> Vec<serde_json::Value> {
-    bars.chunks(period).filter_map(|chunk| {
-        let first = &chunk[0];
-        let mut high = f64::MIN;
-        let mut low = f64::MAX;
-        let mut vol = 0.0_f64;
-        let mut valid = false;
-        for b in chunk {
-            let h = b["high"].as_f64()?;
-            let l = b["low"].as_f64()?;
-            let v = b["volume"].as_f64().unwrap_or(0.0);
-            if h > high { high = h; }
-            if l < low { low = l; }
-            vol += v;
-            valid = true;
-        }
-        if !valid { return None; }
-        let last = chunk.last().unwrap_or(first);
-        Some(serde_json::json!({
-            "timestamp": first["timestamp"],
-            "open": first["open"],
-            "high": high,
-            "low": low,
-            "close": last["close"],
-            "volume": vol,
-        }))
-    }).collect()
+    bars.chunks(period)
+        .filter_map(|chunk| {
+            let first = &chunk[0];
+            let mut high = f64::MIN;
+            let mut low = f64::MAX;
+            let mut vol = 0.0_f64;
+            let mut valid = false;
+            for b in chunk {
+                let h = b["high"].as_f64()?;
+                let l = b["low"].as_f64()?;
+                let v = b["volume"].as_f64().unwrap_or(0.0);
+                if h > high {
+                    high = h;
+                }
+                if l < low {
+                    low = l;
+                }
+                vol += v;
+                valid = true;
+            }
+            if !valid {
+                return None;
+            }
+            let last = chunk.last().unwrap_or(first);
+            Some(serde_json::json!({
+                "timestamp": first["timestamp"],
+                "open": first["open"],
+                "high": high,
+                "low": low,
+                "close": last["close"],
+                "volume": vol,
+            }))
+        })
+        .collect()
 }
 
 /// Aggregate daily bars into monthly OHLCV.
 fn aggregate_to_monthly(daily: &[serde_json::Value]) -> Vec<serde_json::Value> {
-    let mut monthly: std::collections::BTreeMap<String, (f64, f64, f64, f64, f64, String)> = std::collections::BTreeMap::new();
+    let mut monthly: std::collections::BTreeMap<String, (f64, f64, f64, f64, f64, String)> =
+        std::collections::BTreeMap::new();
     for bar in daily {
         let ts = bar["timestamp"].as_str().unwrap_or("");
-        if ts.len() < 7 { continue; }
+        if ts.len() < 7 {
+            continue;
+        }
         let o = bar["open"].as_f64().unwrap_or(0.0);
         let h = bar["high"].as_f64().unwrap_or(0.0);
         let l = bar["low"].as_f64().unwrap_or(0.0);
         let c = bar["close"].as_f64().unwrap_or(0.0);
         let v = bar["volume"].as_f64().unwrap_or(0.0);
         // Skip bars with invalid prices
-        if o <= 0.0 || h <= 0.0 || l <= 0.0 || c <= 0.0 || h < l { continue; }
+        if o <= 0.0 || h <= 0.0 || l <= 0.0 || c <= 0.0 || h < l {
+            continue;
+        }
         let month_key = ts[..7].to_string();
-        let entry = monthly.entry(month_key).or_insert((o, h, l, c, 0.0, ts.to_string()));
-        if h > entry.1 { entry.1 = h; }
-        if l < entry.2 { entry.2 = l; }
+        let entry = monthly
+            .entry(month_key)
+            .or_insert((o, h, l, c, 0.0, ts.to_string()));
+        if h > entry.1 {
+            entry.1 = h;
+        }
+        if l < entry.2 {
+            entry.2 = l;
+        }
         entry.3 = c;
         entry.4 += v;
     }
@@ -369,7 +416,7 @@ mod tests {
         let b0 = &result[0];
         assert_eq!(b0["open"].as_f64().unwrap(), 100.0);
         assert_eq!(b0["high"].as_f64().unwrap(), 120.0); // max of 110, 120
-        assert_eq!(b0["low"].as_f64().unwrap(), 90.0);   // min of 90, 95
+        assert_eq!(b0["low"].as_f64().unwrap(), 90.0); // min of 90, 95
         assert_eq!(b0["close"].as_f64().unwrap(), 115.0); // last bar close
         assert!((b0["volume"].as_f64().unwrap() - 3000.0).abs() < 1e-10);
 
@@ -407,9 +454,14 @@ mod tests {
 
     #[test]
     fn aggregate_bars_single_bar() {
-        let bars = vec![
-            make_bar("2024-01-01T00:00:00Z", 100.0, 110.0, 90.0, 105.0, 1000.0),
-        ];
+        let bars = vec![make_bar(
+            "2024-01-01T00:00:00Z",
+            100.0,
+            110.0,
+            90.0,
+            105.0,
+            1000.0,
+        )];
         let result = aggregate_bars(&bars, 4);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["open"].as_f64().unwrap(), 100.0);
@@ -461,9 +513,14 @@ mod tests {
 
     #[test]
     fn aggregate_to_monthly_single_day() {
-        let daily = vec![
-            make_bar("2024-06-15T00:00:00Z", 50.0, 55.0, 45.0, 52.0, 100.0),
-        ];
+        let daily = vec![make_bar(
+            "2024-06-15T00:00:00Z",
+            50.0,
+            55.0,
+            45.0,
+            52.0,
+            100.0,
+        )];
         let result = aggregate_to_monthly(&daily);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["open"].as_f64().unwrap(), 50.0);

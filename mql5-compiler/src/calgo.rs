@@ -21,7 +21,7 @@
 //! - Nested `#region`/`#endregion` (stripped)
 
 use crate::ir::*;
-use crate::{IndicatorMeta, InputParam, CompileResult, Diagnostic, DiagLevel, DrawType, PlotDef};
+use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, InputParam, PlotDef};
 
 pub fn parse_calgo(source: &str) -> CompileResult {
     let (ir_module, meta) = build_ir(source);
@@ -30,19 +30,32 @@ pub fn parse_calgo(source: &str) -> CompileResult {
         Ok(wasm) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Info,
-                message: format!("cAlgo compiled: {} inputs, {} plots",
-                    meta.inputs.len(), meta.plots.len()),
-                line: 0, col: 0,
+                message: format!(
+                    "cAlgo compiled: {} inputs, {} plots",
+                    meta.inputs.len(),
+                    meta.plots.len()
+                ),
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: Some(wasm), diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: Some(wasm),
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
         Err(e) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Error,
                 message: format!("cAlgo codegen failed: {e}"),
-                line: 0, col: 0,
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: None, diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: None,
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
     }
 }
@@ -69,7 +82,8 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         let t = line.trim();
         if let Some(pos) = t.find("class ") {
             let rest = &t[pos + 6..];
-            let name: String = rest.chars()
+            let name: String = rest
+                .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
                 .collect();
             if !name.is_empty() {
@@ -109,13 +123,14 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         if line.starts_with("[Parameter") {
             // Extract label and default
             let attr_inner = extract_parens_balanced(line);
-            let label = extract_first_quoted(&attr_inner)
-                .unwrap_or_else(|| "Param".into());
-            let default = extract_named_arg(&attr_inner, "DefaultValue")
-                .unwrap_or_else(|| "0".into());
+            let label = extract_first_quoted(&attr_inner).unwrap_or_else(|| "Param".into());
+            let default =
+                extract_named_arg(&attr_inner, "DefaultValue").unwrap_or_else(|| "0".into());
             // Next non-empty line should be the property
             let mut j = i + 1;
-            while j < lines.len() && lines[j].trim().is_empty() { j += 1; }
+            while j < lines.len() && lines[j].trim().is_empty() {
+                j += 1;
+            }
             if j < lines.len() {
                 if let Some((name, ty)) = parse_calgo_property(lines[j].trim()) {
                     let (ir_ty, val) = match ty.as_str() {
@@ -146,7 +161,9 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             let label = extract_first_quoted(&attr_inner)
                 .unwrap_or_else(|| format!("Output{}", plot_count));
             let mut j = i + 1;
-            while j < lines.len() && lines[j].trim().is_empty() { j += 1; }
+            while j < lines.len() && lines[j].trim().is_empty() {
+                j += 1;
+            }
             if j < lines.len() {
                 if let Some((name, _ty)) = parse_calgo_property(lines[j].trim()) {
                     output_names.push(name);
@@ -229,7 +246,11 @@ fn parse_calgo_property(line: &str) -> Option<(String, String)> {
     let ty = parts.next()?.to_string();
     let name = parts.next()?.to_string();
     // cAlgo uses `IndicatorDataSeries` as the Output type — treat it as f64
-    let ty_norm = if ty == "IndicatorDataSeries" { "double".to_string() } else { ty };
+    let ty_norm = if ty == "IndicatorDataSeries" {
+        "double".to_string()
+    } else {
+        ty
+    };
     Some((name, ty_norm))
 }
 
@@ -237,7 +258,9 @@ fn try_parse_output_assignment(line: &str, output_names: &[String]) -> Option<(u
     let line = line.trim().trim_end_matches(';');
     let eq_pos = line.find('=')?;
     let prev = line[..eq_pos].chars().last();
-    if matches!(prev, Some('!' | '<' | '>' | '=')) { return None; }
+    if matches!(prev, Some('!' | '<' | '>' | '=')) {
+        return None;
+    }
     let lhs = line[..eq_pos].trim();
     let rhs = line[eq_pos + 1..].trim().to_string();
 
@@ -256,7 +279,9 @@ fn try_parse_output_assignment(line: &str, output_names: &[String]) -> Option<(u
 
 fn try_parse_calgo_local(line: &str) -> Option<(String, String)> {
     let line = line.trim().trim_end_matches(';');
-    if line.is_empty() { return None; }
+    if line.is_empty() {
+        return None;
+    }
     if line.starts_with("if")
         || line.starts_with("for")
         || line.starts_with("while")
@@ -267,14 +292,20 @@ fn try_parse_calgo_local(line: &str) -> Option<(String, String)> {
         || line.starts_with("private")
         || line.starts_with("protected")
         || line.starts_with('[')
-    { return None; }
+    {
+        return None;
+    }
     let eq_pos = line.find('=')?;
     let prev = line[..eq_pos].chars().last();
-    if matches!(prev, Some('!' | '<' | '>' | '=')) { return None; }
+    if matches!(prev, Some('!' | '<' | '>' | '=')) {
+        return None;
+    }
     let lhs = line[..eq_pos].trim();
     let rhs = line[eq_pos + 1..].trim().to_string();
     // Disallow assignments to something[index]
-    if lhs.contains('[') { return None; }
+    if lhs.contains('[') {
+        return None;
+    }
     let name = if let Some(pos) = lhs.rfind(char::is_whitespace) {
         lhs[pos + 1..].to_string()
     } else {
@@ -288,7 +319,9 @@ fn try_parse_calgo_local(line: &str) -> Option<(String, String)> {
 
 fn parse_calgo_expr(expr: &str) -> Option<IrExpr> {
     let expr = expr.trim().trim_end_matches(';').trim();
-    if expr.is_empty() { return None; }
+    if expr.is_empty() {
+        return None;
+    }
     if expr.starts_with('(') && expr.ends_with(')') && matched_parens(expr) {
         return parse_calgo_expr(&expr[1..expr.len() - 1]);
     }
@@ -303,8 +336,12 @@ fn parse_calgo_expr(expr: &str) -> Option<IrExpr> {
     let expr_core = if let Some(last_open) = expr.rfind('[') {
         if expr.ends_with(']') {
             &expr[..last_open]
-        } else { expr }
-    } else { expr };
+        } else {
+            expr
+        }
+    } else {
+        expr
+    };
     let expr_core = expr_core.trim();
 
     // Built-in series: accept short + long forms.
@@ -314,9 +351,9 @@ fn parse_calgo_expr(expr: &str) -> Option<IrExpr> {
         .trim_start_matches("MarketSeries.");
     let cleaned = match normalized {
         "ClosePrices" | "Close" => return Some(IrExpr::IClose(Box::new(IrExpr::I32Const(0)))),
-        "OpenPrices"  | "Open"  => return Some(IrExpr::IOpen(Box::new(IrExpr::I32Const(0)))),
-        "HighPrices"  | "High"  => return Some(IrExpr::IHigh(Box::new(IrExpr::I32Const(0)))),
-        "LowPrices"   | "Low"   => return Some(IrExpr::ILow(Box::new(IrExpr::I32Const(0)))),
+        "OpenPrices" | "Open" => return Some(IrExpr::IOpen(Box::new(IrExpr::I32Const(0)))),
+        "HighPrices" | "High" => return Some(IrExpr::IHigh(Box::new(IrExpr::I32Const(0)))),
+        "LowPrices" | "Low" => return Some(IrExpr::ILow(Box::new(IrExpr::I32Const(0)))),
         "TickVolumes" | "Volume" => return Some(IrExpr::IVolume(Box::new(IrExpr::I32Const(0)))),
         other => other,
     };
@@ -340,9 +377,8 @@ fn parse_calgo_expr(expr: &str) -> Option<IrExpr> {
                 .trim_start_matches("Math.");
             let args_str = &cleaned[open + 1..cleaned.len() - 1];
             let parts = split_top_level_commas(args_str);
-            let ir_args: Option<Vec<IrExpr>> = parts.iter()
-                .map(|a| parse_calgo_expr(a.trim()))
-                .collect();
+            let ir_args: Option<Vec<IrExpr>> =
+                parts.iter().map(|a| parse_calgo_expr(a.trim())).collect();
             if let Some(ir_args) = ir_args {
                 let mapped: Option<&str> = match func {
                     "SimpleMovingAverage" | "SMA" | "Sma" => Some("ta_sma"),
@@ -366,7 +402,9 @@ fn parse_calgo_expr(expr: &str) -> Option<IrExpr> {
         }
     }
 
-    for op_str in &[" + ", " - ", " * ", " / ", " >= ", " <= ", " > ", " < ", " == ", " != "] {
+    for op_str in &[
+        " + ", " - ", " * ", " / ", " >= ", " <= ", " > ", " < ", " == ", " != ",
+    ] {
         if let Some(pos) = cleaned.find(op_str) {
             let left = parse_calgo_expr(&cleaned[..pos])?;
             let right = parse_calgo_expr(&cleaned[pos + op_str.len()..])?;
@@ -381,7 +419,7 @@ fn parse_calgo_expr(expr: &str) -> Option<IrExpr> {
                 " <= " => IrBinOp::LeF64,
                 " == " => IrBinOp::EqF64,
                 " != " => IrBinOp::NeF64,
-                _      => IrBinOp::AddF64,
+                _ => IrBinOp::AddF64,
             };
             return Some(IrExpr::BinOp(ir_op, Box::new(left), Box::new(right)));
         }
@@ -400,7 +438,9 @@ fn matched_parens(s: &str) -> bool {
             '(' => depth += 1,
             ')' => {
                 depth -= 1;
-                if depth == 0 && i < s.len() - 1 { return false; }
+                if depth == 0 && i < s.len() - 1 {
+                    return false;
+                }
             }
             _ => {}
         }
@@ -409,13 +449,22 @@ fn matched_parens(s: &str) -> bool {
 }
 
 fn extract_parens_balanced(s: &str) -> String {
-    let start = match s.find('(') { Some(i) => i + 1, None => return String::new() };
+    let start = match s.find('(') {
+        Some(i) => i + 1,
+        None => return String::new(),
+    };
     let mut depth = 1i32;
     let mut end = start;
     for (i, c) in s[start..].char_indices() {
         match c {
             '(' => depth += 1,
-            ')' => { depth -= 1; if depth == 0 { end = start + i; break; } }
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = start + i;
+                    break;
+                }
+            }
             _ => {}
         }
     }
@@ -441,10 +490,16 @@ fn extract_named_arg(s: &str, name: &str) -> Option<String> {
         match c {
             '(' => depth += 1,
             ')' => {
-                if depth == 0 { end = i; break; }
+                if depth == 0 {
+                    end = i;
+                    break;
+                }
                 depth -= 1;
             }
-            ',' if depth == 0 => { end = i; break; }
+            ',' if depth == 0 => {
+                end = i;
+                break;
+            }
             _ => {}
         }
     }
@@ -466,7 +521,9 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
             _ => {}
         }
     }
-    if start < s.len() { parts.push(&s[start..]); }
+    if start < s.len() {
+        parts.push(&s[start..]);
+    }
     parts
 }
 
@@ -477,7 +534,10 @@ fn strip_comments_and_regions(src: &str) -> String {
         if c == '/' && chars.peek() == Some(&'/') {
             while let Some(&d) = chars.peek() {
                 chars.next();
-                if d == '\n' { out.push('\n'); break; }
+                if d == '\n' {
+                    out.push('\n');
+                    break;
+                }
             }
         } else if c == '/' && chars.peek() == Some(&'*') {
             chars.next();
@@ -574,7 +634,9 @@ public class D : Indicator {
 
     #[test]
     fn test_calgo_math_abs() {
-        if let Some(IrExpr::Call(name, _)) = parse_calgo_expr("Math.Abs(Close[index] - Open[index])") {
+        if let Some(IrExpr::Call(name, _)) =
+            parse_calgo_expr("Math.Abs(Close[index] - Open[index])")
+        {
             assert_eq!(name, "math_abs");
         } else {
             panic!("Math.Abs should map to math_abs");

@@ -74,32 +74,48 @@ pub fn screen_symbols(filters: &ScreenerFilter, symbols: &[ScreenerSymbol]) -> S
                 return false;
             }
             if let Some(min) = filters.min_price {
-                if s.price < min { return false; }
+                if s.price < min {
+                    return false;
+                }
             }
             if let Some(max) = filters.max_price {
-                if s.price > max { return false; }
+                if s.price > max {
+                    return false;
+                }
             }
             if let Some(min) = filters.min_volume {
-                if s.volume < min { return false; }
+                if s.volume < min {
+                    return false;
+                }
             }
             if let Some(max) = filters.max_volume {
-                if s.volume > max { return false; }
+                if s.volume > max {
+                    return false;
+                }
             }
             if let Some(min) = filters.min_change_pct {
-                if s.change_pct < min { return false; }
+                if s.change_pct < min {
+                    return false;
+                }
             }
             if let Some(max) = filters.max_change_pct {
-                if s.change_pct > max { return false; }
+                if s.change_pct > max {
+                    return false;
+                }
             }
             if let Some(ref sector) = filters.sector {
                 if let Some(ref s_sector) = s.sector {
-                    if !s_sector.eq_ignore_ascii_case(sector) { return false; }
+                    if !s_sector.eq_ignore_ascii_case(sector) {
+                        return false;
+                    }
                 } else {
                     return false;
                 }
             }
             if let Some(ref ac) = filters.asset_class {
-                if !s.asset_class.eq_ignore_ascii_case(ac) { return false; }
+                if !s.asset_class.eq_ignore_ascii_case(ac) {
+                    return false;
+                }
             }
             true
         })
@@ -153,7 +169,16 @@ mod tests {
 
     #[test]
     fn default_filter_passes_tradable() {
-        let syms = vec![test_symbol("AAPL", 150.0, 1e6, 1.0, true, true, true, Some("Tech"))];
+        let syms = vec![test_symbol(
+            "AAPL",
+            150.0,
+            1e6,
+            1.0,
+            true,
+            true,
+            true,
+            Some("Tech"),
+        )];
         let result = screen_symbols(&ScreenerFilter::default(), &syms);
         assert_eq!(result.total_matched, 1);
     }
@@ -171,7 +196,10 @@ mod tests {
             test_symbol("CHEAP", 2.0, 1e6, 0.0, true, true, true, None),
             test_symbol("PRICEY", 200.0, 1e6, 0.0, true, true, true, None),
         ];
-        let filter = ScreenerFilter { min_price: Some(10.0), ..Default::default() };
+        let filter = ScreenerFilter {
+            min_price: Some(10.0),
+            ..Default::default()
+        };
         let result = screen_symbols(&filter, &syms);
         assert_eq!(result.total_matched, 1);
         assert_eq!(result.symbols[0].symbol, "PRICEY");
@@ -183,7 +211,10 @@ mod tests {
             test_symbol("CHEAP", 2.0, 1e6, 0.0, true, true, true, None),
             test_symbol("PRICEY", 200.0, 1e6, 0.0, true, true, true, None),
         ];
-        let filter = ScreenerFilter { max_price: Some(50.0), ..Default::default() };
+        let filter = ScreenerFilter {
+            max_price: Some(50.0),
+            ..Default::default()
+        };
         let result = screen_symbols(&filter, &syms);
         assert_eq!(result.total_matched, 1);
         assert_eq!(result.symbols[0].symbol, "CHEAP");
@@ -195,7 +226,10 @@ mod tests {
             test_symbol("LOW", 50.0, 100.0, 0.0, true, true, true, None),
             test_symbol("HIGH", 50.0, 1e7, 0.0, true, true, true, None),
         ];
-        let filter = ScreenerFilter { min_volume: Some(1e4), ..Default::default() };
+        let filter = ScreenerFilter {
+            min_volume: Some(1e4),
+            ..Default::default()
+        };
         let result = screen_symbols(&filter, &syms);
         assert_eq!(result.total_matched, 1);
         assert_eq!(result.symbols[0].symbol, "HIGH");
@@ -204,7 +238,16 @@ mod tests {
     #[test]
     fn sector_filter_case_insensitive() {
         let syms = vec![
-            test_symbol("AAPL", 150.0, 1e6, 1.0, true, true, true, Some("Technology")),
+            test_symbol(
+                "AAPL",
+                150.0,
+                1e6,
+                1.0,
+                true,
+                true,
+                true,
+                Some("Technology"),
+            ),
             test_symbol("XOM", 100.0, 1e6, 0.5, true, true, true, Some("Energy")),
         ];
         let filter = ScreenerFilter {
@@ -222,7 +265,10 @@ mod tests {
             test_symbol("SHORT", 50.0, 1e6, 0.0, true, true, true, None),
             test_symbol("NOSHORT", 50.0, 1e6, 0.0, true, false, true, None),
         ];
-        let filter = ScreenerFilter { shortable_only: true, ..Default::default() };
+        let filter = ScreenerFilter {
+            shortable_only: true,
+            ..Default::default()
+        };
         let result = screen_symbols(&filter, &syms);
         assert_eq!(result.total_matched, 1);
         assert_eq!(result.symbols[0].symbol, "SHORT");
@@ -252,8 +298,8 @@ mod tests {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelativeStrengthEntry {
     pub symbol: String,
-    pub return_pct: f64,  // % return over lookback period
-    pub rank: usize,       // 1 = strongest
+    pub return_pct: f64, // % return over lookback period
+    pub rank: usize,     // 1 = strongest
 }
 
 /// Compute relative strength ranking from bar cache.
@@ -263,16 +309,31 @@ pub fn compute_relative_strength(
     bars_map: &std::collections::HashMap<String, Vec<f64>>,
     lookback: usize,
 ) -> Vec<RelativeStrengthEntry> {
-    let mut entries: Vec<RelativeStrengthEntry> = bars_map.iter().filter_map(|(sym, closes)| {
-        if closes.len() < lookback + 1 { return None; }
-        let old = closes[closes.len() - lookback - 1];
-        let new = closes[closes.len() - 1];
-        if old <= 0.0 { return None; }
-        let ret = (new / old - 1.0) * 100.0;
-        Some(RelativeStrengthEntry { symbol: sym.clone(), return_pct: ret, rank: 0 })
-    }).collect();
+    let mut entries: Vec<RelativeStrengthEntry> = bars_map
+        .iter()
+        .filter_map(|(sym, closes)| {
+            if closes.len() < lookback + 1 {
+                return None;
+            }
+            let old = closes[closes.len() - lookback - 1];
+            let new = closes[closes.len() - 1];
+            if old <= 0.0 {
+                return None;
+            }
+            let ret = (new / old - 1.0) * 100.0;
+            Some(RelativeStrengthEntry {
+                symbol: sym.clone(),
+                return_pct: ret,
+                rank: 0,
+            })
+        })
+        .collect();
 
-    entries.sort_by(|a, b| b.return_pct.partial_cmp(&a.return_pct).unwrap_or(std::cmp::Ordering::Equal));
+    entries.sort_by(|a, b| {
+        b.return_pct
+            .partial_cmp(&a.return_pct)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     for (i, e) in entries.iter_mut().enumerate() {
         e.rank = i + 1;
     }
@@ -288,7 +349,7 @@ mod rs_tests {
         let mut bars = std::collections::HashMap::new();
         bars.insert("AAPL".into(), vec![100.0, 105.0, 110.0, 115.0, 120.0]); // +20%
         bars.insert("MSFT".into(), vec![200.0, 198.0, 195.0, 190.0, 180.0]); // -10%
-        bars.insert("GOOG".into(), vec![50.0, 52.0, 55.0, 58.0, 60.0]);      // +20%
+        bars.insert("GOOG".into(), vec![50.0, 52.0, 55.0, 58.0, 60.0]); // +20%
         let rs = compute_relative_strength(&bars, 4);
         assert_eq!(rs.len(), 3);
         assert_eq!(rs[0].rank, 1);
@@ -345,8 +406,14 @@ pub fn compute_symbol_correlation_matrix(
                 (Some(a), Some(b)) => {
                     // Align by taking tail of both series
                     let len = a.len().min(b.len());
-                    if len < 3 { 0.0 } else {
-                        let start = if window > 0 && len > window { len - window } else { 0 };
+                    if len < 3 {
+                        0.0
+                    } else {
+                        let start = if window > 0 && len > window {
+                            len - window
+                        } else {
+                            0
+                        };
                         let sa = &a[a.len() - len + start..];
                         let sb = &b[b.len() - len + start..];
                         // PERF: single-pass running-sums Pearson. Was allocating
@@ -354,16 +421,27 @@ pub fn compute_symbol_correlation_matrix(
                         // three passes (mean_a, mean_b, cov/var). We walk the
                         // aligned slices in a single loop computing returns + sums.
                         let rn = sa.len().saturating_sub(1).min(sb.len().saturating_sub(1));
-                        if rn < 3 { 0.0 } else {
+                        if rn < 3 {
+                            0.0
+                        } else {
                             let mut sum_a = 0.0f64;
                             let mut sum_b = 0.0f64;
                             let mut sum_aa = 0.0f64;
                             let mut sum_bb = 0.0f64;
                             let mut sum_ab = 0.0f64;
                             for k in 0..rn {
-                                let ra = if sa[k] > 0.0 { sa[k + 1] / sa[k] - 1.0 } else { 0.0 };
-                                let rb = if sb[k] > 0.0 { sb[k + 1] / sb[k] - 1.0 } else { 0.0 };
-                                sum_a += ra;  sum_b += rb;
+                                let ra = if sa[k] > 0.0 {
+                                    sa[k + 1] / sa[k] - 1.0
+                                } else {
+                                    0.0
+                                };
+                                let rb = if sb[k] > 0.0 {
+                                    sb[k + 1] / sb[k] - 1.0
+                                } else {
+                                    0.0
+                                };
+                                sum_a += ra;
+                                sum_b += rb;
                                 sum_aa += ra * ra;
                                 sum_bb += rb * rb;
                                 sum_ab += ra * rb;
@@ -374,7 +452,9 @@ pub fn compute_symbol_correlation_matrix(
                             let var_b = sum_bb - sum_b * sum_b / nf;
                             if var_a > 0.0 && var_b > 0.0 {
                                 (cov / (var_a.sqrt() * var_b.sqrt())).clamp(-1.0, 1.0)
-                            } else { 0.0 }
+                            } else {
+                                0.0
+                            }
                         }
                     }
                 }
@@ -385,7 +465,11 @@ pub fn compute_symbol_correlation_matrix(
         }
     }
 
-    CorrelationMatrix { symbols, matrix, window_bars: window }
+    CorrelationMatrix {
+        symbols,
+        matrix,
+        window_bars: window,
+    }
 }
 
 #[cfg(test)]
@@ -396,16 +480,20 @@ mod corr_tests {
     fn test_correlation_matrix_basic() {
         let mut close_map = std::collections::HashMap::new();
         close_map.insert("A".into(), vec![100.0, 102.0, 104.0, 103.0, 105.0]);
-        close_map.insert("B".into(), vec![50.0, 51.0, 52.0, 51.5, 52.5]);   // correlated with A
+        close_map.insert("B".into(), vec![50.0, 51.0, 52.0, 51.5, 52.5]); // correlated with A
         close_map.insert("C".into(), vec![200.0, 198.0, 196.0, 197.0, 195.0]); // inversely correlated
         let cm = compute_symbol_correlation_matrix(&close_map, 0);
         assert_eq!(cm.symbols.len(), 3);
         assert_eq!(cm.matrix.len(), 3);
         // Self-correlation = 1.0
-        for i in 0..3 { assert!((cm.matrix[i][i] - 1.0).abs() < 1e-10); }
+        for i in 0..3 {
+            assert!((cm.matrix[i][i] - 1.0).abs() < 1e-10);
+        }
         // All values in [-1, 1]
         for row in &cm.matrix {
-            for &v in row { assert!(v >= -1.0 && v <= 1.0, "Correlation out of range: {v}"); }
+            for &v in row {
+                assert!(v >= -1.0 && v <= 1.0, "Correlation out of range: {v}");
+            }
         }
     }
 
@@ -420,14 +508,24 @@ mod corr_tests {
     #[test]
     fn test_correlation_with_window() {
         let mut close_map = std::collections::HashMap::new();
-        close_map.insert("X".into(), vec![10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0]);
-        close_map.insert("Y".into(), vec![20.0, 22.0, 24.0, 26.0, 28.0, 30.0, 32.0, 34.0, 36.0, 38.0]);
+        close_map.insert(
+            "X".into(),
+            vec![10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0],
+        );
+        close_map.insert(
+            "Y".into(),
+            vec![20.0, 22.0, 24.0, 26.0, 28.0, 30.0, 32.0, 34.0, 36.0, 38.0],
+        );
         let cm = compute_symbol_correlation_matrix(&close_map, 5);
         assert_eq!(cm.window_bars, 5);
         // Perfect positive correlation
         let x_idx = cm.symbols.iter().position(|s| s == "X").unwrap_or(0);
         let y_idx = cm.symbols.iter().position(|s| s == "Y").unwrap_or(1);
-        assert!((cm.matrix[x_idx][y_idx] - 1.0).abs() < 0.01, "Expected ~1.0, got {}", cm.matrix[x_idx][y_idx]);
+        assert!(
+            (cm.matrix[x_idx][y_idx] - 1.0).abs() < 0.01,
+            "Expected ~1.0, got {}",
+            cm.matrix[x_idx][y_idx]
+        );
     }
 }
 
@@ -437,8 +535,8 @@ mod corr_tests {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HvPoint {
     pub lookback: usize,
-    pub current_hv: f64,       // annualized HV for this lookback
-    pub percentile: f64,       // 0-100: where current HV sits in historical distribution
+    pub current_hv: f64, // annualized HV for this lookback
+    pub percentile: f64, // 0-100: where current HV sits in historical distribution
     pub min_hv: f64,
     pub max_hv: f64,
     pub median_hv: f64,
@@ -451,50 +549,74 @@ pub struct HvPoint {
 /// sum-of-squares update so each window advance is O(1) instead of O(lb), making
 /// the whole inner loop O(N+lb) instead of O(N·lb).
 pub fn compute_hv_cone(closes: &[f64], lookbacks: &[usize]) -> Vec<HvPoint> {
-    if closes.len() < 2 { return Vec::new(); }
+    if closes.len() < 2 {
+        return Vec::new();
+    }
     // Single log-return buffer shared across all lookbacks.
     let returns: Vec<f64> = closes.windows(2).map(|w| (w[1] / w[0]).ln()).collect();
     let annualize = (252.0_f64).sqrt() * 100.0;
 
-    lookbacks.iter().filter_map(|&lb| {
-        if returns.len() < lb { return None; }
-        let lb_f = lb as f64;
-        let denom = lb_f - 1.0;
-        if denom <= 0.0 { return None; }
+    lookbacks
+        .iter()
+        .filter_map(|&lb| {
+            if returns.len() < lb {
+                return None;
+            }
+            let lb_f = lb as f64;
+            let denom = lb_f - 1.0;
+            if denom <= 0.0 {
+                return None;
+            }
 
-        // Initial window sum / sum_sq at position 0.
-        let mut sum = 0.0f64;
-        let mut sum_sq = 0.0f64;
-        for &r in &returns[..lb] {
-            sum += r;
-            sum_sq += r * r;
-        }
-        let window_hv = |sum: f64, sum_sq: f64| -> f64 {
-            let mean = sum / lb_f;
-            let var = (sum_sq - sum * mean) / denom; // = (Σx² − n·mean²)/(n−1)
-            var.max(0.0).sqrt() * annualize
-        };
+            // Initial window sum / sum_sq at position 0.
+            let mut sum = 0.0f64;
+            let mut sum_sq = 0.0f64;
+            for &r in &returns[..lb] {
+                sum += r;
+                sum_sq += r * r;
+            }
+            let window_hv = |sum: f64, sum_sq: f64| -> f64 {
+                let mean = sum / lb_f;
+                let var = (sum_sq - sum * mean) / denom; // = (Σx² − n·mean²)/(n−1)
+                var.max(0.0).sqrt() * annualize
+            };
 
-        let mut all_hvs: Vec<f64> = Vec::with_capacity(returns.len() - lb + 1);
-        all_hvs.push(window_hv(sum, sum_sq));
-        for start in 1..=(returns.len() - lb) {
-            let out = returns[start - 1];
-            let into = returns[start + lb - 1];
-            sum += into - out;
-            sum_sq += into * into - out * out;
+            let mut all_hvs: Vec<f64> = Vec::with_capacity(returns.len() - lb + 1);
             all_hvs.push(window_hv(sum, sum_sq));
-        }
-        let current_hv = *all_hvs.last().unwrap_or(&0.0);
+            for start in 1..=(returns.len() - lb) {
+                let out = returns[start - 1];
+                let into = returns[start + lb - 1];
+                sum += into - out;
+                sum_sq += into * into - out * out;
+                all_hvs.push(window_hv(sum, sum_sq));
+            }
+            let current_hv = *all_hvs.last().unwrap_or(&0.0);
 
-        all_hvs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let rank = all_hvs.partition_point(|&h| h <= current_hv);
-        let percentile = if all_hvs.is_empty() { 50.0 } else { rank as f64 / all_hvs.len() as f64 * 100.0 };
-        let min_hv = all_hvs.first().copied().unwrap_or(0.0);
-        let max_hv = all_hvs.last().copied().unwrap_or(0.0);
-        let median_hv = if all_hvs.is_empty() { 0.0 } else { all_hvs[all_hvs.len() / 2] };
+            all_hvs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let rank = all_hvs.partition_point(|&h| h <= current_hv);
+            let percentile = if all_hvs.is_empty() {
+                50.0
+            } else {
+                rank as f64 / all_hvs.len() as f64 * 100.0
+            };
+            let min_hv = all_hvs.first().copied().unwrap_or(0.0);
+            let max_hv = all_hvs.last().copied().unwrap_or(0.0);
+            let median_hv = if all_hvs.is_empty() {
+                0.0
+            } else {
+                all_hvs[all_hvs.len() / 2]
+            };
 
-        Some(HvPoint { lookback: lb, current_hv, percentile, min_hv, max_hv, median_hv })
-    }).collect()
+            Some(HvPoint {
+                lookback: lb,
+                current_hv,
+                percentile,
+                min_hv,
+                max_hv,
+                median_hv,
+            })
+        })
+        .collect()
 }
 
 // ── Sector Heatmap ───────────────────────────────────────────────────
@@ -510,25 +632,46 @@ pub struct SectorHeatmapEntry {
 }
 
 /// Compute sector-level aggregates from fundamentals data.
-pub fn compute_sector_heatmap(fundamentals: &[super::fundamentals::Fundamentals]) -> Vec<SectorHeatmapEntry> {
-    let mut sectors: std::collections::HashMap<String, (usize, f64, f64, f64, usize)> = std::collections::HashMap::new();
+pub fn compute_sector_heatmap(
+    fundamentals: &[super::fundamentals::Fundamentals],
+) -> Vec<SectorHeatmapEntry> {
+    let mut sectors: std::collections::HashMap<String, (usize, f64, f64, f64, usize)> =
+        std::collections::HashMap::new();
     for f in fundamentals {
-        if f.sector.is_empty() { continue; }
-        let entry = sectors.entry(f.sector.clone()).or_insert((0, 0.0, 0.0, 0.0, 0));
+        if f.sector.is_empty() {
+            continue;
+        }
+        let entry = sectors
+            .entry(f.sector.clone())
+            .or_insert((0, 0.0, 0.0, 0.0, 0));
         entry.0 += 1; // count
         entry.1 += f.market_cap.unwrap_or(0.0); // total mcap
-        if let Some(pe) = f.pe_ratio { entry.2 += pe; entry.4 += 1; } // sum PE + count
+        if let Some(pe) = f.pe_ratio {
+            entry.2 += pe;
+            entry.4 += 1;
+        } // sum PE + count
     }
-    let mut result: Vec<SectorHeatmapEntry> = sectors.into_iter().map(|(sector, (count, mcap, pe_sum, _, pe_count))| {
-        SectorHeatmapEntry {
-            sector,
-            symbol_count: count,
-            avg_change_pct: 0.0, // filled from watchlist/price data externally
-            total_market_cap: mcap,
-            avg_pe: if pe_count > 0 { pe_sum / pe_count as f64 } else { 0.0 },
-        }
-    }).collect();
-    result.sort_by(|a, b| b.total_market_cap.partial_cmp(&a.total_market_cap).unwrap_or(std::cmp::Ordering::Equal));
+    let mut result: Vec<SectorHeatmapEntry> = sectors
+        .into_iter()
+        .map(|(sector, (count, mcap, pe_sum, _, pe_count))| {
+            SectorHeatmapEntry {
+                sector,
+                symbol_count: count,
+                avg_change_pct: 0.0, // filled from watchlist/price data externally
+                total_market_cap: mcap,
+                avg_pe: if pe_count > 0 {
+                    pe_sum / pe_count as f64
+                } else {
+                    0.0
+                },
+            }
+        })
+        .collect();
+    result.sort_by(|a, b| {
+        b.total_market_cap
+            .partial_cmp(&a.total_market_cap)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     result
 }
 
@@ -550,13 +693,32 @@ pub fn parse_earnings_surprises(yahoo_data: &serde_json::Value) -> Vec<EarningsS
         Some(a) => a,
         None => return Vec::new(),
     };
-    arr.iter().filter_map(|q| {
-        let quarter = q["quarter"].as_str().or_else(|| q["period"].as_str()).unwrap_or("").to_string();
-        let actual = q["epsActual"]["raw"].as_f64().or_else(|| q["epsActual"].as_f64())?;
-        let estimate = q["epsEstimate"]["raw"].as_f64().or_else(|| q["epsEstimate"].as_f64())?;
-        let surprise = if estimate.abs() > 1e-10 { (actual - estimate) / estimate.abs() * 100.0 } else { 0.0 };
-        Some(EarningsSurprise { quarter, actual_eps: actual, estimate_eps: estimate, surprise_pct: surprise })
-    }).collect()
+    arr.iter()
+        .filter_map(|q| {
+            let quarter = q["quarter"]
+                .as_str()
+                .or_else(|| q["period"].as_str())
+                .unwrap_or("")
+                .to_string();
+            let actual = q["epsActual"]["raw"]
+                .as_f64()
+                .or_else(|| q["epsActual"].as_f64())?;
+            let estimate = q["epsEstimate"]["raw"]
+                .as_f64()
+                .or_else(|| q["epsEstimate"].as_f64())?;
+            let surprise = if estimate.abs() > 1e-10 {
+                (actual - estimate) / estimate.abs() * 100.0
+            } else {
+                0.0
+            };
+            Some(EarningsSurprise {
+                quarter,
+                actual_eps: actual,
+                estimate_eps: estimate,
+                surprise_pct: surprise,
+            })
+        })
+        .collect()
 }
 
 // ── Dividend Yield Screener ──────────────────────────────────────────
@@ -574,20 +736,31 @@ pub struct DividendScreenEntry {
 }
 
 /// Screen and rank dividend stocks from fundamentals data.
-pub fn screen_dividend_stocks(fundamentals: &[super::fundamentals::Fundamentals]) -> Vec<DividendScreenEntry> {
-    let mut result: Vec<DividendScreenEntry> = fundamentals.iter().filter_map(|f| {
-        if !f.is_dividend_stock || f.dividend_yield.unwrap_or(0.0) <= 0.0 { return None; }
-        Some(DividendScreenEntry {
-            symbol: f.symbol.clone(),
-            company: f.company_name.clone(),
-            dividend_yield: f.dividend_yield.unwrap_or(0.0),
-            ex_div_date: f.next_ex_dividend_date.clone().unwrap_or_default(),
-            pe_ratio: f.pe_ratio.unwrap_or(0.0),
-            market_cap: f.market_cap.unwrap_or(0.0),
-            is_dividend_stock: true,
+pub fn screen_dividend_stocks(
+    fundamentals: &[super::fundamentals::Fundamentals],
+) -> Vec<DividendScreenEntry> {
+    let mut result: Vec<DividendScreenEntry> = fundamentals
+        .iter()
+        .filter_map(|f| {
+            if !f.is_dividend_stock || f.dividend_yield.unwrap_or(0.0) <= 0.0 {
+                return None;
+            }
+            Some(DividendScreenEntry {
+                symbol: f.symbol.clone(),
+                company: f.company_name.clone(),
+                dividend_yield: f.dividend_yield.unwrap_or(0.0),
+                ex_div_date: f.next_ex_dividend_date.clone().unwrap_or_default(),
+                pe_ratio: f.pe_ratio.unwrap_or(0.0),
+                market_cap: f.market_cap.unwrap_or(0.0),
+                is_dividend_stock: true,
+            })
         })
-    }).collect();
-    result.sort_by(|a, b| b.dividend_yield.partial_cmp(&a.dividend_yield).unwrap_or(std::cmp::Ordering::Equal));
+        .collect();
+    result.sort_by(|a, b| {
+        b.dividend_yield
+            .partial_cmp(&a.dividend_yield)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     result
 }
 
@@ -609,8 +782,18 @@ pub fn compute_mtf_confluence(symbol: &str, signals: &[(String, Option<bool>)]) 
     let total = signals.len();
     let bullish = signals.iter().filter(|(_, s)| *s == Some(true)).count();
     let bearish = signals.iter().filter(|(_, s)| *s == Some(false)).count();
-    let score = if total > 0 { (bullish as f64 - bearish as f64) / total as f64 } else { 0.0 };
-    MtfConfluence { symbol: symbol.to_string(), bullish_tfs: bullish, bearish_tfs: bearish, total_tfs: total, confluence_score: score }
+    let score = if total > 0 {
+        (bullish as f64 - bearish as f64) / total as f64
+    } else {
+        0.0
+    };
+    MtfConfluence {
+        symbol: symbol.to_string(),
+        bullish_tfs: bullish,
+        bearish_tfs: bearish,
+        total_tfs: total,
+        confluence_score: score,
+    }
 }
 
 // ── Statistical Arbitrage Pairs ──────────────────────────────────────
@@ -621,10 +804,10 @@ pub struct PairSpread {
     pub symbol_a: String,
     pub symbol_b: String,
     pub correlation: f64,
-    pub current_zscore: f64,    // z-score of current spread
+    pub current_zscore: f64, // z-score of current spread
     pub spread_mean: f64,
     pub spread_std: f64,
-    pub half_life: f64,         // mean reversion half-life (bars)
+    pub half_life: f64, // mean reversion half-life (bars)
 }
 
 /// Find cointegrated pairs and compute spread z-scores.
@@ -639,14 +822,24 @@ pub fn find_stat_arb_pairs(
     for i in 0..corr_matrix.symbols.len() {
         for j in (i + 1)..corr_matrix.symbols.len() {
             let corr = corr_matrix.matrix[i][j];
-            if corr.abs() < min_correlation { continue; }
+            if corr.abs() < min_correlation {
+                continue;
+            }
 
             let sym_a = &corr_matrix.symbols[i];
             let sym_b = &corr_matrix.symbols[j];
-            let closes_a = match close_map.get(sym_a) { Some(c) => c, None => continue };
-            let closes_b = match close_map.get(sym_b) { Some(c) => c, None => continue };
+            let closes_a = match close_map.get(sym_a) {
+                Some(c) => c,
+                None => continue,
+            };
+            let closes_b = match close_map.get(sym_b) {
+                Some(c) => c,
+                None => continue,
+            };
             let len = closes_a.len().min(closes_b.len());
-            if len < lookback + 1 { continue; }
+            if len < lookback + 1 {
+                continue;
+            }
 
             // Compute spread = log(A) - log(B) for last `lookback` bars, fusing
             // the mean + variance accumulators into the build pass so we only
@@ -660,7 +853,11 @@ pub fn find_stat_arb_pairs(
             for k in start..len {
                 let a = closes_a[closes_a.len() - len + k];
                 let b = closes_b[closes_b.len() - len + k];
-                let v = if a > 0.0 && b > 0.0 { a.ln() - b.ln() } else { 0.0 };
+                let v = if a > 0.0 && b > 0.0 {
+                    a.ln() - b.ln()
+                } else {
+                    0.0
+                };
                 sum += v;
                 sum_sq += v * v;
                 spreads.push(v);
@@ -671,7 +868,11 @@ pub fn find_stat_arb_pairs(
             let variance = ((sum_sq - sum * sum / nf) / (nf - 1.0)).max(0.0);
             let std = variance.sqrt();
             let current = spreads.last().copied().unwrap_or(0.0);
-            let zscore = if std > 1e-10 { (current - mean) / std } else { 0.0 };
+            let zscore = if std > 1e-10 {
+                (current - mean) / std
+            } else {
+                0.0
+            };
 
             // Half-life via AR(1): single fused pass over the lagged window.
             let half_life = if spreads.len() > 2 {
@@ -690,17 +891,32 @@ pub fn find_stat_arb_pairs(
                     sum_xx += prev * prev;
                 }
                 let beta = (n_hl * sum_xy - sum_x * sum_y) / (n_hl * sum_xx - sum_x * sum_x);
-                if beta > 0.0 && beta < 1.0 { -(2.0_f64).ln() / beta.ln() } else { f64::MAX }
-            } else { f64::MAX };
+                if beta > 0.0 && beta < 1.0 {
+                    -(2.0_f64).ln() / beta.ln()
+                } else {
+                    f64::MAX
+                }
+            } else {
+                f64::MAX
+            };
 
             pairs.push(PairSpread {
-                symbol_a: sym_a.clone(), symbol_b: sym_b.clone(),
-                correlation: corr, current_zscore: zscore,
-                spread_mean: mean, spread_std: std, half_life,
+                symbol_a: sym_a.clone(),
+                symbol_b: sym_b.clone(),
+                correlation: corr,
+                current_zscore: zscore,
+                spread_mean: mean,
+                spread_std: std,
+                half_life,
             });
         }
     }
-    pairs.sort_by(|a, b| b.current_zscore.abs().partial_cmp(&a.current_zscore.abs()).unwrap_or(std::cmp::Ordering::Equal));
+    pairs.sort_by(|a, b| {
+        b.current_zscore
+            .abs()
+            .partial_cmp(&a.current_zscore.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     pairs
 }
 
@@ -710,17 +926,17 @@ pub fn find_stat_arb_pairs(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskBudgetEntry {
     pub name: String,
-    pub weight_pct: f64,          // portfolio weight %
-    pub var_95: f64,              // individual VaR
+    pub weight_pct: f64,            // portfolio weight %
+    pub var_95: f64,                // individual VaR
     pub risk_contribution_pct: f64, // % of total portfolio risk
-    pub marginal_var: f64,        // marginal VaR (incremental risk per unit)
+    pub marginal_var: f64,          // marginal VaR (incremental risk per unit)
 }
 
 /// Compute risk budget: how much each asset contributes to total portfolio VaR.
 pub fn compute_risk_budget(
     names: &[String],
-    weights: &[f64],       // portfolio weights (sum to 1.0)
-    individual_vars: &[f64], // per-asset VaR
+    weights: &[f64],           // portfolio weights (sum to 1.0)
+    individual_vars: &[f64],   // per-asset VaR
     correlations: &[Vec<f64>], // N×N correlation matrix
 ) -> Vec<RiskBudgetEntry> {
     let n = names.len();
@@ -732,8 +948,13 @@ pub fn compute_risk_budget(
     let mut portfolio_var = 0.0;
     for i in 0..n {
         for j in 0..n {
-            let rho = if j < correlations[i].len() { correlations[i][j] } else { 0.0 };
-            portfolio_var += weights[i] * weights[j] * individual_vars[i] * individual_vars[j] * rho;
+            let rho = if j < correlations[i].len() {
+                correlations[i][j]
+            } else {
+                0.0
+            };
+            portfolio_var +=
+                weights[i] * weights[j] * individual_vars[i] * individual_vars[j] * rho;
         }
     }
     let portfolio_vol = portfolio_var.sqrt();
@@ -743,13 +964,25 @@ pub fn compute_risk_budget(
     for i in 0..n {
         let mut marginal = 0.0;
         for j in 0..n {
-            let rho = if j < correlations[i].len() { correlations[i][j] } else { 0.0 };
+            let rho = if j < correlations[i].len() {
+                correlations[i][j]
+            } else {
+                0.0
+            };
             marginal += weights[j] * individual_vars[j] * rho;
         }
         marginal *= individual_vars[i];
-        let marginal_var = if portfolio_vol > 0.0 { marginal / portfolio_vol } else { 0.0 };
+        let marginal_var = if portfolio_vol > 0.0 {
+            marginal / portfolio_vol
+        } else {
+            0.0
+        };
         let risk_contribution = weights[i] * marginal_var;
-        let risk_pct = if portfolio_vol > 0.0 { risk_contribution / portfolio_vol * 100.0 } else { 0.0 };
+        let risk_pct = if portfolio_vol > 0.0 {
+            risk_contribution / portfolio_vol * 100.0
+        } else {
+            0.0
+        };
 
         entries.push(RiskBudgetEntry {
             name: names[i].clone(),
@@ -813,10 +1046,21 @@ mod analytics_tests {
     fn test_stat_arb_pairs() {
         let mut close_map = std::collections::HashMap::new();
         // Two correlated series
-        close_map.insert("A".into(), (0..100).map(|i| 100.0 + i as f64 * 0.5).collect());
-        close_map.insert("B".into(), (0..100).map(|i| 50.0 + i as f64 * 0.25).collect());
+        close_map.insert(
+            "A".into(),
+            (0..100).map(|i| 100.0 + i as f64 * 0.5).collect(),
+        );
+        close_map.insert(
+            "B".into(),
+            (0..100).map(|i| 50.0 + i as f64 * 0.25).collect(),
+        );
         // Uncorrelated
-        close_map.insert("C".into(), (0..100).map(|i| 100.0 + (i as f64 * 0.1).sin() * 10.0).collect());
+        close_map.insert(
+            "C".into(),
+            (0..100)
+                .map(|i| 100.0 + (i as f64 * 0.1).sin() * 10.0)
+                .collect(),
+        );
         let pairs = find_stat_arb_pairs(&close_map, 0.8, 50);
         // A and B should be highly correlated
         assert!(!pairs.is_empty() || true); // may not meet threshold depending on exact data
@@ -829,4 +1073,3 @@ mod analytics_tests {
         assert!(result.is_empty());
     }
 }
-

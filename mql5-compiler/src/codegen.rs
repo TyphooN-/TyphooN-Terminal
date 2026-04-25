@@ -6,8 +6,8 @@
 //! - Exports `on_calculate(rates_total: i32, prev_calculated: i32) -> i32`
 //! - Exports buffer memory for the runtime to read indicator values
 
-use wasm_encoder::*;
 use crate::ir::*;
+use wasm_encoder::*;
 
 /// Emit WASM binary from IR module.
 pub fn emit_wasm(module: &IrModule) -> Result<Vec<u8>, String> {
@@ -23,11 +23,17 @@ pub fn emit_wasm(module: &IrModule) -> Result<Vec<u8>, String> {
     // Type 2: (f64) -> f64 (math_abs, math_sqrt, math_log)
     types.ty().function(vec![ValType::F64], vec![ValType::F64]);
     // Type 3: (f64, f64) -> f64 (math_max, math_min)
-    types.ty().function(vec![ValType::F64, ValType::F64], vec![ValType::F64]);
+    types
+        .ty()
+        .function(vec![ValType::F64, ValType::F64], vec![ValType::F64]);
     // Type 4: (i32, i32) -> i32 (on_calculate signature)
-    types.ty().function(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
+    types
+        .ty()
+        .function(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
     // Type 5: (i32, f64) -> () (set_buffer)
-    types.ty().function(vec![ValType::I32, ValType::F64], vec![]);
+    types
+        .ty()
+        .function(vec![ValType::I32, ValType::F64], vec![]);
 
     wasm.section(&types);
 
@@ -35,18 +41,18 @@ pub fn emit_wasm(module: &IrModule) -> Result<Vec<u8>, String> {
     let mut imports = ImportSection::new();
 
     // Runtime bar data imports
-    imports.import("env", "iBars", EntityType::Function(0));      // 0
-    imports.import("env", "iOpen", EntityType::Function(1));      // 1
-    imports.import("env", "iHigh", EntityType::Function(1));      // 2
-    imports.import("env", "iLow", EntityType::Function(1));       // 3
-    imports.import("env", "iClose", EntityType::Function(1));     // 4
-    imports.import("env", "iVolume", EntityType::Function(1));    // 5
+    imports.import("env", "iBars", EntityType::Function(0)); // 0
+    imports.import("env", "iOpen", EntityType::Function(1)); // 1
+    imports.import("env", "iHigh", EntityType::Function(1)); // 2
+    imports.import("env", "iLow", EntityType::Function(1)); // 3
+    imports.import("env", "iClose", EntityType::Function(1)); // 4
+    imports.import("env", "iVolume", EntityType::Function(1)); // 5
     // Math imports
-    imports.import("env", "math_abs", EntityType::Function(2));   // 6
-    imports.import("env", "math_sqrt", EntityType::Function(2));  // 7
-    imports.import("env", "math_log", EntityType::Function(2));   // 8
-    imports.import("env", "math_max", EntityType::Function(3));   // 9
-    imports.import("env", "math_min", EntityType::Function(3));   // 10
+    imports.import("env", "math_abs", EntityType::Function(2)); // 6
+    imports.import("env", "math_sqrt", EntityType::Function(2)); // 7
+    imports.import("env", "math_log", EntityType::Function(2)); // 8
+    imports.import("env", "math_max", EntityType::Function(3)); // 9
+    imports.import("env", "math_min", EntityType::Function(3)); // 10
     // Buffer write import
     imports.import("env", "set_buffer", EntityType::Function(5)); // 11
 
@@ -133,7 +139,11 @@ impl LocalMap {
     }
 }
 
-fn emit_function_body(func: &mut Function, ir_func: &IrFunction, num_imports: u32) -> Result<(), String> {
+fn emit_function_body(
+    func: &mut Function,
+    ir_func: &IrFunction,
+    num_imports: u32,
+) -> Result<(), String> {
     let local_map = LocalMap::new(&ir_func.params, &ir_func.locals);
 
     // Declare additional locals for IR-declared variables
@@ -163,11 +173,19 @@ fn emit_function_body(func: &mut Function, ir_func: &IrFunction, num_imports: u3
 #[allow(dead_code)] // used by tests
 fn emit_stmt(func: &mut Function, stmt: &IrStmt, num_imports: u32) -> Result<(), String> {
     // Legacy wrapper for tests — uses default local index 2
-    let default_map = LocalMap { map: std::collections::HashMap::new(), next_idx: 3 };
+    let default_map = LocalMap {
+        map: std::collections::HashMap::new(),
+        next_idx: 3,
+    };
     emit_stmt_with_locals(func, stmt, num_imports, &default_map)
 }
 
-fn emit_stmt_with_locals(func: &mut Function, stmt: &IrStmt, num_imports: u32, locals: &LocalMap) -> Result<(), String> {
+fn emit_stmt_with_locals(
+    func: &mut Function,
+    stmt: &IrStmt,
+    num_imports: u32,
+    locals: &LocalMap,
+) -> Result<(), String> {
     match stmt {
         IrStmt::SetLocal(name, expr) => {
             emit_expr_with_locals(func, expr, num_imports, locals)?;
@@ -184,17 +202,23 @@ fn emit_stmt_with_locals(func: &mut Function, stmt: &IrStmt, num_imports: u32, l
         IrStmt::If { cond, then, else_ } => {
             emit_expr_with_locals(func, cond, num_imports, locals)?;
             func.instruction(&Instruction::If(BlockType::Empty));
-            for s in then { emit_stmt_with_locals(func, s, num_imports, locals)?; }
+            for s in then {
+                emit_stmt_with_locals(func, s, num_imports, locals)?;
+            }
             if !else_.is_empty() {
                 func.instruction(&Instruction::Else);
-                for s in else_ { emit_stmt_with_locals(func, s, num_imports, locals)?; }
+                for s in else_ {
+                    emit_stmt_with_locals(func, s, num_imports, locals)?;
+                }
             }
             func.instruction(&Instruction::End);
         }
         IrStmt::Loop { body } => {
             func.instruction(&Instruction::Block(BlockType::Empty));
             func.instruction(&Instruction::Loop(BlockType::Empty));
-            for s in body { emit_stmt_with_locals(func, s, num_imports, locals)?; }
+            for s in body {
+                emit_stmt_with_locals(func, s, num_imports, locals)?;
+            }
             func.instruction(&Instruction::Br(0)); // continue loop
             func.instruction(&Instruction::End); // end loop
             func.instruction(&Instruction::End); // end block
@@ -220,7 +244,9 @@ fn emit_stmt_with_locals(func: &mut Function, stmt: &IrStmt, num_imports: u32, l
             func.instruction(&Instruction::Call(11)); // set_buffer import
         }
         IrStmt::Block(stmts) => {
-            for s in stmts { emit_stmt_with_locals(func, s, num_imports, locals)?; }
+            for s in stmts {
+                emit_stmt_with_locals(func, s, num_imports, locals)?;
+            }
         }
     }
     Ok(())
@@ -228,14 +254,26 @@ fn emit_stmt_with_locals(func: &mut Function, stmt: &IrStmt, num_imports: u32, l
 
 #[allow(dead_code)] // used by tests
 fn emit_expr(func: &mut Function, expr: &IrExpr, num_imports: u32) -> Result<(), String> {
-    let default_map = LocalMap { map: std::collections::HashMap::new(), next_idx: 3 };
+    let default_map = LocalMap {
+        map: std::collections::HashMap::new(),
+        next_idx: 3,
+    };
     emit_expr_with_locals(func, expr, num_imports, &default_map)
 }
 
-fn emit_expr_with_locals(func: &mut Function, expr: &IrExpr, num_imports: u32, locals: &LocalMap) -> Result<(), String> {
+fn emit_expr_with_locals(
+    func: &mut Function,
+    expr: &IrExpr,
+    num_imports: u32,
+    locals: &LocalMap,
+) -> Result<(), String> {
     match expr {
-        IrExpr::I32Const(n) => { func.instruction(&Instruction::I32Const(*n)); }
-        IrExpr::F64Const(f) => { func.instruction(&Instruction::F64Const((*f).into())); }
+        IrExpr::I32Const(n) => {
+            func.instruction(&Instruction::I32Const(*n));
+        }
+        IrExpr::F64Const(f) => {
+            func.instruction(&Instruction::F64Const((*f).into()));
+        }
         IrExpr::GetLocal(name) => {
             func.instruction(&Instruction::LocalGet(locals.resolve(name)));
         }
@@ -266,32 +304,62 @@ fn emit_expr_with_locals(func: &mut Function, expr: &IrExpr, num_imports: u32, l
             emit_expr_with_locals(func, left, num_imports, locals)?;
             emit_expr_with_locals(func, right, num_imports, locals)?;
             match op {
-                IrBinOp::AddF64 => { func.instruction(&Instruction::F64Add); }
-                IrBinOp::SubF64 => { func.instruction(&Instruction::F64Sub); }
-                IrBinOp::MulF64 => { func.instruction(&Instruction::F64Mul); }
-                IrBinOp::DivF64 => { func.instruction(&Instruction::F64Div); }
-                IrBinOp::AddI32 => { func.instruction(&Instruction::I32Add); }
-                IrBinOp::SubI32 => { func.instruction(&Instruction::I32Sub); }
-                IrBinOp::MulI32 => { func.instruction(&Instruction::I32Mul); }
-                IrBinOp::LtF64 => { func.instruction(&Instruction::F64Lt); }
-                IrBinOp::LeF64 => { func.instruction(&Instruction::F64Le); }
-                IrBinOp::GtF64 => { func.instruction(&Instruction::F64Gt); }
-                IrBinOp::GeF64 => { func.instruction(&Instruction::F64Ge); }
-                IrBinOp::EqF64 => { func.instruction(&Instruction::F64Eq); }
-                IrBinOp::NeF64 => { func.instruction(&Instruction::F64Ne); }
+                IrBinOp::AddF64 => {
+                    func.instruction(&Instruction::F64Add);
+                }
+                IrBinOp::SubF64 => {
+                    func.instruction(&Instruction::F64Sub);
+                }
+                IrBinOp::MulF64 => {
+                    func.instruction(&Instruction::F64Mul);
+                }
+                IrBinOp::DivF64 => {
+                    func.instruction(&Instruction::F64Div);
+                }
+                IrBinOp::AddI32 => {
+                    func.instruction(&Instruction::I32Add);
+                }
+                IrBinOp::SubI32 => {
+                    func.instruction(&Instruction::I32Sub);
+                }
+                IrBinOp::MulI32 => {
+                    func.instruction(&Instruction::I32Mul);
+                }
+                IrBinOp::LtF64 => {
+                    func.instruction(&Instruction::F64Lt);
+                }
+                IrBinOp::LeF64 => {
+                    func.instruction(&Instruction::F64Le);
+                }
+                IrBinOp::GtF64 => {
+                    func.instruction(&Instruction::F64Gt);
+                }
+                IrBinOp::GeF64 => {
+                    func.instruction(&Instruction::F64Ge);
+                }
+                IrBinOp::EqF64 => {
+                    func.instruction(&Instruction::F64Eq);
+                }
+                IrBinOp::NeF64 => {
+                    func.instruction(&Instruction::F64Ne);
+                }
                 IrBinOp::And => {
                     func.instruction(&Instruction::I32And);
                 }
                 IrBinOp::Or => {
                     func.instruction(&Instruction::I32Or);
                 }
-                _ => { func.instruction(&Instruction::F64Add); } // fallback
+                _ => {
+                    func.instruction(&Instruction::F64Add);
+                } // fallback
             }
         }
         IrExpr::UnaryOp(op, operand) => {
             emit_expr_with_locals(func, operand, num_imports, locals)?;
             match op {
-                IrUnaryOp::NegF64 => { func.instruction(&Instruction::F64Neg); }
+                IrUnaryOp::NegF64 => {
+                    func.instruction(&Instruction::F64Neg);
+                }
                 IrUnaryOp::NegI32 => {
                     func.instruction(&Instruction::I32Const(0));
                     func.instruction(&Instruction::I32Sub); // 0 - x
@@ -306,12 +374,24 @@ fn emit_expr_with_locals(func: &mut Function, expr: &IrExpr, num_imports: u32, l
                 emit_expr_with_locals(func, arg, num_imports, locals)?;
             }
             match name.as_str() {
-                "math_abs" => { func.instruction(&Instruction::Call(6)); }
-                "math_sqrt" => { func.instruction(&Instruction::Call(7)); }
-                "math_log" => { func.instruction(&Instruction::Call(8)); }
-                "math_max" => { func.instruction(&Instruction::Call(9)); }
-                "math_min" => { func.instruction(&Instruction::Call(10)); }
-                "set_buffer" => { func.instruction(&Instruction::Call(11)); }
+                "math_abs" => {
+                    func.instruction(&Instruction::Call(6));
+                }
+                "math_sqrt" => {
+                    func.instruction(&Instruction::Call(7));
+                }
+                "math_log" => {
+                    func.instruction(&Instruction::Call(8));
+                }
+                "math_max" => {
+                    func.instruction(&Instruction::Call(9));
+                }
+                "math_min" => {
+                    func.instruction(&Instruction::Call(10));
+                }
+                "set_buffer" => {
+                    func.instruction(&Instruction::Call(11));
+                }
                 "__assign" if args.len() == 2 => {
                     // Assignment expression: set local and leave value on stack
                     // args[0] is GetLocal(name) marker, args[1] is the value
@@ -395,7 +475,11 @@ mod tests {
     fn emit_empty_module_produces_valid_wasm() {
         let module = empty_module();
         let bytes = emit_wasm(&module).expect("should emit wasm");
-        assert!(bytes.len() >= 8, "WASM binary too short: {} bytes", bytes.len());
+        assert!(
+            bytes.len() >= 8,
+            "WASM binary too short: {} bytes",
+            bytes.len()
+        );
         assert_eq!(&bytes[0..4], &WASM_MAGIC, "missing WASM magic number");
         assert_eq!(&bytes[4..8], &WASM_VERSION, "wrong WASM version");
     }
@@ -406,15 +490,16 @@ mod tests {
         let bytes = emit_wasm(&module).expect("should emit wasm");
         // The binary should contain the export names as UTF-8 strings
         let wasm_str = String::from_utf8_lossy(&bytes);
-        assert!(wasm_str.contains("on_calculate"), "missing on_calculate export");
+        assert!(
+            wasm_str.contains("on_calculate"),
+            "missing on_calculate export"
+        );
         assert!(wasm_str.contains("memory"), "missing memory export");
     }
 
     #[test]
     fn emit_i32_const_expression() {
-        let body = vec![
-            IrStmt::Return(Some(IrExpr::I32Const(42))),
-        ];
+        let body = vec![IrStmt::Return(Some(IrExpr::I32Const(42)))];
         let module = module_with_body(body);
         let bytes = emit_wasm(&module).expect("should emit wasm");
         assert!(&bytes[0..4] == &WASM_MAGIC);
@@ -424,9 +509,7 @@ mod tests {
 
     #[test]
     fn emit_f64_const_expression() {
-        let body = vec![
-            IrStmt::Expr(IrExpr::F64Const(3.14)),
-        ];
+        let body = vec![IrStmt::Expr(IrExpr::F64Const(3.14))];
         let module = module_with_body(body);
         let bytes = emit_wasm(&module).expect("should emit wasm");
         assert_eq!(&bytes[0..4], &WASM_MAGIC);
@@ -439,9 +522,7 @@ mod tests {
     #[test]
     fn emit_f64_nan_for_unknown_function() {
         // Unknown function calls should emit NaN placeholder
-        let body = vec![
-            IrStmt::Expr(IrExpr::Call("UnknownFunc".into(), vec![])),
-        ];
+        let body = vec![IrStmt::Expr(IrExpr::Call("UnknownFunc".into(), vec![]))];
         let module = module_with_body(body);
         let bytes = emit_wasm(&module).expect("should emit wasm for unknown func");
         assert_eq!(&bytes[0..4], &WASM_MAGIC);
@@ -455,12 +536,10 @@ mod tests {
     fn emit_known_math_functions() {
         // Known math functions should NOT emit NaN — they emit Call instructions
         for func_name in &["math_abs", "math_sqrt", "math_log"] {
-            let body = vec![
-                IrStmt::Expr(IrExpr::Call(
-                    func_name.to_string(),
-                    vec![IrExpr::F64Const(1.0)],
-                )),
-            ];
+            let body = vec![IrStmt::Expr(IrExpr::Call(
+                func_name.to_string(),
+                vec![IrExpr::F64Const(1.0)],
+            ))];
             let module = module_with_body(body);
             let bytes = emit_wasm(&module).expect(&format!("should emit wasm for {}", func_name));
             assert_eq!(&bytes[0..4], &WASM_MAGIC);
@@ -476,13 +555,11 @@ mod tests {
             (IrBinOp::DivF64, "div"),
         ];
         for (op, label) in ops {
-            let body = vec![
-                IrStmt::Expr(IrExpr::BinOp(
-                    op,
-                    Box::new(IrExpr::F64Const(2.0)),
-                    Box::new(IrExpr::F64Const(3.0)),
-                )),
-            ];
+            let body = vec![IrStmt::Expr(IrExpr::BinOp(
+                op,
+                Box::new(IrExpr::F64Const(2.0)),
+                Box::new(IrExpr::F64Const(3.0)),
+            ))];
             let module = module_with_body(body);
             let bytes = emit_wasm(&module).expect(&format!("should emit wasm for f64.{}", label));
             assert_eq!(&bytes[0..4], &WASM_MAGIC);
@@ -500,13 +577,11 @@ mod tests {
             IrBinOp::NeF64,
         ];
         for op in ops {
-            let body = vec![
-                IrStmt::Expr(IrExpr::BinOp(
-                    op,
-                    Box::new(IrExpr::F64Const(1.0)),
-                    Box::new(IrExpr::F64Const(2.0)),
-                )),
-            ];
+            let body = vec![IrStmt::Expr(IrExpr::BinOp(
+                op,
+                Box::new(IrExpr::F64Const(1.0)),
+                Box::new(IrExpr::F64Const(2.0)),
+            ))];
             let module = module_with_body(body);
             let bytes = emit_wasm(&module).expect("should emit comparison op");
             assert_eq!(&bytes[0..4], &WASM_MAGIC);
@@ -515,12 +590,10 @@ mod tests {
 
     #[test]
     fn emit_unary_neg_f64() {
-        let body = vec![
-            IrStmt::Expr(IrExpr::UnaryOp(
-                IrUnaryOp::NegF64,
-                Box::new(IrExpr::F64Const(5.0)),
-            )),
-        ];
+        let body = vec![IrStmt::Expr(IrExpr::UnaryOp(
+            IrUnaryOp::NegF64,
+            Box::new(IrExpr::F64Const(5.0)),
+        ))];
         let module = module_with_body(body);
         let bytes = emit_wasm(&module).expect("should emit unary neg");
         assert_eq!(&bytes[0..4], &WASM_MAGIC);
@@ -528,12 +601,10 @@ mod tests {
 
     #[test]
     fn emit_unary_not() {
-        let body = vec![
-            IrStmt::Expr(IrExpr::UnaryOp(
-                IrUnaryOp::Not,
-                Box::new(IrExpr::I32Const(1)),
-            )),
-        ];
+        let body = vec![IrStmt::Expr(IrExpr::UnaryOp(
+            IrUnaryOp::Not,
+            Box::new(IrExpr::I32Const(1)),
+        ))];
         let module = module_with_body(body);
         let bytes = emit_wasm(&module).expect("should emit unary not");
         assert_eq!(&bytes[0..4], &WASM_MAGIC);
@@ -541,13 +612,11 @@ mod tests {
 
     #[test]
     fn emit_if_statement() {
-        let body = vec![
-            IrStmt::If {
-                cond: IrExpr::I32Const(1),
-                then: vec![IrStmt::Return(Some(IrExpr::I32Const(1)))],
-                else_: vec![IrStmt::Return(Some(IrExpr::I32Const(0)))],
-            },
-        ];
+        let body = vec![IrStmt::If {
+            cond: IrExpr::I32Const(1),
+            then: vec![IrStmt::Return(Some(IrExpr::I32Const(1)))],
+            else_: vec![IrStmt::Return(Some(IrExpr::I32Const(0)))],
+        }];
         let module = module_with_body(body);
         let bytes = emit_wasm(&module).expect("should emit if stmt");
         assert_eq!(&bytes[0..4], &WASM_MAGIC);
@@ -555,11 +624,9 @@ mod tests {
 
     #[test]
     fn emit_loop_and_break() {
-        let body = vec![
-            IrStmt::Loop {
-                body: vec![IrStmt::Break],
-            },
-        ];
+        let body = vec![IrStmt::Loop {
+            body: vec![IrStmt::Break],
+        }];
         let module = module_with_body(body);
         let bytes = emit_wasm(&module).expect("should emit loop");
         assert_eq!(&bytes[0..4], &WASM_MAGIC);
@@ -593,9 +660,7 @@ mod tests {
 
     #[test]
     fn emit_integer_zero() {
-        let body = vec![
-            IrStmt::Return(Some(IrExpr::I32Const(0))),
-        ];
+        let body = vec![IrStmt::Return(Some(IrExpr::I32Const(0)))];
         let module = module_with_body(body);
         let bytes = emit_wasm(&module).expect("should emit i32 zero");
         assert_eq!(&bytes[0..4], &WASM_MAGIC);
@@ -603,12 +668,10 @@ mod tests {
 
     #[test]
     fn emit_negative_i32() {
-        let body = vec![
-            IrStmt::Expr(IrExpr::UnaryOp(
-                IrUnaryOp::NegI32,
-                Box::new(IrExpr::I32Const(10)),
-            )),
-        ];
+        let body = vec![IrStmt::Expr(IrExpr::UnaryOp(
+            IrUnaryOp::NegI32,
+            Box::new(IrExpr::I32Const(10)),
+        ))];
         let module = module_with_body(body);
         let bytes = emit_wasm(&module).expect("should emit neg i32");
         assert_eq!(&bytes[0..4], &WASM_MAGIC);
@@ -633,9 +696,7 @@ mod tests {
 
     #[test]
     fn emit_set_local() {
-        let body = vec![
-            IrStmt::SetLocal("temp".into(), IrExpr::F64Const(1.0)),
-        ];
+        let body = vec![IrStmt::SetLocal("temp".into(), IrExpr::F64Const(1.0))];
         let module = module_with_body(body);
         let bytes = emit_wasm(&module).expect("should emit set_local");
         assert_eq!(&bytes[0..4], &WASM_MAGIC);
@@ -643,9 +704,7 @@ mod tests {
 
     #[test]
     fn emit_return_none() {
-        let body = vec![
-            IrStmt::Return(None),
-        ];
+        let body = vec![IrStmt::Return(None)];
         let module = module_with_body(body);
         let bytes = emit_wasm(&module).expect("should emit return none");
         assert_eq!(&bytes[0..4], &WASM_MAGIC);
@@ -653,12 +712,10 @@ mod tests {
 
     #[test]
     fn emit_block_stmts() {
-        let body = vec![
-            IrStmt::Block(vec![
-                IrStmt::Expr(IrExpr::I32Const(1)),
-                IrStmt::Expr(IrExpr::I32Const(2)),
-            ]),
-        ];
+        let body = vec![IrStmt::Block(vec![
+            IrStmt::Expr(IrExpr::I32Const(1)),
+            IrStmt::Expr(IrExpr::I32Const(2)),
+        ])];
         let module = module_with_body(body);
         let bytes = emit_wasm(&module).expect("should emit block");
         assert_eq!(&bytes[0..4], &WASM_MAGIC);

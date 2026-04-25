@@ -89,11 +89,31 @@ impl TradeReport {
         }
 
         let n_trades = trades.len() as f64;
-        let win_rate = if n_trades > 0.0 { n_wins as f64 / n_trades * 100.0 } else { 0.0 };
-        let profit_factor = if gross_loss > 0.0 { (gross_profit / gross_loss).min(999.0) } else { 999.0 };
-        let avg_win = if n_wins == 0 { 0.0 } else { gross_profit / n_wins as f64 };
-        let avg_loss = if n_losses == 0 { 0.0 } else { gross_loss / n_losses as f64 };
-        let avg_trade = if n_trades > 0.0 { total_pnl / n_trades } else { 0.0 };
+        let win_rate = if n_trades > 0.0 {
+            n_wins as f64 / n_trades * 100.0
+        } else {
+            0.0
+        };
+        let profit_factor = if gross_loss > 0.0 {
+            (gross_profit / gross_loss).min(999.0)
+        } else {
+            999.0
+        };
+        let avg_win = if n_wins == 0 {
+            0.0
+        } else {
+            gross_profit / n_wins as f64
+        };
+        let avg_loss = if n_losses == 0 {
+            0.0
+        } else {
+            gross_loss / n_losses as f64
+        };
+        let avg_trade = if n_trades > 0.0 {
+            total_pnl / n_trades
+        } else {
+            0.0
+        };
 
         // Max consecutive wins/losses
         let mut max_con_wins: u32 = 0;
@@ -129,10 +149,22 @@ impl TradeReport {
         // Sharpe ratio (annualized, assuming daily returns)
         let returns: Vec<f64> = trades.iter().map(|t| t.pnl_pct / 100.0).collect();
         let n_returns = returns.len() as f64;
-        let mean_ret = if n_returns > 0.0 { returns.iter().sum::<f64>() / n_returns } else { 0.0 };
-        let variance = if n_returns > 0.0 { returns.iter().map(|r| (r - mean_ret).powi(2)).sum::<f64>() / n_returns } else { 0.0 };
+        let mean_ret = if n_returns > 0.0 {
+            returns.iter().sum::<f64>() / n_returns
+        } else {
+            0.0
+        };
+        let variance = if n_returns > 0.0 {
+            returns.iter().map(|r| (r - mean_ret).powi(2)).sum::<f64>() / n_returns
+        } else {
+            0.0
+        };
         let std_dev = variance.sqrt();
-        let sharpe = if std_dev > 1e-10 { (mean_ret / std_dev) * (252.0_f64).sqrt() } else { 0.0 };
+        let sharpe = if std_dev > 1e-10 {
+            (mean_ret / std_dev) * (252.0_f64).sqrt()
+        } else {
+            0.0
+        };
 
         Self {
             total_trades: trades.len(),
@@ -178,7 +210,10 @@ pub struct SMACrossStrategy {
 
 impl SMACrossStrategy {
     pub fn new(fast_period: usize, slow_period: usize) -> Self {
-        Self { fast_period, slow_period }
+        Self {
+            fast_period,
+            slow_period,
+        }
     }
 }
 
@@ -193,7 +228,9 @@ fn sma(bars: &[Bar], end: usize, period: usize) -> Option<f64> {
 
 impl Strategy for SMACrossStrategy {
     fn on_bar(&mut self, _bar: &Bar, index: usize, bars: &[Bar]) -> Option<Signal> {
-        if index < 1 { return None; }
+        if index < 1 {
+            return None;
+        }
 
         let fast_now = sma(bars, index, self.fast_period)?;
         let slow_now = sma(bars, index, self.slow_period)?;
@@ -231,13 +268,20 @@ pub struct NNFXStrategy {
 
 impl NNFXStrategy {
     pub fn new(kama_period: usize, fisher_period: usize) -> Self {
-        Self { kama_period, fisher_period, kama_prev: 0.0, fisher_prev: 0.0 }
+        Self {
+            kama_period,
+            fisher_period,
+            kama_prev: 0.0,
+            fisher_prev: 0.0,
+        }
     }
 }
 
 fn kama_at(bars: &[Bar], end: usize, period: usize) -> Option<f64> {
-    if end + 1 < period + 1 { return None; }
-    let fast_sc = 2.0 / 3.0;  // fast=2
+    if end + 1 < period + 1 {
+        return None;
+    }
+    let fast_sc = 2.0 / 3.0; // fast=2
     let slow_sc = 2.0 / 31.0; // slow=30
     let start = end + 1 - (period + 1);
     let mut kama = bars[start].open;
@@ -245,9 +289,15 @@ fn kama_at(bars: &[Bar], end: usize, period: usize) -> Option<f64> {
         let direction = (bars[i].open - bars[i.saturating_sub(period)].open).abs();
         let mut volatility = 0.0;
         for j in (i.saturating_sub(period - 1))..=i {
-            if j > 0 { volatility += (bars[j].open - bars[j - 1].open).abs(); }
+            if j > 0 {
+                volatility += (bars[j].open - bars[j - 1].open).abs();
+            }
         }
-        let er = if volatility > 1e-10 { direction / volatility } else { 0.0 };
+        let er = if volatility > 1e-10 {
+            direction / volatility
+        } else {
+            0.0
+        };
         let sc = (er * (fast_sc - slow_sc) + slow_sc).powi(2);
         kama += sc * (bars[i].open - kama);
     }
@@ -255,7 +305,9 @@ fn kama_at(bars: &[Bar], end: usize, period: usize) -> Option<f64> {
 }
 
 fn fisher_at(bars: &[Bar], end: usize, period: usize) -> Option<f64> {
-    if end + 1 < period { return None; }
+    if end + 1 < period {
+        return None;
+    }
     let start = end + 1 - period;
     let mut highest = f64::MIN;
     let mut lowest = f64::MAX;
@@ -265,7 +317,9 @@ fn fisher_at(bars: &[Bar], end: usize, period: usize) -> Option<f64> {
         lowest = lowest.min(mid);
     }
     let range = highest - lowest;
-    if range < 1e-10 { return Some(0.0); }
+    if range < 1e-10 {
+        return Some(0.0);
+    }
     let mid = (bars[end].high + bars[end].low) / 2.0;
     let raw = 2.0 * ((mid - lowest) / range - 0.5);
     let clamped = raw.clamp(-0.999, 0.999);
@@ -317,12 +371,19 @@ pub struct KAMACrossStrategy {
 
 impl KAMACrossStrategy {
     pub fn new(period: usize, fast: usize, slow: usize) -> Self {
-        Self { period, fast, slow, position: 0 }
+        Self {
+            period,
+            fast,
+            slow,
+            position: 0,
+        }
     }
 }
 
 fn kama_custom(bars: &[Bar], end: usize, period: usize, fast: usize, slow: usize) -> Option<f64> {
-    if end + 1 < period + 1 { return None; }
+    if end + 1 < period + 1 {
+        return None;
+    }
     let fast_sc = 2.0 / (fast as f64 + 1.0);
     let slow_sc = 2.0 / (slow as f64 + 1.0);
     let start = end + 1 - (period + 1);
@@ -331,9 +392,15 @@ fn kama_custom(bars: &[Bar], end: usize, period: usize, fast: usize, slow: usize
         let direction = (bars[i].close - bars[i.saturating_sub(period)].close).abs();
         let mut volatility = 0.0;
         for j in (i.saturating_sub(period - 1))..=i {
-            if j > 0 { volatility += (bars[j].close - bars[j - 1].close).abs(); }
+            if j > 0 {
+                volatility += (bars[j].close - bars[j - 1].close).abs();
+            }
         }
-        let er = if volatility > 1e-10 { direction / volatility } else { 0.0 };
+        let er = if volatility > 1e-10 {
+            direction / volatility
+        } else {
+            0.0
+        };
         let sc = (er * (fast_sc - slow_sc) + slow_sc).powi(2);
         kama += sc * (bars[i].close - kama);
     }
@@ -342,7 +409,9 @@ fn kama_custom(bars: &[Bar], end: usize, period: usize, fast: usize, slow: usize
 
 impl Strategy for KAMACrossStrategy {
     fn on_bar(&mut self, _bar: &Bar, index: usize, bars: &[Bar]) -> Option<Signal> {
-        if index < 1 { return None; }
+        if index < 1 {
+            return None;
+        }
         let kama_now = kama_custom(bars, index, self.period, self.fast, self.slow)?;
         let kama_prev = kama_custom(bars, index - 1, self.period, self.fast, self.slow)?;
         let close = bars[index].close;
@@ -376,13 +445,18 @@ pub struct FisherCrossStrategy {
 
 impl FisherCrossStrategy {
     pub fn new(period: usize) -> Self {
-        Self { period, position: 0 }
+        Self {
+            period,
+            position: 0,
+        }
     }
 }
 
 /// Compute Fisher Transform value at given bar index. Returns (fisher, signal).
 fn fisher_pair(bars: &[Bar], end: usize, period: usize) -> Option<(f64, f64)> {
-    if end + 1 < period + 1 { return None; }
+    if end + 1 < period + 1 {
+        return None;
+    }
     // We need at least period+1 bars to compute both current and previous Fisher
     let start = end + 1 - (period + 1).min(end + 1);
     let mut val = 0.0_f64;
@@ -392,7 +466,9 @@ fn fisher_pair(bars: &[Bar], end: usize, period: usize) -> Option<(f64, f64)> {
 
     // Walk through bars to iteratively compute Fisher
     for i in start..=end {
-        if i + 1 < period { continue; }
+        if i + 1 < period {
+            continue;
+        }
         let lo = i + 1 - period;
         let mut highest = f64::MIN;
         let mut lowest = f64::MAX;
@@ -403,7 +479,11 @@ fn fisher_pair(bars: &[Bar], end: usize, period: usize) -> Option<(f64, f64)> {
         }
         let range = highest - lowest;
         let mid = (bars[i].high + bars[i].low) / 2.0;
-        let raw = if range > 1e-10 { 2.0 * ((mid - lowest) / range - 0.5) } else { 0.0 };
+        let raw = if range > 1e-10 {
+            2.0 * ((mid - lowest) / range - 0.5)
+        } else {
+            0.0
+        };
         val = 0.5 * val + 0.5 * raw.clamp(-0.999, 0.999);
         prev_fisher = fisher;
         fisher = 0.5 * ((1.0 + val) / (1.0 - val)).ln() + 0.5 * prev_fisher;
@@ -415,7 +495,9 @@ fn fisher_pair(bars: &[Bar], end: usize, period: usize) -> Option<(f64, f64)> {
 
 impl Strategy for FisherCrossStrategy {
     fn on_bar(&mut self, _bar: &Bar, index: usize, bars: &[Bar]) -> Option<Signal> {
-        if index < 1 { return None; }
+        if index < 1 {
+            return None;
+        }
         let (fisher_now, signal_now) = fisher_pair(bars, index, self.period)?;
         let (fisher_prev, signal_prev) = fisher_pair(bars, index - 1, self.period)?;
 
@@ -449,23 +531,40 @@ pub struct RSIMeanRevStrategy {
 
 impl RSIMeanRevStrategy {
     pub fn new(period: usize, oversold: f64, overbought: f64) -> Self {
-        Self { period, oversold, overbought, position: 0 }
+        Self {
+            period,
+            oversold,
+            overbought,
+            position: 0,
+        }
     }
 }
 
 fn rsi_at(bars: &[Bar], end: usize, period: usize) -> Option<f64> {
-    if end < period { return None; }
+    if end < period {
+        return None;
+    }
     let mut avg_gain = 0.0;
     let mut avg_loss = 0.0;
 
     // Wilder-smoothed RSI
-    let seed_start = if end + 1 > 2 * period { end + 1 - 2 * period } else { 1 };
+    let seed_start = if end + 1 > 2 * period {
+        end + 1 - 2 * period
+    } else {
+        1
+    };
     let seed_end = seed_start + period;
-    if seed_end > end + 1 || seed_start == 0 { return None; }
+    if seed_end > end + 1 || seed_start == 0 {
+        return None;
+    }
 
     for i in seed_start..seed_end {
         let change = bars[i].close - bars[i - 1].close;
-        if change > 0.0 { avg_gain += change; } else { avg_loss += change.abs(); }
+        if change > 0.0 {
+            avg_gain += change;
+        } else {
+            avg_loss += change.abs();
+        }
     }
     avg_gain /= period as f64;
     avg_loss /= period as f64;
@@ -479,7 +578,9 @@ fn rsi_at(bars: &[Bar], end: usize, period: usize) -> Option<f64> {
         avg_loss = (avg_loss * (period as f64 - 1.0) + loss) / period as f64;
     }
 
-    if avg_loss < 1e-10 { return Some(100.0); }
+    if avg_loss < 1e-10 {
+        return Some(100.0);
+    }
     let rs = avg_gain / avg_loss;
     Some(100.0 - 100.0 / (1.0 + rs))
 }
@@ -521,24 +622,24 @@ impl Strategy for RSIMeanRevStrategy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalkForwardResult {
     pub windows: Vec<WalkForwardWindow>,
-    pub oos_sharpe: f64,        // out-of-sample Sharpe
-    pub oos_profit_factor: f64, // out-of-sample PF
-    pub oos_win_rate: f64,      // out-of-sample win rate
-    pub robustness_score: f64,  // oos_sharpe / is_sharpe ratio (>0.5 = robust)
+    pub oos_sharpe: f64,             // out-of-sample Sharpe
+    pub oos_profit_factor: f64,      // out-of-sample PF
+    pub oos_win_rate: f64,           // out-of-sample win rate
+    pub robustness_score: f64,       // oos_sharpe / is_sharpe ratio (>0.5 = robust)
     pub best_params: (usize, usize), // optimal parameters from walk-forward
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalkForwardWindow {
     pub window_idx: usize,
-    pub is_start: usize,     // in-sample start bar
-    pub is_end: usize,       // in-sample end bar
-    pub oos_start: usize,    // out-of-sample start bar
-    pub oos_end: usize,      // out-of-sample end bar
+    pub is_start: usize,  // in-sample start bar
+    pub is_end: usize,    // in-sample end bar
+    pub oos_start: usize, // out-of-sample start bar
+    pub oos_end: usize,   // out-of-sample end bar
     pub best_fast: usize,
     pub best_slow: usize,
-    pub is_sharpe: f64,      // in-sample Sharpe with best params
-    pub oos_sharpe: f64,     // out-of-sample Sharpe with those params
+    pub is_sharpe: f64,  // in-sample Sharpe with best params
+    pub oos_sharpe: f64, // out-of-sample Sharpe with those params
     pub oos_pnl: f64,
     pub oos_trades: usize,
 }
@@ -556,8 +657,12 @@ pub fn walk_forward(
     let n = bars.len();
     if n < 200 || num_windows < 2 {
         return WalkForwardResult {
-            windows: Vec::new(), oos_sharpe: 0.0, oos_profit_factor: 0.0,
-            oos_win_rate: 0.0, robustness_score: 0.0, best_params: (10, 50),
+            windows: Vec::new(),
+            oos_sharpe: 0.0,
+            oos_profit_factor: 0.0,
+            oos_win_rate: 0.0,
+            robustness_score: 0.0,
+            best_params: (10, 50),
         };
     }
 
@@ -570,7 +675,9 @@ pub fn walk_forward(
         let start = w * window_size;
         let is_end = start + is_size;
         let oos_end = (start + window_size).min(n);
-        if oos_end <= is_end { continue; }
+        if oos_end <= is_end {
+            continue;
+        }
 
         // Optimize on in-sample
         let is_bars = &bars[start..is_end];
@@ -605,9 +712,12 @@ pub fn walk_forward(
 
         windows.push(WalkForwardWindow {
             window_idx: w,
-            is_start: start, is_end,
-            oos_start: is_end, oos_end,
-            best_fast, best_slow,
+            is_start: start,
+            is_end,
+            oos_start: is_end,
+            oos_end,
+            best_fast,
+            best_slow,
             is_sharpe: best_sharpe,
             oos_sharpe: oos_result.report.sharpe_ratio,
             oos_pnl: oos_result.report.total_pnl,
@@ -618,23 +728,41 @@ pub fn walk_forward(
     // Aggregate OOS results
     let total_oos_trades = oos_trades_all.len();
     let oos_wins = oos_trades_all.iter().filter(|t| t.pnl > 0.0).count();
-    let oos_gross_win: f64 = oos_trades_all.iter().filter(|t| t.pnl > 0.0).map(|t| t.pnl).sum();
-    let oos_gross_loss: f64 = oos_trades_all.iter().filter(|t| t.pnl <= 0.0).map(|t| t.pnl.abs()).sum();
+    let oos_gross_win: f64 = oos_trades_all
+        .iter()
+        .filter(|t| t.pnl > 0.0)
+        .map(|t| t.pnl)
+        .sum();
+    let oos_gross_loss: f64 = oos_trades_all
+        .iter()
+        .filter(|t| t.pnl <= 0.0)
+        .map(|t| t.pnl.abs())
+        .sum();
 
     let avg_is_sharpe = if !windows.is_empty() {
         windows.iter().map(|w| w.is_sharpe).sum::<f64>() / windows.len() as f64
-    } else { 0.0 };
+    } else {
+        0.0
+    };
     let avg_oos_sharpe = if !windows.is_empty() {
         windows.iter().map(|w| w.oos_sharpe).sum::<f64>() / windows.len() as f64
-    } else { 0.0 };
-    let robustness = if avg_is_sharpe > 0.0 { avg_oos_sharpe / avg_is_sharpe } else { 0.0 };
+    } else {
+        0.0
+    };
+    let robustness = if avg_is_sharpe > 0.0 {
+        avg_oos_sharpe / avg_is_sharpe
+    } else {
+        0.0
+    };
 
     // Most common best params across windows
-    let most_common_fast = windows.iter()
+    let most_common_fast = windows
+        .iter()
         .map(|w| w.best_fast)
         .max_by_key(|&f| windows.iter().filter(|w| w.best_fast == f).count())
         .unwrap_or(10);
-    let most_common_slow = windows.iter()
+    let most_common_slow = windows
+        .iter()
         .map(|w| w.best_slow)
         .max_by_key(|&s| windows.iter().filter(|w| w.best_slow == s).count())
         .unwrap_or(50);
@@ -642,8 +770,16 @@ pub fn walk_forward(
     WalkForwardResult {
         windows,
         oos_sharpe: avg_oos_sharpe,
-        oos_profit_factor: if oos_gross_loss > 0.0 { oos_gross_win / oos_gross_loss } else { 0.0 },
-        oos_win_rate: if total_oos_trades > 0 { oos_wins as f64 / total_oos_trades as f64 } else { 0.0 },
+        oos_profit_factor: if oos_gross_loss > 0.0 {
+            oos_gross_win / oos_gross_loss
+        } else {
+            0.0
+        },
+        oos_win_rate: if total_oos_trades > 0 {
+            oos_wins as f64 / total_oos_trades as f64
+        } else {
+            0.0
+        },
         robustness_score: robustness,
         best_params: (most_common_fast, most_common_slow),
     }
@@ -862,8 +998,12 @@ pub fn optimize_sma_cross(
 
     for fast in fast_range.0..=fast_range.1 {
         for slow in slow_range.0..=slow_range.1 {
-            if fast >= slow { continue; }
-            if slow > bars.len() { continue; }
+            if fast >= slow {
+                continue;
+            }
+            if slow > bars.len() {
+                continue;
+            }
             total_combinations += 1;
 
             let mut strat = SMACrossStrategy::new(fast, slow);
@@ -884,7 +1024,9 @@ pub fn optimize_sma_cross(
 
     // Sort by profit factor descending (infinity goes first, then highest)
     all_results.sort_by(|a, b| {
-        b.profit_factor.partial_cmp(&a.profit_factor).unwrap_or(std::cmp::Ordering::Equal)
+        b.profit_factor
+            .partial_cmp(&a.profit_factor)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     // Take top N
@@ -1107,7 +1249,9 @@ mod tests {
 
     impl Strategy for AlternateBuySell {
         fn on_bar(&mut self, _bar: &Bar, index: usize, _bars: &[Bar]) -> Option<Signal> {
-            if index == 0 { return None; }
+            if index == 0 {
+                return None;
+            }
             match self.last_signal {
                 None => {
                     self.last_signal = Some(Signal::Buy);
@@ -1138,18 +1282,28 @@ mod tests {
     }
 
     impl BuyThenClose {
-        fn new() -> Self { Self { state: 0 } }
+        fn new() -> Self {
+            Self { state: 0 }
+        }
     }
 
     impl Strategy for BuyThenClose {
         fn on_bar(&mut self, _bar: &Bar, index: usize, _bars: &[Bar]) -> Option<Signal> {
             match (index, self.state) {
-                (1, 0) => { self.state = 1; Some(Signal::Buy) }
-                (3, 1) => { self.state = 2; Some(Signal::Close) }
+                (1, 0) => {
+                    self.state = 1;
+                    Some(Signal::Buy)
+                }
+                (3, 1) => {
+                    self.state = 2;
+                    Some(Signal::Close)
+                }
                 _ => None,
             }
         }
-        fn name(&self) -> &str { "BuyThenClose" }
+        fn name(&self) -> &str {
+            "BuyThenClose"
+        }
     }
 
     // ── TradeReport::from_trades ───────────────────────────────────
@@ -1166,11 +1320,15 @@ mod tests {
     #[test]
     fn trade_report_single_winning_trade() {
         let trades = vec![Trade {
-            entry_index: 0, exit_index: 1,
-            entry_price: 100.0, exit_price: 110.0,
+            entry_index: 0,
+            exit_index: 1,
+            entry_price: 100.0,
+            exit_price: 110.0,
             side: "long".to_string(),
-            pnl: 100.0, pnl_pct: 10.0,
-            entry_time: "t0".into(), exit_time: "t1".into(),
+            pnl: 100.0,
+            pnl_pct: 10.0,
+            entry_time: "t0".into(),
+            exit_time: "t1".into(),
         }];
         let report = TradeReport::from_trades(&trades, 10000.0);
         assert_eq!(report.total_trades, 1);
@@ -1188,25 +1346,37 @@ mod tests {
     fn trade_report_mixed_trades() {
         let trades = vec![
             Trade {
-                entry_index: 0, exit_index: 1,
-                entry_price: 100.0, exit_price: 120.0,
+                entry_index: 0,
+                exit_index: 1,
+                entry_price: 100.0,
+                exit_price: 120.0,
                 side: "long".to_string(),
-                pnl: 200.0, pnl_pct: 20.0,
-                entry_time: "t0".into(), exit_time: "t1".into(),
+                pnl: 200.0,
+                pnl_pct: 20.0,
+                entry_time: "t0".into(),
+                exit_time: "t1".into(),
             },
             Trade {
-                entry_index: 1, exit_index: 2,
-                entry_price: 120.0, exit_price: 110.0,
+                entry_index: 1,
+                exit_index: 2,
+                entry_price: 120.0,
+                exit_price: 110.0,
                 side: "long".to_string(),
-                pnl: -100.0, pnl_pct: -8.33,
-                entry_time: "t1".into(), exit_time: "t2".into(),
+                pnl: -100.0,
+                pnl_pct: -8.33,
+                entry_time: "t1".into(),
+                exit_time: "t2".into(),
             },
             Trade {
-                entry_index: 2, exit_index: 3,
-                entry_price: 110.0, exit_price: 130.0,
+                entry_index: 2,
+                exit_index: 3,
+                entry_price: 110.0,
+                exit_price: 130.0,
                 side: "long".to_string(),
-                pnl: 200.0, pnl_pct: 18.18,
-                entry_time: "t2".into(), exit_time: "t3".into(),
+                pnl: 200.0,
+                pnl_pct: 18.18,
+                entry_time: "t2".into(),
+                exit_time: "t3".into(),
             },
         ];
         let report = TradeReport::from_trades(&trades, 10000.0);
@@ -1227,18 +1397,26 @@ mod tests {
     fn trade_report_all_losses() {
         let trades = vec![
             Trade {
-                entry_index: 0, exit_index: 1,
-                entry_price: 100.0, exit_price: 90.0,
+                entry_index: 0,
+                exit_index: 1,
+                entry_price: 100.0,
+                exit_price: 90.0,
                 side: "long".to_string(),
-                pnl: -100.0, pnl_pct: -10.0,
-                entry_time: "t0".into(), exit_time: "t1".into(),
+                pnl: -100.0,
+                pnl_pct: -10.0,
+                entry_time: "t0".into(),
+                exit_time: "t1".into(),
             },
             Trade {
-                entry_index: 1, exit_index: 2,
-                entry_price: 90.0, exit_price: 80.0,
+                entry_index: 1,
+                exit_index: 2,
+                entry_price: 90.0,
+                exit_price: 80.0,
                 side: "long".to_string(),
-                pnl: -100.0, pnl_pct: -11.11,
-                entry_time: "t1".into(), exit_time: "t2".into(),
+                pnl: -100.0,
+                pnl_pct: -11.11,
+                entry_time: "t1".into(),
+                exit_time: "t2".into(),
             },
         ];
         let report = TradeReport::from_trades(&trades, 10000.0);
@@ -1277,7 +1455,9 @@ mod tests {
     fn sma_cross_generates_signals() {
         // Create bars where fast SMA will cross slow SMA.
         // Flat at 100 for 20 bars, then ramp up sharply.
-        let mut bars: Vec<Bar> = (0..20).map(|i| flat_bar(100.0, &format!("t{}", i))).collect();
+        let mut bars: Vec<Bar> = (0..20)
+            .map(|i| flat_bar(100.0, &format!("t{}", i)))
+            .collect();
         for i in 20..40 {
             bars.push(flat_bar(100.0 + (i - 20) as f64 * 5.0, &format!("t{}", i)));
         }
@@ -1289,14 +1469,20 @@ mod tests {
         let mut strat = SMACrossStrategy::new(3, 10);
         let result = run_backtest(&bars, &mut strat, 10000.0);
         // Should generate at least one trade from crossovers
-        assert!(result.trades.len() >= 1, "Expected at least 1 trade, got {}", result.trades.len());
+        assert!(
+            result.trades.len() >= 1,
+            "Expected at least 1 trade, got {}",
+            result.trades.len()
+        );
         assert_eq!(result.equity_curve.len(), bars.len());
     }
 
     #[test]
     fn sma_cross_no_signal_flat_market() {
         // Completely flat market — no crossover possible
-        let bars: Vec<Bar> = (0..50).map(|i| flat_bar(100.0, &format!("t{}", i))).collect();
+        let bars: Vec<Bar> = (0..50)
+            .map(|i| flat_bar(100.0, &format!("t{}", i)))
+            .collect();
         let mut strat = SMACrossStrategy::new(5, 20);
         let result = run_backtest(&bars, &mut strat, 10000.0);
         // With perfectly flat prices, SMA fast == SMA slow always, no crossover
@@ -1371,7 +1557,9 @@ mod tests {
     fn run_backtest_closes_open_position_at_end() {
         // Trending up => SMA cross should eventually buy, then the position
         // should be force-closed at the last bar.
-        let mut bars: Vec<Bar> = (0..15).map(|i| flat_bar(100.0, &format!("t{}", i))).collect();
+        let mut bars: Vec<Bar> = (0..15)
+            .map(|i| flat_bar(100.0, &format!("t{}", i)))
+            .collect();
         for i in 15..30 {
             bars.push(flat_bar(100.0 + (i - 15) as f64 * 10.0, &format!("t{}", i)));
         }
@@ -1431,13 +1619,21 @@ mod tests {
     #[test]
     fn bar_by_bar_close_at_end() {
         // Strategy buys but never closes — verify forced close at last bar
-        struct BuyOnce { bought: bool }
+        struct BuyOnce {
+            bought: bool,
+        }
         impl Strategy for BuyOnce {
             fn on_bar(&mut self, _bar: &Bar, index: usize, _bars: &[Bar]) -> Option<Signal> {
-                if index == 1 && !self.bought { self.bought = true; Some(Signal::Buy) }
-                else { None }
+                if index == 1 && !self.bought {
+                    self.bought = true;
+                    Some(Signal::Buy)
+                } else {
+                    None
+                }
             }
-            fn name(&self) -> &str { "BuyOnce" }
+            fn name(&self) -> &str {
+                "BuyOnce"
+            }
         }
 
         let bars = vec![
@@ -1459,23 +1655,33 @@ mod tests {
     #[test]
     fn bar_by_bar_short_trade() {
         // Strategy: sell at bar 1 (open short), buy at bar 3 (close short)
-        struct ShortThenClose { state: u8 }
+        struct ShortThenClose {
+            state: u8,
+        }
         impl Strategy for ShortThenClose {
             fn on_bar(&mut self, _bar: &Bar, index: usize, _bars: &[Bar]) -> Option<Signal> {
                 match (index, self.state) {
-                    (1, 0) => { self.state = 1; Some(Signal::Sell) }
-                    (3, 1) => { self.state = 2; Some(Signal::Buy) }
+                    (1, 0) => {
+                        self.state = 1;
+                        Some(Signal::Sell)
+                    }
+                    (3, 1) => {
+                        self.state = 2;
+                        Some(Signal::Buy)
+                    }
                     _ => None,
                 }
             }
-            fn name(&self) -> &str { "ShortThenClose" }
+            fn name(&self) -> &str {
+                "ShortThenClose"
+            }
         }
 
         let bars = vec![
             flat_bar(100.0, "t0"),
             flat_bar(100.0, "t1"), // short entry
             flat_bar(90.0, "t2"),
-            flat_bar(80.0, "t3"),  // close short (Buy signal)
+            flat_bar(80.0, "t3"), // close short (Buy signal)
             flat_bar(85.0, "t4"),
         ];
         let mut strat = ShortThenClose { state: 0 };
@@ -1494,7 +1700,9 @@ mod tests {
     #[test]
     fn optimize_sma_cross_basic() {
         // Need enough bars for the largest slow period we test
-        let mut bars: Vec<Bar> = (0..20).map(|i| flat_bar(100.0, &format!("t{}", i))).collect();
+        let mut bars: Vec<Bar> = (0..20)
+            .map(|i| flat_bar(100.0, &format!("t{}", i)))
+            .collect();
         for i in 20..60 {
             bars.push(flat_bar(100.0 + (i - 20) as f64 * 2.0, &format!("t{}", i)));
         }
@@ -1507,8 +1715,10 @@ mod tests {
         assert!(!report.results.is_empty());
         // Results should be sorted by profit factor descending
         for i in 1..report.results.len() {
-            assert!(report.results[i - 1].profit_factor >= report.results[i].profit_factor
-                || report.results[i - 1].profit_factor.is_infinite());
+            assert!(
+                report.results[i - 1].profit_factor >= report.results[i].profit_factor
+                    || report.results[i - 1].profit_factor.is_infinite()
+            );
         }
     }
 
@@ -1523,7 +1733,9 @@ mod tests {
 
     #[test]
     fn optimize_sma_cross_top_n_limit() {
-        let mut bars: Vec<Bar> = (0..30).map(|i| flat_bar(100.0, &format!("t{}", i))).collect();
+        let mut bars: Vec<Bar> = (0..30)
+            .map(|i| flat_bar(100.0, &format!("t{}", i)))
+            .collect();
         for i in 30..80 {
             bars.push(flat_bar(100.0 + (i - 30) as f64, &format!("t{}", i)));
         }
@@ -1626,7 +1838,13 @@ mod tests {
         let mut bars: Vec<Bar> = Vec::new();
         for i in 0..50 {
             let price = 100.0 + 30.0 * (i as f64 * 0.15).sin();
-            bars.push(bar(price - 1.0, price + 2.0, price - 2.0, price, &format!("t{}", i)));
+            bars.push(bar(
+                price - 1.0,
+                price + 2.0,
+                price - 2.0,
+                price,
+                &format!("t{}", i),
+            ));
         }
         let mut strat = NNFXStrategy::new(10, 5);
         let result = run_backtest(&bars, &mut strat, 10000.0);
@@ -1681,7 +1899,13 @@ mod tests {
         let mut bars: Vec<Bar> = Vec::new();
         for i in 0..60 {
             let price = 100.0 + 20.0 * (i as f64 * 0.2).sin();
-            bars.push(bar(price, price + 3.0, price - 3.0, price, &format!("t{}", i)));
+            bars.push(bar(
+                price,
+                price + 3.0,
+                price - 3.0,
+                price,
+                &format!("t{}", i),
+            ));
         }
         let mut strat = FisherCrossStrategy::new(10);
         let result = run_backtest(&bars, &mut strat, 10000.0);
@@ -1741,7 +1965,11 @@ mod tests {
         let bars = trending_up(100.0, 40);
         let rsi = rsi_at(&bars, 39, 14);
         assert!(rsi.is_some());
-        assert!(rsi.unwrap() > 80.0, "Expected RSI > 80 for all-up, got {}", rsi.unwrap());
+        assert!(
+            rsi.unwrap() > 80.0,
+            "Expected RSI > 80 for all-up, got {}",
+            rsi.unwrap()
+        );
     }
 
     // ── fisher_at helper ───────────────────────────────────────────
@@ -1787,7 +2015,11 @@ mod tests {
         let bars = trending_up(100.0, 30);
         let k = kama_at(&bars, 29, 10).unwrap();
         // KAMA should be between start and end prices
-        assert!(k > 100.0 && k < 130.0, "KAMA={} should be between 100 and 130", k);
+        assert!(
+            k > 100.0 && k < 130.0,
+            "KAMA={} should be between 100 and 130",
+            k
+        );
     }
 
     // ── fisher_pair helper ─────────────────────────────────────────
@@ -1846,9 +2078,13 @@ mod tests {
         let mut strat2 = SMACrossStrategy::new(3, 8);
         let result2 = bar_by_bar_backtest(&bars, &mut strat2, 10000.0);
 
-        assert_eq!(result1.trades.len(), result2.trades.len(),
+        assert_eq!(
+            result1.trades.len(),
+            result2.trades.len(),
             "run_backtest ({}) and bar_by_bar ({}) should produce same number of trades",
-            result1.trades.len(), result2.trades.len());
+            result1.trades.len(),
+            result2.trades.len()
+        );
 
         for (t1, t2) in result1.trades.iter().zip(result2.trades.iter()) {
             assert_eq!(t1.entry_index, t2.entry_index);
@@ -1868,7 +2104,11 @@ mod tests {
 
         let final_eq1 = *result1.equity_curve.last().unwrap_or(&5000.0);
         let final_eq2 = result2.states.last().map(|s| s.equity).unwrap_or(5000.0);
-        assert!((final_eq1 - final_eq2).abs() < 1e-4,
-            "Final equity mismatch: run_backtest={}, bar_by_bar={}", final_eq1, final_eq2);
+        assert!(
+            (final_eq1 - final_eq2).abs() < 1e-4,
+            "Final equity mismatch: run_backtest={}, bar_by_bar={}",
+            final_eq1,
+            final_eq2
+        );
     }
 }

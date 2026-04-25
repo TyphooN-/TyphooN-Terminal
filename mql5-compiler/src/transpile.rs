@@ -38,8 +38,8 @@
 //! with a plot declaration for each buffer slot plus inputs mapped to the
 //! target's idiomatic input syntax.
 
-use crate::ir::*;
 use crate::IndicatorMeta;
+use crate::ir::*;
 
 /// Set of languages the transpiler understands as a source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,18 +80,22 @@ pub fn transpile(source: &str, from: SourceLanguage, to: TargetLanguage) -> Resu
 }
 
 /// Parse the source in the given language and return its IR + metadata.
-pub fn source_to_ir(source: &str, lang: SourceLanguage) -> Result<(IrModule, IndicatorMeta), String> {
+pub fn source_to_ir(
+    source: &str,
+    lang: SourceLanguage,
+) -> Result<(IrModule, IndicatorMeta), String> {
     match lang {
         SourceLanguage::EasyLanguage => Ok(crate::easylang::build_ir(source)),
-        SourceLanguage::ThinkScript  => Ok(crate::thinkscript::build_ir(source)),
-        SourceLanguage::PineScript   => Ok(crate::pine::build_ir(source)),
-        SourceLanguage::Afl          => Ok(crate::afl::build_ir(source)),
-        SourceLanguage::ProBuilder   => Ok(crate::probuilder::build_ir(source)),
-        SourceLanguage::NinjaScript  => Ok(crate::ninjascript::build_ir(source)),
-        SourceLanguage::Calgo        => Ok(crate::calgo::build_ir(source)),
-        SourceLanguage::Acsil        => Ok(crate::acsil::build_ir(source)),
+        SourceLanguage::ThinkScript => Ok(crate::thinkscript::build_ir(source)),
+        SourceLanguage::PineScript => Ok(crate::pine::build_ir(source)),
+        SourceLanguage::Afl => Ok(crate::afl::build_ir(source)),
+        SourceLanguage::ProBuilder => Ok(crate::probuilder::build_ir(source)),
+        SourceLanguage::NinjaScript => Ok(crate::ninjascript::build_ir(source)),
+        SourceLanguage::Calgo => Ok(crate::calgo::build_ir(source)),
+        SourceLanguage::Acsil => Ok(crate::acsil::build_ir(source)),
         SourceLanguage::Mql5 => crate::build_mql5_ir(source).map_err(|diags| {
-            diags.into_iter()
+            diags
+                .into_iter()
                 .map(|d| format!("{}:{}: {}", d.line, d.col, d.message))
                 .collect::<Vec<_>>()
                 .join("; ")
@@ -101,7 +105,8 @@ pub fn source_to_ir(source: &str, lang: SourceLanguage) -> Result<(IrModule, Ind
             // inherits full source-to-IR for free.
             let (rewritten, _warnings) = crate::mql4::rewrite_mql4_to_mql5(source);
             crate::build_mql5_ir(&rewritten).map_err(|diags| {
-                diags.into_iter()
+                diags
+                    .into_iter()
                     .map(|d| format!("{}:{}: {}", d.line, d.col, d.message))
                     .collect::<Vec<_>>()
                     .join("; ")
@@ -113,16 +118,16 @@ pub fn source_to_ir(source: &str, lang: SourceLanguage) -> Result<(IrModule, Ind
 /// Emit the IR as source code in the target language.
 pub fn emit(ir: &IrModule, meta: &IndicatorMeta, to: TargetLanguage) -> String {
     match to {
-        TargetLanguage::Mql5         => emit_mql5(ir, meta),
-        TargetLanguage::Mql4         => emit_mql4(ir, meta),
-        TargetLanguage::PineScript   => emit_pine_v5(ir, meta),
+        TargetLanguage::Mql5 => emit_mql5(ir, meta),
+        TargetLanguage::Mql4 => emit_mql4(ir, meta),
+        TargetLanguage::PineScript => emit_pine_v5(ir, meta),
         TargetLanguage::EasyLanguage => emit_easylang(ir, meta),
-        TargetLanguage::ThinkScript  => emit_thinkscript(ir, meta),
-        TargetLanguage::Afl          => emit_afl(ir, meta),
-        TargetLanguage::ProBuilder   => emit_probuilder(ir, meta),
-        TargetLanguage::NinjaScript  => emit_ninjascript(ir, meta),
-        TargetLanguage::Calgo        => emit_calgo(ir, meta),
-        TargetLanguage::Acsil        => emit_acsil(ir, meta),
+        TargetLanguage::ThinkScript => emit_thinkscript(ir, meta),
+        TargetLanguage::Afl => emit_afl(ir, meta),
+        TargetLanguage::ProBuilder => emit_probuilder(ir, meta),
+        TargetLanguage::NinjaScript => emit_ninjascript(ir, meta),
+        TargetLanguage::Calgo => emit_calgo(ir, meta),
+        TargetLanguage::Acsil => emit_acsil(ir, meta),
     }
 }
 
@@ -131,17 +136,44 @@ pub fn emit(ir: &IrModule, meta: &IndicatorMeta, to: TargetLanguage) -> String {
 fn emit_mql5(ir: &IrModule, meta: &IndicatorMeta) -> String {
     let mut out = String::new();
     // Header / properties
-    let name = if meta.short_name.is_empty() { "Transpiled" } else { meta.short_name.as_str() };
-    out.push_str(&format!("//+------------------------------------------------------------------+\n"));
-    out.push_str(&format!("//|  {}  (transpiled by TyphooN Terminal)                            |\n", name));
-    out.push_str(&format!("//+------------------------------------------------------------------+\n"));
-    out.push_str(&format!("#property indicator_{}\n",
-        if meta.separate_window { "separate_window" } else { "chart_window" }));
+    let name = if meta.short_name.is_empty() {
+        "Transpiled"
+    } else {
+        meta.short_name.as_str()
+    };
+    out.push_str(&format!(
+        "//+------------------------------------------------------------------+\n"
+    ));
+    out.push_str(&format!(
+        "//|  {}  (transpiled by TyphooN Terminal)                            |\n",
+        name
+    ));
+    out.push_str(&format!(
+        "//+------------------------------------------------------------------+\n"
+    ));
+    out.push_str(&format!(
+        "#property indicator_{}\n",
+        if meta.separate_window {
+            "separate_window"
+        } else {
+            "chart_window"
+        }
+    ));
     out.push_str(&format!("#property indicator_shortname \"{}\"\n", name));
-    out.push_str(&format!("#property indicator_buffers {}\n", meta.buffers.max(1)));
-    out.push_str(&format!("#property indicator_plots   {}\n", meta.plots.len().max(1)));
+    out.push_str(&format!(
+        "#property indicator_buffers {}\n",
+        meta.buffers.max(1)
+    ));
+    out.push_str(&format!(
+        "#property indicator_plots   {}\n",
+        meta.plots.len().max(1)
+    ));
     for (i, p) in meta.plots.iter().enumerate() {
-        out.push_str(&format!("#property indicator_label{}  \"{}\"\n", i + 1, p.label));
+        out.push_str(&format!(
+            "#property indicator_label{}  \"{}\"\n",
+            i + 1,
+            p.label
+        ));
         out.push_str(&format!("#property indicator_type{}   DRAW_LINE\n", i + 1));
         out.push_str(&format!("#property indicator_color{}  clrBlue\n", i + 1));
     }
@@ -149,7 +181,12 @@ fn emit_mql5(ir: &IrModule, meta: &IndicatorMeta) -> String {
     // Inputs
     for inp in &ir.inputs {
         let (ty, default) = ir_input_default(inp);
-        out.push_str(&format!("input {} {} = {};\n", ty, camel_case(&inp.name), default));
+        out.push_str(&format!(
+            "input {} {} = {};\n",
+            ty,
+            camel_case(&inp.name),
+            default
+        ));
     }
     out.push('\n');
     // Buffer declarations
@@ -160,7 +197,10 @@ fn emit_mql5(ir: &IrModule, meta: &IndicatorMeta) -> String {
     // OnInit
     out.push_str("int OnInit() {\n");
     for (i, _) in meta.plots.iter().enumerate() {
-        out.push_str(&format!("    SetIndexBuffer({}, Buffer{}, INDICATOR_DATA);\n", i, i));
+        out.push_str(&format!(
+            "    SetIndexBuffer({}, Buffer{}, INDICATOR_DATA);\n",
+            i, i
+        ));
     }
     out.push_str("    return INIT_SUCCEEDED;\n}\n\n");
     // OnCalculate
@@ -200,14 +240,18 @@ fn emit_expr_mql5(e: &IrExpr, bar: &str) -> String {
         IrExpr::I32Const(n) => format!("{}", n),
         IrExpr::F64Const(f) => format!("{}", f),
         IrExpr::GetLocal(n) => n.clone(),
-        IrExpr::IOpen(_)    => format!("open[{}]", bar),
-        IrExpr::IHigh(_)    => format!("high[{}]", bar),
-        IrExpr::ILow(_)     => format!("low[{}]", bar),
-        IrExpr::IClose(_)   => format!("close[{}]", bar),
-        IrExpr::IVolume(_)  => format!("(double)tick_volume[{}]", bar),
-        IrExpr::IBars       => "rates_total".into(),
-        IrExpr::BinOp(op, l, r) => format!("({} {} {})",
-            emit_expr_mql5(l, bar), binop_sym(op), emit_expr_mql5(r, bar)),
+        IrExpr::IOpen(_) => format!("open[{}]", bar),
+        IrExpr::IHigh(_) => format!("high[{}]", bar),
+        IrExpr::ILow(_) => format!("low[{}]", bar),
+        IrExpr::IClose(_) => format!("close[{}]", bar),
+        IrExpr::IVolume(_) => format!("(double)tick_volume[{}]", bar),
+        IrExpr::IBars => "rates_total".into(),
+        IrExpr::BinOp(op, l, r) => format!(
+            "({} {} {})",
+            emit_expr_mql5(l, bar),
+            binop_sym(op),
+            emit_expr_mql5(r, bar)
+        ),
         IrExpr::Call(name, args) => {
             let a: Vec<String> = args.iter().map(|a| emit_expr_mql5(a, bar)).collect();
             mql5_builtin(name, &a, bar)
@@ -219,29 +263,52 @@ fn emit_expr_mql5(e: &IrExpr, bar: &str) -> String {
 
 fn mql5_builtin(name: &str, args: &[String], bar: &str) -> String {
     match name {
-        "ta_sma"     => format!("iMA(_Symbol,_Period,(int)({}),0,MODE_SMA,PRICE_CLOSE)",
-            args.get(1).cloned().unwrap_or_else(|| "14".into())),
-        "ta_ema"     => format!("iMA(_Symbol,_Period,(int)({}),0,MODE_EMA,PRICE_CLOSE)",
-            args.get(1).cloned().unwrap_or_else(|| "14".into())),
-        "ta_rsi"     => format!("iRSI(_Symbol,_Period,(int)({}),PRICE_CLOSE)",
-            args.get(1).or(args.first()).cloned().unwrap_or_else(|| "14".into())),
-        "ta_atr"     => format!("iATR(_Symbol,_Period,(int)({}))",
-            args.first().cloned().unwrap_or_else(|| "14".into())),
-        "ta_highest" => format!("high[iHighest(_Symbol,_Period,MODE_HIGH,(int)({}),{})]",
-            args.get(1).cloned().unwrap_or_else(|| "14".into()), bar),
-        "ta_lowest"  => format!("low[iLowest(_Symbol,_Period,MODE_LOW,(int)({}),{})]",
-            args.get(1).cloned().unwrap_or_else(|| "14".into()), bar),
-        "ta_stdev"   => format!("iStdDev(_Symbol,_Period,(int)({}),0,MODE_SMA,PRICE_CLOSE)",
-            args.get(1).cloned().unwrap_or_else(|| "20".into())),
-        "math_abs"   => format!("MathAbs({})", args.first().cloned().unwrap_or_default()),
-        "math_sqrt"  => format!("MathSqrt({})", args.first().cloned().unwrap_or_default()),
-        "math_log"   => format!("MathLog({})", args.first().cloned().unwrap_or_default()),
-        "math_max"   => format!("MathMax({},{})",
+        "ta_sma" => format!(
+            "iMA(_Symbol,_Period,(int)({}),0,MODE_SMA,PRICE_CLOSE)",
+            args.get(1).cloned().unwrap_or_else(|| "14".into())
+        ),
+        "ta_ema" => format!(
+            "iMA(_Symbol,_Period,(int)({}),0,MODE_EMA,PRICE_CLOSE)",
+            args.get(1).cloned().unwrap_or_else(|| "14".into())
+        ),
+        "ta_rsi" => format!(
+            "iRSI(_Symbol,_Period,(int)({}),PRICE_CLOSE)",
+            args.get(1)
+                .or(args.first())
+                .cloned()
+                .unwrap_or_else(|| "14".into())
+        ),
+        "ta_atr" => format!(
+            "iATR(_Symbol,_Period,(int)({}))",
+            args.first().cloned().unwrap_or_else(|| "14".into())
+        ),
+        "ta_highest" => format!(
+            "high[iHighest(_Symbol,_Period,MODE_HIGH,(int)({}),{})]",
+            args.get(1).cloned().unwrap_or_else(|| "14".into()),
+            bar
+        ),
+        "ta_lowest" => format!(
+            "low[iLowest(_Symbol,_Period,MODE_LOW,(int)({}),{})]",
+            args.get(1).cloned().unwrap_or_else(|| "14".into()),
+            bar
+        ),
+        "ta_stdev" => format!(
+            "iStdDev(_Symbol,_Period,(int)({}),0,MODE_SMA,PRICE_CLOSE)",
+            args.get(1).cloned().unwrap_or_else(|| "20".into())
+        ),
+        "math_abs" => format!("MathAbs({})", args.first().cloned().unwrap_or_default()),
+        "math_sqrt" => format!("MathSqrt({})", args.first().cloned().unwrap_or_default()),
+        "math_log" => format!("MathLog({})", args.first().cloned().unwrap_or_default()),
+        "math_max" => format!(
+            "MathMax({},{})",
             args.first().cloned().unwrap_or_default(),
-            args.get(1).cloned().unwrap_or_default()),
-        "math_min"   => format!("MathMin({},{})",
+            args.get(1).cloned().unwrap_or_default()
+        ),
+        "math_min" => format!(
+            "MathMin({},{})",
             args.first().cloned().unwrap_or_default(),
-            args.get(1).cloned().unwrap_or_default()),
+            args.get(1).cloned().unwrap_or_default()
+        ),
         _ => format!("/* {} */ 0.0", name),
     }
 }
@@ -250,10 +317,16 @@ fn mql5_builtin(name: &str, args: &[String], bar: &str) -> String {
 
 fn emit_pine_v5(ir: &IrModule, meta: &IndicatorMeta) -> String {
     let mut out = String::new();
-    let name = if meta.short_name.is_empty() { "Transpiled" } else { meta.short_name.as_str() };
+    let name = if meta.short_name.is_empty() {
+        "Transpiled"
+    } else {
+        meta.short_name.as_str()
+    };
     out.push_str("//@version=5\n");
-    out.push_str(&format!("indicator(\"{}\", overlay={})\n",
-        name, !meta.separate_window));
+    out.push_str(&format!(
+        "indicator(\"{}\", overlay={})\n",
+        name, !meta.separate_window
+    ));
     // Inputs
     for inp in &ir.inputs {
         let pine_ty = match inp.ir_type {
@@ -262,8 +335,13 @@ fn emit_pine_v5(ir: &IrModule, meta: &IndicatorMeta) -> String {
             _ => "float",
         };
         let (_, default) = ir_input_default(inp);
-        out.push_str(&format!("{} = input.{}({}, title=\"{}\")\n",
-            snake_case(&inp.name), pine_ty, default, inp.name));
+        out.push_str(&format!(
+            "{} = input.{}({}, title=\"{}\")\n",
+            snake_case(&inp.name),
+            pine_ty,
+            default,
+            inp.name
+        ));
     }
     // Body: emit locals and plots
     if let Some(ref f) = ir.on_calculate {
@@ -273,11 +351,16 @@ fn emit_pine_v5(ir: &IrModule, meta: &IndicatorMeta) -> String {
                     out.push_str(&format!("{} = {}\n", snake_case(name), emit_expr_pine(e)));
                 }
                 IrStmt::SetBuffer(idx, _, e) => {
-                    let label = meta.plots.get(*idx)
+                    let label = meta
+                        .plots
+                        .get(*idx)
                         .map(|p| p.label.clone())
                         .unwrap_or_else(|| format!("Plot{}", idx));
-                    out.push_str(&format!("plot({}, title=\"{}\", color=color.blue)\n",
-                        emit_expr_pine(e), label));
+                    out.push_str(&format!(
+                        "plot({}, title=\"{}\", color=color.blue)\n",
+                        emit_expr_pine(e),
+                        label
+                    ));
                 }
                 _ => {}
             }
@@ -291,14 +374,18 @@ fn emit_expr_pine(e: &IrExpr) -> String {
         IrExpr::I32Const(n) => format!("{}", n),
         IrExpr::F64Const(f) => format!("{}", f),
         IrExpr::GetLocal(n) => snake_case(n),
-        IrExpr::IOpen(_)    => "open".into(),
-        IrExpr::IHigh(_)    => "high".into(),
-        IrExpr::ILow(_)     => "low".into(),
-        IrExpr::IClose(_)   => "close".into(),
-        IrExpr::IVolume(_)  => "volume".into(),
-        IrExpr::IBars       => "bar_index".into(),
-        IrExpr::BinOp(op, l, r) => format!("({} {} {})",
-            emit_expr_pine(l), binop_sym(op), emit_expr_pine(r)),
+        IrExpr::IOpen(_) => "open".into(),
+        IrExpr::IHigh(_) => "high".into(),
+        IrExpr::ILow(_) => "low".into(),
+        IrExpr::IClose(_) => "close".into(),
+        IrExpr::IVolume(_) => "volume".into(),
+        IrExpr::IBars => "bar_index".into(),
+        IrExpr::BinOp(op, l, r) => format!(
+            "({} {} {})",
+            emit_expr_pine(l),
+            binop_sym(op),
+            emit_expr_pine(r)
+        ),
         IrExpr::Call(name, args) => {
             let a: Vec<String> = args.iter().map(emit_expr_pine).collect();
             pine_builtin(name, &a)
@@ -311,19 +398,19 @@ fn emit_expr_pine(e: &IrExpr) -> String {
 fn pine_builtin(name: &str, args: &[String]) -> String {
     let a = |i: usize| args.get(i).cloned().unwrap_or_else(|| "0".into());
     match name {
-        "ta_sma"     => format!("ta.sma({}, {})", a(0), a(1)),
-        "ta_ema"     => format!("ta.ema({}, {})", a(0), a(1)),
-        "ta_rsi"     => format!("ta.rsi({}, {})", a(0), a(1)),
-        "ta_atr"     => format!("ta.atr({})", a(0)),
+        "ta_sma" => format!("ta.sma({}, {})", a(0), a(1)),
+        "ta_ema" => format!("ta.ema({}, {})", a(0), a(1)),
+        "ta_rsi" => format!("ta.rsi({}, {})", a(0), a(1)),
+        "ta_atr" => format!("ta.atr({})", a(0)),
         "ta_highest" => format!("ta.highest({}, {})", a(0), a(1)),
-        "ta_lowest"  => format!("ta.lowest({}, {})", a(0), a(1)),
-        "ta_stdev"   => format!("ta.stdev({}, {})", a(0), a(1)),
-        "math_abs"   => format!("math.abs({})", a(0)),
-        "math_sqrt"  => format!("math.sqrt({})", a(0)),
-        "math_log"   => format!("math.log({})", a(0)),
-        "math_max"   => format!("math.max({}, {})", a(0), a(1)),
-        "math_min"   => format!("math.min({}, {})", a(0), a(1)),
-        _            => format!("/* {} */ 0.0", name),
+        "ta_lowest" => format!("ta.lowest({}, {})", a(0), a(1)),
+        "ta_stdev" => format!("ta.stdev({}, {})", a(0), a(1)),
+        "math_abs" => format!("math.abs({})", a(0)),
+        "math_sqrt" => format!("math.sqrt({})", a(0)),
+        "math_log" => format!("math.log({})", a(0)),
+        "math_max" => format!("math.max({}, {})", a(0), a(1)),
+        "math_min" => format!("math.min({}, {})", a(0), a(1)),
+        _ => format!("/* {} */ 0.0", name),
     }
 }
 
@@ -334,10 +421,14 @@ fn emit_easylang(ir: &IrModule, meta: &IndicatorMeta) -> String {
     // Inputs block
     if !ir.inputs.is_empty() {
         out.push_str("inputs:\n");
-        let items: Vec<String> = ir.inputs.iter().map(|inp| {
-            let (_, default) = ir_input_default(inp);
-            format!("    {}({})", camel_case(&inp.name), default)
-        }).collect();
+        let items: Vec<String> = ir
+            .inputs
+            .iter()
+            .map(|inp| {
+                let (_, default) = ir_input_default(inp);
+                format!("    {}({})", camel_case(&inp.name), default)
+            })
+            .collect();
         out.push_str(&items.join(",\n"));
         out.push_str(";\n\n");
     }
@@ -345,9 +436,11 @@ fn emit_easylang(ir: &IrModule, meta: &IndicatorMeta) -> String {
     if let Some(ref f) = ir.on_calculate {
         if !f.locals.is_empty() {
             out.push_str("variables:\n");
-            let items: Vec<String> = f.locals.iter().map(|(n, _)| {
-                format!("    {}(0)", camel_case(n))
-            }).collect();
+            let items: Vec<String> = f
+                .locals
+                .iter()
+                .map(|(n, _)| format!("    {}(0)", camel_case(n)))
+                .collect();
             out.push_str(&items.join(",\n"));
             out.push_str(";\n\n");
         }
@@ -357,10 +450,17 @@ fn emit_easylang(ir: &IrModule, meta: &IndicatorMeta) -> String {
                     out.push_str(&format!("{} = {};\n", camel_case(name), emit_expr_el(e)));
                 }
                 IrStmt::SetBuffer(idx, _, e) => {
-                    let label = meta.plots.get(*idx)
+                    let label = meta
+                        .plots
+                        .get(*idx)
                         .map(|p| p.label.clone())
                         .unwrap_or_else(|| format!("Plot{}", idx));
-                    out.push_str(&format!("Plot{}({}, \"{}\");\n", idx + 1, emit_expr_el(e), label));
+                    out.push_str(&format!(
+                        "Plot{}({}, \"{}\");\n",
+                        idx + 1,
+                        emit_expr_el(e),
+                        label
+                    ));
                 }
                 _ => {}
             }
@@ -374,14 +474,15 @@ fn emit_expr_el(e: &IrExpr) -> String {
         IrExpr::I32Const(n) => format!("{}", n),
         IrExpr::F64Const(f) => format!("{}", f),
         IrExpr::GetLocal(n) => camel_case(n),
-        IrExpr::IOpen(_)    => "Open".into(),
-        IrExpr::IHigh(_)    => "High".into(),
-        IrExpr::ILow(_)     => "Low".into(),
-        IrExpr::IClose(_)   => "Close".into(),
-        IrExpr::IVolume(_)  => "Volume".into(),
-        IrExpr::IBars       => "CurrentBar".into(),
-        IrExpr::BinOp(op, l, r) => format!("({} {} {})",
-            emit_expr_el(l), el_binop(op), emit_expr_el(r)),
+        IrExpr::IOpen(_) => "Open".into(),
+        IrExpr::IHigh(_) => "High".into(),
+        IrExpr::ILow(_) => "Low".into(),
+        IrExpr::IClose(_) => "Close".into(),
+        IrExpr::IVolume(_) => "Volume".into(),
+        IrExpr::IBars => "CurrentBar".into(),
+        IrExpr::BinOp(op, l, r) => {
+            format!("({} {} {})", emit_expr_el(l), el_binop(op), emit_expr_el(r))
+        }
         IrExpr::Call(name, args) => {
             let a: Vec<String> = args.iter().map(emit_expr_el).collect();
             el_builtin(name, &a)
@@ -402,19 +503,19 @@ fn el_binop(op: &IrBinOp) -> &'static str {
 fn el_builtin(name: &str, args: &[String]) -> String {
     let a = |i: usize| args.get(i).cloned().unwrap_or_else(|| "0".into());
     match name {
-        "ta_sma"     => format!("Average({}, {})", a(0), a(1)),
-        "ta_ema"     => format!("XAverage({}, {})", a(0), a(1)),
-        "ta_rsi"     => format!("RSI({}, {})", a(0), a(1)),
-        "ta_atr"     => format!("ATR({})", a(0)),
+        "ta_sma" => format!("Average({}, {})", a(0), a(1)),
+        "ta_ema" => format!("XAverage({}, {})", a(0), a(1)),
+        "ta_rsi" => format!("RSI({}, {})", a(0), a(1)),
+        "ta_atr" => format!("ATR({})", a(0)),
         "ta_highest" => format!("Highest({}, {})", a(0), a(1)),
-        "ta_lowest"  => format!("Lowest({}, {})", a(0), a(1)),
-        "ta_stdev"   => format!("StdDev({}, {})", a(0), a(1)),
-        "math_abs"   => format!("AbsValue({})", a(0)),
-        "math_sqrt"  => format!("SquareRoot({})", a(0)),
-        "math_log"   => format!("Log({})", a(0)),
-        "math_max"   => format!("MaxList({}, {})", a(0), a(1)),
-        "math_min"   => format!("MinList({}, {})", a(0), a(1)),
-        _            => format!("{{ {} }} 0", name),
+        "ta_lowest" => format!("Lowest({}, {})", a(0), a(1)),
+        "ta_stdev" => format!("StdDev({}, {})", a(0), a(1)),
+        "math_abs" => format!("AbsValue({})", a(0)),
+        "math_sqrt" => format!("SquareRoot({})", a(0)),
+        "math_log" => format!("Log({})", a(0)),
+        "math_max" => format!("MaxList({}, {})", a(0), a(1)),
+        "math_min" => format!("MinList({}, {})", a(0), a(1)),
+        _ => format!("{{ {} }} 0", name),
     }
 }
 
@@ -422,7 +523,9 @@ fn el_builtin(name: &str, args: &[String]) -> String {
 
 fn emit_thinkscript(ir: &IrModule, meta: &IndicatorMeta) -> String {
     let mut out = String::new();
-    if meta.separate_window { out.push_str("declare lower;\n"); }
+    if meta.separate_window {
+        out.push_str("declare lower;\n");
+    }
     // Inputs
     for inp in &ir.inputs {
         let (_, default) = ir_input_default(inp);
@@ -432,14 +535,23 @@ fn emit_thinkscript(ir: &IrModule, meta: &IndicatorMeta) -> String {
         for stmt in &f.body {
             match stmt {
                 IrStmt::SetLocal(name, e) => {
-                    out.push_str(&format!("def {} = {};\n", snake_case(name), emit_expr_ts(e)));
+                    out.push_str(&format!(
+                        "def {} = {};\n",
+                        snake_case(name),
+                        emit_expr_ts(e)
+                    ));
                 }
                 IrStmt::SetBuffer(idx, _, e) => {
-                    let label = meta.plots.get(*idx)
+                    let label = meta
+                        .plots
+                        .get(*idx)
                         .map(|p| p.label.clone())
                         .unwrap_or_else(|| format!("Plot{}", idx));
-                    out.push_str(&format!("plot {} = {};\n",
-                        snake_case(&label), emit_expr_ts(e)));
+                    out.push_str(&format!(
+                        "plot {} = {};\n",
+                        snake_case(&label),
+                        emit_expr_ts(e)
+                    ));
                 }
                 _ => {}
             }
@@ -453,14 +565,18 @@ fn emit_expr_ts(e: &IrExpr) -> String {
         IrExpr::I32Const(n) => format!("{}", n),
         IrExpr::F64Const(f) => format!("{}", f),
         IrExpr::GetLocal(n) => snake_case(n),
-        IrExpr::IOpen(_)    => "open".into(),
-        IrExpr::IHigh(_)    => "high".into(),
-        IrExpr::ILow(_)     => "low".into(),
-        IrExpr::IClose(_)   => "close".into(),
-        IrExpr::IVolume(_)  => "volume".into(),
-        IrExpr::IBars       => "BarNumber()".into(),
-        IrExpr::BinOp(op, l, r) => format!("({} {} {})",
-            emit_expr_ts(l), binop_sym(op), emit_expr_ts(r)),
+        IrExpr::IOpen(_) => "open".into(),
+        IrExpr::IHigh(_) => "high".into(),
+        IrExpr::ILow(_) => "low".into(),
+        IrExpr::IClose(_) => "close".into(),
+        IrExpr::IVolume(_) => "volume".into(),
+        IrExpr::IBars => "BarNumber()".into(),
+        IrExpr::BinOp(op, l, r) => format!(
+            "({} {} {})",
+            emit_expr_ts(l),
+            binop_sym(op),
+            emit_expr_ts(r)
+        ),
         IrExpr::Call(name, args) => {
             let a: Vec<String> = args.iter().map(emit_expr_ts).collect();
             ts_builtin(name, &a)
@@ -473,19 +589,19 @@ fn emit_expr_ts(e: &IrExpr) -> String {
 fn ts_builtin(name: &str, args: &[String]) -> String {
     let a = |i: usize| args.get(i).cloned().unwrap_or_else(|| "0".into());
     match name {
-        "ta_sma"     => format!("Average({}, {})", a(0), a(1)),
-        "ta_ema"     => format!("ExpAverage({}, {})", a(0), a(1)),
-        "ta_rsi"     => format!("RSI({}, {})", a(0), a(1)),
-        "ta_atr"     => format!("ATR({})", a(0)),
+        "ta_sma" => format!("Average({}, {})", a(0), a(1)),
+        "ta_ema" => format!("ExpAverage({}, {})", a(0), a(1)),
+        "ta_rsi" => format!("RSI({}, {})", a(0), a(1)),
+        "ta_atr" => format!("ATR({})", a(0)),
         "ta_highest" => format!("Highest({}, {})", a(0), a(1)),
-        "ta_lowest"  => format!("Lowest({}, {})", a(0), a(1)),
-        "ta_stdev"   => format!("StDev({}, {})", a(0), a(1)),
-        "math_abs"   => format!("AbsValue({})", a(0)),
-        "math_sqrt"  => format!("Sqrt({})", a(0)),
-        "math_log"   => format!("Log({})", a(0)),
-        "math_max"   => format!("Max({}, {})", a(0), a(1)),
-        "math_min"   => format!("Min({}, {})", a(0), a(1)),
-        _            => format!("{{-- {} --}} 0", name),
+        "ta_lowest" => format!("Lowest({}, {})", a(0), a(1)),
+        "ta_stdev" => format!("StDev({}, {})", a(0), a(1)),
+        "math_abs" => format!("AbsValue({})", a(0)),
+        "math_sqrt" => format!("Sqrt({})", a(0)),
+        "math_log" => format!("Log({})", a(0)),
+        "math_max" => format!("Max({}, {})", a(0), a(1)),
+        "math_min" => format!("Min({}, {})", a(0), a(1)),
+        _ => format!("{{-- {} --}} 0", name),
     }
 }
 
@@ -493,15 +609,35 @@ fn ts_builtin(name: &str, args: &[String]) -> String {
 
 fn emit_mql4(ir: &IrModule, meta: &IndicatorMeta) -> String {
     let mut out = String::new();
-    let name = if meta.short_name.is_empty() { "Transpiled" } else { meta.short_name.as_str() };
-    out.push_str(&format!("//+------------------------------------------------------------------+\n"));
-    out.push_str(&format!("//|  {}  (transpiled by TyphooN Terminal — MQL4)                    |\n", name));
-    out.push_str(&format!("//+------------------------------------------------------------------+\n"));
+    let name = if meta.short_name.is_empty() {
+        "Transpiled"
+    } else {
+        meta.short_name.as_str()
+    };
+    out.push_str(&format!(
+        "//+------------------------------------------------------------------+\n"
+    ));
+    out.push_str(&format!(
+        "//|  {}  (transpiled by TyphooN Terminal — MQL4)                    |\n",
+        name
+    ));
+    out.push_str(&format!(
+        "//+------------------------------------------------------------------+\n"
+    ));
     out.push_str("#property strict\n");
-    out.push_str(&format!("#property indicator_{}\n",
-        if meta.separate_window { "separate_window" } else { "chart_window" }));
+    out.push_str(&format!(
+        "#property indicator_{}\n",
+        if meta.separate_window {
+            "separate_window"
+        } else {
+            "chart_window"
+        }
+    ));
     out.push_str(&format!("#property indicator_shortname \"{}\"\n", name));
-    out.push_str(&format!("#property indicator_buffers {}\n", meta.buffers.max(1)));
+    out.push_str(&format!(
+        "#property indicator_buffers {}\n",
+        meta.buffers.max(1)
+    ));
     for (i, _) in meta.plots.iter().enumerate() {
         out.push_str(&format!("#property indicator_color{}  Blue\n", i + 1));
     }
@@ -509,7 +645,12 @@ fn emit_mql4(ir: &IrModule, meta: &IndicatorMeta) -> String {
     // MQL4 uses `extern` instead of `input`
     for inp in &ir.inputs {
         let (ty, default) = ir_input_default(inp);
-        out.push_str(&format!("extern {} {} = {};\n", ty, camel_case(&inp.name), default));
+        out.push_str(&format!(
+            "extern {} {} = {};\n",
+            ty,
+            camel_case(&inp.name),
+            default
+        ));
     }
     out.push('\n');
     for (i, _) in meta.plots.iter().enumerate() {
@@ -553,14 +694,18 @@ fn emit_expr_mql4(e: &IrExpr) -> String {
         IrExpr::I32Const(n) => format!("{}", n),
         IrExpr::F64Const(f) => format!("{}", f),
         IrExpr::GetLocal(n) => n.clone(),
-        IrExpr::IOpen(_)    => "Open[i]".into(),
-        IrExpr::IHigh(_)    => "High[i]".into(),
-        IrExpr::ILow(_)     => "Low[i]".into(),
-        IrExpr::IClose(_)   => "Close[i]".into(),
-        IrExpr::IVolume(_)  => "(double)Volume[i]".into(),
-        IrExpr::IBars       => "Bars".into(),
-        IrExpr::BinOp(op, l, r) => format!("({} {} {})",
-            emit_expr_mql4(l), binop_sym(op), emit_expr_mql4(r)),
+        IrExpr::IOpen(_) => "Open[i]".into(),
+        IrExpr::IHigh(_) => "High[i]".into(),
+        IrExpr::ILow(_) => "Low[i]".into(),
+        IrExpr::IClose(_) => "Close[i]".into(),
+        IrExpr::IVolume(_) => "(double)Volume[i]".into(),
+        IrExpr::IBars => "Bars".into(),
+        IrExpr::BinOp(op, l, r) => format!(
+            "({} {} {})",
+            emit_expr_mql4(l),
+            binop_sym(op),
+            emit_expr_mql4(r)
+        ),
         IrExpr::Call(name, args) => {
             let a: Vec<String> = args.iter().map(emit_expr_mql4).collect();
             mql4_builtin(name, &a)
@@ -573,18 +718,18 @@ fn emit_expr_mql4(e: &IrExpr) -> String {
 fn mql4_builtin(name: &str, args: &[String]) -> String {
     let a = |i: usize| args.get(i).cloned().unwrap_or_else(|| "0".into());
     match name {
-        "ta_sma"     => format!("iMA(NULL,0,(int)({}),0,MODE_SMA,PRICE_CLOSE,i)", a(1)),
-        "ta_ema"     => format!("iMA(NULL,0,(int)({}),0,MODE_EMA,PRICE_CLOSE,i)", a(1)),
-        "ta_rsi"     => format!("iRSI(NULL,0,(int)({}),PRICE_CLOSE,i)", a(1)),
-        "ta_atr"     => format!("iATR(NULL,0,(int)({}),i)", a(0)),
+        "ta_sma" => format!("iMA(NULL,0,(int)({}),0,MODE_SMA,PRICE_CLOSE,i)", a(1)),
+        "ta_ema" => format!("iMA(NULL,0,(int)({}),0,MODE_EMA,PRICE_CLOSE,i)", a(1)),
+        "ta_rsi" => format!("iRSI(NULL,0,(int)({}),PRICE_CLOSE,i)", a(1)),
+        "ta_atr" => format!("iATR(NULL,0,(int)({}),i)", a(0)),
         "ta_highest" => format!("High[iHighest(NULL,0,MODE_HIGH,(int)({}),i)]", a(1)),
-        "ta_lowest"  => format!("Low[iLowest(NULL,0,MODE_LOW,(int)({}),i)]", a(1)),
-        "ta_stdev"   => format!("iStdDev(NULL,0,(int)({}),0,MODE_SMA,PRICE_CLOSE,i)", a(1)),
-        "math_abs"   => format!("MathAbs({})", a(0)),
-        "math_sqrt"  => format!("MathSqrt({})", a(0)),
-        "math_log"   => format!("MathLog({})", a(0)),
-        "math_max"   => format!("MathMax({},{})", a(0), a(1)),
-        "math_min"   => format!("MathMin({},{})", a(0), a(1)),
+        "ta_lowest" => format!("Low[iLowest(NULL,0,MODE_LOW,(int)({}),i)]", a(1)),
+        "ta_stdev" => format!("iStdDev(NULL,0,(int)({}),0,MODE_SMA,PRICE_CLOSE,i)", a(1)),
+        "math_abs" => format!("MathAbs({})", a(0)),
+        "math_sqrt" => format!("MathSqrt({})", a(0)),
+        "math_log" => format!("MathLog({})", a(0)),
+        "math_max" => format!("MathMax({},{})", a(0), a(1)),
+        "math_min" => format!("MathMin({},{})", a(0), a(1)),
         _ => format!("/* {} */ 0.0", name),
     }
 }
@@ -593,13 +738,21 @@ fn mql4_builtin(name: &str, args: &[String]) -> String {
 
 fn emit_afl(ir: &IrModule, meta: &IndicatorMeta) -> String {
     let mut out = String::new();
-    let name = if meta.short_name.is_empty() { "Transpiled" } else { meta.short_name.as_str() };
+    let name = if meta.short_name.is_empty() {
+        "Transpiled"
+    } else {
+        meta.short_name.as_str()
+    };
     out.push_str(&format!("_SECTION_BEGIN(\"{}\");\n", name));
     // Inputs via Param()
     for inp in &ir.inputs {
         let (_, default) = ir_input_default(inp);
-        out.push_str(&format!("{} = Param(\"{}\", {}, 1, 1000, 1);\n",
-            camel_case(&inp.name), inp.name, default));
+        out.push_str(&format!(
+            "{} = Param(\"{}\", {}, 1, 1000, 1);\n",
+            camel_case(&inp.name),
+            inp.name,
+            default
+        ));
     }
     if let Some(ref f) = ir.on_calculate {
         for stmt in &f.body {
@@ -608,11 +761,16 @@ fn emit_afl(ir: &IrModule, meta: &IndicatorMeta) -> String {
                     out.push_str(&format!("{} = {};\n", camel_case(name), emit_expr_afl(e)));
                 }
                 IrStmt::SetBuffer(idx, _, e) => {
-                    let label = meta.plots.get(*idx)
+                    let label = meta
+                        .plots
+                        .get(*idx)
                         .map(|p| p.label.clone())
                         .unwrap_or_else(|| format!("Plot{}", idx));
-                    out.push_str(&format!("Plot({}, \"{}\", colorBlue, styleLine);\n",
-                        emit_expr_afl(e), label));
+                    out.push_str(&format!(
+                        "Plot({}, \"{}\", colorBlue, styleLine);\n",
+                        emit_expr_afl(e),
+                        label
+                    ));
                 }
                 _ => {}
             }
@@ -627,14 +785,18 @@ fn emit_expr_afl(e: &IrExpr) -> String {
         IrExpr::I32Const(n) => format!("{}", n),
         IrExpr::F64Const(f) => format!("{}", f),
         IrExpr::GetLocal(n) => camel_case(n),
-        IrExpr::IOpen(_)    => "Open".into(),
-        IrExpr::IHigh(_)    => "High".into(),
-        IrExpr::ILow(_)     => "Low".into(),
-        IrExpr::IClose(_)   => "Close".into(),
-        IrExpr::IVolume(_)  => "Volume".into(),
-        IrExpr::IBars       => "BarIndex()".into(),
-        IrExpr::BinOp(op, l, r) => format!("({} {} {})",
-            emit_expr_afl(l), binop_sym(op), emit_expr_afl(r)),
+        IrExpr::IOpen(_) => "Open".into(),
+        IrExpr::IHigh(_) => "High".into(),
+        IrExpr::ILow(_) => "Low".into(),
+        IrExpr::IClose(_) => "Close".into(),
+        IrExpr::IVolume(_) => "Volume".into(),
+        IrExpr::IBars => "BarIndex()".into(),
+        IrExpr::BinOp(op, l, r) => format!(
+            "({} {} {})",
+            emit_expr_afl(l),
+            binop_sym(op),
+            emit_expr_afl(r)
+        ),
         IrExpr::Call(name, args) => {
             let a: Vec<String> = args.iter().map(emit_expr_afl).collect();
             afl_builtin(name, &a)
@@ -647,19 +809,19 @@ fn emit_expr_afl(e: &IrExpr) -> String {
 fn afl_builtin(name: &str, args: &[String]) -> String {
     let a = |i: usize| args.get(i).cloned().unwrap_or_else(|| "0".into());
     match name {
-        "ta_sma"     => format!("MA({}, {})", a(0), a(1)),
-        "ta_ema"     => format!("EMA({}, {})", a(0), a(1)),
-        "ta_rsi"     => format!("RSI({})", a(1)),
-        "ta_atr"     => format!("ATR({})", a(0)),
+        "ta_sma" => format!("MA({}, {})", a(0), a(1)),
+        "ta_ema" => format!("EMA({}, {})", a(0), a(1)),
+        "ta_rsi" => format!("RSI({})", a(1)),
+        "ta_atr" => format!("ATR({})", a(0)),
         "ta_highest" => format!("HHV({}, {})", a(0), a(1)),
-        "ta_lowest"  => format!("LLV({}, {})", a(0), a(1)),
-        "ta_stdev"   => format!("StDev({}, {})", a(0), a(1)),
-        "math_abs"   => format!("abs({})", a(0)),
-        "math_sqrt"  => format!("sqrt({})", a(0)),
-        "math_log"   => format!("log({})", a(0)),
-        "math_max"   => format!("Max({}, {})", a(0), a(1)),
-        "math_min"   => format!("Min({}, {})", a(0), a(1)),
-        _            => format!("/* {} */ 0", name),
+        "ta_lowest" => format!("LLV({}, {})", a(0), a(1)),
+        "ta_stdev" => format!("StDev({}, {})", a(0), a(1)),
+        "math_abs" => format!("abs({})", a(0)),
+        "math_sqrt" => format!("sqrt({})", a(0)),
+        "math_log" => format!("log({})", a(0)),
+        "math_max" => format!("Max({}, {})", a(0), a(1)),
+        "math_min" => format!("Min({}, {})", a(0), a(1)),
+        _ => format!("/* {} */ 0", name),
     }
 }
 
@@ -667,14 +829,22 @@ fn afl_builtin(name: &str, args: &[String]) -> String {
 
 fn emit_probuilder(ir: &IrModule, meta: &IndicatorMeta) -> String {
     let mut out = String::new();
-    let name = if meta.short_name.is_empty() { "Transpiled" } else { meta.short_name.as_str() };
+    let name = if meta.short_name.is_empty() {
+        "Transpiled"
+    } else {
+        meta.short_name.as_str()
+    };
     out.push_str(&format!("REM {} (transpiled by TyphooN Terminal)\n", name));
     // ProBuilder has no input declarations in the usual sense — values
     // get baked in at the RETURN statement. Emit a comment with the
     // defaults for the user to pull out into a dropdown manually.
     for inp in &ir.inputs {
         let (_, default) = ir_input_default(inp);
-        out.push_str(&format!("REM input {} = {}\n", snake_case(&inp.name), default));
+        out.push_str(&format!(
+            "REM input {} = {}\n",
+            snake_case(&inp.name),
+            default
+        ));
         // Also declare as a local variable so downstream expressions compile.
         out.push_str(&format!("{} = {}\n", snake_case(&inp.name), default));
     }
@@ -684,10 +854,16 @@ fn emit_probuilder(ir: &IrModule, meta: &IndicatorMeta) -> String {
         for stmt in &f.body {
             match stmt {
                 IrStmt::SetLocal(name, e) => {
-                    out.push_str(&format!("{} = {}\n", snake_case(name), emit_expr_probuilder(e)));
+                    out.push_str(&format!(
+                        "{} = {}\n",
+                        snake_case(name),
+                        emit_expr_probuilder(e)
+                    ));
                 }
                 IrStmt::SetBuffer(idx, _, e) => {
-                    let label = meta.plots.get(*idx)
+                    let label = meta
+                        .plots
+                        .get(*idx)
                         .map(|p| p.label.clone())
                         .unwrap_or_else(|| format!("Plot{}", idx));
                     return_clauses.push(format!("{} AS \"{}\"", emit_expr_probuilder(e), label));
@@ -709,14 +885,18 @@ fn emit_expr_probuilder(e: &IrExpr) -> String {
         IrExpr::I32Const(n) => format!("{}", n),
         IrExpr::F64Const(f) => format!("{}", f),
         IrExpr::GetLocal(n) => snake_case(n),
-        IrExpr::IOpen(_)    => "open".into(),
-        IrExpr::IHigh(_)    => "high".into(),
-        IrExpr::ILow(_)     => "low".into(),
-        IrExpr::IClose(_)   => "close".into(),
-        IrExpr::IVolume(_)  => "volume".into(),
-        IrExpr::IBars       => "barindex".into(),
-        IrExpr::BinOp(op, l, r) => format!("({} {} {})",
-            emit_expr_probuilder(l), pb_binop(op), emit_expr_probuilder(r)),
+        IrExpr::IOpen(_) => "open".into(),
+        IrExpr::IHigh(_) => "high".into(),
+        IrExpr::ILow(_) => "low".into(),
+        IrExpr::IClose(_) => "close".into(),
+        IrExpr::IVolume(_) => "volume".into(),
+        IrExpr::IBars => "barindex".into(),
+        IrExpr::BinOp(op, l, r) => format!(
+            "({} {} {})",
+            emit_expr_probuilder(l),
+            pb_binop(op),
+            emit_expr_probuilder(r)
+        ),
         IrExpr::Call(name, args) => {
             let a: Vec<String> = args.iter().map(emit_expr_probuilder).collect();
             pb_builtin(name, &a)
@@ -737,19 +917,19 @@ fn pb_binop(op: &IrBinOp) -> &'static str {
 fn pb_builtin(name: &str, args: &[String]) -> String {
     let a = |i: usize| args.get(i).cloned().unwrap_or_else(|| "0".into());
     match name {
-        "ta_sma"     => format!("Average[{}]({})", a(1), a(0)),
-        "ta_ema"     => format!("ExponentialAverage[{}]({})", a(1), a(0)),
-        "ta_rsi"     => format!("RSI[{}]({})", a(1), a(0)),
-        "ta_atr"     => format!("ATR[{}]", a(0)),
+        "ta_sma" => format!("Average[{}]({})", a(1), a(0)),
+        "ta_ema" => format!("ExponentialAverage[{}]({})", a(1), a(0)),
+        "ta_rsi" => format!("RSI[{}]({})", a(1), a(0)),
+        "ta_atr" => format!("ATR[{}]", a(0)),
         "ta_highest" => format!("Highest[{}]({})", a(1), a(0)),
-        "ta_lowest"  => format!("Lowest[{}]({})", a(1), a(0)),
-        "ta_stdev"   => format!("StdDev[{}]({})", a(1), a(0)),
-        "math_abs"   => format!("abs({})", a(0)),
-        "math_sqrt"  => format!("sqrt({})", a(0)),
-        "math_log"   => format!("log({})", a(0)),
-        "math_max"   => format!("max({}, {})", a(0), a(1)),
-        "math_min"   => format!("min({}, {})", a(0), a(1)),
-        _            => format!("{{ {} }} 0", name),
+        "ta_lowest" => format!("Lowest[{}]({})", a(1), a(0)),
+        "ta_stdev" => format!("StdDev[{}]({})", a(1), a(0)),
+        "math_abs" => format!("abs({})", a(0)),
+        "math_sqrt" => format!("sqrt({})", a(0)),
+        "math_log" => format!("log({})", a(0)),
+        "math_max" => format!("max({}, {})", a(0), a(1)),
+        "math_min" => format!("min({}, {})", a(0), a(1)),
+        _ => format!("{{ {} }} 0", name),
     }
 }
 
@@ -757,7 +937,11 @@ fn pb_builtin(name: &str, args: &[String]) -> String {
 
 fn emit_ninjascript(ir: &IrModule, meta: &IndicatorMeta) -> String {
     let mut out = String::new();
-    let name = if meta.short_name.is_empty() { "Transpiled" } else { meta.short_name.as_str() };
+    let name = if meta.short_name.is_empty() {
+        "Transpiled"
+    } else {
+        meta.short_name.as_str()
+    };
     out.push_str("#region Using declarations\n");
     out.push_str("using System;\n");
     out.push_str("using NinjaTrader.NinjaScript;\n");
@@ -766,13 +950,25 @@ fn emit_ninjascript(ir: &IrModule, meta: &IndicatorMeta) -> String {
     out.push_str("using NinjaTrader.Gui.Tools;\n");
     out.push_str("#endregion\n\n");
     out.push_str("namespace NinjaTrader.NinjaScript.Indicators\n{\n");
-    out.push_str(&format!("    public class {} : Indicator\n    {{\n", pascal_case(name)));
+    out.push_str(&format!(
+        "    public class {} : Indicator\n    {{\n",
+        pascal_case(name)
+    ));
     out.push_str("        protected override void OnStateChange()\n        {\n");
     out.push_str("            if (State == State.SetDefaults)\n            {\n");
-    out.push_str(&format!("                Name                          = \"{}\";\n", name));
-    out.push_str(&format!("                IsOverlay                     = {};\n", !meta.separate_window));
+    out.push_str(&format!(
+        "                Name                          = \"{}\";\n",
+        name
+    ));
+    out.push_str(&format!(
+        "                IsOverlay                     = {};\n",
+        !meta.separate_window
+    ));
     for p in &meta.plots {
-        out.push_str(&format!("                AddPlot(Brushes.Blue, \"{}\");\n", p.label));
+        out.push_str(&format!(
+            "                AddPlot(Brushes.Blue, \"{}\");\n",
+            p.label
+        ));
     }
     out.push_str("            }\n        }\n\n");
     out.push_str("        protected override void OnBarUpdate()\n        {\n");
@@ -782,7 +978,9 @@ fn emit_ninjascript(ir: &IrModule, meta: &IndicatorMeta) -> String {
     let input_names: Vec<String> = ir.inputs.iter().map(|i| i.name.clone()).collect();
     if let Some(ref f) = ir.on_calculate {
         for (local_name, _) in &f.locals {
-            if input_names.iter().any(|n| n == local_name) { continue; }
+            if input_names.iter().any(|n| n == local_name) {
+                continue;
+            }
             out.push_str(&format!("            double {} = 0.0;\n", local_name));
         }
         for stmt in &f.body {
@@ -793,12 +991,18 @@ fn emit_ninjascript(ir: &IrModule, meta: &IndicatorMeta) -> String {
                     } else {
                         local_name.clone()
                     };
-                    out.push_str(&format!("            {} = {};\n",
-                        lhs, emit_expr_ns(e, &input_names)));
+                    out.push_str(&format!(
+                        "            {} = {};\n",
+                        lhs,
+                        emit_expr_ns(e, &input_names)
+                    ));
                 }
                 IrStmt::SetBuffer(idx, _, e) => {
-                    out.push_str(&format!("            Values[{}][0] = {};\n",
-                        idx, emit_expr_ns(e, &input_names)));
+                    out.push_str(&format!(
+                        "            Values[{}][0] = {};\n",
+                        idx,
+                        emit_expr_ns(e, &input_names)
+                    ));
                 }
                 _ => {}
             }
@@ -808,13 +1012,22 @@ fn emit_ninjascript(ir: &IrModule, meta: &IndicatorMeta) -> String {
     // Parameter properties
     for inp in &ir.inputs {
         let (ty, default) = ir_input_default(inp);
-        let cs_ty = match ty { "double" => "double", "int" => "int", "bool" => "bool", _ => "double" };
+        let cs_ty = match ty {
+            "double" => "double",
+            "int" => "int",
+            "bool" => "bool",
+            _ => "double",
+        };
         out.push_str("\n        [NinjaScriptProperty]\n");
         out.push_str("        [Display(Name=\"");
         out.push_str(&inp.name);
         out.push_str("\", GroupName=\"NinjaScriptParameters\", Order=0)]\n");
-        out.push_str(&format!("        public {} {} {{ get; set; }} = {};\n",
-            cs_ty, pascal_case(&inp.name), default));
+        out.push_str(&format!(
+            "        public {} {} {{ get; set; }} = {};\n",
+            cs_ty,
+            pascal_case(&inp.name),
+            default
+        ));
     }
     out.push_str("    }\n}\n");
     out
@@ -831,14 +1044,18 @@ fn emit_expr_ns(e: &IrExpr, inputs: &[String]) -> String {
                 n.clone()
             }
         }
-        IrExpr::IOpen(_)    => "Open[0]".into(),
-        IrExpr::IHigh(_)    => "High[0]".into(),
-        IrExpr::ILow(_)     => "Low[0]".into(),
-        IrExpr::IClose(_)   => "Close[0]".into(),
-        IrExpr::IVolume(_)  => "Volume[0]".into(),
-        IrExpr::IBars       => "CurrentBar".into(),
-        IrExpr::BinOp(op, l, r) => format!("({} {} {})",
-            emit_expr_ns(l, inputs), binop_sym(op), emit_expr_ns(r, inputs)),
+        IrExpr::IOpen(_) => "Open[0]".into(),
+        IrExpr::IHigh(_) => "High[0]".into(),
+        IrExpr::ILow(_) => "Low[0]".into(),
+        IrExpr::IClose(_) => "Close[0]".into(),
+        IrExpr::IVolume(_) => "Volume[0]".into(),
+        IrExpr::IBars => "CurrentBar".into(),
+        IrExpr::BinOp(op, l, r) => format!(
+            "({} {} {})",
+            emit_expr_ns(l, inputs),
+            binop_sym(op),
+            emit_expr_ns(r, inputs)
+        ),
         IrExpr::Call(name, args) => {
             let a: Vec<String> = args.iter().map(|x| emit_expr_ns(x, inputs)).collect();
             ns_builtin(name, &a)
@@ -851,19 +1068,19 @@ fn emit_expr_ns(e: &IrExpr, inputs: &[String]) -> String {
 fn ns_builtin(name: &str, args: &[String]) -> String {
     let a = |i: usize| args.get(i).cloned().unwrap_or_else(|| "0".into());
     match name {
-        "ta_sma"     => format!("SMA({}, (int)({}))[0]", a(0), a(1)),
-        "ta_ema"     => format!("EMA({}, (int)({}))[0]", a(0), a(1)),
-        "ta_rsi"     => format!("RSI({}, (int)({}), 3)[0]", a(0), a(1)),
-        "ta_atr"     => format!("ATR((int)({}))[0]", a(0)),
+        "ta_sma" => format!("SMA({}, (int)({}))[0]", a(0), a(1)),
+        "ta_ema" => format!("EMA({}, (int)({}))[0]", a(0), a(1)),
+        "ta_rsi" => format!("RSI({}, (int)({}), 3)[0]", a(0), a(1)),
+        "ta_atr" => format!("ATR((int)({}))[0]", a(0)),
         "ta_highest" => format!("MAX({}, (int)({}))[0]", a(0), a(1)),
-        "ta_lowest"  => format!("MIN({}, (int)({}))[0]", a(0), a(1)),
-        "ta_stdev"   => format!("StdDev({}, (int)({}))[0]", a(0), a(1)),
-        "math_abs"   => format!("Math.Abs({})", a(0)),
-        "math_sqrt"  => format!("Math.Sqrt({})", a(0)),
-        "math_log"   => format!("Math.Log({})", a(0)),
-        "math_max"   => format!("Math.Max({}, {})", a(0), a(1)),
-        "math_min"   => format!("Math.Min({}, {})", a(0), a(1)),
-        _            => format!("/* {} */ 0.0", name),
+        "ta_lowest" => format!("MIN({}, (int)({}))[0]", a(0), a(1)),
+        "ta_stdev" => format!("StdDev({}, (int)({}))[0]", a(0), a(1)),
+        "math_abs" => format!("Math.Abs({})", a(0)),
+        "math_sqrt" => format!("Math.Sqrt({})", a(0)),
+        "math_log" => format!("Math.Log({})", a(0)),
+        "math_max" => format!("Math.Max({}, {})", a(0), a(1)),
+        "math_min" => format!("Math.Min({}, {})", a(0), a(1)),
+        _ => format!("/* {} */ 0.0", name),
     }
 }
 
@@ -871,33 +1088,61 @@ fn ns_builtin(name: &str, args: &[String]) -> String {
 
 fn emit_calgo(ir: &IrModule, meta: &IndicatorMeta) -> String {
     let mut out = String::new();
-    let name = if meta.short_name.is_empty() { "Transpiled" } else { meta.short_name.as_str() };
+    let name = if meta.short_name.is_empty() {
+        "Transpiled"
+    } else {
+        meta.short_name.as_str()
+    };
     out.push_str("using System;\n");
     out.push_str("using cAlgo.API;\n");
     out.push_str("using cAlgo.API.Indicators;\n");
     out.push_str("using cAlgo.API.Internals;\n\n");
     out.push_str("namespace cAlgo\n{\n");
-    out.push_str(&format!("    [Indicator(Name = \"{}\", IsOverlay = {}, AccessRights = AccessRights.None)]\n",
-        name, !meta.separate_window));
-    out.push_str(&format!("    public class {} : Indicator\n    {{\n", pascal_case(name)));
+    out.push_str(&format!(
+        "    [Indicator(Name = \"{}\", IsOverlay = {}, AccessRights = AccessRights.None)]\n",
+        name, !meta.separate_window
+    ));
+    out.push_str(&format!(
+        "    public class {} : Indicator\n    {{\n",
+        pascal_case(name)
+    ));
     // Parameters
     for inp in &ir.inputs {
         let (ty, default) = ir_input_default(inp);
-        let cs_ty = match ty { "double" => "double", "int" => "int", "bool" => "bool", _ => "double" };
-        out.push_str(&format!("        [Parameter(\"{}\", DefaultValue = {})]\n", inp.name, default));
-        out.push_str(&format!("        public {} {} {{ get; set; }}\n\n", cs_ty, pascal_case(&inp.name)));
+        let cs_ty = match ty {
+            "double" => "double",
+            "int" => "int",
+            "bool" => "bool",
+            _ => "double",
+        };
+        out.push_str(&format!(
+            "        [Parameter(\"{}\", DefaultValue = {})]\n",
+            inp.name, default
+        ));
+        out.push_str(&format!(
+            "        public {} {} {{ get; set; }}\n\n",
+            cs_ty,
+            pascal_case(&inp.name)
+        ));
     }
     // Outputs
     for p in &meta.plots {
-        out.push_str(&format!("        [Output(\"{}\", LineColor = \"Blue\")]\n", p.label));
-        out.push_str(&format!("        public IndicatorDataSeries {} {{ get; set; }}\n\n",
-            pascal_case(&p.label)));
+        out.push_str(&format!(
+            "        [Output(\"{}\", LineColor = \"Blue\")]\n",
+            p.label
+        ));
+        out.push_str(&format!(
+            "        public IndicatorDataSeries {} {{ get; set; }}\n\n",
+            pascal_case(&p.label)
+        ));
     }
     out.push_str("        public override void Calculate(int index)\n        {\n");
     let input_names: Vec<String> = ir.inputs.iter().map(|i| i.name.clone()).collect();
     if let Some(ref f) = ir.on_calculate {
         for (local_name, _) in &f.locals {
-            if input_names.iter().any(|n| n == local_name) { continue; }
+            if input_names.iter().any(|n| n == local_name) {
+                continue;
+            }
             out.push_str(&format!("            double {} = 0.0;\n", local_name));
         }
         for stmt in &f.body {
@@ -908,15 +1153,23 @@ fn emit_calgo(ir: &IrModule, meta: &IndicatorMeta) -> String {
                     } else {
                         local_name.clone()
                     };
-                    out.push_str(&format!("            {} = {};\n",
-                        lhs, emit_expr_calgo(e, &input_names)));
+                    out.push_str(&format!(
+                        "            {} = {};\n",
+                        lhs,
+                        emit_expr_calgo(e, &input_names)
+                    ));
                 }
                 IrStmt::SetBuffer(idx, _, e) => {
-                    let target = meta.plots.get(*idx)
+                    let target = meta
+                        .plots
+                        .get(*idx)
                         .map(|p| pascal_case(&p.label))
                         .unwrap_or_else(|| format!("Plot{}", idx));
-                    out.push_str(&format!("            {}[index] = {};\n",
-                        target, emit_expr_calgo(e, &input_names)));
+                    out.push_str(&format!(
+                        "            {}[index] = {};\n",
+                        target,
+                        emit_expr_calgo(e, &input_names)
+                    ));
                 }
                 _ => {}
             }
@@ -937,14 +1190,18 @@ fn emit_expr_calgo(e: &IrExpr, inputs: &[String]) -> String {
                 n.clone()
             }
         }
-        IrExpr::IOpen(_)    => "Bars.OpenPrices[index]".into(),
-        IrExpr::IHigh(_)    => "Bars.HighPrices[index]".into(),
-        IrExpr::ILow(_)     => "Bars.LowPrices[index]".into(),
-        IrExpr::IClose(_)   => "Bars.ClosePrices[index]".into(),
-        IrExpr::IVolume(_)  => "Bars.TickVolumes[index]".into(),
-        IrExpr::IBars       => "Bars.Count".into(),
-        IrExpr::BinOp(op, l, r) => format!("({} {} {})",
-            emit_expr_calgo(l, inputs), binop_sym(op), emit_expr_calgo(r, inputs)),
+        IrExpr::IOpen(_) => "Bars.OpenPrices[index]".into(),
+        IrExpr::IHigh(_) => "Bars.HighPrices[index]".into(),
+        IrExpr::ILow(_) => "Bars.LowPrices[index]".into(),
+        IrExpr::IClose(_) => "Bars.ClosePrices[index]".into(),
+        IrExpr::IVolume(_) => "Bars.TickVolumes[index]".into(),
+        IrExpr::IBars => "Bars.Count".into(),
+        IrExpr::BinOp(op, l, r) => format!(
+            "({} {} {})",
+            emit_expr_calgo(l, inputs),
+            binop_sym(op),
+            emit_expr_calgo(r, inputs)
+        ),
         IrExpr::Call(name, args) => {
             let a: Vec<String> = args.iter().map(|x| emit_expr_calgo(x, inputs)).collect();
             calgo_builtin(name, &a)
@@ -957,19 +1214,42 @@ fn emit_expr_calgo(e: &IrExpr, inputs: &[String]) -> String {
 fn calgo_builtin(name: &str, args: &[String]) -> String {
     let a = |i: usize| args.get(i).cloned().unwrap_or_else(|| "0".into());
     match name {
-        "ta_sma"     => format!("Indicators.SimpleMovingAverage({}, (int)({})).Result[index]", a(0), a(1)),
-        "ta_ema"     => format!("Indicators.ExponentialMovingAverage({}, (int)({})).Result[index]", a(0), a(1)),
-        "ta_rsi"     => format!("Indicators.RelativeStrengthIndex({}, (int)({})).Result[index]", a(0), a(1)),
-        "ta_atr"     => format!("Indicators.AverageTrueRange((int)({}), MovingAverageType.Simple).Result[index]", a(0)),
-        "ta_highest" => format!("Indicators.Highest({}, (int)({})).Result[index]", a(0), a(1)),
-        "ta_lowest"  => format!("Indicators.Lowest({}, (int)({})).Result[index]", a(0), a(1)),
-        "ta_stdev"   => format!("Indicators.StandardDeviation({}, (int)({}), MovingAverageType.Simple).Result[index]", a(0), a(1)),
-        "math_abs"   => format!("Math.Abs({})", a(0)),
-        "math_sqrt"  => format!("Math.Sqrt({})", a(0)),
-        "math_log"   => format!("Math.Log({})", a(0)),
-        "math_max"   => format!("Math.Max({}, {})", a(0), a(1)),
-        "math_min"   => format!("Math.Min({}, {})", a(0), a(1)),
-        _            => format!("/* {} */ 0.0", name),
+        "ta_sma" => format!(
+            "Indicators.SimpleMovingAverage({}, (int)({})).Result[index]",
+            a(0),
+            a(1)
+        ),
+        "ta_ema" => format!(
+            "Indicators.ExponentialMovingAverage({}, (int)({})).Result[index]",
+            a(0),
+            a(1)
+        ),
+        "ta_rsi" => format!(
+            "Indicators.RelativeStrengthIndex({}, (int)({})).Result[index]",
+            a(0),
+            a(1)
+        ),
+        "ta_atr" => format!(
+            "Indicators.AverageTrueRange((int)({}), MovingAverageType.Simple).Result[index]",
+            a(0)
+        ),
+        "ta_highest" => format!(
+            "Indicators.Highest({}, (int)({})).Result[index]",
+            a(0),
+            a(1)
+        ),
+        "ta_lowest" => format!("Indicators.Lowest({}, (int)({})).Result[index]", a(0), a(1)),
+        "ta_stdev" => format!(
+            "Indicators.StandardDeviation({}, (int)({}), MovingAverageType.Simple).Result[index]",
+            a(0),
+            a(1)
+        ),
+        "math_abs" => format!("Math.Abs({})", a(0)),
+        "math_sqrt" => format!("Math.Sqrt({})", a(0)),
+        "math_log" => format!("Math.Log({})", a(0)),
+        "math_max" => format!("Math.Max({}, {})", a(0), a(1)),
+        "math_min" => format!("Math.Min({}, {})", a(0), a(1)),
+        _ => format!("/* {} */ 0.0", name),
     }
 }
 
@@ -977,19 +1257,32 @@ fn calgo_builtin(name: &str, args: &[String]) -> String {
 
 fn emit_acsil(ir: &IrModule, meta: &IndicatorMeta) -> String {
     let mut out = String::new();
-    let name = if meta.short_name.is_empty() { "Transpiled" } else { meta.short_name.as_str() };
+    let name = if meta.short_name.is_empty() {
+        "Transpiled"
+    } else {
+        meta.short_name.as_str()
+    };
     let func_name = pascal_case(name);
     out.push_str("#include \"SierraChart.h\"\n\n");
     out.push_str(&format!("SCDLLName(\"{}\")\n\n", name));
-    out.push_str(&format!("SCSFExport scsf_{}(SCStudyInterfaceRef sc)\n{{\n", func_name));
+    out.push_str(&format!(
+        "SCSFExport scsf_{}(SCStudyInterfaceRef sc)\n{{\n",
+        func_name
+    ));
     // Declare subgraph and input refs
     for (i, p) in meta.plots.iter().enumerate() {
-        out.push_str(&format!("    SCSubgraphRef {} = sc.Subgraph[{}];\n",
-            acsil_ident(&p.label, i, "Sub"), i));
+        out.push_str(&format!(
+            "    SCSubgraphRef {} = sc.Subgraph[{}];\n",
+            acsil_ident(&p.label, i, "Sub"),
+            i
+        ));
     }
     for (i, inp) in ir.inputs.iter().enumerate() {
-        out.push_str(&format!("    SCInputRef {} = sc.Input[{}];\n",
-            acsil_ident(&inp.name, i, "Input"), i));
+        out.push_str(&format!(
+            "    SCInputRef {} = sc.Input[{}];\n",
+            acsil_ident(&inp.name, i, "Input"),
+            i
+        ));
     }
     out.push('\n');
     // SetDefaults block
@@ -1002,8 +1295,14 @@ fn emit_acsil(ir: &IrModule, meta: &IndicatorMeta) -> String {
     for (i, p) in meta.plots.iter().enumerate() {
         let ref_name = acsil_ident(&p.label, i, "Sub");
         out.push_str(&format!("        {}.Name = \"{}\";\n", ref_name, p.label));
-        out.push_str(&format!("        {}.DrawStyle = DRAWSTYLE_LINE;\n", ref_name));
-        out.push_str(&format!("        {}.PrimaryColor = RGB(0, 0, 255);\n", ref_name));
+        out.push_str(&format!(
+            "        {}.DrawStyle = DRAWSTYLE_LINE;\n",
+            ref_name
+        ));
+        out.push_str(&format!(
+            "        {}.PrimaryColor = RGB(0, 0, 255);\n",
+            ref_name
+        ));
     }
     for (i, inp) in ir.inputs.iter().enumerate() {
         let ref_name = acsil_ident(&inp.name, i, "Input");
@@ -1017,26 +1316,39 @@ fn emit_acsil(ir: &IrModule, meta: &IndicatorMeta) -> String {
     out.push_str("        return;\n    }\n\n");
     // Body
     let input_names: Vec<String> = ir.inputs.iter().map(|i| i.name.clone()).collect();
-    let input_ref_names: Vec<(String, String)> = ir.inputs.iter().enumerate()
+    let input_ref_names: Vec<(String, String)> = ir
+        .inputs
+        .iter()
+        .enumerate()
         .map(|(i, inp)| (inp.name.clone(), acsil_ident(&inp.name, i, "Input")))
         .collect();
     if let Some(ref f) = ir.on_calculate {
         for (local_name, _) in &f.locals {
-            if input_names.iter().any(|n| n == local_name) { continue; }
+            if input_names.iter().any(|n| n == local_name) {
+                continue;
+            }
             out.push_str(&format!("    float {} = 0.0;\n", local_name));
         }
         for stmt in &f.body {
             match stmt {
                 IrStmt::SetLocal(local_name, e) => {
-                    out.push_str(&format!("    {} = {};\n",
-                        local_name, emit_expr_acsil(e, &input_ref_names)));
+                    out.push_str(&format!(
+                        "    {} = {};\n",
+                        local_name,
+                        emit_expr_acsil(e, &input_ref_names)
+                    ));
                 }
                 IrStmt::SetBuffer(idx, _, e) => {
-                    let ref_name = meta.plots.get(*idx)
+                    let ref_name = meta
+                        .plots
+                        .get(*idx)
                         .map(|p| acsil_ident(&p.label, *idx, "Sub"))
                         .unwrap_or_else(|| format!("sc.Subgraph[{}]", idx));
-                    out.push_str(&format!("    {}[sc.Index] = {};\n",
-                        ref_name, emit_expr_acsil(e, &input_ref_names)));
+                    out.push_str(&format!(
+                        "    {}[sc.Index] = {};\n",
+                        ref_name,
+                        emit_expr_acsil(e, &input_ref_names)
+                    ));
                 }
                 _ => {}
             }
@@ -1058,16 +1370,23 @@ fn emit_expr_acsil(e: &IrExpr, input_refs: &[(String, String)]) -> String {
                 n.clone()
             }
         }
-        IrExpr::IOpen(_)    => "sc.BaseDataIn[SC_OPEN][sc.Index]".into(),
-        IrExpr::IHigh(_)    => "sc.BaseDataIn[SC_HIGH][sc.Index]".into(),
-        IrExpr::ILow(_)     => "sc.BaseDataIn[SC_LOW][sc.Index]".into(),
-        IrExpr::IClose(_)   => "sc.BaseDataIn[SC_LAST][sc.Index]".into(),
-        IrExpr::IVolume(_)  => "sc.BaseDataIn[SC_VOLUME][sc.Index]".into(),
-        IrExpr::IBars       => "sc.Index".into(),
-        IrExpr::BinOp(op, l, r) => format!("({} {} {})",
-            emit_expr_acsil(l, input_refs), binop_sym(op), emit_expr_acsil(r, input_refs)),
+        IrExpr::IOpen(_) => "sc.BaseDataIn[SC_OPEN][sc.Index]".into(),
+        IrExpr::IHigh(_) => "sc.BaseDataIn[SC_HIGH][sc.Index]".into(),
+        IrExpr::ILow(_) => "sc.BaseDataIn[SC_LOW][sc.Index]".into(),
+        IrExpr::IClose(_) => "sc.BaseDataIn[SC_LAST][sc.Index]".into(),
+        IrExpr::IVolume(_) => "sc.BaseDataIn[SC_VOLUME][sc.Index]".into(),
+        IrExpr::IBars => "sc.Index".into(),
+        IrExpr::BinOp(op, l, r) => format!(
+            "({} {} {})",
+            emit_expr_acsil(l, input_refs),
+            binop_sym(op),
+            emit_expr_acsil(r, input_refs)
+        ),
         IrExpr::Call(name, args) => {
-            let a: Vec<String> = args.iter().map(|x| emit_expr_acsil(x, input_refs)).collect();
+            let a: Vec<String> = args
+                .iter()
+                .map(|x| emit_expr_acsil(x, input_refs))
+                .collect();
             acsil_builtin(name, &a)
         }
         IrExpr::UnaryOp(_, inner) => format!("(-{})", emit_expr_acsil(inner, input_refs)),
@@ -1078,29 +1397,50 @@ fn emit_expr_acsil(e: &IrExpr, input_refs: &[(String, String)]) -> String {
 fn acsil_builtin(name: &str, args: &[String]) -> String {
     let a = |i: usize| args.get(i).cloned().unwrap_or_else(|| "0".into());
     match name {
-        "ta_sma"     => format!("sc.SimpleMovAvg({}, {})", a(0), a(1)),
-        "ta_ema"     => format!("sc.ExponentialMovAvg({}, {})", a(0), a(1)),
-        "ta_rsi"     => format!("sc.RSI({}, {})", a(0), a(1)),
-        "ta_atr"     => format!("sc.ATR({})", a(0)),
+        "ta_sma" => format!("sc.SimpleMovAvg({}, {})", a(0), a(1)),
+        "ta_ema" => format!("sc.ExponentialMovAvg({}, {})", a(0), a(1)),
+        "ta_rsi" => format!("sc.RSI({}, {})", a(0), a(1)),
+        "ta_atr" => format!("sc.ATR({})", a(0)),
         "ta_highest" => format!("sc.Highest({}, {})", a(0), a(1)),
-        "ta_lowest"  => format!("sc.Lowest({}, {})", a(0), a(1)),
-        "ta_stdev"   => format!("sc.StdDev({}, {})", a(0), a(1)),
-        "math_abs"   => format!("fabs({})", a(0)),
-        "math_sqrt"  => format!("sqrt({})", a(0)),
-        "math_log"   => format!("log({})", a(0)),
-        "math_max"   => format!("sc.FormattedEvaluate(0, 0, 0, 0, 0) /* max({}, {}) */", a(0), a(1)),
-        "math_min"   => format!("sc.FormattedEvaluate(0, 0, 0, 0, 0) /* min({}, {}) */", a(0), a(1)),
-        _            => format!("/* {} */ 0.0f", name),
+        "ta_lowest" => format!("sc.Lowest({}, {})", a(0), a(1)),
+        "ta_stdev" => format!("sc.StdDev({}, {})", a(0), a(1)),
+        "math_abs" => format!("fabs({})", a(0)),
+        "math_sqrt" => format!("sqrt({})", a(0)),
+        "math_log" => format!("log({})", a(0)),
+        "math_max" => format!(
+            "sc.FormattedEvaluate(0, 0, 0, 0, 0) /* max({}, {}) */",
+            a(0),
+            a(1)
+        ),
+        "math_min" => format!(
+            "sc.FormattedEvaluate(0, 0, 0, 0, 0) /* min({}, {}) */",
+            a(0),
+            a(1)
+        ),
+        _ => format!("/* {} */ 0.0f", name),
     }
 }
 
 /// Create a valid C identifier from a label. If it looks like a C keyword
 /// or is empty, use `prefix + index` instead.
 fn acsil_ident(label: &str, index: usize, prefix: &str) -> String {
-    let cleaned: String = label.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+    let cleaned: String = label
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
-    if cleaned.is_empty() || cleaned.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(true) {
+    if cleaned.is_empty()
+        || cleaned
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(true)
+    {
         format!("{}_{}", prefix, index)
     } else {
         cleaned
@@ -1111,10 +1451,10 @@ fn acsil_ident(label: &str, index: usize, prefix: &str) -> String {
 
 fn ir_input_default(inp: &IrInput) -> (&'static str, String) {
     match (&inp.ir_type, &inp.default) {
-        (IrType::I32,  IrValue::I32(n))  => ("int",   n.to_string()),
-        (IrType::I64,  IrValue::I64(n))  => ("long",  n.to_string()),
-        (IrType::F64,  IrValue::F64(f))  => ("double", format!("{}", f)),
-        (IrType::Bool, IrValue::Bool(b)) => ("bool",  b.to_string()),
+        (IrType::I32, IrValue::I32(n)) => ("int", n.to_string()),
+        (IrType::I64, IrValue::I64(n)) => ("long", n.to_string()),
+        (IrType::F64, IrValue::F64(f)) => ("double", format!("{}", f)),
+        (IrType::Bool, IrValue::Bool(b)) => ("bool", b.to_string()),
         _ => ("double", "0.0".into()),
     }
 }
@@ -1126,18 +1466,20 @@ fn binop_sym(op: &IrBinOp) -> &'static str {
         IrBinOp::MulF64 | IrBinOp::MulI32 => "*",
         IrBinOp::DivF64 | IrBinOp::DivI32 => "/",
         IrBinOp::ModI32 => "%",
-        IrBinOp::EqF64  | IrBinOp::EqI32 => "==",
-        IrBinOp::NeF64  | IrBinOp::NeI32 => "!=",
-        IrBinOp::LtF64  | IrBinOp::LtI32 => "<",
-        IrBinOp::LeF64  | IrBinOp::LeI32 => "<=",
-        IrBinOp::GtF64  | IrBinOp::GtI32 => ">",
-        IrBinOp::GeF64  | IrBinOp::GeI32 => ">=",
+        IrBinOp::EqF64 | IrBinOp::EqI32 => "==",
+        IrBinOp::NeF64 | IrBinOp::NeI32 => "!=",
+        IrBinOp::LtF64 | IrBinOp::LtI32 => "<",
+        IrBinOp::LeF64 | IrBinOp::LeI32 => "<=",
+        IrBinOp::GtF64 | IrBinOp::GtI32 => ">",
+        IrBinOp::GeF64 | IrBinOp::GeI32 => ">=",
         IrBinOp::And => "&&",
-        IrBinOp::Or  => "||",
+        IrBinOp::Or => "||",
     }
 }
 
-fn i_var(s: &str) -> &str { s }
+fn i_var(s: &str) -> &str {
+    s
+}
 
 /// `length` → `Length`, `moving_avg` → `MovingAvg`.
 fn camel_case(s: &str) -> String {
@@ -1181,10 +1523,17 @@ fn pascal_case(s: &str) -> String {
         }
     }
     // Leading digit is invalid in C# — prefix with `_`
-    if out.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    if out
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
         out.insert(0, '_');
     }
-    if out.is_empty() { out.push_str("Indicator"); }
+    if out.is_empty() {
+        out.push_str("Indicator");
+    }
     out
 }
 
@@ -1219,7 +1568,11 @@ inputs: Length(20);
 MA = Average(Close, Length);
 Plot1(MA, "SMA");
 "#;
-        let out = roundtrip(src, SourceLanguage::EasyLanguage, TargetLanguage::PineScript);
+        let out = roundtrip(
+            src,
+            SourceLanguage::EasyLanguage,
+            TargetLanguage::PineScript,
+        );
         assert!(out.contains("//@version=5"));
         assert!(out.contains("indicator("));
         assert!(out.contains("ta.sma(close, length)"));
@@ -1234,7 +1587,11 @@ input length = 14;
 def ma = Average(close, length);
 plot SMA = ma;
 "#;
-        let out = roundtrip(src, SourceLanguage::ThinkScript, TargetLanguage::EasyLanguage);
+        let out = roundtrip(
+            src,
+            SourceLanguage::ThinkScript,
+            TargetLanguage::EasyLanguage,
+        );
         assert!(out.contains("inputs:"));
         assert!(out.contains("Length(14)"));
         assert!(out.contains("Average(Close, Length)"));
@@ -1276,7 +1633,11 @@ _SECTION_END();
 ema20 = ExponentialAverage[20](close)
 RETURN ema20 AS "EMA20"
 "#;
-        let out = roundtrip(src, SourceLanguage::ProBuilder, TargetLanguage::EasyLanguage);
+        let out = roundtrip(
+            src,
+            SourceLanguage::ProBuilder,
+            TargetLanguage::EasyLanguage,
+        );
         assert!(out.contains("XAverage"));
         assert!(out.contains("Plot1"));
     }
@@ -1299,7 +1660,11 @@ public class MyEma : Indicator
     }
 }
 "#;
-        let out = roundtrip(src, SourceLanguage::NinjaScript, TargetLanguage::EasyLanguage);
+        let out = roundtrip(
+            src,
+            SourceLanguage::NinjaScript,
+            TargetLanguage::EasyLanguage,
+        );
         assert!(out.contains("inputs:"));
         assert!(out.contains("Period(14)"));
         assert!(out.contains("XAverage"));
@@ -1422,7 +1787,11 @@ variables: Ema(0);
 Ema = XAverage(Close, Length);
 Plot1(Ema, "EMA");
 "#;
-        let out = roundtrip(src, SourceLanguage::EasyLanguage, TargetLanguage::ProBuilder);
+        let out = roundtrip(
+            src,
+            SourceLanguage::EasyLanguage,
+            TargetLanguage::ProBuilder,
+        );
         assert!(out.contains("RETURN"));
         assert!(out.contains("ExponentialAverage[length](close)"));
         assert!(out.contains("AS \"EMA\""));
@@ -1436,7 +1805,11 @@ variables: EmaVal(0);
 EmaVal = XAverage(Close, Period);
 Plot1(EmaVal, "EMA");
 "#;
-        let out = roundtrip(src, SourceLanguage::EasyLanguage, TargetLanguage::NinjaScript);
+        let out = roundtrip(
+            src,
+            SourceLanguage::EasyLanguage,
+            TargetLanguage::NinjaScript,
+        );
         assert!(out.contains("using NinjaTrader.NinjaScript.Indicators;"));
         assert!(out.contains("[NinjaScriptProperty]"));
         assert!(out.contains("public int Period"));
@@ -1489,8 +1862,17 @@ Plot2(Ema2, "Slow");
         ];
         for t in targets {
             let out = roundtrip(src, SourceLanguage::EasyLanguage, t);
-            assert!(!out.is_empty(), "target {:?} should emit non-empty output", t);
-            assert!(out.len() > 30, "target {:?} emitted suspiciously short source: {}", t, out);
+            assert!(
+                !out.is_empty(),
+                "target {:?} should emit non-empty output",
+                t
+            );
+            assert!(
+                out.len() > 30,
+                "target {:?} emitted suspiciously short source: {}",
+                t,
+                out
+            );
         }
     }
 
@@ -1514,7 +1896,11 @@ length = input.int(defval=10, title="Length")
 avg = ta.sma(close, length)
 plot(avg, title="Avg")
 "#;
-        let out = roundtrip(src, SourceLanguage::PineScript, TargetLanguage::EasyLanguage);
+        let out = roundtrip(
+            src,
+            SourceLanguage::PineScript,
+            TargetLanguage::EasyLanguage,
+        );
         assert!(out.contains("inputs:"));
         assert!(out.contains("Average("));
     }

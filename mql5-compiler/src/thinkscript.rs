@@ -21,7 +21,7 @@
 //! thinkScript is case-sensitive. Keywords are reserved but follow identifier rules.
 
 use crate::ir::*;
-use crate::{IndicatorMeta, InputParam, CompileResult, Diagnostic, DiagLevel, DrawType, PlotDef};
+use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, InputParam, PlotDef};
 
 /// Parse thinkScript source and produce an IR-based CompileResult.
 pub fn parse_thinkscript(source: &str) -> CompileResult {
@@ -31,19 +31,32 @@ pub fn parse_thinkscript(source: &str) -> CompileResult {
         Ok(wasm) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Info,
-                message: format!("thinkScript compiled: {} inputs, {} plots",
-                    meta.inputs.len(), meta.plots.len()),
-                line: 0, col: 0,
+                message: format!(
+                    "thinkScript compiled: {} inputs, {} plots",
+                    meta.inputs.len(),
+                    meta.plots.len()
+                ),
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: Some(wasm), diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: Some(wasm),
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
         Err(e) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Error,
                 message: format!("thinkScript WASM codegen failed: {e}"),
-                line: 0, col: 0,
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: None, diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: None,
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
     }
 }
@@ -70,7 +83,9 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             None => raw_line,
         };
         let trimmed = line.trim().trim_end_matches(';').trim();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
 
         // declare lower; declare upper; — switch separate_window flag
         if trimmed.starts_with("declare lower") {
@@ -86,7 +101,11 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         if let Some(rest) = trimmed.strip_prefix("input ") {
             if let Some((name, default)) = split_assign(rest) {
                 let (ty, val, ptype) = classify_default(default);
-                inputs.push(IrInput { name: name.clone(), ir_type: ty, default: val });
+                inputs.push(IrInput {
+                    name: name.clone(),
+                    ir_type: ty,
+                    default: val,
+                });
                 meta.inputs.push(InputParam {
                     name,
                     param_type: ptype.into(),
@@ -132,7 +151,9 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         // `Name = expr` — re-assignment of existing local (no def keyword)
         if let Some((name, expr_str)) = split_assign(trimmed) {
             // Must be a simple identifier on the LHS
-            if !name.chars().all(|c| c.is_alphanumeric() || c == '_') { continue; }
+            if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                continue;
+            }
             if let Some(expr) = parse_ts_expr(expr_str) {
                 if !locals.iter().any(|(n, _)| n == &name) {
                     locals.push((name.clone(), IrType::F64));
@@ -173,11 +194,17 @@ fn split_assign(s: &str) -> Option<(String, &str)> {
     let eq = s.find('=')?;
     // Skip comparison
     let prev = s[..eq].chars().last();
-    if matches!(prev, Some('!' | '<' | '>' | '=')) { return None; }
+    if matches!(prev, Some('!' | '<' | '>' | '=')) {
+        return None;
+    }
     let next = s.as_bytes().get(eq + 1).copied();
-    if next == Some(b'=') { return None; }
+    if next == Some(b'=') {
+        return None;
+    }
     let name = s[..eq].trim().to_string();
-    if name.is_empty() { return None; }
+    if name.is_empty() {
+        return None;
+    }
     Some((name, s[eq + 1..].trim()))
 }
 
@@ -185,7 +212,11 @@ fn split_assign(s: &str) -> Option<(String, &str)> {
 fn classify_default(default: &str) -> (IrType, IrValue, &'static str) {
     let d = default.trim();
     if d.eq_ignore_ascii_case("yes") || d.eq_ignore_ascii_case("no") {
-        return (IrType::Bool, IrValue::Bool(d.eq_ignore_ascii_case("yes")), "bool");
+        return (
+            IrType::Bool,
+            IrValue::Bool(d.eq_ignore_ascii_case("yes")),
+            "bool",
+        );
     }
     if let Ok(i) = d.parse::<i32>() {
         return (IrType::I32, IrValue::I32(i), "int");
@@ -200,7 +231,9 @@ fn classify_default(default: &str) -> (IrType, IrValue, &'static str) {
 /// Parse a thinkScript expression into IR.
 pub(crate) fn parse_ts_expr(expr: &str) -> Option<IrExpr> {
     let expr = expr.trim().trim_end_matches(';').trim();
-    if expr.is_empty() { return None; }
+    if expr.is_empty() {
+        return None;
+    }
 
     // Parenthesised expression
     if expr.starts_with('(') && expr.ends_with(')') {
@@ -218,10 +251,10 @@ pub(crate) fn parse_ts_expr(expr: &str) -> Option<IrExpr> {
     // Built-in series (thinkScript is case-sensitive for identifiers;
     // series tokens are lowercase)
     match expr {
-        "close"  => return Some(IrExpr::IClose(Box::new(IrExpr::I32Const(0)))),
-        "open"   => return Some(IrExpr::IOpen(Box::new(IrExpr::I32Const(0)))),
-        "high"   => return Some(IrExpr::IHigh(Box::new(IrExpr::I32Const(0)))),
-        "low"    => return Some(IrExpr::ILow(Box::new(IrExpr::I32Const(0)))),
+        "close" => return Some(IrExpr::IClose(Box::new(IrExpr::I32Const(0)))),
+        "open" => return Some(IrExpr::IOpen(Box::new(IrExpr::I32Const(0)))),
+        "high" => return Some(IrExpr::IHigh(Box::new(IrExpr::I32Const(0)))),
+        "low" => return Some(IrExpr::ILow(Box::new(IrExpr::I32Const(0)))),
         "volume" => return Some(IrExpr::IVolume(Box::new(IrExpr::I32Const(0)))),
         "barnumber" | "BarNumber" => return Some(IrExpr::IBars),
         _ => {}
@@ -233,25 +266,24 @@ pub(crate) fn parse_ts_expr(expr: &str) -> Option<IrExpr> {
             let func = &expr[..open];
             let args_str = &expr[open + 1..expr.len() - 1];
             let args_parts: Vec<&str> = split_top_level_commas(args_str);
-            let ir_args: Option<Vec<IrExpr>> = args_parts.iter()
-                .map(|a| parse_ts_expr(a.trim()))
-                .collect();
+            let ir_args: Option<Vec<IrExpr>> =
+                args_parts.iter().map(|a| parse_ts_expr(a.trim())).collect();
             if let Some(ir_args) = ir_args {
                 // thinkScript built-ins — map to the common IR function names
                 // the runtime knows about. Case-sensitive match on the documented spellings.
                 let mapped: Option<&str> = match func {
                     "Average" | "MovingAverage" | "SimpleMovingAvg" => Some("ta_sma"),
                     "ExpAverage" | "ExponentialMovingAvg" => Some("ta_ema"),
-                    "RSI"                     => Some("ta_rsi"),
-                    "ATR" | "TrueRange"       => Some("ta_atr"),
-                    "Highest"                 => Some("ta_highest"),
-                    "Lowest"                  => Some("ta_lowest"),
-                    "StDev" | "StandardDev"   => Some("ta_stdev"),
-                    "AbsValue" | "Abs"        => Some("math_abs"),
-                    "Sqrt" | "SquareRoot"     => Some("math_sqrt"),
-                    "Log"                     => Some("math_log"),
-                    "Max"                     => Some("math_max"),
-                    "Min"                     => Some("math_min"),
+                    "RSI" => Some("ta_rsi"),
+                    "ATR" | "TrueRange" => Some("ta_atr"),
+                    "Highest" => Some("ta_highest"),
+                    "Lowest" => Some("ta_lowest"),
+                    "StDev" | "StandardDev" => Some("ta_stdev"),
+                    "AbsValue" | "Abs" => Some("math_abs"),
+                    "Sqrt" | "SquareRoot" => Some("math_sqrt"),
+                    "Log" => Some("math_log"),
+                    "Max" => Some("math_max"),
+                    "Min" => Some("math_min"),
                     _ => None,
                 };
                 if let Some(name) = mapped {
@@ -262,7 +294,9 @@ pub(crate) fn parse_ts_expr(expr: &str) -> Option<IrExpr> {
     }
 
     // Binary operators — thinkScript uses standard ops
-    for op_str in &[" + ", " - ", " * ", " / ", " > ", " < ", " >= ", " <= ", " == ", " != "] {
+    for op_str in &[
+        " + ", " - ", " * ", " / ", " > ", " < ", " >= ", " <= ", " == ", " != ",
+    ] {
         if let Some(pos) = expr.find(op_str) {
             let left = parse_ts_expr(&expr[..pos])?;
             let right = parse_ts_expr(&expr[pos + op_str.len()..])?;
@@ -277,7 +311,7 @@ pub(crate) fn parse_ts_expr(expr: &str) -> Option<IrExpr> {
                 " <= " => IrBinOp::LeF64,
                 " == " => IrBinOp::EqF64,
                 " != " => IrBinOp::NeF64,
-                _      => IrBinOp::AddF64,
+                _ => IrBinOp::AddF64,
             };
             return Some(IrExpr::BinOp(ir_op, Box::new(left), Box::new(right)));
         }

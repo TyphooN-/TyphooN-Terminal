@@ -21,7 +21,7 @@
 //! - User-defined functions
 
 use crate::ir::*;
-use crate::{IndicatorMeta, CompileResult, Diagnostic, DiagLevel, DrawType, PlotDef};
+use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, PlotDef};
 
 pub fn parse_probuilder(source: &str) -> CompileResult {
     let (ir_module, meta) = build_ir(source);
@@ -31,17 +31,27 @@ pub fn parse_probuilder(source: &str) -> CompileResult {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Info,
                 message: format!("ProBuilder compiled: {} returns", meta.plots.len()),
-                line: 0, col: 0,
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: Some(wasm), diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: Some(wasm),
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
         Err(e) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Error,
                 message: format!("ProBuilder codegen failed: {e}"),
-                line: 0, col: 0,
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: None, diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: None,
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
     }
 }
@@ -63,16 +73,23 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         // Handle both // and REM comments (ProBuilder uses REM traditionally)
         let line = if let Some(idx) = raw_line.find("//") {
             &raw_line[..idx]
-        } else { raw_line };
+        } else {
+            raw_line
+        };
         let trimmed_raw = line.trim();
         // REM-style comment: whole line
         let upper_first: String = trimmed_raw
-            .chars().take(4).collect::<String>().to_ascii_uppercase();
+            .chars()
+            .take(4)
+            .collect::<String>()
+            .to_ascii_uppercase();
         if upper_first.starts_with("REM ") || trimmed_raw.eq_ignore_ascii_case("REM") {
             continue;
         }
         let trimmed = trimmed_raw;
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
         let upper = trimmed.to_ascii_uppercase();
 
         // RETURN statement(s): `RETURN expr1 [AS "label1"], expr2 [AS "label2"]`
@@ -81,7 +98,9 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             // Split on top-level commas to support multi-return
             for segment in split_top_level_commas(rest) {
                 let seg = segment.trim();
-                if seg.is_empty() { continue; }
+                if seg.is_empty() {
+                    continue;
+                }
                 // Look for ` AS "label"` suffix (case-insensitive)
                 let (expr_part, label) = if let Some(pos) = find_case_insensitive(seg, " AS ") {
                     let label_part = seg[pos + 4..].trim().trim_matches('"').to_string();
@@ -108,7 +127,9 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         // Assignment: name = expr
         if let Some(eq_pos) = trimmed.find('=') {
             let prev = trimmed[..eq_pos].chars().last();
-            if matches!(prev, Some('!' | '<' | '>' | '=')) { continue; }
+            if matches!(prev, Some('!' | '<' | '>' | '=')) {
+                continue;
+            }
             let lhs = trimmed[..eq_pos].trim();
             let rhs = trimmed[eq_pos + 1..].trim();
             if lhs.is_empty() || !lhs.chars().all(|c| c.is_alphanumeric() || c == '_') {
@@ -150,7 +171,9 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
 
 fn parse_pb_expr(expr: &str) -> Option<IrExpr> {
     let expr = expr.trim();
-    if expr.is_empty() { return None; }
+    if expr.is_empty() {
+        return None;
+    }
     if expr.starts_with('(') && expr.ends_with(')') {
         return parse_pb_expr(&expr[1..expr.len() - 1]);
     }
@@ -164,9 +187,9 @@ fn parse_pb_expr(expr: &str) -> Option<IrExpr> {
     let lower = expr.to_ascii_lowercase();
     match lower.as_str() {
         "close" => return Some(IrExpr::IClose(Box::new(IrExpr::I32Const(0)))),
-        "open"  => return Some(IrExpr::IOpen(Box::new(IrExpr::I32Const(0)))),
-        "high"  => return Some(IrExpr::IHigh(Box::new(IrExpr::I32Const(0)))),
-        "low"   => return Some(IrExpr::ILow(Box::new(IrExpr::I32Const(0)))),
+        "open" => return Some(IrExpr::IOpen(Box::new(IrExpr::I32Const(0)))),
+        "high" => return Some(IrExpr::IHigh(Box::new(IrExpr::I32Const(0)))),
+        "low" => return Some(IrExpr::ILow(Box::new(IrExpr::I32Const(0)))),
         "volume" => return Some(IrExpr::IVolume(Box::new(IrExpr::I32Const(0)))),
         "barindex" => return Some(IrExpr::IBars),
         _ => {}
@@ -226,9 +249,8 @@ fn parse_pb_expr(expr: &str) -> Option<IrExpr> {
             let func = &lower[..open];
             let args_str = &expr[open + 1..expr.len() - 1];
             let parts = split_top_level_commas(args_str);
-            let ir_args: Option<Vec<IrExpr>> = parts.iter()
-                .map(|a| parse_pb_expr(a.trim()))
-                .collect();
+            let ir_args: Option<Vec<IrExpr>> =
+                parts.iter().map(|a| parse_pb_expr(a.trim())).collect();
             if let Some(ir_args) = ir_args {
                 let mapped: Option<&str> = match func {
                     "abs" => Some("math_abs"),
@@ -245,7 +267,9 @@ fn parse_pb_expr(expr: &str) -> Option<IrExpr> {
         }
     }
 
-    for op_str in &[" + ", " - ", " * ", " / ", " >= ", " <= ", " > ", " < ", " <> ", " = "] {
+    for op_str in &[
+        " + ", " - ", " * ", " / ", " >= ", " <= ", " > ", " < ", " <> ", " = ",
+    ] {
         if let Some(pos) = expr.find(op_str) {
             let left = parse_pb_expr(&expr[..pos])?;
             let right = parse_pb_expr(&expr[pos + op_str.len()..])?;
@@ -258,9 +282,9 @@ fn parse_pb_expr(expr: &str) -> Option<IrExpr> {
                 " < " => IrBinOp::LtF64,
                 " >= " => IrBinOp::GeF64,
                 " <= " => IrBinOp::LeF64,
-                " = "  => IrBinOp::EqF64,
+                " = " => IrBinOp::EqF64,
                 " <> " => IrBinOp::NeF64,
-                _      => IrBinOp::AddF64,
+                _ => IrBinOp::AddF64,
             };
             return Some(IrExpr::BinOp(ir_op, Box::new(left), Box::new(right)));
         }
@@ -290,12 +314,16 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
             _ => {}
         }
     }
-    if start < s.len() { parts.push(&s[start..]); }
+    if start < s.len() {
+        parts.push(&s[start..]);
+    }
     parts
 }
 
 fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
-    if needle.is_empty() { return Some(0); }
+    if needle.is_empty() {
+        return Some(0);
+    }
     let hl = haystack.to_ascii_lowercase();
     let nl = needle.to_ascii_lowercase();
     hl.find(&nl)
@@ -402,7 +430,9 @@ RETURN a AS "ATR"
     fn test_pb_exp_maps_to_ema() {
         if let Some(IrExpr::Call(name, _)) = parse_pb_expr("ExponentialAverage[14](close)") {
             assert_eq!(name, "ta_ema");
-        } else { panic!("ExponentialAverage should map to ta_ema"); }
+        } else {
+            panic!("ExponentialAverage should map to ta_ema");
+        }
     }
 
     #[test]

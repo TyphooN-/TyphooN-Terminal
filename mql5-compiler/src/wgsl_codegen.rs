@@ -54,19 +54,22 @@ pub fn emit_wgsl(program: &Program) -> Result<String, CompileError> {
         None
     });
 
-    let on_calc = on_calc.ok_or_else(|| CompileError::Internal(
-        "No OnCalculate function found".to_string(),
-    ))?;
+    let on_calc = on_calc
+        .ok_or_else(|| CompileError::Internal("No OnCalculate function found".to_string()))?;
 
     // Collect helper functions (not OnCalculate, not OnInit)
-    let helpers: Vec<&FunctionDef> = program.items.iter().filter_map(|item| {
-        if let TopLevel::Function(func) = item {
-            if func.name != "OnCalculate" && func.name != "OnInit" {
-                return Some(func);
+    let helpers: Vec<&FunctionDef> = program
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let TopLevel::Function(func) = item {
+                if func.name != "OnCalculate" && func.name != "OnInit" {
+                    return Some(func);
+                }
             }
-        }
-        None
-    }).collect();
+            None
+        })
+        .collect();
 
     // Build shader
     let mut out = String::new();
@@ -88,14 +91,23 @@ pub fn emit_wgsl(program: &Program) -> Result<String, CompileError> {
     // Helper functions
     for helper in &helpers {
         let ret_type = mql5_type_to_wgsl(&helper.return_type);
-        let params_str: Vec<String> = helper.params.iter()
+        let params_str: Vec<String> = helper
+            .params
+            .iter()
             .filter_map(|p| {
                 let wt = mql5_type_to_wgsl(&p.type_name);
-                if wt == "/* string */" { return None; }
+                if wt == "/* string */" {
+                    return None;
+                }
                 Some(format!("{}: {}", p.name, wt))
             })
             .collect();
-        out.push_str(&format!("fn {}({}) -> {} {{\n", helper.name, params_str.join(", "), ret_type));
+        out.push_str(&format!(
+            "fn {}({}) -> {} {{\n",
+            helper.name,
+            params_str.join(", "),
+            ret_type
+        ));
         emit_stmts(&mut out, &helper.body, &mut ctx, 1)?;
         out.push_str("}\n\n");
     }
@@ -187,7 +199,10 @@ fn emit_stmt(
                 if decl.is_const {
                     out.push_str(&format!("{}let {} = {};\n", prefix, decl.name, expr_str));
                 } else {
-                    out.push_str(&format!("{}var {}: {} = {};\n", prefix, decl.name, wgsl_type, expr_str));
+                    out.push_str(&format!(
+                        "{}var {}: {} = {};\n",
+                        prefix, decl.name, wgsl_type, expr_str
+                    ));
                 }
             } else {
                 let default = match wgsl_type {
@@ -197,7 +212,10 @@ fn emit_stmt(
                     "bool" => "false",
                     _ => "0.0",
                 };
-                out.push_str(&format!("{}var {}: {} = {};\n", prefix, decl.name, wgsl_type, default));
+                out.push_str(&format!(
+                    "{}var {}: {} = {};\n",
+                    prefix, decl.name, wgsl_type, default
+                ));
             }
             ctx.declared_vars.push(decl.name.clone());
         }
@@ -226,7 +244,9 @@ fn emit_stmt(
                 out.push_str(&format!("{}return;\n", prefix));
             }
         }
-        Stmt::If { cond, then, else_, .. } => {
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
             let prefix = ind(indent);
             let cond_str = emit_expr_str(cond, ctx)?;
             out.push_str(&format!("{}if ({}) {{\n", prefix, cond_str));
@@ -237,7 +257,13 @@ fn emit_stmt(
             }
             out.push_str(&format!("{}}}\n", prefix));
         }
-        Stmt::For { init, cond, step, body, .. } => {
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
             let prefix = ind(indent);
             // Emit init before loop
             if let Some(init_stmt) = init {
@@ -254,10 +280,16 @@ fn emit_stmt(
             if let Some(step_expr) = step {
                 if let Expr::PostIncr(inner) = step_expr {
                     let inner_str = emit_expr_str(inner, ctx)?;
-                    out.push_str(&format!("{}    {} = {} + 1i;\n", prefix, inner_str, inner_str));
+                    out.push_str(&format!(
+                        "{}    {} = {} + 1i;\n",
+                        prefix, inner_str, inner_str
+                    ));
                 } else if let Expr::PostDecr(inner) = step_expr {
                     let inner_str = emit_expr_str(inner, ctx)?;
-                    out.push_str(&format!("{}    {} = {} - 1i;\n", prefix, inner_str, inner_str));
+                    out.push_str(&format!(
+                        "{}    {} = {} - 1i;\n",
+                        prefix, inner_str, inner_str
+                    ));
                 } else if let Expr::Assign { target, op, value } = step_expr {
                     emit_assign(out, target, op, value, ctx, indent + 1)?;
                 } else {
@@ -295,7 +327,12 @@ fn emit_stmt(
             emit_stmts(out, stmts, ctx, indent + 1)?;
             out.push_str(&format!("{}}}\n", prefix));
         }
-        Stmt::Switch { expr, cases, default, .. } => {
+        Stmt::Switch {
+            expr,
+            cases,
+            default,
+            ..
+        } => {
             let prefix = ind(indent);
             let expr_str = emit_expr_str(expr, ctx)?;
             out.push_str(&format!("{}switch {} {{\n", prefix, expr_str));
@@ -442,9 +479,7 @@ fn emit_expr_str(expr: &Expr, ctx: &mut WgslCtx) -> Result<String, CompileError>
                 UnaryOp::PreDecr => Ok(format!("({} - 1i)", inner)),
             }
         }
-        Expr::Call { func, args } => {
-            emit_call_str(func, args, ctx)
-        }
+        Expr::Call { func, args } => emit_call_str(func, args, ctx),
         Expr::Index { array, index } => {
             let array_str = emit_expr_str(array, ctx)?;
             let index_str = emit_expr_str(index, ctx)?;
@@ -474,9 +509,7 @@ fn emit_expr_str(expr: &Expr, ctx: &mut WgslCtx) -> Result<String, CompileError>
             // In expression context, return current value (side effect handled at stmt level)
             emit_expr_str(inner, ctx)
         }
-        Expr::PostDecr(inner) => {
-            emit_expr_str(inner, ctx)
-        }
+        Expr::PostDecr(inner) => emit_expr_str(inner, ctx),
         Expr::Assign { target, op, value } => {
             // Assignment as expression — emit the value
             let target_str = emit_expr_str(target, ctx)?;
@@ -485,23 +518,16 @@ fn emit_expr_str(expr: &Expr, ctx: &mut WgslCtx) -> Result<String, CompileError>
             Ok(rhs)
         }
         Expr::ArrayInit(elems) => {
-            let parts: Result<Vec<String>, _> = elems.iter()
-                .map(|e| emit_expr_str(e, ctx))
-                .collect();
+            let parts: Result<Vec<String>, _> =
+                elems.iter().map(|e| emit_expr_str(e, ctx)).collect();
             Ok(format!("array({})", parts?.join(", ")))
         }
     }
 }
 
 /// Emit a function call, mapping MQL5 built-ins to WGSL equivalents.
-fn emit_call_str(
-    func: &str,
-    args: &[Expr],
-    ctx: &mut WgslCtx,
-) -> Result<String, CompileError> {
-    let arg_strs: Result<Vec<String>, _> = args.iter()
-        .map(|a| emit_expr_str(a, ctx))
-        .collect();
+fn emit_call_str(func: &str, args: &[Expr], ctx: &mut WgslCtx) -> Result<String, CompileError> {
+    let arg_strs: Result<Vec<String>, _> = args.iter().map(|a| emit_expr_str(a, ctx)).collect();
     let arg_strs = arg_strs?;
 
     match func {
@@ -509,36 +535,63 @@ fn emit_call_str(
         // iOpen(symbol, timeframe, shift) → bars[shift * 5 + 0]
         "iOpen" => {
             let shift = bar_shift_arg(&arg_strs);
-            Ok(format!("bars[{} * {}u + {}u]", shift, BAR_STRIDE, OPEN_OFFSET))
+            Ok(format!(
+                "bars[{} * {}u + {}u]",
+                shift, BAR_STRIDE, OPEN_OFFSET
+            ))
         }
         "iHigh" => {
             let shift = bar_shift_arg(&arg_strs);
-            Ok(format!("bars[{} * {}u + {}u]", shift, BAR_STRIDE, HIGH_OFFSET))
+            Ok(format!(
+                "bars[{} * {}u + {}u]",
+                shift, BAR_STRIDE, HIGH_OFFSET
+            ))
         }
         "iLow" => {
             let shift = bar_shift_arg(&arg_strs);
-            Ok(format!("bars[{} * {}u + {}u]", shift, BAR_STRIDE, LOW_OFFSET))
+            Ok(format!(
+                "bars[{} * {}u + {}u]",
+                shift, BAR_STRIDE, LOW_OFFSET
+            ))
         }
         "iClose" => {
             let shift = bar_shift_arg(&arg_strs);
-            Ok(format!("bars[{} * {}u + {}u]", shift, BAR_STRIDE, CLOSE_OFFSET))
+            Ok(format!(
+                "bars[{} * {}u + {}u]",
+                shift, BAR_STRIDE, CLOSE_OFFSET
+            ))
         }
         "iVolume" => {
             let shift = bar_shift_arg(&arg_strs);
-            Ok(format!("bars[{} * {}u + {}u]", shift, BAR_STRIDE, VOLUME_OFFSET))
+            Ok(format!(
+                "bars[{} * {}u + {}u]",
+                shift, BAR_STRIDE, VOLUME_OFFSET
+            ))
         }
         "iBars" => Ok("params.bar_count".to_string()),
 
         // Math built-ins
-        "MathSqrt" | "sqrt" => Ok(format!("sqrt({})", arg_strs.first().unwrap_or(&"0.0".to_string()))),
-        "MathAbs" | "fabs" => Ok(format!("abs({})", arg_strs.first().unwrap_or(&"0.0".to_string()))),
+        "MathSqrt" | "sqrt" => Ok(format!(
+            "sqrt({})",
+            arg_strs.first().unwrap_or(&"0.0".to_string())
+        )),
+        "MathAbs" | "fabs" => Ok(format!(
+            "abs({})",
+            arg_strs.first().unwrap_or(&"0.0".to_string())
+        )),
         "MathPow" | "pow" => {
             let base = arg_strs.first().map(|s| s.as_str()).unwrap_or("0.0");
             let exp = arg_strs.get(1).map(|s| s.as_str()).unwrap_or("1.0");
             Ok(format!("pow({}, {})", base, exp))
         }
-        "MathLog" | "log" => Ok(format!("log({})", arg_strs.first().unwrap_or(&"0.0".to_string()))),
-        "MathExp" | "exp" => Ok(format!("exp({})", arg_strs.first().unwrap_or(&"0.0".to_string()))),
+        "MathLog" | "log" => Ok(format!(
+            "log({})",
+            arg_strs.first().unwrap_or(&"0.0".to_string())
+        )),
+        "MathExp" | "exp" => Ok(format!(
+            "exp({})",
+            arg_strs.first().unwrap_or(&"0.0".to_string())
+        )),
         "MathMax" | "fmax" => {
             let a = arg_strs.first().map(|s| s.as_str()).unwrap_or("0.0");
             let b = arg_strs.get(1).map(|s| s.as_str()).unwrap_or("0.0");
@@ -549,32 +602,55 @@ fn emit_call_str(
             let b = arg_strs.get(1).map(|s| s.as_str()).unwrap_or("0.0");
             Ok(format!("min({}, {})", a, b))
         }
-        "MathFloor" | "floor" => Ok(format!("floor({})", arg_strs.first().unwrap_or(&"0.0".to_string()))),
-        "MathCeil" | "ceil" => Ok(format!("ceil({})", arg_strs.first().unwrap_or(&"0.0".to_string()))),
-        "MathRound" | "round" => Ok(format!("round({})", arg_strs.first().unwrap_or(&"0.0".to_string()))),
-        "MathSin" | "sin" => Ok(format!("sin({})", arg_strs.first().unwrap_or(&"0.0".to_string()))),
-        "MathCos" | "cos" => Ok(format!("cos({})", arg_strs.first().unwrap_or(&"0.0".to_string()))),
-        "MathTan" | "tan" => Ok(format!("tan({})", arg_strs.first().unwrap_or(&"0.0".to_string()))),
-        "MathAtan" | "atan" => Ok(format!("atan({})", arg_strs.first().unwrap_or(&"0.0".to_string()))),
+        "MathFloor" | "floor" => Ok(format!(
+            "floor({})",
+            arg_strs.first().unwrap_or(&"0.0".to_string())
+        )),
+        "MathCeil" | "ceil" => Ok(format!(
+            "ceil({})",
+            arg_strs.first().unwrap_or(&"0.0".to_string())
+        )),
+        "MathRound" | "round" => Ok(format!(
+            "round({})",
+            arg_strs.first().unwrap_or(&"0.0".to_string())
+        )),
+        "MathSin" | "sin" => Ok(format!(
+            "sin({})",
+            arg_strs.first().unwrap_or(&"0.0".to_string())
+        )),
+        "MathCos" | "cos" => Ok(format!(
+            "cos({})",
+            arg_strs.first().unwrap_or(&"0.0".to_string())
+        )),
+        "MathTan" | "tan" => Ok(format!(
+            "tan({})",
+            arg_strs.first().unwrap_or(&"0.0".to_string())
+        )),
+        "MathAtan" | "atan" => Ok(format!(
+            "atan({})",
+            arg_strs.first().unwrap_or(&"0.0".to_string())
+        )),
 
         // Buffer operations — skip in WGSL (handled by runtime)
-        "SetIndexBuffer" | "SetIndexStyle" | "IndicatorSetInteger" |
-        "IndicatorSetString" | "IndicatorSetDouble" |
-        "PlotIndexSetInteger" | "PlotIndexSetDouble" | "PlotIndexSetString" |
-        "Print" | "Alert" | "Comment" | "PlaySound" => {
-            Ok("/* runtime-only */".to_string())
-        }
+        "SetIndexBuffer"
+        | "SetIndexStyle"
+        | "IndicatorSetInteger"
+        | "IndicatorSetString"
+        | "IndicatorSetDouble"
+        | "PlotIndexSetInteger"
+        | "PlotIndexSetDouble"
+        | "PlotIndexSetString"
+        | "Print"
+        | "Alert"
+        | "Comment"
+        | "PlaySound" => Ok("/* runtime-only */".to_string()),
 
         // ArraySetAsSeries and similar — no-op in compute shader
-        "ArraySetAsSeries" | "ArrayResize" | "ArrayInitialize" |
-        "ArraySize" | "ArrayCopy" | "ArrayFree" => {
-            Ok("/* array-op */".to_string())
-        }
+        "ArraySetAsSeries" | "ArrayResize" | "ArrayInitialize" | "ArraySize" | "ArrayCopy"
+        | "ArrayFree" => Ok("/* array-op */".to_string()),
 
         // Default: emit as-is (user-defined function call)
-        _ => {
-            Ok(format!("{}({})", func, arg_strs.join(", ")))
-        }
+        _ => Ok(format!("{}({})", func, arg_strs.join(", "))),
     }
 }
 
@@ -613,8 +689,20 @@ mod tests {
             return_type: "int".to_string(),
             name: "OnCalculate".to_string(),
             params: vec![
-                Param { type_name: "int".to_string(), name: "rates_total".to_string(), is_ref: false, is_array: false, default: None },
-                Param { type_name: "int".to_string(), name: "prev_calculated".to_string(), is_ref: false, is_array: false, default: None },
+                Param {
+                    type_name: "int".to_string(),
+                    name: "rates_total".to_string(),
+                    is_ref: false,
+                    is_array: false,
+                    default: None,
+                },
+                Param {
+                    type_name: "int".to_string(),
+                    name: "prev_calculated".to_string(),
+                    is_ref: false,
+                    is_array: false,
+                    default: None,
+                },
             ],
             body,
             is_static: false,
@@ -637,7 +725,11 @@ mod tests {
             }
         "#;
         let wgsl = compile(src);
-        assert!(wgsl.contains("1.0 + 2.0"), "should contain addition: {}", wgsl);
+        assert!(
+            wgsl.contains("1.0 + 2.0"),
+            "should contain addition: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -650,8 +742,16 @@ mod tests {
             }
         "#;
         let wgsl = compile(src);
-        assert!(wgsl.contains("var x: f32 = 3.14"), "should declare f32 var: {}", wgsl);
-        assert!(wgsl.contains("var count: i32 = 10i"), "should declare i32 var: {}", wgsl);
+        assert!(
+            wgsl.contains("var x: f32 = 3.14"),
+            "should declare f32 var: {}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("var count: i32 = 10i"),
+            "should declare i32 var: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -680,10 +780,22 @@ mod tests {
             }
         "#;
         let wgsl = compile(src);
-        assert!(wgsl.contains("var j: i32 = 0i"), "should init loop var: {}", wgsl);
+        assert!(
+            wgsl.contains("var j: i32 = 0i"),
+            "should init loop var: {}",
+            wgsl
+        );
         assert!(wgsl.contains("loop {"), "should contain loop: {}", wgsl);
-        assert!(wgsl.contains("break"), "should contain break condition: {}", wgsl);
-        assert!(wgsl.contains("j = j + 1i"), "should contain increment: {}", wgsl);
+        assert!(
+            wgsl.contains("break"),
+            "should contain break condition: {}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("j = j + 1i"),
+            "should contain increment: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -699,44 +811,86 @@ mod tests {
         "#;
         let wgsl = compile(src);
         assert!(wgsl.contains("loop {"), "should contain loop: {}", wgsl);
-        assert!(wgsl.contains("break"), "should contain break condition: {}", wgsl);
+        assert!(
+            wgsl.contains("break"),
+            "should contain break condition: {}",
+            wgsl
+        );
     }
 
     #[test]
     fn builtin_math_functions() {
         // Build AST manually to bypass parser bug (function call args dropped).
         fn call_expr(name: &str, args: Vec<Expr>) -> Expr {
-            Expr::Call { func: name.to_string(), args }
+            Expr::Call {
+                func: name.to_string(),
+                args,
+            }
         }
         fn var_init(name: &str, init: Expr) -> Stmt {
             Stmt::VarDecl(VarDecl {
-                type_name: "double".to_string(), name: name.to_string(),
-                is_static: false, is_const: false, is_array: false,
-                array_size: None, init: Some(init), line: 1,
+                type_name: "double".to_string(),
+                name: name.to_string(),
+                is_static: false,
+                is_const: false,
+                is_array: false,
+                array_size: None,
+                init: Some(init),
+                line: 1,
             })
         }
         let body = vec![
             var_init("a", call_expr("MathSqrt", vec![Expr::FloatLit(4.0)])),
-            var_init("b", call_expr("MathAbs", vec![Expr::UnaryOp { op: UnaryOp::Neg, operand: Box::new(Expr::FloatLit(1.0)) }])),
-            var_init("c", call_expr("MathPow", vec![Expr::FloatLit(2.0), Expr::FloatLit(3.0)])),
+            var_init(
+                "b",
+                call_expr(
+                    "MathAbs",
+                    vec![Expr::UnaryOp {
+                        op: UnaryOp::Neg,
+                        operand: Box::new(Expr::FloatLit(1.0)),
+                    }],
+                ),
+            ),
+            var_init(
+                "c",
+                call_expr("MathPow", vec![Expr::FloatLit(2.0), Expr::FloatLit(3.0)]),
+            ),
             var_init("d", call_expr("MathLog", vec![Expr::FloatLit(10.0)])),
             var_init("e", call_expr("MathExp", vec![Expr::FloatLit(1.0)])),
-            var_init("f", call_expr("MathMax", vec![Expr::FloatLit(1.0), Expr::FloatLit(2.0)])),
-            var_init("g", call_expr("MathMin", vec![Expr::FloatLit(3.0), Expr::FloatLit(4.0)])),
+            var_init(
+                "f",
+                call_expr("MathMax", vec![Expr::FloatLit(1.0), Expr::FloatLit(2.0)]),
+            ),
+            var_init(
+                "g",
+                call_expr("MathMin", vec![Expr::FloatLit(3.0), Expr::FloatLit(4.0)]),
+            ),
             var_init("h", call_expr("MathFloor", vec![Expr::FloatLit(3.7)])),
             var_init("j", call_expr("MathCeil", vec![Expr::FloatLit(3.2)])),
             Stmt::Return(Some(Expr::Ident("rates_total".to_string()))),
         ];
         let wgsl = emit(&program_with_body(body));
-        assert!(wgsl.contains("sqrt(4.0)"), "should map MathSqrt to sqrt: {}", wgsl);
+        assert!(
+            wgsl.contains("sqrt(4.0)"),
+            "should map MathSqrt to sqrt: {}",
+            wgsl
+        );
         assert!(wgsl.contains("abs("), "should map MathAbs to abs: {}", wgsl);
         assert!(wgsl.contains("pow("), "should map MathPow to pow: {}", wgsl);
         assert!(wgsl.contains("log("), "should map MathLog to log: {}", wgsl);
         assert!(wgsl.contains("exp("), "should map MathExp to exp: {}", wgsl);
         assert!(wgsl.contains("max("), "should map MathMax to max: {}", wgsl);
         assert!(wgsl.contains("min("), "should map MathMin to min: {}", wgsl);
-        assert!(wgsl.contains("floor("), "should map MathFloor to floor: {}", wgsl);
-        assert!(wgsl.contains("ceil("), "should map MathCeil to ceil: {}", wgsl);
+        assert!(
+            wgsl.contains("floor("),
+            "should map MathFloor to floor: {}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("ceil("),
+            "should map MathCeil to ceil: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -750,7 +904,11 @@ mod tests {
             Stmt::Return(Some(Expr::Ident("rates_total".to_string()))),
         ];
         let wgsl = emit(&program_with_body(body));
-        assert!(wgsl.contains("bars[i * 5u + 0u]"), "should map iOpen to bars offset 0: {}", wgsl);
+        assert!(
+            wgsl.contains("bars[i * 5u + 0u]"),
+            "should map iOpen to bars offset 0: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -763,7 +921,11 @@ mod tests {
             Stmt::Return(Some(Expr::Ident("rates_total".to_string()))),
         ];
         let wgsl = emit(&program_with_body(body));
-        assert!(wgsl.contains("bars[3i * 5u + 1u]"), "should map iHigh to bars offset 1: {}", wgsl);
+        assert!(
+            wgsl.contains("bars[3i * 5u + 1u]"),
+            "should map iHigh to bars offset 1: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -776,7 +938,11 @@ mod tests {
             Stmt::Return(Some(Expr::Ident("rates_total".to_string()))),
         ];
         let wgsl = emit(&program_with_body(body));
-        assert!(wgsl.contains("bars[2i * 5u + 2u]"), "should map iLow to bars offset 2: {}", wgsl);
+        assert!(
+            wgsl.contains("bars[2i * 5u + 2u]"),
+            "should map iLow to bars offset 2: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -789,7 +955,11 @@ mod tests {
             Stmt::Return(Some(Expr::Ident("rates_total".to_string()))),
         ];
         let wgsl = emit(&program_with_body(body));
-        assert!(wgsl.contains("bars[1i * 5u + 3u]"), "should map iClose to bars offset 3: {}", wgsl);
+        assert!(
+            wgsl.contains("bars[1i * 5u + 3u]"),
+            "should map iClose to bars offset 3: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -802,7 +972,11 @@ mod tests {
             Stmt::Return(Some(Expr::Ident("rates_total".to_string()))),
         ];
         let wgsl = emit(&program_with_body(body));
-        assert!(wgsl.contains("bars[0i * 5u + 4u]"), "should map iVolume to bars offset 4: {}", wgsl);
+        assert!(
+            wgsl.contains("bars[0i * 5u + 4u]"),
+            "should map iVolume to bars offset 4: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -814,7 +988,11 @@ mod tests {
             }
         "#;
         let wgsl = compile(src);
-        assert!(wgsl.contains("params.bar_count"), "should map iBars to params.bar_count: {}", wgsl);
+        assert!(
+            wgsl.contains("params.bar_count"),
+            "should map iBars to params.bar_count: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -828,9 +1006,14 @@ mod tests {
         let body = vec![
             Stmt::For {
                 init: Some(Box::new(Stmt::VarDecl(VarDecl {
-                    type_name: "int".to_string(), name: "i".to_string(),
-                    is_static: false, is_const: false, is_array: false,
-                    array_size: None, init: Some(Expr::IntLit(0)), line: 1,
+                    type_name: "int".to_string(),
+                    name: "i".to_string(),
+                    is_static: false,
+                    is_const: false,
+                    is_array: false,
+                    array_size: None,
+                    init: Some(Expr::IntLit(0)),
+                    line: 1,
                 }))),
                 cond: Some(Expr::BinOp {
                     op: BinOp::Lt,
@@ -840,19 +1023,34 @@ mod tests {
                 step: Some(Expr::PostIncr(Box::new(i_ident()))),
                 body: vec![
                     Stmt::VarDecl(VarDecl {
-                        type_name: "double".to_string(), name: "close".to_string(),
-                        is_static: false, is_const: false, is_array: false,
-                        array_size: None, init: Some(call_bar("iClose")), line: 1,
+                        type_name: "double".to_string(),
+                        name: "close".to_string(),
+                        is_static: false,
+                        is_const: false,
+                        is_array: false,
+                        array_size: None,
+                        init: Some(call_bar("iClose")),
+                        line: 1,
                     }),
                     Stmt::VarDecl(VarDecl {
-                        type_name: "double".to_string(), name: "high".to_string(),
-                        is_static: false, is_const: false, is_array: false,
-                        array_size: None, init: Some(call_bar("iHigh")), line: 1,
+                        type_name: "double".to_string(),
+                        name: "high".to_string(),
+                        is_static: false,
+                        is_const: false,
+                        is_array: false,
+                        array_size: None,
+                        init: Some(call_bar("iHigh")),
+                        line: 1,
                     }),
                     Stmt::VarDecl(VarDecl {
-                        type_name: "double".to_string(), name: "low".to_string(),
-                        is_static: false, is_const: false, is_array: false,
-                        array_size: None, init: Some(call_bar("iLow")), line: 1,
+                        type_name: "double".to_string(),
+                        name: "low".to_string(),
+                        is_static: false,
+                        is_const: false,
+                        is_array: false,
+                        array_size: None,
+                        init: Some(call_bar("iLow")),
+                        line: 1,
                     }),
                     Stmt::Expr(Expr::Assign {
                         target: Box::new(Expr::Index {
@@ -881,13 +1079,41 @@ mod tests {
         ];
         let wgsl = emit(&program_with_body(body));
         // Should have all the expected shader structure
-        assert!(wgsl.contains("@group(0) @binding(0)"), "should have bar binding: {}", wgsl);
-        assert!(wgsl.contains("@group(0) @binding(1)"), "should have output binding: {}", wgsl);
-        assert!(wgsl.contains("@group(0) @binding(2)"), "should have params binding: {}", wgsl);
-        assert!(wgsl.contains("struct Params"), "should have Params struct: {}", wgsl);
-        assert!(wgsl.contains("@compute @workgroup_size(256)"), "should have compute attribute: {}", wgsl);
-        assert!(wgsl.contains("fn main("), "should have main function: {}", wgsl);
-        assert!(wgsl.contains("if (i >= params.bar_count)"), "should have bounds check: {}", wgsl);
+        assert!(
+            wgsl.contains("@group(0) @binding(0)"),
+            "should have bar binding: {}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("@group(0) @binding(1)"),
+            "should have output binding: {}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("@group(0) @binding(2)"),
+            "should have params binding: {}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("struct Params"),
+            "should have Params struct: {}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("@compute @workgroup_size(256)"),
+            "should have compute attribute: {}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("fn main("),
+            "should have main function: {}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("if (i >= params.bar_count)"),
+            "should have bounds check: {}",
+            wgsl
+        );
         // Should have bar data access
         assert!(wgsl.contains("bars["), "should access bars array: {}", wgsl);
         // Should have output write
@@ -904,8 +1130,16 @@ mod tests {
             }
         "#;
         let wgsl = compile(src);
-        assert!(wgsl.contains("InpPeriod: i32"), "should have InpPeriod in Params: {}", wgsl);
-        assert!(wgsl.contains("InpFactor: f32"), "should have InpFactor in Params: {}", wgsl);
+        assert!(
+            wgsl.contains("InpPeriod: i32"),
+            "should have InpPeriod in Params: {}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("InpFactor: f32"),
+            "should have InpFactor in Params: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -913,19 +1147,33 @@ mod tests {
         // Build AST manually to bypass parser bug (ternary mangled into additions).
         let body = vec![
             Stmt::VarDecl(VarDecl {
-                type_name: "double".to_string(), name: "x".to_string(),
-                is_static: false, is_const: false, is_array: false,
-                array_size: None, init: Some(Expr::FloatLit(1.0)), line: 1,
+                type_name: "double".to_string(),
+                name: "x".to_string(),
+                is_static: false,
+                is_const: false,
+                is_array: false,
+                array_size: None,
+                init: Some(Expr::FloatLit(1.0)),
+                line: 1,
             }),
             Stmt::VarDecl(VarDecl {
-                type_name: "double".to_string(), name: "y".to_string(),
-                is_static: false, is_const: false, is_array: false,
-                array_size: None, init: Some(Expr::FloatLit(2.0)), line: 1,
+                type_name: "double".to_string(),
+                name: "y".to_string(),
+                is_static: false,
+                is_const: false,
+                is_array: false,
+                array_size: None,
+                init: Some(Expr::FloatLit(2.0)),
+                line: 1,
             }),
             Stmt::VarDecl(VarDecl {
-                type_name: "double".to_string(), name: "result".to_string(),
-                is_static: false, is_const: false, is_array: false,
-                array_size: None, init: Some(Expr::Ternary {
+                type_name: "double".to_string(),
+                name: "result".to_string(),
+                is_static: false,
+                is_const: false,
+                is_array: false,
+                array_size: None,
+                init: Some(Expr::Ternary {
                     cond: Box::new(Expr::BinOp {
                         op: BinOp::Gt,
                         left: Box::new(Expr::Ident("x".to_string())),
@@ -933,12 +1181,17 @@ mod tests {
                     }),
                     then: Box::new(Expr::Ident("x".to_string())),
                     else_: Box::new(Expr::Ident("y".to_string())),
-                }), line: 1,
+                }),
+                line: 1,
             }),
             Stmt::Return(Some(Expr::Ident("rates_total".to_string()))),
         ];
         let wgsl = emit(&program_with_body(body));
-        assert!(wgsl.contains("select("), "should use select for ternary: {}", wgsl);
+        assert!(
+            wgsl.contains("select("),
+            "should use select for ternary: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -965,7 +1218,11 @@ mod tests {
         "#;
         let wgsl = compile(src);
         assert!(wgsl.contains("break;"), "should contain break: {}", wgsl);
-        assert!(wgsl.contains("continue;"), "should contain continue: {}", wgsl);
+        assert!(
+            wgsl.contains("continue;"),
+            "should contain continue: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -973,13 +1230,18 @@ mod tests {
         // Build AST manually to bypass parser bug (all binary ops parsed as Add).
         fn binop_var(name: &str, op: BinOp, l: f64, r: f64) -> Stmt {
             Stmt::VarDecl(VarDecl {
-                type_name: "double".to_string(), name: name.to_string(),
-                is_static: false, is_const: false, is_array: false,
-                array_size: None, init: Some(Expr::BinOp {
+                type_name: "double".to_string(),
+                name: name.to_string(),
+                is_static: false,
+                is_const: false,
+                is_array: false,
+                array_size: None,
+                init: Some(Expr::BinOp {
                     op,
                     left: Box::new(Expr::FloatLit(l)),
                     right: Box::new(Expr::FloatLit(r)),
-                }), line: 1,
+                }),
+                line: 1,
             })
         }
         let body = vec![
@@ -1022,9 +1284,21 @@ mod tests {
             }
         "#;
         let wgsl = compile(src);
-        assert!(wgsl.contains("var<storage, read> bars: array<f32>"), "bars binding: {}", wgsl);
-        assert!(wgsl.contains("var<storage, read_write> output: array<f32>"), "output binding: {}", wgsl);
-        assert!(wgsl.contains("var<uniform> params: Params"), "params binding: {}", wgsl);
+        assert!(
+            wgsl.contains("var<storage, read> bars: array<f32>"),
+            "bars binding: {}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("var<storage, read_write> output: array<f32>"),
+            "output binding: {}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("var<uniform> params: Params"),
+            "params binding: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -1035,7 +1309,11 @@ mod tests {
             }
         "#;
         let wgsl = compile(src);
-        assert!(wgsl.contains("bar_count: u32"), "Params should always have bar_count: {}", wgsl);
+        assert!(
+            wgsl.contains("bar_count: u32"),
+            "Params should always have bar_count: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -1045,8 +1323,11 @@ mod tests {
             return_type: "double".to_string(),
             name: "MyHelper".to_string(),
             params: vec![Param {
-                type_name: "double".to_string(), name: "x".to_string(),
-                is_ref: false, is_array: false, default: None,
+                type_name: "double".to_string(),
+                name: "x".to_string(),
+                is_ref: false,
+                is_array: false,
+                default: None,
             }],
             body: vec![Stmt::Return(Some(Expr::BinOp {
                 op: BinOp::Mul,
@@ -1058,18 +1339,31 @@ mod tests {
         });
         let body = vec![
             Stmt::VarDecl(VarDecl {
-                type_name: "double".to_string(), name: "val".to_string(),
-                is_static: false, is_const: false, is_array: false,
-                array_size: None, init: Some(Expr::Call {
+                type_name: "double".to_string(),
+                name: "val".to_string(),
+                is_static: false,
+                is_const: false,
+                is_array: false,
+                array_size: None,
+                init: Some(Expr::Call {
                     func: "MyHelper".to_string(),
                     args: vec![Expr::FloatLit(3.0)],
-                }), line: 1,
+                }),
+                line: 1,
             }),
             Stmt::Return(Some(Expr::Ident("rates_total".to_string()))),
         ];
         let wgsl = emit(&program_with_items_and_body(vec![helper], body));
-        assert!(wgsl.contains("fn MyHelper("), "should emit helper function: {}", wgsl);
-        assert!(wgsl.contains("MyHelper(3.0"), "should call helper: {}", wgsl);
+        assert!(
+            wgsl.contains("fn MyHelper("),
+            "should emit helper function: {}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("MyHelper(3.0"),
+            "should call helper: {}",
+            wgsl
+        );
     }
 
     #[test]
@@ -1083,7 +1377,11 @@ mod tests {
             Stmt::Return(Some(Expr::Ident("rates_total".to_string()))),
         ];
         let wgsl = emit(&program_with_body(body));
-        assert!(wgsl.contains("/* runtime-only */"), "should mark Print as runtime-only: {}", wgsl);
+        assert!(
+            wgsl.contains("/* runtime-only */"),
+            "should mark Print as runtime-only: {}",
+            wgsl
+        );
     }
 
     #[test]

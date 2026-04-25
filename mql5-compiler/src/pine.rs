@@ -19,7 +19,7 @@
 //! - Basic arithmetic and comparison operators
 
 use crate::ir::*;
-use crate::{IndicatorMeta, InputParam, CompileResult, Diagnostic, DiagLevel, DrawType, PlotDef};
+use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, InputParam, PlotDef};
 
 /// Parse PineScript source and produce IR module.
 pub fn parse_pine(source: &str) -> CompileResult {
@@ -29,19 +29,33 @@ pub fn parse_pine(source: &str) -> CompileResult {
         Ok(wasm) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Info,
-                message: format!("PineScript v{} compiled: {} inputs, {} plots",
-                    pine_version, meta.inputs.len(), meta.plots.len()),
-                line: 0, col: 0,
+                message: format!(
+                    "PineScript v{} compiled: {} inputs, {} plots",
+                    pine_version,
+                    meta.inputs.len(),
+                    meta.plots.len()
+                ),
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: Some(wasm), diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: Some(wasm),
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
         Err(e) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Error,
                 message: format!("WASM codegen failed: {e}"),
-                line: 0, col: 0,
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: None, diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: None,
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
     }
 }
@@ -78,31 +92,33 @@ fn build_ir_internal(source: &str) -> (IrModule, IndicatorMeta, u8) {
     // Helper: given a line, rewrite v4 bareword calls into v5 namespaced form
     // so the rest of the scanner only needs one set of match arms.
     let normalize_line = |line: String| -> String {
-        if pine_version >= 5 { return line; }
+        if pine_version >= 5 {
+            return line;
+        }
         let replacements: &[(&str, &str)] = &[
-            ("study(",          "indicator("),
-            ("security(",       "request.security("),
-            ("sma(",            "ta.sma("),
-            ("ema(",            "ta.ema("),
-            ("rma(",            "ta.rma("),
-            ("wma(",            "ta.wma("),
-            ("vwma(",           "ta.vwma("),
-            ("rsi(",            "ta.rsi("),
-            ("atr(",            "ta.atr("),
-            ("highest(",        "ta.highest("),
-            ("lowest(",         "ta.lowest("),
-            ("stdev(",          "ta.stdev("),
-            ("crossover(",      "ta.crossover("),
-            ("crossunder(",     "ta.crossunder("),
-            ("change(",         "ta.change("),
-            ("tr(",             "ta.tr("),
-            ("abs(",            "math.abs("),
-            ("sqrt(",           "math.sqrt("),
-            ("log(",            "math.log("),
-            ("max(",            "math.max("),
-            ("min(",            "math.min("),
-            ("input.int(",      "input.int("), // already v5 form — no-op
-            ("input(",          "input.int("), // v4 `input(14)` → treat as int
+            ("study(", "indicator("),
+            ("security(", "request.security("),
+            ("sma(", "ta.sma("),
+            ("ema(", "ta.ema("),
+            ("rma(", "ta.rma("),
+            ("wma(", "ta.wma("),
+            ("vwma(", "ta.vwma("),
+            ("rsi(", "ta.rsi("),
+            ("atr(", "ta.atr("),
+            ("highest(", "ta.highest("),
+            ("lowest(", "ta.lowest("),
+            ("stdev(", "ta.stdev("),
+            ("crossover(", "ta.crossover("),
+            ("crossunder(", "ta.crossunder("),
+            ("change(", "ta.change("),
+            ("tr(", "ta.tr("),
+            ("abs(", "math.abs("),
+            ("sqrt(", "math.sqrt("),
+            ("log(", "math.log("),
+            ("max(", "math.max("),
+            ("min(", "math.min("),
+            ("input.int(", "input.int("), // already v5 form — no-op
+            ("input(", "input.int("),     // v4 `input(14)` → treat as int
         ];
         let mut out = line;
         for (from, to) in replacements {
@@ -119,10 +135,14 @@ fn build_ir_internal(source: &str) -> (IrModule, IndicatorMeta, u8) {
         let trimmed = line.trim();
 
         // Skip comments and empty lines
-        if trimmed.is_empty() || trimmed.starts_with("//") { continue; }
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
 
         // Version header
-        if trimmed.starts_with("//@version=") { continue; }
+        if trimmed.starts_with("//@version=") {
+            continue;
+        }
 
         // indicator() declaration (study() in v4 was rewritten above)
         if trimmed.starts_with("indicator(") {
@@ -136,13 +156,21 @@ fn build_ir_internal(source: &str) -> (IrModule, IndicatorMeta, u8) {
         }
 
         // Input declarations: "name = input.int(...)" or "name = input(...)"
-        if trimmed.contains("input.int(") || trimmed.contains("input.float(") ||
-           trimmed.contains("input.bool(") || trimmed.contains("input.string(") ||
-           (trimmed.contains("= input(") && !trimmed.contains("= input.")) {
-            let input_type = if trimmed.contains("input.int(") { "int" }
-                else if trimmed.contains("input.float(") { "float" }
-                else if trimmed.contains("input.bool(") { "bool" }
-                else { "float" };
+        if trimmed.contains("input.int(")
+            || trimmed.contains("input.float(")
+            || trimmed.contains("input.bool(")
+            || trimmed.contains("input.string(")
+            || (trimmed.contains("= input(") && !trimmed.contains("= input."))
+        {
+            let input_type = if trimmed.contains("input.int(") {
+                "int"
+            } else if trimmed.contains("input.float(") {
+                "float"
+            } else if trimmed.contains("input.bool(") {
+                "bool"
+            } else {
+                "float"
+            };
             let parsed = parse_pine_input(trimmed, input_type);
             if let Some((name, default)) = parsed {
                 let (ir_type, ir_default) = match input_type {
@@ -150,8 +178,16 @@ fn build_ir_internal(source: &str) -> (IrModule, IndicatorMeta, u8) {
                     "bool" => (IrType::Bool, IrValue::Bool(default == "true")),
                     _ => (IrType::F64, IrValue::F64(default.parse().unwrap_or(0.0))),
                 };
-                inputs.push(IrInput { name: name.clone(), ir_type, default: ir_default });
-                meta.inputs.push(InputParam { name, param_type: input_type.into(), default_value: default });
+                inputs.push(IrInput {
+                    name: name.clone(),
+                    ir_type,
+                    default: ir_default,
+                });
+                meta.inputs.push(InputParam {
+                    name,
+                    param_type: input_type.into(),
+                    default_value: default,
+                });
             }
             continue;
         }
@@ -165,7 +201,8 @@ fn build_ir_internal(source: &str) -> (IrModule, IndicatorMeta, u8) {
                     ir_body.push(IrStmt::SetBuffer(plot_count, IrExpr::IBars, ir_expr));
                     meta.plots.push(PlotDef {
                         index: plot_count,
-                        label: extract_plot_title(trimmed).unwrap_or_else(|| format!("Plot {}", plot_count)),
+                        label: extract_plot_title(trimmed)
+                            .unwrap_or_else(|| format!("Plot {}", plot_count)),
                         draw_type: DrawType::Line,
                         color: extract_plot_color(trimmed).unwrap_or_else(|| "clrBlue".into()),
                         width: 1,
@@ -194,15 +231,19 @@ fn build_ir_internal(source: &str) -> (IrModule, IndicatorMeta, u8) {
             let rhs = trimmed[eq_pos + 1..].trim();
 
             // Skip if it's a comparison (==, !=, <=, >=)
-            if rhs.starts_with('=') || trimmed.chars().nth(eq_pos.saturating_sub(1)) == Some('!')
+            if rhs.starts_with('=')
+                || trimmed.chars().nth(eq_pos.saturating_sub(1)) == Some('!')
                 || trimmed.chars().nth(eq_pos.saturating_sub(1)) == Some('<')
-                || trimmed.chars().nth(eq_pos.saturating_sub(1)) == Some('>') {
+                || trimmed.chars().nth(eq_pos.saturating_sub(1)) == Some('>')
+            {
                 continue;
             }
 
             // Handle var keyword
             let var_name = lhs.strip_prefix("var ").unwrap_or(lhs).trim();
-            if var_name.contains(' ') || var_name.contains('(') { continue; } // not a simple assignment
+            if var_name.contains(' ') || var_name.contains('(') {
+                continue;
+            } // not a simple assignment
 
             // Parse RHS expression
             if let Some(ir_expr) = parse_pine_expr(rhs) {
@@ -242,8 +283,12 @@ fn parse_pine_expr(expr: &str) -> Option<IrExpr> {
     let expr = expr.trim();
 
     // Numeric literal
-    if let Ok(f) = expr.parse::<f64>() { return Some(IrExpr::F64Const(f)); }
-    if let Ok(i) = expr.parse::<i32>() { return Some(IrExpr::I32Const(i)); }
+    if let Ok(f) = expr.parse::<f64>() {
+        return Some(IrExpr::F64Const(f));
+    }
+    if let Ok(i) = expr.parse::<i32>() {
+        return Some(IrExpr::I32Const(i));
+    }
 
     // Built-in series
     match expr {
@@ -317,26 +362,50 @@ fn parse_pine_expr(expr: &str) -> Option<IrExpr> {
     }
 
     // ta.crossover(a, b) / ta.crossunder(a, b)
-    if expr.starts_with("ta.crossover(") { return parse_two_arg_call(expr, "ta_crossover"); }
-    if expr.starts_with("ta.crossunder(") { return parse_two_arg_call(expr, "ta_crossunder"); }
+    if expr.starts_with("ta.crossover(") {
+        return parse_two_arg_call(expr, "ta_crossover");
+    }
+    if expr.starts_with("ta.crossunder(") {
+        return parse_two_arg_call(expr, "ta_crossunder");
+    }
     // ta.stdev(source, length)
-    if expr.starts_with("ta.stdev(") { return parse_two_arg_call(expr, "ta_stdev"); }
+    if expr.starts_with("ta.stdev(") {
+        return parse_two_arg_call(expr, "ta_stdev");
+    }
     // ta.change(source)
-    if expr.starts_with("ta.change(") { return parse_single_arg_call(expr, "ta_change"); }
+    if expr.starts_with("ta.change(") {
+        return parse_single_arg_call(expr, "ta_change");
+    }
     // ta.tr (true range — no args)
-    if expr == "ta.tr" { return Some(IrExpr::Call("ta_tr".into(), vec![])); }
+    if expr == "ta.tr" {
+        return Some(IrExpr::Call("ta_tr".into(), vec![]));
+    }
     // nz(val, replacement)
-    if expr.starts_with("nz(") { return parse_two_arg_call(expr, "nz"); }
+    if expr.starts_with("nz(") {
+        return parse_two_arg_call(expr, "nz");
+    }
 
     // math.abs/max/min/sqrt/log
-    if expr.starts_with("math.abs(") { return parse_single_arg_call(expr, "math_abs"); }
-    if expr.starts_with("math.sqrt(") { return parse_single_arg_call(expr, "math_sqrt"); }
-    if expr.starts_with("math.log(") { return parse_single_arg_call(expr, "math_log"); }
-    if expr.starts_with("math.max(") { return parse_two_arg_call(expr, "math_max"); }
-    if expr.starts_with("math.min(") { return parse_two_arg_call(expr, "math_min"); }
+    if expr.starts_with("math.abs(") {
+        return parse_single_arg_call(expr, "math_abs");
+    }
+    if expr.starts_with("math.sqrt(") {
+        return parse_single_arg_call(expr, "math_sqrt");
+    }
+    if expr.starts_with("math.log(") {
+        return parse_single_arg_call(expr, "math_log");
+    }
+    if expr.starts_with("math.max(") {
+        return parse_two_arg_call(expr, "math_max");
+    }
+    if expr.starts_with("math.min(") {
+        return parse_two_arg_call(expr, "math_min");
+    }
 
     // Binary operators (basic — no precedence, left to right)
-    for op_str in &[" + ", " - ", " * ", " / ", " > ", " < ", " >= ", " <= ", " == ", " != "] {
+    for op_str in &[
+        " + ", " - ", " * ", " / ", " > ", " < ", " >= ", " <= ", " == ", " != ",
+    ] {
         if let Some(pos) = expr.find(op_str) {
             let left = parse_pine_expr(&expr[..pos])?;
             let right = parse_pine_expr(&expr[pos + op_str.len()..])?;
@@ -378,14 +447,18 @@ fn parse_two_arg_call(expr: &str, func: &str) -> Option<IrExpr> {
         let a = parse_pine_expr(parts[0].trim())?;
         let b = parse_pine_expr(parts[1].trim())?;
         Some(IrExpr::Call(func.into(), vec![a, b]))
-    } else { None }
+    } else {
+        None
+    }
 }
 
 /// Replace occurrences of `from` with `to` only when not preceded by an
 /// identifier character. Used for v4 → v5 normalisation so we don't mangle
 /// `ta.sma(` into `ta.ta.sma(` when both forms coexist.
 fn replace_unprefixed(haystack: &str, from: &str, to: &str) -> String {
-    if !haystack.contains(from) { return haystack.to_string(); }
+    if !haystack.contains(from) {
+        return haystack.to_string();
+    }
     let bytes = haystack.as_bytes();
     let fb = from.as_bytes();
     let mut out = String::with_capacity(haystack.len());
@@ -419,7 +492,9 @@ fn extract_parens(s: &str) -> &str {
 fn extract_string_arg(s: &str, _prefix: &str) -> Option<String> {
     let inner = extract_parens(s);
     if inner.starts_with('"') {
-        inner[1..].find('"').map(|end| inner[1..end + 1].to_string())
+        inner[1..]
+            .find('"')
+            .map(|end| inner[1..end + 1].to_string())
     } else {
         None
     }
@@ -435,7 +510,11 @@ fn parse_pine_input(line: &str, _type_hint: &str) -> Option<(String, String)> {
     // Find defval= or first positional arg
     let default = if let Some(dv) = inner.find("defval=") {
         let rest = &inner[dv + 7..];
-        rest.split(&[',', ')'][..]).next().unwrap_or("0").trim().to_string()
+        rest.split(&[',', ')'][..])
+            .next()
+            .unwrap_or("0")
+            .trim()
+            .to_string()
     } else {
         inner.split(',').next().unwrap_or("0").trim().to_string()
     };
@@ -450,8 +529,12 @@ fn extract_plot_title(s: &str) -> Option<String> {
         let rest = &inner[pos + 6..];
         if rest.starts_with('"') {
             rest[1..].find('"').map(|end| rest[1..end + 1].to_string())
-        } else { None }
-    } else { None }
+        } else {
+            None
+        }
+    } else {
+        None
+    }
 }
 
 /// Extract color from plot() args (e.g., color=color.blue).
@@ -460,17 +543,22 @@ fn extract_plot_color(s: &str) -> Option<String> {
     if let Some(pos) = inner.find("color=") {
         let rest = &inner[pos + 6..];
         let color = rest.split(&[',', ')'][..]).next()?.trim();
-        Some(match color {
-            "color.blue" => "clrBlue",
-            "color.red" => "clrRed",
-            "color.green" => "clrGreen",
-            "color.white" => "clrWhite",
-            "color.yellow" => "clrYellow",
-            "color.orange" => "clrOrange",
-            "color.purple" => "clrMagenta",
-            _ => "clrBlue",
-        }.into())
-    } else { None }
+        Some(
+            match color {
+                "color.blue" => "clrBlue",
+                "color.red" => "clrRed",
+                "color.green" => "clrGreen",
+                "color.white" => "clrWhite",
+                "color.yellow" => "clrYellow",
+                "color.orange" => "clrOrange",
+                "color.purple" => "clrMagenta",
+                _ => "clrBlue",
+            }
+            .into(),
+        )
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -487,7 +575,11 @@ sma_val = ta.sma(close, length)
 plot(sma_val, title="SMA", color=color.blue)
 "#;
         let result = parse_pine(source);
-        assert!(result.wasm.is_some(), "Should produce WASM: {:?}", result.diagnostics);
+        assert!(
+            result.wasm.is_some(),
+            "Should produce WASM: {:?}",
+            result.diagnostics
+        );
         let meta = result.metadata.unwrap();
         assert_eq!(meta.short_name, "Simple SMA");
         assert_eq!(meta.inputs.len(), 1);
@@ -506,7 +598,11 @@ rsi_val = ta.rsi(close, length)
 plot(rsi_val, title="RSI", color=color.yellow)
 "#;
         let result = parse_pine(source);
-        assert!(result.wasm.is_some(), "Should produce WASM: {:?}", result.diagnostics);
+        assert!(
+            result.wasm.is_some(),
+            "Should produce WASM: {:?}",
+            result.diagnostics
+        );
         let meta = result.metadata.unwrap();
         assert_eq!(meta.short_name, "RSI");
         assert!(meta.separate_window);
@@ -573,7 +669,11 @@ val = sma(close, length)
 plot(val, title="SMA", color=color.blue)
 "#;
         let result = parse_pine(source);
-        assert!(result.wasm.is_some(), "v4 should compile: {:?}", result.diagnostics);
+        assert!(
+            result.wasm.is_some(),
+            "v4 should compile: {:?}",
+            result.diagnostics
+        );
         let meta = result.metadata.unwrap();
         assert_eq!(meta.short_name, "v4 indicator");
         assert_eq!(meta.inputs.len(), 1);

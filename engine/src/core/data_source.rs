@@ -156,7 +156,8 @@ impl DataSourceManager {
 
         let ordered: Vec<&DataSourceEntry> = if let Some(ovr) = override_sources {
             // Use override ordering
-            ovr.sources.iter()
+            ovr.sources
+                .iter()
                 .filter_map(|id| self.sources.iter().find(|s| s.id == *id))
                 .collect()
         } else {
@@ -185,20 +186,24 @@ impl DataSourceManager {
 
     /// Find which source a cache key belongs to by prefix.
     pub fn source_for_key(&self, cache_key: &str) -> Option<&DataSourceEntry> {
-        self.sources.iter().find(|s| cache_key.starts_with(&format!("{}:", s.cache_prefix)))
+        self.sources
+            .iter()
+            .find(|s| cache_key.starts_with(&format!("{}:", s.cache_prefix)))
     }
 
     /// Get a summary of all sources and their health status.
     pub fn status_summary(&self) -> Vec<(String, String, bool, i64)> {
-        self.sources.iter().map(|s| {
-            (s.id.clone(), s.label.clone(), s.healthy, s.last_success_ts)
-        }).collect()
+        self.sources
+            .iter()
+            .map(|s| (s.id.clone(), s.label.clone(), s.healthy, s.last_success_ts))
+            .collect()
     }
 
     /// Add a per-symbol routing override.
     pub fn add_override(&mut self, pattern: &str, sources: Vec<String>) {
         // Remove existing override for this pattern
-        self.overrides.retain(|o| o.pattern.to_uppercase() != pattern.to_uppercase());
+        self.overrides
+            .retain(|o| o.pattern.to_uppercase() != pattern.to_uppercase());
         self.overrides.push(SymbolOverride {
             pattern: pattern.to_uppercase(),
             sources,

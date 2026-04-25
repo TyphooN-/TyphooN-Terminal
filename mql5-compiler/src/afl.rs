@@ -27,7 +27,7 @@
 //! - Matrix/array slicing
 
 use crate::ir::*;
-use crate::{IndicatorMeta, InputParam, CompileResult, Diagnostic, DiagLevel, DrawType, PlotDef};
+use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, InputParam, PlotDef};
 
 pub fn parse_afl(source: &str) -> CompileResult {
     let (ir_module, meta) = build_ir(source);
@@ -36,19 +36,32 @@ pub fn parse_afl(source: &str) -> CompileResult {
         Ok(wasm) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Info,
-                message: format!("AFL compiled: {} inputs, {} plots",
-                    meta.inputs.len(), meta.plots.len()),
-                line: 0, col: 0,
+                message: format!(
+                    "AFL compiled: {} inputs, {} plots",
+                    meta.inputs.len(),
+                    meta.plots.len()
+                ),
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: Some(wasm), diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: Some(wasm),
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
         Err(e) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Error,
                 message: format!("AFL codegen failed: {e}"),
-                line: 0, col: 0,
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: None, diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: None,
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
     }
 }
@@ -73,7 +86,9 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             None => raw_line,
         };
         let trimmed = line.trim().trim_end_matches(';');
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
         let lower = trimmed.to_ascii_lowercase();
 
         // _SECTION_BEGIN("Name") — short name
@@ -85,7 +100,9 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             }
             continue;
         }
-        if lower.starts_with("_section_end") { continue; }
+        if lower.starts_with("_section_end") {
+            continue;
+        }
 
         // Plot(value, "title", color, style)
         if lower.starts_with("plot(") && trimmed.ends_with(')') {
@@ -93,7 +110,8 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             let parts = split_top_level_commas(args_str);
             if let Some(first) = parts.first() {
                 if let Some(expr) = parse_afl_expr(first.trim()) {
-                    let label = parts.get(1)
+                    let label = parts
+                        .get(1)
                         .map(|s| s.trim().trim_matches('"').to_string())
                         .unwrap_or_else(|| format!("Plot{}", plot_count + 1));
                     ir_body.push(IrStmt::SetBuffer(plot_count, IrExpr::IBars, expr));
@@ -114,9 +132,13 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         // Assignment: name = expr
         if let Some(eq_pos) = trimmed.find('=') {
             let prev = trimmed[..eq_pos].chars().last();
-            if matches!(prev, Some('!' | '<' | '>' | '=')) { continue; }
+            if matches!(prev, Some('!' | '<' | '>' | '=')) {
+                continue;
+            }
             let next = trimmed[eq_pos + 1..].chars().next();
-            if next == Some('=') { continue; }
+            if next == Some('=') {
+                continue;
+            }
             let lhs = trimmed[..eq_pos].trim();
             let rhs = trimmed[eq_pos + 1..].trim();
             if lhs.is_empty() || !lhs.chars().all(|c| c.is_alphanumeric() || c == '_') {
@@ -127,10 +149,14 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             if rhs.to_ascii_lowercase().starts_with("param(") && rhs.ends_with(')') {
                 let inner = &rhs[6..rhs.len() - 1];
                 let parts = split_top_level_commas(inner);
-                let label = parts.first()
+                let label = parts
+                    .first()
                     .map(|s| s.trim().trim_matches('"').to_string())
                     .unwrap_or_else(|| lhs.to_string());
-                let default_str = parts.get(1).map(|s| s.trim().to_string()).unwrap_or_else(|| "0".into());
+                let default_str = parts
+                    .get(1)
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_else(|| "0".into());
                 let (ty, val) = if let Ok(i) = default_str.parse::<i32>() {
                     (IrType::I32, IrValue::I32(i))
                 } else if let Ok(f) = default_str.parse::<f64>() {
@@ -138,7 +164,10 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
                 } else {
                     (IrType::F64, IrValue::F64(0.0))
                 };
-                let param_type = match ty { IrType::I32 => "int", _ => "float" };
+                let param_type = match ty {
+                    IrType::I32 => "int",
+                    _ => "float",
+                };
                 inputs.push(IrInput {
                     name: lhs.to_ascii_lowercase(),
                     ir_type: ty,
@@ -188,7 +217,9 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
 
 fn parse_afl_expr(expr: &str) -> Option<IrExpr> {
     let expr = expr.trim().trim_end_matches(';').trim();
-    if expr.is_empty() { return None; }
+    if expr.is_empty() {
+        return None;
+    }
     if expr.starts_with('(') && expr.ends_with(')') {
         return parse_afl_expr(&expr[1..expr.len() - 1]);
     }
@@ -202,9 +233,9 @@ fn parse_afl_expr(expr: &str) -> Option<IrExpr> {
     let lower = expr.to_ascii_lowercase();
     match lower.as_str() {
         "close" | "c" => return Some(IrExpr::IClose(Box::new(IrExpr::I32Const(0)))),
-        "open"  | "o" => return Some(IrExpr::IOpen(Box::new(IrExpr::I32Const(0)))),
-        "high"  | "h" => return Some(IrExpr::IHigh(Box::new(IrExpr::I32Const(0)))),
-        "low"   | "l" => return Some(IrExpr::ILow(Box::new(IrExpr::I32Const(0)))),
+        "open" | "o" => return Some(IrExpr::IOpen(Box::new(IrExpr::I32Const(0)))),
+        "high" | "h" => return Some(IrExpr::IHigh(Box::new(IrExpr::I32Const(0)))),
+        "low" | "l" => return Some(IrExpr::ILow(Box::new(IrExpr::I32Const(0)))),
         "volume" | "v" => return Some(IrExpr::IVolume(Box::new(IrExpr::I32Const(0)))),
         "barindex" | "bar_index" => return Some(IrExpr::IBars),
         _ => {}
@@ -216,7 +247,8 @@ fn parse_afl_expr(expr: &str) -> Option<IrExpr> {
             let func = &lower[..open];
             let args_str = &expr[open + 1..expr.len() - 1];
             let args_parts = split_top_level_commas(args_str);
-            let ir_args: Option<Vec<IrExpr>> = args_parts.iter()
+            let ir_args: Option<Vec<IrExpr>> = args_parts
+                .iter()
                 .map(|a| parse_afl_expr(a.trim()))
                 .collect();
             if let Some(ir_args) = ir_args {
@@ -242,7 +274,9 @@ fn parse_afl_expr(expr: &str) -> Option<IrExpr> {
         }
     }
 
-    for op_str in &[" + ", " - ", " * ", " / ", " > ", " < ", " >= ", " <= ", " == ", " != "] {
+    for op_str in &[
+        " + ", " - ", " * ", " / ", " > ", " < ", " >= ", " <= ", " == ", " != ",
+    ] {
         if let Some(pos) = expr.find(op_str) {
             let left = parse_afl_expr(&expr[..pos])?;
             let right = parse_afl_expr(&expr[pos + op_str.len()..])?;
@@ -303,7 +337,9 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
             _ => {}
         }
     }
-    if start < s.len() { parts.push(&s[start..]); }
+    if start < s.len() {
+        parts.push(&s[start..]);
+    }
     parts
 }
 
@@ -363,10 +399,14 @@ Plot(Low, "L", colorRed);
     fn test_afl_hhv_llv_mapping() {
         if let Some(IrExpr::Call(name, _)) = parse_afl_expr("HHV(High, 20)") {
             assert_eq!(name, "ta_highest");
-        } else { panic!("HHV should map to ta_highest"); }
+        } else {
+            panic!("HHV should map to ta_highest");
+        }
         if let Some(IrExpr::Call(name, _)) = parse_afl_expr("LLV(Low, 20)") {
             assert_eq!(name, "ta_lowest");
-        } else { panic!("LLV should map to ta_lowest"); }
+        } else {
+            panic!("LLV should map to ta_lowest");
+        }
     }
 
     #[test]

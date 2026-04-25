@@ -31,13 +31,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AiSessionRecord {
     pub session_id: String,
-    pub provider: String,          // "claude" | "gemini" | "codex" | "ai_chat"
-    pub cli_session_id: String,    // native Claude --resume id; empty for others
-    pub started_at: i64,           // unix seconds
+    pub provider: String,       // "claude" | "gemini" | "codex" | "ai_chat"
+    pub cli_session_id: String, // native Claude --resume id; empty for others
+    pub started_at: i64,        // unix seconds
     pub last_touched_at: i64,
     pub turns: Vec<(bool, String)>, // (is_user, message)
-    pub subject: String,           // first user message trimmed to ~120 chars
-    pub model: String,             // model name at time of save
+    pub subject: String,            // first user message trimmed to ~120 chars
+    pub model: String,              // model name at time of save
 }
 
 /// One row in the session-history index. Small so the whole index fits in
@@ -56,7 +56,9 @@ pub struct SessionIndexEntry {
 const INDEX_KEY: &str = "ai:sessions:index";
 const MAX_INDEX: usize = 500;
 
-fn now_ts() -> i64 { chrono::Utc::now().timestamp() }
+fn now_ts() -> i64 {
+    chrono::Utc::now().timestamp()
+}
 
 fn session_key(provider: &str, session_id: &str) -> String {
     format!("ai:session:{}:{}", provider, session_id)
@@ -83,8 +85,12 @@ pub fn persist_turn(
     turns: &[(bool, String)],
     model: &str,
 ) -> Result<(), String> {
-    if session_id.trim().is_empty() { return Err("empty session_id".into()); }
-    if provider.trim().is_empty()   { return Err("empty provider".into());   }
+    if session_id.trim().is_empty() {
+        return Err("empty session_id".into());
+    }
+    if provider.trim().is_empty() {
+        return Err("empty provider".into());
+    }
 
     let key = session_key(provider, session_id);
     let now = now_ts();
@@ -95,7 +101,8 @@ pub fn persist_turn(
     };
 
     let started_at = existing.as_ref().map(|r| r.started_at).unwrap_or(now);
-    let subject = existing.as_ref()
+    let subject = existing
+        .as_ref()
         .map(|r| r.subject.clone())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| pick_subject(turns));
@@ -128,7 +135,9 @@ pub fn persist_turn(
         model: rec.model.clone(),
     });
     idx.sort_by(|a, b| b.last_touched_at.cmp(&a.last_touched_at));
-    if idx.len() > MAX_INDEX { idx.truncate(MAX_INDEX); }
+    if idx.len() > MAX_INDEX {
+        idx.truncate(MAX_INDEX);
+    }
     let idx_json = serde_json::to_string(&idx).map_err(|e| format!("serialize index: {e}"))?;
     cache.put_kv(INDEX_KEY, &idx_json)?;
 
@@ -136,7 +145,11 @@ pub fn persist_turn(
 }
 
 /// Load a specific session by (provider, session_id). Returns None if not found.
-pub fn load_session(cache: &Cache, provider: &str, session_id: &str) -> Result<Option<AiSessionRecord>, String> {
+pub fn load_session(
+    cache: &Cache,
+    provider: &str,
+    session_id: &str,
+) -> Result<Option<AiSessionRecord>, String> {
     let key = session_key(provider, session_id);
     match cache.get_kv(&key)? {
         Some(s) => Ok(serde_json::from_str(&s).ok()),
@@ -156,7 +169,10 @@ pub fn read_index(cache: &Cache) -> Result<Vec<SessionIndexEntry>, String> {
 ///
 /// Used by the RESUME* slash commands to pick up where the user left off
 /// without having to ask them which session.
-pub fn latest_for_provider(cache: &Cache, provider: &str) -> Result<Option<AiSessionRecord>, String> {
+pub fn latest_for_provider(
+    cache: &Cache,
+    provider: &str,
+) -> Result<Option<AiSessionRecord>, String> {
     let idx = read_index(cache)?;
     for entry in idx.iter() {
         if entry.provider == provider {
@@ -172,8 +188,13 @@ mod tests {
 
     fn tmp_cache() -> Cache {
         let mut p = std::env::temp_dir();
-        p.push(format!("typhoon_ai_sessions_{}.db",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        p.push(format!(
+            "typhoon_ai_sessions_{}.db",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = std::fs::remove_file(&p);
         Cache::open(&p).expect("open cache")
     }
@@ -185,7 +206,15 @@ mod tests {
             (true, "what's AAPL doing?".into()),
             (false, "trading sideways".into()),
         ];
-        persist_turn(&cache, "sess-1", "claude", Some("cli-uuid-1"), &turns, "opus").unwrap();
+        persist_turn(
+            &cache,
+            "sess-1",
+            "claude",
+            Some("cli-uuid-1"),
+            &turns,
+            "opus",
+        )
+        .unwrap();
 
         let loaded = load_session(&cache, "claude", "sess-1").unwrap().unwrap();
         assert_eq!(loaded.turns.len(), 2);
@@ -203,7 +232,10 @@ mod tests {
         let cache = tmp_cache();
         let t1 = vec![(true, "first".into())];
         persist_turn(&cache, "sess-2", "gemini", None, &t1, "gemini-2.5-pro").unwrap();
-        let first_started = load_session(&cache, "gemini", "sess-2").unwrap().unwrap().started_at;
+        let first_started = load_session(&cache, "gemini", "sess-2")
+            .unwrap()
+            .unwrap()
+            .started_at;
 
         std::thread::sleep(std::time::Duration::from_secs(1));
         let t2 = vec![(true, "first".into()), (false, "reply".into())];
@@ -218,10 +250,34 @@ mod tests {
     #[test]
     fn latest_for_provider_picks_most_recent() {
         let cache = tmp_cache();
-        persist_turn(&cache, "s-a", "claude", None, &[(true, "old".into())], "opus").unwrap();
+        persist_turn(
+            &cache,
+            "s-a",
+            "claude",
+            None,
+            &[(true, "old".into())],
+            "opus",
+        )
+        .unwrap();
         std::thread::sleep(std::time::Duration::from_secs(1));
-        persist_turn(&cache, "s-b", "claude", None, &[(true, "new".into())], "sonnet").unwrap();
-        persist_turn(&cache, "other", "gemini", None, &[(true, "other-prov".into())], "gemini-2.5-pro").unwrap();
+        persist_turn(
+            &cache,
+            "s-b",
+            "claude",
+            None,
+            &[(true, "new".into())],
+            "sonnet",
+        )
+        .unwrap();
+        persist_turn(
+            &cache,
+            "other",
+            "gemini",
+            None,
+            &[(true, "other-prov".into())],
+            "gemini-2.5-pro",
+        )
+        .unwrap();
 
         let latest = latest_for_provider(&cache, "claude").unwrap().unwrap();
         assert_eq!(latest.session_id, "s-b");
@@ -233,7 +289,15 @@ mod tests {
         let cache = tmp_cache();
         for i in 0..(MAX_INDEX + 20) {
             let sid = format!("s-{}", i);
-            persist_turn(&cache, &sid, "ai_chat", None, &[(true, format!("msg {i}"))], "claude").unwrap();
+            persist_turn(
+                &cache,
+                &sid,
+                "ai_chat",
+                None,
+                &[(true, format!("msg {i}"))],
+                "claude",
+            )
+            .unwrap();
         }
         let idx = read_index(&cache).unwrap();
         assert_eq!(idx.len(), MAX_INDEX);

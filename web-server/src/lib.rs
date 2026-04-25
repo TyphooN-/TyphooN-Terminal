@@ -1,18 +1,12 @@
 use axum::{
-    Router,
-    extract::{ConnectInfo, State, WebSocketUpgrade, ws},
+    extract::{ws, ConnectInfo, State, WebSocketUpgrade},
     response::IntoResponse,
     routing::get,
+    Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
 use futures_util::{SinkExt, StreamExt};
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    path::PathBuf,
-    sync::Arc,
-    time::Instant,
-};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc, time::Instant};
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tower_http::services::ServeDir;
 use typhoon_web_protocol::{WebCmd, WebMsg};
@@ -54,7 +48,10 @@ struct ConnectionTracker {
 
 impl ConnectionTracker {
     fn new() -> Self {
-        Self { total: 0, per_ip: HashMap::new() }
+        Self {
+            total: 0,
+            per_ip: HashMap::new(),
+        }
     }
 
     fn try_add(&mut self, ip: std::net::IpAddr) -> bool {
@@ -142,7 +139,10 @@ async fn ws_handler(
     if !conns.try_add(ip) {
         drop(conns);
         tracing::warn!("Web client rejected from {ip}: connection limit reached");
-        return (axum::http::StatusCode::SERVICE_UNAVAILABLE, "Too many connections")
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "Too many connections",
+        )
             .into_response();
     }
     drop(conns);
@@ -152,7 +152,11 @@ async fn ws_handler(
         .into_response()
 }
 
-async fn run_websocket_session(socket: ws::WebSocket, state: Arc<AppState>, client_ip: std::net::IpAddr) {
+async fn run_websocket_session(
+    socket: ws::WebSocket,
+    state: Arc<AppState>,
+    client_ip: std::net::IpAddr,
+) {
     let (mut sender, mut receiver) = socket.split();
 
     tracing::info!("Web client connected from {client_ip}");
@@ -247,50 +251,88 @@ async fn run_websocket_session(socket: ws::WebSocket, state: Arc<AppState>, clie
                                 if !typhoon_web_protocol::is_valid_symbol(symbol)
                                     || !typhoon_web_protocol::is_valid_timeframe(timeframe)
                                 {
-                                    tracing::warn!("Web client {client_ip} sent invalid symbol/timeframe");
+                                    tracing::warn!(
+                                        "Web client {client_ip} sent invalid symbol/timeframe"
+                                    );
                                     continue;
                                 }
                             }
                             WebCmd::GetWatchlistQuotes { symbols } => {
                                 if symbols.len() > typhoon_web_protocol::MAX_WATCHLIST_SYMBOLS
-                                    || symbols.iter().any(|s| !typhoon_web_protocol::is_valid_symbol(s))
+                                    || symbols
+                                        .iter()
+                                        .any(|s| !typhoon_web_protocol::is_valid_symbol(s))
                                 {
-                                    tracing::warn!("Web client {client_ip} sent invalid watchlist request");
+                                    tracing::warn!(
+                                        "Web client {client_ip} sent invalid watchlist request"
+                                    );
                                     continue;
                                 }
                             }
                             WebCmd::PlaceOrder {
-                                symbol, qty, side, order_type, broker,
-                                limit_price, stop_price,
-                                take_profit, stop_loss,
-                                trail_percent, trail_offset,
-                                risk_mode, risk_pct,
+                                symbol,
+                                qty,
+                                side,
+                                order_type,
+                                broker,
+                                limit_price,
+                                stop_price,
+                                take_profit,
+                                stop_loss,
+                                trail_percent,
+                                trail_offset,
+                                risk_mode,
+                                risk_pct,
                             } => {
                                 if !typhoon_web_protocol::is_valid_symbol(symbol)
                                     || !typhoon_web_protocol::is_valid_order_qty(*qty)
                                     || !typhoon_web_protocol::is_valid_order_side(side)
                                     || !typhoon_web_protocol::is_valid_order_type(order_type)
                                     || !matches!(broker.as_str(), "alpaca" | "tastytrade")
-                                    || limit_price.map(|p| !p.is_finite() || p <= 0.0).unwrap_or(false)
-                                    || stop_price.map(|p| !p.is_finite() || p <= 0.0).unwrap_or(false)
-                                    || take_profit.map(|p| !p.is_finite() || p <= 0.0).unwrap_or(false)
-                                    || stop_loss.map(|p| !p.is_finite() || p <= 0.0).unwrap_or(false)
-                                    || trail_percent.map(|p| !p.is_finite() || p <= 0.0 || p > 100.0).unwrap_or(false)
-                                    || trail_offset.map(|p| !p.is_finite() || p <= 0.0).unwrap_or(false)
-                                    || risk_mode.as_ref().map(|m| !typhoon_web_protocol::is_valid_risk_mode(m)).unwrap_or(false)
-                                    || risk_pct.map(|p| !p.is_finite() || p <= 0.0 || p > 100.0).unwrap_or(false)
+                                    || limit_price
+                                        .map(|p| !p.is_finite() || p <= 0.0)
+                                        .unwrap_or(false)
+                                    || stop_price
+                                        .map(|p| !p.is_finite() || p <= 0.0)
+                                        .unwrap_or(false)
+                                    || take_profit
+                                        .map(|p| !p.is_finite() || p <= 0.0)
+                                        .unwrap_or(false)
+                                    || stop_loss
+                                        .map(|p| !p.is_finite() || p <= 0.0)
+                                        .unwrap_or(false)
+                                    || trail_percent
+                                        .map(|p| !p.is_finite() || p <= 0.0 || p > 100.0)
+                                        .unwrap_or(false)
+                                    || trail_offset
+                                        .map(|p| !p.is_finite() || p <= 0.0)
+                                        .unwrap_or(false)
+                                    || risk_mode
+                                        .as_ref()
+                                        .map(|m| !typhoon_web_protocol::is_valid_risk_mode(m))
+                                        .unwrap_or(false)
+                                    || risk_pct
+                                        .map(|p| !p.is_finite() || p <= 0.0 || p > 100.0)
+                                        .unwrap_or(false)
                                 {
-                                    tracing::warn!("Web client {client_ip} sent invalid PlaceOrder");
+                                    tracing::warn!(
+                                        "Web client {client_ip} sent invalid PlaceOrder"
+                                    );
                                     continue;
                                 }
                             }
                             WebCmd::CancelOrder { order_id, broker } => {
                                 // Order ID: alphanumeric + dashes, bounded length
-                                if order_id.is_empty() || order_id.len() > 64
-                                    || !order_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                                if order_id.is_empty()
+                                    || order_id.len() > 64
+                                    || !order_id
+                                        .chars()
+                                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
                                     || !matches!(broker.as_str(), "alpaca" | "tastytrade")
                                 {
-                                    tracing::warn!("Web client {client_ip} sent invalid CancelOrder");
+                                    tracing::warn!(
+                                        "Web client {client_ip} sent invalid CancelOrder"
+                                    );
                                     continue;
                                 }
                             }
@@ -298,51 +340,76 @@ async fn run_websocket_session(socket: ws::WebSocket, state: Arc<AppState>, clie
                                 if !typhoon_web_protocol::is_valid_symbol(symbol)
                                     || !matches!(broker.as_str(), "alpaca" | "tastytrade")
                                 {
-                                    tracing::warn!("Web client {client_ip} sent invalid ClosePosition");
+                                    tracing::warn!(
+                                        "Web client {client_ip} sent invalid ClosePosition"
+                                    );
                                     continue;
                                 }
                             }
                             // ── ADR-092: validate new command variants ──
-                            WebCmd::GetIndicators { symbol, timeframe, indicators } => {
+                            WebCmd::GetIndicators {
+                                symbol,
+                                timeframe,
+                                indicators,
+                            } => {
                                 if !typhoon_web_protocol::is_valid_symbol(symbol)
                                     || !typhoon_web_protocol::is_valid_timeframe(timeframe)
                                     || indicators.is_empty()
                                     || indicators.len() > typhoon_web_protocol::MAX_INDICATOR_NAMES
-                                    || indicators.iter().any(|n| !typhoon_web_protocol::is_valid_indicator_name(n))
+                                    || indicators
+                                        .iter()
+                                        .any(|n| !typhoon_web_protocol::is_valid_indicator_name(n))
                                 {
-                                    tracing::warn!("Web client {client_ip} sent invalid GetIndicators");
+                                    tracing::warn!(
+                                        "Web client {client_ip} sent invalid GetIndicators"
+                                    );
                                     continue;
                                 }
                             }
-                            WebCmd::CreateAlert { symbol, condition, price, message } => {
+                            WebCmd::CreateAlert {
+                                symbol,
+                                condition,
+                                price,
+                                message,
+                            } => {
                                 if !typhoon_web_protocol::is_valid_symbol(symbol)
                                     || !typhoon_web_protocol::is_valid_alert_condition(condition)
-                                    || !price.is_finite() || *price <= 0.0
+                                    || !price.is_finite()
+                                    || *price <= 0.0
                                     || message.len() > typhoon_web_protocol::MAX_ALERT_MSG_LEN
                                 {
-                                    tracing::warn!("Web client {client_ip} sent invalid CreateAlert");
+                                    tracing::warn!(
+                                        "Web client {client_ip} sent invalid CreateAlert"
+                                    );
                                     continue;
                                 }
                             }
                             WebCmd::DeleteAlert { alert_id } => {
                                 if !typhoon_web_protocol::is_valid_alert_id(alert_id) {
-                                    tracing::warn!("Web client {client_ip} sent invalid DeleteAlert");
+                                    tracing::warn!(
+                                        "Web client {client_ip} sent invalid DeleteAlert"
+                                    );
                                     continue;
                                 }
                             }
                             WebCmd::GetNews { symbol } => {
                                 if let Some(s) = symbol {
                                     if !typhoon_web_protocol::is_valid_symbol(s) {
-                                        tracing::warn!("Web client {client_ip} sent invalid GetNews symbol");
+                                        tracing::warn!(
+                                            "Web client {client_ip} sent invalid GetNews symbol"
+                                        );
                                         continue;
                                     }
                                 }
                             }
-                            WebCmd::Subscribe { symbol, timeframe } | WebCmd::Unsubscribe { symbol, timeframe } => {
+                            WebCmd::Subscribe { symbol, timeframe }
+                            | WebCmd::Unsubscribe { symbol, timeframe } => {
                                 if !typhoon_web_protocol::is_valid_symbol(symbol)
                                     || !typhoon_web_protocol::is_valid_timeframe(timeframe)
                                 {
-                                    tracing::warn!("Web client {client_ip} sent invalid Subscribe/Unsubscribe");
+                                    tracing::warn!(
+                                        "Web client {client_ip} sent invalid Subscribe/Unsubscribe"
+                                    );
                                     continue;
                                 }
                             }
@@ -384,7 +451,10 @@ async fn wait_for_auth(
                 Ok(WebCmd::Auth { passphrase }) => {
                     // Constant-time comparison prevents timing attacks on passphrase
                     use subtle::ConstantTimeEq;
-                    Ok(passphrase.as_bytes().ct_eq(expected_passphrase.as_bytes()).into())
+                    Ok(passphrase
+                        .as_bytes()
+                        .ct_eq(expected_passphrase.as_bytes())
+                        .into())
                 }
                 _ => Ok(false),
             };

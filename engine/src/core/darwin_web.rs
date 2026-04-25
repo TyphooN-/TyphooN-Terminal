@@ -21,8 +21,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use thirtyfour::prelude::*;
 use std::time::Duration;
+use thirtyfour::prelude::*;
 
 // ── Keyring Keys ────────��──────────────────────────────────────────
 
@@ -42,7 +42,8 @@ mod selectors {
     // CAPTCHA detection — covers reCAPTCHA, hCaptcha, and Cloudflare Turnstile
     pub const CAPTCHA_FRAME: &str = "iframe[src*='captcha'], iframe[src*='recaptcha'], .g-recaptcha, .h-captcha, iframe[src*='turnstile']";
     // Dashboard — presence means login succeeded
-    pub const DASHBOARD_MARKER: &str = ".dashboard, [data-page='dashboard'], .portfolio-overview, .main-content";
+    pub const DASHBOARD_MARKER: &str =
+        ".dashboard, [data-page='dashboard'], .portfolio-overview, .main-content";
 
     // ── DARWIN profile page — Overview tab ──────────────────────────
     pub const DARWIN_QUOTE: &str = ".darwin-quote, [data-field='quote'], .current-quote";
@@ -69,7 +70,8 @@ mod selectors {
     pub const DARWIN_AUM: &str = ".aum-value, [data-field='aum']";
     pub const DARWIN_CAPACITY: &str = ".capacity, [data-field='capacity']";
     // Exclusion/status detection
-    pub const DARWIN_EXCLUDED: &str = ".excluded-badge, .suspended-badge, [data-status='excluded'], [data-status='suspended']";
+    pub const DARWIN_EXCLUDED: &str =
+        ".excluded-badge, .suspended-badge, [data-status='excluded'], [data-status='suspended']";
     pub const DARWIN_EXCLUSION_REASON: &str = ".exclusion-reason, [data-field='exclusion_reason']";
     // Trading stats (strategy analysis tab)
     pub const DARWIN_TOTAL_TRADES: &str = ".total-trades, [data-field='total_trades']";
@@ -88,7 +90,8 @@ mod selectors {
 
     // ── Return/Performance tab ─────────────────────────────────────
     // Monthly returns grid: table rows with year + 12 monthly cells
-    pub const MONTHLY_RETURNS_TABLE: &str = ".monthly-returns, table.returns-table, [data-section='monthly-returns'], .return-grid";
+    pub const MONTHLY_RETURNS_TABLE: &str =
+        ".monthly-returns, table.returns-table, [data-section='monthly-returns'], .return-grid";
     pub const MONTHLY_RETURNS_ROW: &str = "tr[data-year], .returns-row, tbody tr";
     pub const MONTHLY_RETURNS_CELL: &str = "td[data-month], .return-cell, td";
     // Equity curve data points
@@ -115,8 +118,10 @@ mod selectors {
     pub const _DSCORE_HISTORY_POINT: &str = "[data-dscore-value], .dscore-point";
 
     // ── Investor tab ────────────��──────────────────────────────────
-    pub const INVESTOR_FLOW_ROW: &str = "[data-investor-date], .investor-flow-row, .investor-history tr";
-    pub const INVESTOR_FLOW_COUNT: &str = "[data-investor-count], .investor-count-cell, td:nth-child(2)";
+    pub const INVESTOR_FLOW_ROW: &str =
+        "[data-investor-date], .investor-flow-row, .investor-history tr";
+    pub const INVESTOR_FLOW_COUNT: &str =
+        "[data-investor-count], .investor-count-cell, td:nth-child(2)";
     pub const INVESTOR_FLOW_AUM: &str = "[data-investor-aum], .investor-aum-cell, td:nth-child(3)";
     pub const INVESTOR_CAPITAL_IN: &str = ".capital-in, [data-field='capital_in']";
     pub const INVESTOR_CAPITAL_OUT: &str = ".capital-out, [data-field='capital_out']";
@@ -128,21 +133,29 @@ mod selectors {
     pub const CORRELATION_CELL: &str = "td[data-correlation]";
     // Performance page
     pub const _PORTFOLIO_EQUITY: &str = ".portfolio-equity, [data-field='portfolio_return']";
-    pub const PORTFOLIO_MONTHLY_TABLE: &str = ".portfolio-monthly-returns, .portfolio-returns-table";
+    pub const PORTFOLIO_MONTHLY_TABLE: &str =
+        ".portfolio-monthly-returns, .portfolio-returns-table";
     pub const PORTFOLIO_TOTAL_RETURN: &str = ".total-return, [data-field='total_return']";
     pub const PORTFOLIO_CAGR: &str = ".portfolio-cagr, [data-field='portfolio_cagr']";
-    pub const PORTFOLIO_BEST_MONTH: &str = ".portfolio-best-month, [data-field='portfolio_best_month']";
-    pub const PORTFOLIO_WORST_MONTH: &str = ".portfolio-worst-month, [data-field='portfolio_worst_month']";
+    pub const PORTFOLIO_BEST_MONTH: &str =
+        ".portfolio-best-month, [data-field='portfolio_best_month']";
+    pub const PORTFOLIO_WORST_MONTH: &str =
+        ".portfolio-worst-month, [data-field='portfolio_worst_month']";
     // Risk page
     pub const PORTFOLIO_VAR: &str = ".portfolio-var, [data-field='portfolio_var']";
     pub const PORTFOLIO_MAX_DD: &str = ".portfolio-max-dd, [data-field='portfolio_max_dd']";
-    pub const PORTFOLIO_DIVERSIFICATION: &str = ".diversification-benefit, [data-field='diversification']";
+    pub const PORTFOLIO_DIVERSIFICATION: &str =
+        ".diversification-benefit, [data-field='diversification']";
     pub const PORTFOLIO_VAR_HISTORY_ROW: &str = ".portfolio-var-row, [data-portfolio-var-date]";
     // Allocation page
-    pub const ALLOCATION_ROW: &str = ".allocation-row, [data-darwin-allocation], .allocation-table tr";
-    pub const ALLOCATION_TICKER: &str = "[data-allocation-ticker], .allocation-ticker, td:nth-child(1)";
-    pub const ALLOCATION_WEIGHT: &str = "[data-allocation-weight], .allocation-weight, td:nth-child(2)";
-    pub const ALLOCATION_INVESTED: &str = "[data-allocation-invested], .allocation-invested, td:nth-child(3)";
+    pub const ALLOCATION_ROW: &str =
+        ".allocation-row, [data-darwin-allocation], .allocation-table tr";
+    pub const ALLOCATION_TICKER: &str =
+        "[data-allocation-ticker], .allocation-ticker, td:nth-child(1)";
+    pub const ALLOCATION_WEIGHT: &str =
+        "[data-allocation-weight], .allocation-weight, td:nth-child(2)";
+    pub const ALLOCATION_INVESTED: &str =
+        "[data-allocation-invested], .allocation-invested, td:nth-child(3)";
     pub const ALLOCATION_PNL: &str = "[data-allocation-pnl], .allocation-pnl, td:nth-child(4)";
 }
 
@@ -163,14 +176,14 @@ pub struct DarwinWebSnapshot {
     pub all_time_return_pct: f64,
     // ── D-Score Components ���────────────────────────────────────
     pub dscore: f64,
-    pub ds_experience: f64,       // Ex (experience)
-    pub ds_risk_mgmt: f64,        // Rs (risk stability)
-    pub ds_risk_adjustment: f64,  // Ra (risk adjustment)
-    pub ds_performance: f64,      // Pf (performance fee)
-    pub ds_scalability: f64,      // Sc (scalability/capacity)
+    pub ds_experience: f64,         // Ex (experience)
+    pub ds_risk_mgmt: f64,          // Rs (risk stability)
+    pub ds_risk_adjustment: f64,    // Ra (risk adjustment)
+    pub ds_performance: f64,        // Pf (performance fee)
+    pub ds_scalability: f64,        // Sc (scalability/capacity)
     pub ds_market_correlation: f64, // Mc (market correlation)
     // ── Risk Metrics ─────��─────────────────────────────────────
-    pub var_monthly: f64,         // monthly VaR
+    pub var_monthly: f64, // monthly VaR
     pub max_drawdown_pct: f64,
     pub volatility_annual: f64,
     pub sharpe_ratio: f64,
@@ -534,14 +547,19 @@ pub async fn launch_browser() -> Result<WebDriver, String> {
     caps.add_arg("--window-size=1280,900")
         .map_err(|e| format!("Chrome caps error: {e}"))?;
 
-    WebDriver::new(CHROMEDRIVER_URL, caps)
-        .await
-        .map_err(|e| format!("Failed to connect to ChromeDriver at {CHROMEDRIVER_URL}: {e}. Is chromedriver running?"))
+    WebDriver::new(CHROMEDRIVER_URL, caps).await.map_err(|e| {
+        format!(
+            "Failed to connect to ChromeDriver at {CHROMEDRIVER_URL}: {e}. Is chromedriver running?"
+        )
+    })
 }
 
 /// Close the browser and end the WebDriver session.
 pub async fn close_browser(driver: WebDriver) -> Result<(), String> {
-    driver.quit().await.map_err(|e| format!("Browser close error: {e}"))
+    driver
+        .quit()
+        .await
+        .map_err(|e| format!("Browser close error: {e}"))
 }
 
 // ── Login Flow ─────────────��────────────────────��──────────────────
@@ -549,30 +567,50 @@ pub async fn close_browser(driver: WebDriver) -> Result<(), String> {
 /// Log in to darwinexzero.com. Returns true if CAPTCHA was encountered
 /// (user must solve it in the visible browser window).
 pub async fn login(driver: &WebDriver, email: &str, password: &str) -> Result<bool, String> {
-    driver.goto(DARWINEX_LOGIN_URL).await
+    driver
+        .goto(DARWINEX_LOGIN_URL)
+        .await
         .map_err(|e| format!("Navigate to login failed: {e}"))?;
 
     // Wait for the email field to appear
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Fill email
-    let email_field = driver.find(By::Css(selectors::LOGIN_EMAIL)).await
+    let email_field = driver
+        .find(By::Css(selectors::LOGIN_EMAIL))
+        .await
         .map_err(|e| format!("Email field not found: {e}"))?;
-    email_field.clear().await.map_err(|e| format!("Clear email: {e}"))?;
-    email_field.send_keys(email).await
+    email_field
+        .clear()
+        .await
+        .map_err(|e| format!("Clear email: {e}"))?;
+    email_field
+        .send_keys(email)
+        .await
         .map_err(|e| format!("Type email failed: {e}"))?;
 
     // Fill password
-    let pwd_field = driver.find(By::Css(selectors::LOGIN_PASSWORD)).await
+    let pwd_field = driver
+        .find(By::Css(selectors::LOGIN_PASSWORD))
+        .await
         .map_err(|e| format!("Password field not found: {e}"))?;
-    pwd_field.clear().await.map_err(|e| format!("Clear password: {e}"))?;
-    pwd_field.send_keys(password).await
+    pwd_field
+        .clear()
+        .await
+        .map_err(|e| format!("Clear password: {e}"))?;
+    pwd_field
+        .send_keys(password)
+        .await
         .map_err(|e| format!("Type password failed: {e}"))?;
 
     // Click submit
-    let submit = driver.find(By::Css(selectors::LOGIN_SUBMIT)).await
+    let submit = driver
+        .find(By::Css(selectors::LOGIN_SUBMIT))
+        .await
         .map_err(|e| format!("Submit button not found: {e}"))?;
-    submit.click().await
+    submit
+        .click()
+        .await
         .map_err(|e| format!("Click submit failed: {e}"))?;
 
     // Wait a moment for page response
@@ -586,7 +624,9 @@ pub async fn login(driver: &WebDriver, email: &str, password: &str) -> Result<bo
     }
 
     // Verify we reached the dashboard
-    let url = driver.current_url().await
+    let url = driver
+        .current_url()
+        .await
         .map_err(|e| format!("Get URL failed: {e}"))?;
     if url.as_str().contains("login") {
         return Err("Login failed — still on login page after submit".to_string());
@@ -616,7 +656,11 @@ pub async fn wait_for_captcha_solve(driver: &WebDriver) -> Result<(), String> {
         }
 
         // Also check for dashboard marker
-        if driver.find(By::Css(selectors::DASHBOARD_MARKER)).await.is_ok() {
+        if driver
+            .find(By::Css(selectors::DASHBOARD_MARKER))
+            .await
+            .is_ok()
+        {
             return Ok(());
         }
 
@@ -640,20 +684,30 @@ pub async fn is_session_valid(driver: &WebDriver) -> bool {
 
 /// Extract all cookies from the browser session for caching.
 pub async fn get_cookies(driver: &WebDriver) -> Result<Vec<SerializableCookie>, String> {
-    let cookies = driver.get_all_cookies().await
+    let cookies = driver
+        .get_all_cookies()
+        .await
         .map_err(|e| format!("Get cookies failed: {e}"))?;
-    Ok(cookies.iter().map(|c| SerializableCookie {
-        name: c.name.clone(),
-        value: c.value.clone(),
-        domain: c.domain.clone(),
-        path: c.path.clone(),
-    }).collect())
+    Ok(cookies
+        .iter()
+        .map(|c| SerializableCookie {
+            name: c.name.clone(),
+            value: c.value.clone(),
+            domain: c.domain.clone(),
+            path: c.path.clone(),
+        })
+        .collect())
 }
 
 /// Restore cookies from cache into the browser session.
-pub async fn restore_cookies(driver: &WebDriver, cookies: &[SerializableCookie]) -> Result<(), String> {
+pub async fn restore_cookies(
+    driver: &WebDriver,
+    cookies: &[SerializableCookie],
+) -> Result<(), String> {
     // Must navigate to the domain first before setting cookies
-    driver.goto(DARWINEX_LOGIN_URL).await
+    driver
+        .goto(DARWINEX_LOGIN_URL)
+        .await
         .map_err(|e| format!("Navigate for cookie restore failed: {e}"))?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
@@ -675,7 +729,8 @@ pub async fn restore_cookies(driver: &WebDriver, cookies: &[SerializableCookie])
 
 /// Parse a numeric string (possibly with %, $, commas, or other formatting).
 fn parse_numeric(text: &str) -> f64 {
-    let cleaned: String = text.chars()
+    let cleaned: String = text
+        .chars()
         .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
         .collect();
     cleaned.parse::<f64>().unwrap_or(0.0)
@@ -715,7 +770,8 @@ fn parse_date_to_ms(text: &str) -> i64 {
     // Try full date formats first
     for fmt in &["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"] {
         if let Ok(dt) = chrono::NaiveDate::parse_from_str(trimmed, fmt) {
-            return dt.and_hms_opt(0, 0, 0)
+            return dt
+                .and_hms_opt(0, 0, 0)
                 .map(|ndt| ndt.and_utc().timestamp_millis())
                 .unwrap_or(0);
         }
@@ -726,7 +782,8 @@ fn parse_date_to_ms(text: &str) -> i64 {
         let with_day = format!("01 {}", trimmed);
         let day_fmt = format!("%d {}", fmt);
         if let Ok(dt) = chrono::NaiveDate::parse_from_str(&with_day, &day_fmt) {
-            return dt.and_hms_opt(0, 0, 0)
+            return dt
+                .and_hms_opt(0, 0, 0)
                 .map(|ndt| ndt.and_utc().timestamp_millis())
                 .unwrap_or(0);
         }
@@ -735,7 +792,8 @@ fn parse_date_to_ms(text: &str) -> i64 {
     if let Ok(year) = trimmed.parse::<i32>() {
         if (2000..=2100).contains(&year) {
             if let Some(dt) = chrono::NaiveDate::from_ymd_opt(year, 1, 1) {
-                return dt.and_hms_opt(0, 0, 0)
+                return dt
+                    .and_hms_opt(0, 0, 0)
                     .map(|ndt| ndt.and_utc().timestamp_millis())
                     .unwrap_or(0);
             }
@@ -772,9 +830,16 @@ pub fn validate_snapshot(snap: &DarwinWebSnapshot) -> Vec<ScrapeWarning> {
     }
     // Count how many key fields are zero — if nearly all are 0, page likely didn't load
     let zero_count = [
-        snap.quote, snap.dscore, snap.var_monthly, snap.sharpe_ratio,
-        snap.all_time_return_pct, snap.aum,
-    ].iter().filter(|v| **v == 0.0).count();
+        snap.quote,
+        snap.dscore,
+        snap.var_monthly,
+        snap.sharpe_ratio,
+        snap.all_time_return_pct,
+        snap.aum,
+    ]
+    .iter()
+    .filter(|v| **v == 0.0)
+    .count();
     if zero_count >= 5 {
         warnings.push(ScrapeWarning {
             ticker: t.clone(),
@@ -790,7 +855,10 @@ pub fn validate_snapshot(snap: &DarwinWebSnapshot) -> Vec<ScrapeWarning> {
 
 /// Build the DARWIN profile URL for a given ticker.
 fn darwin_profile_url(ticker: &str) -> String {
-    format!("https://www.darwinexzero.com/darwin/{}", ticker.to_uppercase())
+    format!(
+        "https://www.darwinexzero.com/darwin/{}",
+        ticker.to_uppercase()
+    )
 }
 
 /// Scrape a single DARWIN's profile page — Overview tab (with retry).
@@ -798,7 +866,9 @@ pub async fn scrape_darwin(driver: &WebDriver, ticker: &str) -> Result<DarwinWeb
     let url = darwin_profile_url(ticker);
 
     for attempt in 0..=MAX_RETRIES {
-        driver.goto(&url).await
+        driver
+            .goto(&url)
+            .await
             .map_err(|e| format!("Navigate to {ticker} profile failed: {e}"))?;
         tokio::time::sleep(PAGE_LOAD_WAIT).await;
 
@@ -833,8 +903,14 @@ pub async fn scrape_darwin(driver: &WebDriver, ticker: &str) -> Result<DarwinWeb
         let capacity_remaining_pct = scrape_numeric(driver, selectors::DARWIN_CAPACITY).await;
 
         // Exclusion status (auto-detected from page)
-        let excluded = driver.find(By::Css(selectors::DARWIN_EXCLUDED)).await.is_ok();
-        let exclusion_reason = match driver.find(By::Css(selectors::DARWIN_EXCLUSION_REASON)).await {
+        let excluded = driver
+            .find(By::Css(selectors::DARWIN_EXCLUDED))
+            .await
+            .is_ok();
+        let exclusion_reason = match driver
+            .find(By::Css(selectors::DARWIN_EXCLUSION_REASON))
+            .await
+        {
             Ok(elem) => elem.text().await.unwrap_or_default(),
             Err(_) => String::new(),
         };
@@ -887,7 +963,8 @@ pub async fn scrape_darwin(driver: &WebDriver, ticker: &str) -> Result<DarwinWeb
         if critical && attempt < MAX_RETRIES {
             tracing::warn!(
                 "{ticker}: snapshot validation failed (attempt {}/{}) — retrying",
-                attempt + 1, MAX_RETRIES + 1
+                attempt + 1,
+                MAX_RETRIES + 1
             );
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
@@ -903,7 +980,10 @@ pub async fn scrape_darwin(driver: &WebDriver, ticker: &str) -> Result<DarwinWeb
         return Ok(snap);
     }
 
-    Err(format!("{ticker}: scrape failed after {} attempts — page did not load", MAX_RETRIES + 1))
+    Err(format!(
+        "{ticker}: scrape failed after {} attempts — page did not load",
+        MAX_RETRIES + 1
+    ))
 }
 
 /// Scrape the Return/Performance tab for a single DARWIN.
@@ -936,14 +1016,21 @@ pub async fn scrape_return_tab(driver: &WebDriver, ticker: &str) -> DarwinMonthl
 
     // Scrape monthly returns table
     if let Ok(table) = driver.find(By::Css(selectors::MONTHLY_RETURNS_TABLE)).await {
-        if let Ok(rows) = table.find_all(By::Css(selectors::MONTHLY_RETURNS_ROW)).await {
+        if let Ok(rows) = table
+            .find_all(By::Css(selectors::MONTHLY_RETURNS_ROW))
+            .await
+        {
             for row in &rows {
                 if let Ok(cells) = row.find_all(By::Css(selectors::MONTHLY_RETURNS_CELL)).await {
-                    if cells.is_empty() { continue; }
+                    if cells.is_empty() {
+                        continue;
+                    }
                     // First cell is usually the year
                     let year_text = cells[0].text().await.unwrap_or_default();
                     let year = parse_numeric(&year_text) as u16;
-                    if year < 2000 || year > 2100 { continue; }
+                    if year < 2000 || year > 2100 {
+                        continue;
+                    }
 
                     let mut months = [None; 12];
                     // Cells 1..=12 are months (Jan..Dec)
@@ -967,7 +1054,11 @@ pub async fn scrape_return_tab(driver: &WebDriver, ticker: &str) -> DarwinMonthl
                         None
                     };
 
-                    result.rows.push(MonthlyReturnRow { year, months, year_total });
+                    result.rows.push(MonthlyReturnRow {
+                        year,
+                        months,
+                        year_total,
+                    });
                 }
             }
         }
@@ -1006,30 +1097,59 @@ pub async fn scrape_risk_tab(driver: &WebDriver, ticker: &str) -> DarwinVaRHisto
     // Scrape VaR history rows
     if let Ok(rows) = driver.find_all(By::Css(selectors::VAR_HISTORY_ROW)).await {
         for row in &rows {
-            let date_attr = row.attr("data-var-date").await.ok().flatten().unwrap_or_default();
+            let date_attr = row
+                .attr("data-var-date")
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             let ts = parse_date_to_ms(&date_attr);
             let var_text = row.text().await.unwrap_or_default();
             let var_pct = parse_numeric(&var_text);
             if ts > 0 {
-                result.points.push(VaRPoint { timestamp_ms: ts, var_pct });
+                result.points.push(VaRPoint {
+                    timestamp_ms: ts,
+                    var_pct,
+                });
             }
         }
     }
 
     // Scrape drawdown periods
-    if let Ok(rows) = driver.find_all(By::Css(selectors::DRAWDOWN_PERIOD_ROW)).await {
+    if let Ok(rows) = driver
+        .find_all(By::Css(selectors::DRAWDOWN_PERIOD_ROW))
+        .await
+    {
         for row in &rows {
-            let start_attr = row.attr("data-start").await.ok().flatten().unwrap_or_default();
-            let end_attr = row.attr("data-end").await.ok().flatten().unwrap_or_default();
+            let start_attr = row
+                .attr("data-start")
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            let end_attr = row
+                .attr("data-end")
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             let depth_text = row.text().await.unwrap_or_default();
             let start_ms = parse_date_to_ms(&start_attr);
             let end_ms = parse_date_to_ms(&end_attr);
             let depth_pct = parse_numeric(&depth_text);
-            let recovery_attr = row.attr("data-recovery-days").await.ok().flatten().unwrap_or_default();
+            let recovery_attr = row
+                .attr("data-recovery-days")
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             let recovery_days = parse_numeric(&recovery_attr) as u32;
             if start_ms > 0 {
                 result.drawdown_periods.push(DrawdownPeriod {
-                    start_ms, end_ms, depth_pct, recovery_days,
+                    start_ms,
+                    end_ms,
+                    depth_pct,
+                    recovery_days,
                 });
             }
         }
@@ -1053,27 +1173,72 @@ pub async fn scrape_investable_tab(driver: &WebDriver, ticker: &str) -> DarwinDS
     }
 
     // Scrape D-Score history data points
-    if let Ok(rows) = driver.find_all(By::Css(selectors::DSCORE_HISTORY_ROW)).await {
+    if let Ok(rows) = driver
+        .find_all(By::Css(selectors::DSCORE_HISTORY_ROW))
+        .await
+    {
         for row in &rows {
-            let date_attr = row.attr("data-dscore-date").await.ok().flatten().unwrap_or_default();
+            let date_attr = row
+                .attr("data-dscore-date")
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             let ts = parse_date_to_ms(&date_attr);
-            if ts == 0 { continue; }
+            if ts == 0 {
+                continue;
+            }
 
             // Try to get individual component values from the row
-            let dscore_val = row.attr("data-dscore-value").await.ok().flatten()
-                .map(|v| parse_numeric(&v)).unwrap_or(0.0);
-            let ex = row.attr("data-ex").await.ok().flatten()
-                .map(|v| parse_numeric(&v)).unwrap_or(0.0);
-            let rs = row.attr("data-rs").await.ok().flatten()
-                .map(|v| parse_numeric(&v)).unwrap_or(0.0);
-            let ra = row.attr("data-ra").await.ok().flatten()
-                .map(|v| parse_numeric(&v)).unwrap_or(0.0);
-            let pf = row.attr("data-pf").await.ok().flatten()
-                .map(|v| parse_numeric(&v)).unwrap_or(0.0);
-            let sc = row.attr("data-sc").await.ok().flatten()
-                .map(|v| parse_numeric(&v)).unwrap_or(0.0);
-            let mc = row.attr("data-mc").await.ok().flatten()
-                .map(|v| parse_numeric(&v)).unwrap_or(0.0);
+            let dscore_val = row
+                .attr("data-dscore-value")
+                .await
+                .ok()
+                .flatten()
+                .map(|v| parse_numeric(&v))
+                .unwrap_or(0.0);
+            let ex = row
+                .attr("data-ex")
+                .await
+                .ok()
+                .flatten()
+                .map(|v| parse_numeric(&v))
+                .unwrap_or(0.0);
+            let rs = row
+                .attr("data-rs")
+                .await
+                .ok()
+                .flatten()
+                .map(|v| parse_numeric(&v))
+                .unwrap_or(0.0);
+            let ra = row
+                .attr("data-ra")
+                .await
+                .ok()
+                .flatten()
+                .map(|v| parse_numeric(&v))
+                .unwrap_or(0.0);
+            let pf = row
+                .attr("data-pf")
+                .await
+                .ok()
+                .flatten()
+                .map(|v| parse_numeric(&v))
+                .unwrap_or(0.0);
+            let sc = row
+                .attr("data-sc")
+                .await
+                .ok()
+                .flatten()
+                .map(|v| parse_numeric(&v))
+                .unwrap_or(0.0);
+            let mc = row
+                .attr("data-mc")
+                .await
+                .ok()
+                .flatten()
+                .map(|v| parse_numeric(&v))
+                .unwrap_or(0.0);
 
             result.points.push(DScorePoint {
                 timestamp_ms: ts,
@@ -1118,9 +1283,16 @@ pub async fn scrape_investor_tab(driver: &WebDriver, ticker: &str) -> DarwinInve
     // Scrape investor flow history rows
     if let Ok(rows) = driver.find_all(By::Css(selectors::INVESTOR_FLOW_ROW)).await {
         for row in &rows {
-            let date_attr = row.attr("data-investor-date").await.ok().flatten().unwrap_or_default();
+            let date_attr = row
+                .attr("data-investor-date")
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             let ts = parse_date_to_ms(&date_attr);
-            if ts == 0 { continue; }
+            if ts == 0 {
+                continue;
+            }
 
             // Get count and AuM from cells within the row
             let count_text = match row.find(By::Css(selectors::INVESTOR_FLOW_COUNT)).await {
@@ -1147,15 +1319,38 @@ pub async fn scrape_investor_tab(driver: &WebDriver, ticker: &str) -> DarwinInve
 async fn scrape_equity_curve(driver: &WebDriver, ticker: &str) -> DarwinEquityCurve {
     let mut points = Vec::new();
 
-    if let Ok(elems) = driver.find_all(By::Css(selectors::EQUITY_CURVE_POINT)).await {
+    if let Ok(elems) = driver
+        .find_all(By::Css(selectors::EQUITY_CURVE_POINT))
+        .await
+    {
         for elem in &elems {
-            let mut ts_attr = elem.attr("data-timestamp").await.ok().flatten().unwrap_or_default();
+            let mut ts_attr = elem
+                .attr("data-timestamp")
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             if ts_attr.is_empty() {
-                ts_attr = elem.attr("data-date").await.ok().flatten().unwrap_or_default();
+                ts_attr = elem
+                    .attr("data-date")
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
             }
-            let mut val_attr = elem.attr("data-equity").await.ok().flatten().unwrap_or_default();
+            let mut val_attr = elem
+                .attr("data-equity")
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             if val_attr.is_empty() {
-                val_attr = elem.attr("data-value").await.ok().flatten().unwrap_or_default();
+                val_attr = elem
+                    .attr("data-value")
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
             }
 
             let ts = if ts_attr.contains('-') || ts_attr.contains('/') {
@@ -1166,7 +1361,10 @@ async fn scrape_equity_curve(driver: &WebDriver, ticker: &str) -> DarwinEquityCu
             let value = parse_numeric(&val_attr);
 
             if ts > 0 && value > 0.0 {
-                points.push(EquityPoint { timestamp_ms: ts, value });
+                points.push(EquityPoint {
+                    timestamp_ms: ts,
+                    value,
+                });
             }
         }
     }
@@ -1182,7 +1380,17 @@ async fn scrape_equity_curve(driver: &WebDriver, ticker: &str) -> DarwinEquityCu
 pub async fn scrape_darwin_full(
     driver: &WebDriver,
     ticker: &str,
-) -> Result<(DarwinWebSnapshot, DarwinMonthlyReturns, DarwinEquityCurve, DarwinVaRHistory, DarwinDScoreHistory, DarwinInvestorFlow), String> {
+) -> Result<
+    (
+        DarwinWebSnapshot,
+        DarwinMonthlyReturns,
+        DarwinEquityCurve,
+        DarwinVaRHistory,
+        DarwinDScoreHistory,
+        DarwinInvestorFlow,
+    ),
+    String,
+> {
     // 1. Overview tab (includes navigation to the DARWIN page)
     let snapshot = scrape_darwin(driver, ticker).await?;
 
@@ -1201,7 +1409,14 @@ pub async fn scrape_darwin_full(
     // 6. Investor tab
     let investor_flow = scrape_investor_tab(driver, ticker).await;
 
-    Ok((snapshot, monthly_returns, equity_curve, var_history, dscore_history, investor_flow))
+    Ok((
+        snapshot,
+        monthly_returns,
+        equity_curve,
+        var_history,
+        dscore_history,
+        investor_flow,
+    ))
 }
 
 // ── Portfolio-Level Scraping ──────────────────────────────────────
@@ -1212,7 +1427,9 @@ pub async fn scrape_correlation(
     tickers: &[String],
 ) -> Result<Vec<DarwinWebCorrelation>, String> {
     // Navigate to portfolio/correlation page
-    driver.goto("https://www.darwinexzero.com/portfolio/correlation").await
+    driver
+        .goto("https://www.darwinexzero.com/portfolio/correlation")
+        .await
         .map_err(|e| format!("Navigate to correlation page failed: {e}"))?;
 
     tokio::time::sleep(PAGE_LOAD_WAIT).await;
@@ -1224,10 +1441,18 @@ pub async fn scrape_correlation(
         Ok(cells) => {
             for cell in &cells {
                 // Try to extract data attributes for darwin pair + correlation value
-                let darwin_a = cell.attr("data-darwin-a").await
-                    .ok().flatten().unwrap_or_default();
-                let darwin_b = cell.attr("data-darwin-b").await
-                    .ok().flatten().unwrap_or_default();
+                let darwin_a = cell
+                    .attr("data-darwin-a")
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                let darwin_b = cell
+                    .attr("data-darwin-b")
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
                 let corr_text = cell.text().await.unwrap_or_default();
                 let correlation = parse_numeric(&corr_text);
 
@@ -1255,7 +1480,11 @@ pub async fn scrape_correlation(
 
 /// Scrape portfolio performance from /portfolio/performance.
 pub async fn scrape_portfolio_performance(driver: &WebDriver) -> Option<PortfolioPerformance> {
-    if driver.goto("https://www.darwinexzero.com/portfolio/performance").await.is_err() {
+    if driver
+        .goto("https://www.darwinexzero.com/portfolio/performance")
+        .await
+        .is_err()
+    {
         tracing::warn!("Failed to navigate to portfolio/performance");
         return None;
     }
@@ -1268,14 +1497,24 @@ pub async fn scrape_portfolio_performance(driver: &WebDriver) -> Option<Portfoli
 
     // Scrape monthly returns table (same format as per-DARWIN)
     let mut monthly_returns = Vec::new();
-    if let Ok(table) = driver.find(By::Css(selectors::PORTFOLIO_MONTHLY_TABLE)).await {
-        if let Ok(rows) = table.find_all(By::Css(selectors::MONTHLY_RETURNS_ROW)).await {
+    if let Ok(table) = driver
+        .find(By::Css(selectors::PORTFOLIO_MONTHLY_TABLE))
+        .await
+    {
+        if let Ok(rows) = table
+            .find_all(By::Css(selectors::MONTHLY_RETURNS_ROW))
+            .await
+        {
             for row in &rows {
                 if let Ok(cells) = row.find_all(By::Css(selectors::MONTHLY_RETURNS_CELL)).await {
-                    if cells.is_empty() { continue; }
+                    if cells.is_empty() {
+                        continue;
+                    }
                     let year_text = cells[0].text().await.unwrap_or_default();
                     let year = parse_numeric(&year_text) as u16;
-                    if year < 2000 || year > 2100 { continue; }
+                    if year < 2000 || year > 2100 {
+                        continue;
+                    }
 
                     let mut months = [None; 12];
                     for (i, cell) in cells.iter().skip(1).take(12).enumerate() {
@@ -1288,10 +1527,20 @@ pub async fn scrape_portfolio_performance(driver: &WebDriver) -> Option<Portfoli
                     let year_total = if cells.len() > 13 {
                         let text = cells[cells.len() - 1].text().await.unwrap_or_default();
                         let trimmed = text.trim();
-                        if !trimmed.is_empty() && trimmed != "-" { Some(parse_numeric(trimmed)) } else { None }
-                    } else { None };
+                        if !trimmed.is_empty() && trimmed != "-" {
+                            Some(parse_numeric(trimmed))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
 
-                    monthly_returns.push(MonthlyReturnRow { year, months, year_total });
+                    monthly_returns.push(MonthlyReturnRow {
+                        year,
+                        months,
+                        year_total,
+                    });
                 }
             }
         }
@@ -1299,20 +1548,50 @@ pub async fn scrape_portfolio_performance(driver: &WebDriver) -> Option<Portfoli
 
     // Scrape equity curve
     let mut equity_points = Vec::new();
-    if let Ok(elems) = driver.find_all(By::Css(selectors::EQUITY_CURVE_POINT)).await {
+    if let Ok(elems) = driver
+        .find_all(By::Css(selectors::EQUITY_CURVE_POINT))
+        .await
+    {
         for elem in &elems {
-            let mut ts_attr = elem.attr("data-timestamp").await.ok().flatten().unwrap_or_default();
+            let mut ts_attr = elem
+                .attr("data-timestamp")
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             if ts_attr.is_empty() {
-                ts_attr = elem.attr("data-date").await.ok().flatten().unwrap_or_default();
+                ts_attr = elem
+                    .attr("data-date")
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
             }
-            let mut val_attr = elem.attr("data-equity").await.ok().flatten().unwrap_or_default();
+            let mut val_attr = elem
+                .attr("data-equity")
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             if val_attr.is_empty() {
-                val_attr = elem.attr("data-value").await.ok().flatten().unwrap_or_default();
+                val_attr = elem
+                    .attr("data-value")
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
             }
-            let ts = if ts_attr.contains('-') { parse_date_to_ms(&ts_attr) } else { parse_numeric(&ts_attr) as i64 };
+            let ts = if ts_attr.contains('-') {
+                parse_date_to_ms(&ts_attr)
+            } else {
+                parse_numeric(&ts_attr) as i64
+            };
             let value = parse_numeric(&val_attr);
             if ts > 0 && value != 0.0 {
-                equity_points.push(EquityPoint { timestamp_ms: ts, value });
+                equity_points.push(EquityPoint {
+                    timestamp_ms: ts,
+                    value,
+                });
             }
         }
     }
@@ -1329,7 +1608,11 @@ pub async fn scrape_portfolio_performance(driver: &WebDriver) -> Option<Portfoli
 
 /// Scrape portfolio risk from /portfolio/risk.
 pub async fn scrape_portfolio_risk(driver: &WebDriver) -> Option<PortfolioRisk> {
-    if driver.goto("https://www.darwinexzero.com/portfolio/risk").await.is_err() {
+    if driver
+        .goto("https://www.darwinexzero.com/portfolio/risk")
+        .await
+        .is_err()
+    {
         tracing::warn!("Failed to navigate to portfolio/risk");
         return None;
     }
@@ -1337,18 +1620,30 @@ pub async fn scrape_portfolio_risk(driver: &WebDriver) -> Option<PortfolioRisk> 
 
     let current_var = scrape_numeric(driver, selectors::PORTFOLIO_VAR).await;
     let max_drawdown_pct = scrape_numeric(driver, selectors::PORTFOLIO_MAX_DD).await;
-    let diversification_benefit_pct = scrape_numeric(driver, selectors::PORTFOLIO_DIVERSIFICATION).await;
+    let diversification_benefit_pct =
+        scrape_numeric(driver, selectors::PORTFOLIO_DIVERSIFICATION).await;
 
     // VaR history
     let mut var_history = Vec::new();
-    if let Ok(rows) = driver.find_all(By::Css(selectors::PORTFOLIO_VAR_HISTORY_ROW)).await {
+    if let Ok(rows) = driver
+        .find_all(By::Css(selectors::PORTFOLIO_VAR_HISTORY_ROW))
+        .await
+    {
         for row in &rows {
-            let date_attr = row.attr("data-portfolio-var-date").await.ok().flatten().unwrap_or_default();
+            let date_attr = row
+                .attr("data-portfolio-var-date")
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             let ts = parse_date_to_ms(&date_attr);
             let var_text = row.text().await.unwrap_or_default();
             let var_pct = parse_numeric(&var_text);
             if ts > 0 {
-                var_history.push(VaRPoint { timestamp_ms: ts, var_pct });
+                var_history.push(VaRPoint {
+                    timestamp_ms: ts,
+                    var_pct,
+                });
             }
         }
     }
@@ -1365,7 +1660,11 @@ pub async fn scrape_portfolio_risk(driver: &WebDriver) -> Option<PortfolioRisk> 
 pub async fn scrape_portfolio_allocation(driver: &WebDriver) -> Vec<DarwinAllocation> {
     let mut allocations = Vec::new();
 
-    if driver.goto("https://www.darwinexzero.com/portfolio/allocation").await.is_err() {
+    if driver
+        .goto("https://www.darwinexzero.com/portfolio/allocation")
+        .await
+        .is_err()
+    {
         tracing::warn!("Failed to navigate to portfolio/allocation");
         return allocations;
     }
@@ -1395,7 +1694,12 @@ pub async fn scrape_portfolio_allocation(driver: &WebDriver) -> Vec<DarwinAlloca
                 Err(_) => 0.0,
             };
 
-            allocations.push(DarwinAllocation { ticker, weight_pct, invested, pnl });
+            allocations.push(DarwinAllocation {
+                ticker,
+                weight_pct,
+                invested,
+                pnl,
+            });
         }
     }
 
@@ -1459,7 +1763,8 @@ where
     // ── Portfolio-level pages ──────────────────────────────────────
 
     // Scrape correlation matrix
-    let correlations = scrape_correlation(driver, &config.managed_darwins).await
+    let correlations = scrape_correlation(driver, &config.managed_darwins)
+        .await
         .unwrap_or_default();
 
     // Scrape portfolio performance
@@ -1487,7 +1792,8 @@ where
     // ── Correlation analysis ──────────────────────────────────────
 
     // Determine which DARWINs are active (not excluded)
-    let active: HashSet<String> = snapshots.iter()
+    let active: HashSet<String> = snapshots
+        .iter()
         .filter(|s| !s.excluded)
         .map(|s| s.ticker.clone())
         .filter(|t| !config.excluded_darwins.contains(t))
@@ -1499,17 +1805,26 @@ where
             tracing::warn!(
                 "DARWIN {} is EXCLUDED on Darwinex: {}",
                 snap.ticker,
-                if snap.exclusion_reason.is_empty() { "no reason given" } else { &snap.exclusion_reason }
+                if snap.exclusion_reason.is_empty() {
+                    "no reason given"
+                } else {
+                    &snap.exclusion_reason
+                }
             );
         }
     }
 
     // Update correlation_portfolio on snapshots if we have correlation data
     for snap in &mut snapshots {
-        let (sum, count) = correlations.iter()
+        let (sum, count) = correlations
+            .iter()
             .filter(|c| {
                 let involves_snap = c.darwin_a == snap.ticker || c.darwin_b == snap.ticker;
-                let other = if c.darwin_a == snap.ticker { &c.darwin_b } else { &c.darwin_a };
+                let other = if c.darwin_a == snap.ticker {
+                    &c.darwin_b
+                } else {
+                    &c.darwin_a
+                };
                 involves_snap && active.contains(other)
             })
             .fold((0.0_f64, 0_u32), |(s, n), c| (s + c.correlation, n + 1));
@@ -1530,7 +1845,11 @@ where
                 darwin_b: corr.darwin_b.clone(),
                 correlation: corr.correlation,
                 threshold: config.correlation_alert_threshold,
-                suggestion: suggest_correlation_fix(&corr.darwin_a, &corr.darwin_b, corr.correlation),
+                suggestion: suggest_correlation_fix(
+                    &corr.darwin_a,
+                    &corr.darwin_b,
+                    corr.correlation,
+                ),
             });
         }
     }
@@ -1544,7 +1863,10 @@ where
         for alert in &correlation_alerts {
             tracing::warn!(
                 "  {} × {} = {:.4} (threshold: {:.2})",
-                alert.darwin_a, alert.darwin_b, alert.correlation, alert.threshold
+                alert.darwin_a,
+                alert.darwin_b,
+                alert.correlation,
+                alert.threshold
             );
         }
     }
@@ -1617,13 +1939,17 @@ impl DarwinWebConfig {
     /// Validate and deduplicate managed DARWIN tickers.
     /// Rejects tickers with special characters (only alphanumeric allowed).
     pub fn normalize(&mut self) {
-        self.managed_darwins = self.managed_darwins.iter()
+        self.managed_darwins = self
+            .managed_darwins
+            .iter()
             .map(|t| t.trim().to_uppercase())
             .filter(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_alphanumeric()))
             .collect();
         self.managed_darwins.sort();
         self.managed_darwins.dedup();
-        self.excluded_darwins = self.excluded_darwins.iter()
+        self.excluded_darwins = self
+            .excluded_darwins
+            .iter()
             .map(|t| t.trim().to_uppercase())
             .filter(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_alphanumeric()))
             .collect();
@@ -1639,7 +1965,8 @@ impl DarwinWebConfig {
 
     /// Return managed DARWINs that are NOT excluded (for correlation analysis).
     pub fn active_darwins(&self) -> Vec<&str> {
-        self.managed_darwins.iter()
+        self.managed_darwins
+            .iter()
             .filter(|t| !self.excluded_darwins.contains(t))
             .map(|t| t.as_str())
             .collect()
@@ -1802,12 +2129,12 @@ mod tests {
             managed_darwins: vec![
                 "tpn".to_string(),
                 "AJT".to_string(),
-                "tpn".to_string(), // duplicate
+                "tpn".to_string(),    // duplicate
                 " xuqf ".to_string(), // whitespace
             ],
             excluded_darwins: vec!["mfso".to_string(), "MFSO".to_string()],
             auto_scrape: false,
-            scrape_minute: 99, // invalid — should be clamped
+            scrape_minute: 99,                // invalid — should be clamped
             correlation_alert_threshold: 2.0, // invalid — should be clamped
         };
         cfg.normalize();
@@ -1827,11 +2154,20 @@ mod tests {
         assert_eq!(cache_keys::PORTFOLIO_PERF, "dwx_web:portfolio_performance");
         assert_eq!(cache_keys::PORTFOLIO_RISK, "dwx_web:portfolio_risk");
         assert_eq!(cache_keys::ALLOCATIONS, "dwx_web:allocations");
-        assert_eq!(cache_keys::monthly_returns("tpn"), "dwx_web:TPN:monthly_returns");
+        assert_eq!(
+            cache_keys::monthly_returns("tpn"),
+            "dwx_web:TPN:monthly_returns"
+        );
         assert_eq!(cache_keys::equity_curve("ajt"), "dwx_web:AJT:equity_curve");
         assert_eq!(cache_keys::var_history("XUQF"), "dwx_web:XUQF:var_history");
-        assert_eq!(cache_keys::dscore_history("tpn"), "dwx_web:TPN:dscore_history");
-        assert_eq!(cache_keys::investor_flow("ajt"), "dwx_web:AJT:investor_flow");
+        assert_eq!(
+            cache_keys::dscore_history("tpn"),
+            "dwx_web:TPN:dscore_history"
+        );
+        assert_eq!(
+            cache_keys::investor_flow("ajt"),
+            "dwx_web:AJT:investor_flow"
+        );
     }
 
     #[test]
@@ -1866,7 +2202,10 @@ mod tests {
     fn validate_snapshot_healthy() {
         let snap = test_snapshot();
         let warnings = validate_snapshot(&snap);
-        assert!(warnings.is_empty(), "healthy snapshot should have no warnings");
+        assert!(
+            warnings.is_empty(),
+            "healthy snapshot should have no warnings"
+        );
     }
 
     #[test]
@@ -1879,8 +2218,10 @@ mod tests {
         snap.all_time_return_pct = 0.0;
         snap.aum = 0.0;
         let warnings = validate_snapshot(&snap);
-        assert!(warnings.iter().any(|w| w.field == "all"),
-            "all-zeros snapshot should trigger 'all' warning");
+        assert!(
+            warnings.iter().any(|w| w.field == "all"),
+            "all-zeros snapshot should trigger 'all' warning"
+        );
     }
 
     #[test]
@@ -1895,8 +2236,20 @@ mod tests {
     fn monthly_return_row_roundtrip() {
         let row = MonthlyReturnRow {
             year: 2024,
-            months: [Some(1.2), Some(-0.5), None, Some(2.1), None, None,
-                     Some(0.3), None, Some(-1.1), Some(0.8), None, Some(3.2)],
+            months: [
+                Some(1.2),
+                Some(-0.5),
+                None,
+                Some(2.1),
+                None,
+                None,
+                Some(0.3),
+                None,
+                Some(-1.1),
+                Some(0.8),
+                None,
+                Some(3.2),
+            ],
             year_total: Some(6.0),
         };
         let json = serde_json::to_string(&row).unwrap();
@@ -1909,7 +2262,10 @@ mod tests {
 
     #[test]
     fn equity_point_roundtrip() {
-        let pt = EquityPoint { timestamp_ms: 1700000000000, value: 125.67 };
+        let pt = EquityPoint {
+            timestamp_ms: 1700000000000,
+            value: 125.67,
+        };
         let json = serde_json::to_string(&pt).unwrap();
         let back: EquityPoint = serde_json::from_str(&json).unwrap();
         assert_eq!(back.timestamp_ms, 1700000000000);
@@ -1918,7 +2274,10 @@ mod tests {
 
     #[test]
     fn var_point_roundtrip() {
-        let pt = VaRPoint { timestamp_ms: 1700000000000, var_pct: 4.5 };
+        let pt = VaRPoint {
+            timestamp_ms: 1700000000000,
+            var_pct: 4.5,
+        };
         let json = serde_json::to_string(&pt).unwrap();
         let back: VaRPoint = serde_json::from_str(&json).unwrap();
         assert!((back.var_pct - 4.5).abs() < f64::EPSILON);
@@ -1994,7 +2353,10 @@ mod tests {
                 months: [Some(1.0); 12],
                 year_total: Some(12.0),
             }],
-            equity_points: vec![EquityPoint { timestamp_ms: 1700000000000, value: 100.0 }],
+            equity_points: vec![EquityPoint {
+                timestamp_ms: 1700000000000,
+                value: 100.0,
+            }],
         };
         let json = serde_json::to_string(&pp).unwrap();
         let back: PortfolioPerformance = serde_json::from_str(&json).unwrap();
@@ -2008,7 +2370,10 @@ mod tests {
             current_var: 4.5,
             max_drawdown_pct: 12.0,
             diversification_benefit_pct: 15.3,
-            var_history: vec![VaRPoint { timestamp_ms: 1700000000000, var_pct: 4.5 }],
+            var_history: vec![VaRPoint {
+                timestamp_ms: 1700000000000,
+                var_pct: 4.5,
+            }],
         };
         let json = serde_json::to_string(&pr).unwrap();
         let back: PortfolioRisk = serde_json::from_str(&json).unwrap();
@@ -2021,8 +2386,20 @@ mod tests {
             ticker: "TPN".to_string(),
             rows: vec![MonthlyReturnRow {
                 year: 2024,
-                months: [Some(1.2), None, Some(-0.5), None, None, None,
-                         None, None, None, None, None, None],
+                months: [
+                    Some(1.2),
+                    None,
+                    Some(-0.5),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
                 year_total: Some(0.7),
             }],
             cagr: 10.5,
@@ -2042,7 +2419,10 @@ mod tests {
     fn darwin_var_history_roundtrip() {
         let vh = DarwinVaRHistory {
             ticker: "TPN".to_string(),
-            points: vec![VaRPoint { timestamp_ms: 1700000000000, var_pct: 4.5 }],
+            points: vec![VaRPoint {
+                timestamp_ms: 1700000000000,
+                var_pct: 4.5,
+            }],
             current_var: 4.5,
             avg_var: 4.0,
             max_var: 6.5,
@@ -2067,8 +2447,12 @@ mod tests {
             ticker: "TPN".to_string(),
             points: vec![DScorePoint {
                 timestamp_ms: 1700000000000,
-                dscore: 65.0, experience: 8.0, risk_stability: 7.5,
-                risk_adjustment: 6.0, performance: 9.0, scalability: 5.0,
+                dscore: 65.0,
+                experience: 8.0,
+                risk_stability: 7.5,
+                risk_adjustment: 6.0,
+                performance: 9.0,
+                scalability: 5.0,
                 market_correlation: 4.0,
             }],
         };
@@ -2102,7 +2486,9 @@ mod tests {
         let update = DarwinWebUpdate {
             snapshots: vec![test_snapshot()],
             correlations: vec![DarwinWebCorrelation {
-                darwin_a: "TPN".into(), darwin_b: "AJT".into(), correlation: 0.42,
+                darwin_a: "TPN".into(),
+                darwin_b: "AJT".into(),
+                correlation: 0.42,
             }],
             correlation_alerts: Vec::new(),
             timestamp_ms: 1700000000000,

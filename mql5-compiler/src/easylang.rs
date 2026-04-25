@@ -22,7 +22,7 @@
 //! EL is case-insensitive; we lowercase identifiers for lookup.
 
 use crate::ir::*;
-use crate::{IndicatorMeta, InputParam, CompileResult, Diagnostic, DiagLevel, DrawType, PlotDef};
+use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, InputParam, PlotDef};
 
 /// Parse EasyLanguage source and produce an IR-based CompileResult.
 pub fn parse_easylang(source: &str) -> CompileResult {
@@ -32,19 +32,32 @@ pub fn parse_easylang(source: &str) -> CompileResult {
         Ok(wasm) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Info,
-                message: format!("EasyLanguage compiled: {} inputs, {} plots",
-                    meta.inputs.len(), meta.plots.len()),
-                line: 0, col: 0,
+                message: format!(
+                    "EasyLanguage compiled: {} inputs, {} plots",
+                    meta.inputs.len(),
+                    meta.plots.len()
+                ),
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: Some(wasm), diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: Some(wasm),
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
         Err(e) => {
             diagnostics.push(Diagnostic {
                 level: DiagLevel::Error,
                 message: format!("EasyLanguage WASM codegen failed: {e}"),
-                line: 0, col: 0,
+                line: 0,
+                col: 0,
             });
-            CompileResult { wasm: None, diagnostics, metadata: Some(meta) }
+            CompileResult {
+                wasm: None,
+                diagnostics,
+                metadata: Some(meta),
+            }
         }
     }
 }
@@ -76,18 +89,22 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             None => raw_line,
         };
         let trimmed = line.trim().trim_end_matches(';');
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
         let lower = trimmed.to_ascii_lowercase();
 
         // Section openers: "inputs:" / "input:" / "variables:" / "vars:"
         if lower.starts_with("inputs:") || lower.starts_with("input:") {
-            in_inputs = true; in_vars = false;
+            in_inputs = true;
+            in_vars = false;
             let after_colon = &trimmed[trimmed.find(':').unwrap_or(0) + 1..];
             parse_el_input_list(after_colon, &mut inputs, &mut meta.inputs);
             continue;
         }
         if lower.starts_with("variables:") || lower.starts_with("vars:") {
-            in_inputs = false; in_vars = true;
+            in_inputs = false;
+            in_vars = true;
             let after_colon = &trimmed[trimmed.find(':').unwrap_or(0) + 1..];
             parse_el_var_list(after_colon, &mut locals);
             continue;
@@ -127,7 +144,8 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
                 if let Some(expr) = parse_el_expr(first.trim()) {
                     // Always pass current-bar (index 0) semantics via IBars for runtime time axis
                     ir_body.push(IrStmt::SetBuffer(plot_idx, IrExpr::IBars, expr));
-                    let label = parts.get(1)
+                    let label = parts
+                        .get(1)
                         .map(|s| s.trim().trim_matches('"').to_string())
                         .unwrap_or_else(|| format!("Plot{}", plot_idx + 1));
                     if meta.plots.iter().all(|p| p.index != plot_idx) {
@@ -149,7 +167,9 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         if let Some(eq_pos) = trimmed.find('=') {
             // Skip comparison operators
             let prev = trimmed[..eq_pos].chars().last();
-            if matches!(prev, Some('!' | '<' | '>' | '=')) { continue; }
+            if matches!(prev, Some('!' | '<' | '>' | '=')) {
+                continue;
+            }
             let lhs = trimmed[..eq_pos].trim();
             let rhs = trimmed[eq_pos + 1..].trim();
             if lhs.is_empty() || !lhs.chars().all(|c| c.is_alphanumeric() || c == '_') {
@@ -158,7 +178,10 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             let lhs_lower = lhs.to_ascii_lowercase();
             if let Some(expr) = parse_el_expr(rhs) {
                 // Auto-declare if not already a local
-                if !locals.iter().any(|(n, _)| n.eq_ignore_ascii_case(&lhs_lower)) {
+                if !locals
+                    .iter()
+                    .any(|(n, _)| n.eq_ignore_ascii_case(&lhs_lower))
+                {
                     locals.push((lhs_lower.clone(), IrType::F64));
                 }
                 ir_body.push(IrStmt::SetLocal(lhs_lower, expr));
@@ -193,32 +216,38 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
 
 /// If the (lowercased) line starts with "plot<N>(", return (index, original-case prefix+rest).
 fn el_plot_prefix(lower: &str) -> Option<(usize, &str)> {
-    if !lower.starts_with("plot") { return None; }
+    if !lower.starts_with("plot") {
+        return None;
+    }
     let after = &lower[4..];
     let num_end = after.find('(')?;
     let num: usize = after[..num_end].parse().ok()?;
-    if num == 0 { return None; }
+    if num == 0 {
+        return None;
+    }
     // Return (0-based index, the "plotN(...)" slice itself)
     Some((num - 1, lower.get(4 + num_end..)?))
 }
 
 /// Parse a comma-separated list of `Name(default)` pairs as typed inputs.
 /// EL syntax: `Length(14), Source(Close), Multiplier(2.0)`
-fn parse_el_input_list(
-    list: &str,
-    inputs: &mut Vec<IrInput>,
-    meta_inputs: &mut Vec<InputParam>,
-) {
+fn parse_el_input_list(list: &str, inputs: &mut Vec<IrInput>, meta_inputs: &mut Vec<InputParam>) {
     let list = list.trim().trim_end_matches(';').trim_end_matches(',');
-    if list.is_empty() { return; }
+    if list.is_empty() {
+        return;
+    }
     for item in split_top_level_commas(list) {
         let item = item.trim();
-        if item.is_empty() { continue; }
+        if item.is_empty() {
+            continue;
+        }
         // item: "Length(14)" or "Source(Close)"
         if let Some(open) = item.find('(') {
             let name = item[..open].trim().to_string();
             let default_str = item[open + 1..].trim_end_matches(')').trim();
-            if name.is_empty() { continue; }
+            if name.is_empty() {
+                continue;
+            }
             // Try int first, then float, else string
             let (ty, val) = if let Ok(i) = default_str.parse::<i32>() {
                 (IrType::I32, IrValue::I32(i))
@@ -228,7 +257,11 @@ fn parse_el_input_list(
                 // Series reference ("Close", "High", etc.) — default to 0.0
                 (IrType::F64, IrValue::F64(0.0))
             };
-            let param_type = match ty { IrType::I32 => "int", IrType::F64 => "float", _ => "string" };
+            let param_type = match ty {
+                IrType::I32 => "int",
+                IrType::F64 => "float",
+                _ => "string",
+            };
             inputs.push(IrInput {
                 name: name.to_ascii_lowercase(),
                 ir_type: ty,
@@ -246,10 +279,14 @@ fn parse_el_input_list(
 /// Parse a comma-separated list of `Name(initial)` pairs as local variables.
 fn parse_el_var_list(list: &str, locals: &mut Vec<(String, IrType)>) {
     let list = list.trim().trim_end_matches(';').trim_end_matches(',');
-    if list.is_empty() { return; }
+    if list.is_empty() {
+        return;
+    }
     for item in split_top_level_commas(list) {
         let item = item.trim();
-        if item.is_empty() { continue; }
+        if item.is_empty() {
+            continue;
+        }
         let name = if let Some(open) = item.find('(') {
             item[..open].trim().to_string()
         } else {
@@ -264,7 +301,9 @@ fn parse_el_var_list(list: &str, locals: &mut Vec<(String, IrType)>) {
 /// Parse an EL expression into IR.
 pub(crate) fn parse_el_expr(expr: &str) -> Option<IrExpr> {
     let expr = expr.trim().trim_end_matches(';').trim();
-    if expr.is_empty() { return None; }
+    if expr.is_empty() {
+        return None;
+    }
 
     // Parenthesised expression
     if expr.starts_with('(') && expr.ends_with(')') {
@@ -284,9 +323,9 @@ pub(crate) fn parse_el_expr(expr: &str) -> Option<IrExpr> {
     // Built-in series (case-insensitive)
     match lower.as_str() {
         "close" | "c" => return Some(IrExpr::IClose(Box::new(IrExpr::I32Const(0)))),
-        "open"  | "o" => return Some(IrExpr::IOpen(Box::new(IrExpr::I32Const(0)))),
-        "high"  | "h" => return Some(IrExpr::IHigh(Box::new(IrExpr::I32Const(0)))),
-        "low"   | "l" => return Some(IrExpr::ILow(Box::new(IrExpr::I32Const(0)))),
+        "open" | "o" => return Some(IrExpr::IOpen(Box::new(IrExpr::I32Const(0)))),
+        "high" | "h" => return Some(IrExpr::IHigh(Box::new(IrExpr::I32Const(0)))),
+        "low" | "l" => return Some(IrExpr::ILow(Box::new(IrExpr::I32Const(0)))),
         "volume" | "v" => return Some(IrExpr::IVolume(Box::new(IrExpr::I32Const(0)))),
         "currentbar" | "barnumber" => return Some(IrExpr::IBars),
         _ => {}
@@ -299,22 +338,21 @@ pub(crate) fn parse_el_expr(expr: &str) -> Option<IrExpr> {
             let func = &lower[..open];
             let args_str = &expr[open + 1..expr.len() - 1];
             let args_parts: Vec<&str> = split_top_level_commas(args_str);
-            let ir_args: Option<Vec<IrExpr>> = args_parts.iter()
-                .map(|a| parse_el_expr(a.trim()))
-                .collect();
+            let ir_args: Option<Vec<IrExpr>> =
+                args_parts.iter().map(|a| parse_el_expr(a.trim())).collect();
             if let Some(ir_args) = ir_args {
                 // Map EL func names to IR calls the runtime knows about.
                 let mapped: Option<&str> = match func {
                     "average" | "avg" | "sma" => Some("ta_sma"),
                     "xaverage" | "ema" => Some("ta_ema"),
-                    "rsi"       => Some("ta_rsi"),
-                    "atr"       => Some("ta_atr"),
-                    "highest"   => Some("ta_highest"),
-                    "lowest"    => Some("ta_lowest"),
+                    "rsi" => Some("ta_rsi"),
+                    "atr" => Some("ta_atr"),
+                    "highest" => Some("ta_highest"),
+                    "lowest" => Some("ta_lowest"),
                     "stddev" | "standarddev" => Some("ta_stdev"),
                     "absvalue" | "absolute" | "abs" => Some("math_abs"),
                     "squareroot" | "sqrt" => Some("math_sqrt"),
-                    "log"       => Some("math_log"),
+                    "log" => Some("math_log"),
                     "maxlist" | "maximum" | "max" => Some("math_max"),
                     "minlist" | "minimum" | "min" => Some("math_min"),
                     _ => None,
@@ -327,7 +365,9 @@ pub(crate) fn parse_el_expr(expr: &str) -> Option<IrExpr> {
     }
 
     // Binary operators (left-to-right, no precedence — same as pine.rs)
-    for op_str in &[" + ", " - ", " * ", " / ", " > ", " < ", " >= ", " <= ", " = ", " <> "] {
+    for op_str in &[
+        " + ", " - ", " * ", " / ", " > ", " < ", " >= ", " <= ", " = ", " <> ",
+    ] {
         if let Some(pos) = expr.find(op_str) {
             let left = parse_el_expr(&expr[..pos])?;
             let right = parse_el_expr(&expr[pos + op_str.len()..])?;
@@ -340,9 +380,9 @@ pub(crate) fn parse_el_expr(expr: &str) -> Option<IrExpr> {
                 " < " => IrBinOp::LtF64,
                 " >= " => IrBinOp::GeF64,
                 " <= " => IrBinOp::LeF64,
-                " = "  => IrBinOp::EqF64,
+                " = " => IrBinOp::EqF64,
                 " <> " => IrBinOp::NeF64,
-                _      => IrBinOp::AddF64,
+                _ => IrBinOp::AddF64,
             };
             return Some(IrExpr::BinOp(ir_op, Box::new(left), Box::new(right)));
         }
@@ -363,8 +403,16 @@ fn strip_brace_comments(src: &str) -> String {
     for ch in src.chars() {
         match ch {
             '{' => depth += 1,
-            '}' => if depth > 0 { depth -= 1 },
-            _ => if depth == 0 { out.push(ch); }
+            '}' => {
+                if depth > 0 {
+                    depth -= 1
+                }
+            }
+            _ => {
+                if depth == 0 {
+                    out.push(ch);
+                }
+            }
         }
     }
     out

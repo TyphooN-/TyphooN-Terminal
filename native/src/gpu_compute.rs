@@ -928,7 +928,12 @@ impl GpuCompute {
     }
 
     /// Compute TRIX on GPU from close prices. Output: [line, signal, hist] × bar_count.
-    pub fn compute_trix_gpu(&self, closes: &[f32], period: u32, signal_period: u32) -> Option<Vec<f32>> {
+    pub fn compute_trix_gpu(
+        &self,
+        closes: &[f32],
+        period: u32,
+        signal_period: u32,
+    ) -> Option<Vec<f32>> {
         if closes.len() != self.bar_count as usize {
             return None;
         }
@@ -953,7 +958,12 @@ impl GpuCompute {
     }
 
     /// Compute Ultimate Oscillator on GPU from interleaved [high, low, close] data.
-    pub fn compute_ultosc_gpu(&self, highs: &[f32], lows: &[f32], closes: &[f32]) -> Option<Vec<f32>> {
+    pub fn compute_ultosc_gpu(
+        &self,
+        highs: &[f32],
+        lows: &[f32],
+        closes: &[f32],
+    ) -> Option<Vec<f32>> {
         if highs.len() != closes.len()
             || lows.len() != closes.len()
             || closes.len() != self.bar_count as usize

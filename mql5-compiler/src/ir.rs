@@ -5,7 +5,7 @@
 
 use crate::ast::*;
 use crate::error::CompileError;
-use crate::{IndicatorMeta, InputParam, DrawType};
+use crate::{DrawType, IndicatorMeta, InputParam};
 
 /// IR module — ready for WASM codegen.
 #[derive(Debug)]
@@ -37,12 +37,20 @@ pub struct IrInput {
 
 #[derive(Debug, Clone)]
 pub enum IrType {
-    I32, I64, F64, Bool, String,
+    I32,
+    I64,
+    F64,
+    Bool,
+    String,
 }
 
 #[derive(Debug, Clone)]
 pub enum IrValue {
-    I32(i32), I64(i64), F64(f64), Bool(bool), String(String),
+    I32(i32),
+    I64(i64),
+    F64(f64),
+    Bool(bool),
+    String(String),
 }
 
 #[derive(Debug)]
@@ -67,8 +75,14 @@ pub enum IrStmt {
     SetGlobal(String, IrExpr),
     SetBuffer(usize, IrExpr, IrExpr), // buffer_idx, bar_idx, value
     Return(Option<IrExpr>),
-    If { cond: IrExpr, then: Vec<IrStmt>, else_: Vec<IrStmt> },
-    Loop { body: Vec<IrStmt> },
+    If {
+        cond: IrExpr,
+        then: Vec<IrStmt>,
+        else_: Vec<IrStmt>,
+    },
+    Loop {
+        body: Vec<IrStmt>,
+    },
     Break,
     Continue,
     Expr(IrExpr),
@@ -83,7 +97,7 @@ pub enum IrExpr {
     GetGlobal(String),
     GetBuffer(usize, Box<IrExpr>), // buffer_idx, bar_idx
     // Bar data access (runtime imports)
-    IOpen(Box<IrExpr>),   // shift
+    IOpen(Box<IrExpr>), // shift
     IHigh(Box<IrExpr>),
     ILow(Box<IrExpr>),
     IClose(Box<IrExpr>),
@@ -100,16 +114,36 @@ pub enum IrExpr {
 
 #[derive(Debug)]
 pub enum IrBinOp {
-    AddF64, SubF64, MulF64, DivF64,
-    AddI32, SubI32, MulI32, DivI32, ModI32,
-    EqF64, NeF64, LtF64, LeF64, GtF64, GeF64,
-    EqI32, NeI32, LtI32, LeI32, GtI32, GeI32,
-    And, Or,
+    AddF64,
+    SubF64,
+    MulF64,
+    DivF64,
+    AddI32,
+    SubI32,
+    MulI32,
+    DivI32,
+    ModI32,
+    EqF64,
+    NeF64,
+    LtF64,
+    LeF64,
+    GtF64,
+    GeF64,
+    EqI32,
+    NeI32,
+    LtI32,
+    LeI32,
+    GtI32,
+    GeI32,
+    And,
+    Or,
 }
 
 #[derive(Debug)]
 pub enum IrUnaryOp {
-    NegF64, NegI32, Not,
+    NegF64,
+    NegI32,
+    Not,
 }
 
 /// Extract indicator metadata from AST (before full lowering).
@@ -124,29 +158,31 @@ pub fn extract_metadata(program: &Program) -> IndicatorMeta {
 
     for item in &program.items {
         match item {
-            TopLevel::Property(prop) => {
-                match prop.name.as_str() {
-                    "indicator_shortname" => {
-                        if let Expr::StringLit(s) = &prop.value {
-                            meta.short_name = s.clone();
-                        }
+            TopLevel::Property(prop) => match prop.name.as_str() {
+                "indicator_shortname" => {
+                    if let Expr::StringLit(s) = &prop.value {
+                        meta.short_name = s.clone();
                     }
-                    "indicator_separate_window" => {
-                        meta.separate_window = true;
-                    }
-                    "indicator_buffers" => {
-                        if let Expr::IntLit(n) = &prop.value {
-                            meta.buffers = *n as usize;
-                        }
-                    }
-                    _ => {}
                 }
-            }
+                "indicator_separate_window" => {
+                    meta.separate_window = true;
+                }
+                "indicator_buffers" => {
+                    if let Expr::IntLit(n) = &prop.value {
+                        meta.buffers = *n as usize;
+                    }
+                }
+                _ => {}
+            },
             TopLevel::Input(input) => {
                 meta.inputs.push(InputParam {
                     name: input.name.clone(),
                     param_type: input.type_name.clone(),
-                    default_value: input.default.as_ref().map(|e| format!("{e:?}")).unwrap_or_default(),
+                    default_value: input
+                        .default
+                        .as_ref()
+                        .map(|e| format!("{e:?}"))
+                        .unwrap_or_default(),
                 });
             }
             _ => {}
@@ -173,7 +209,9 @@ pub fn lower(program: &Program) -> Result<IrModule, Vec<CompileError>> {
         match item {
             TopLevel::Input(input) => {
                 let ir_type = mql5_type_to_ir(&input.type_name);
-                let default = input.default.as_ref()
+                let default = input
+                    .default
+                    .as_ref()
                     .map(|e| expr_to_ir_value(e))
                     .unwrap_or(IrValue::F64(0.0));
                 module.inputs.push(IrInput {
@@ -200,28 +238,20 @@ pub fn lower(program: &Program) -> Result<IrModule, Vec<CompileError>> {
                     });
                 }
             }
-            TopLevel::Function(func) => {
-                match func.name.as_str() {
-                    "OnCalculate" => {
-                        match lower_function(func) {
-                            Ok(ir_func) => module.on_calculate = Some(ir_func),
-                            Err(e) => errors.push(e),
-                        }
-                    }
-                    "OnInit" => {
-                        match lower_function(func) {
-                            Ok(ir_func) => module.on_init = Some(ir_func),
-                            Err(e) => errors.push(e),
-                        }
-                    }
-                    _ => {
-                        match lower_function(func) {
-                            Ok(ir_func) => module.functions.push(ir_func),
-                            Err(e) => errors.push(e),
-                        }
-                    }
-                }
-            }
+            TopLevel::Function(func) => match func.name.as_str() {
+                "OnCalculate" => match lower_function(func) {
+                    Ok(ir_func) => module.on_calculate = Some(ir_func),
+                    Err(e) => errors.push(e),
+                },
+                "OnInit" => match lower_function(func) {
+                    Ok(ir_func) => module.on_init = Some(ir_func),
+                    Err(e) => errors.push(e),
+                },
+                _ => match lower_function(func) {
+                    Ok(ir_func) => module.functions.push(ir_func),
+                    Err(e) => errors.push(e),
+                },
+            },
             _ => {}
         }
     }
@@ -255,7 +285,9 @@ fn expr_to_ir_value(expr: &Expr) -> IrValue {
 
 fn lower_function(func: &FunctionDef) -> Result<IrFunction, CompileError> {
     let return_type = mql5_type_to_ir(&func.return_type);
-    let params: Vec<(String, IrType)> = func.params.iter()
+    let params: Vec<(String, IrType)> = func
+        .params
+        .iter()
         .map(|p| (p.name.clone(), mql5_type_to_ir(&p.type_name)))
         .collect();
 
@@ -271,7 +303,10 @@ fn lower_function(func: &FunctionDef) -> Result<IrFunction, CompileError> {
     })
 }
 
-fn lower_stmts(stmts: &[Stmt], locals: &mut Vec<(String, IrType)>) -> Result<Vec<IrStmt>, CompileError> {
+fn lower_stmts(
+    stmts: &[Stmt],
+    locals: &mut Vec<(String, IrType)>,
+) -> Result<Vec<IrStmt>, CompileError> {
     let mut result = Vec::new();
     for stmt in stmts {
         result.push(lower_stmt(stmt, locals)?);
@@ -295,13 +330,29 @@ fn lower_stmt(stmt: &Stmt, locals: &mut Vec<(String, IrType)>) -> Result<IrStmt,
             let ir_expr = expr.as_ref().map(|e| lower_expr(e)).transpose()?;
             Ok(IrStmt::Return(ir_expr))
         }
-        Stmt::If { cond, then, else_, .. } => {
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
             let ir_cond = lower_expr(cond)?;
             let ir_then = lower_stmts(then, locals)?;
-            let ir_else = else_.as_ref().map(|e| lower_stmts(e, locals)).transpose()?.unwrap_or_default();
-            Ok(IrStmt::If { cond: ir_cond, then: ir_then, else_: ir_else })
+            let ir_else = else_
+                .as_ref()
+                .map(|e| lower_stmts(e, locals))
+                .transpose()?
+                .unwrap_or_default();
+            Ok(IrStmt::If {
+                cond: ir_cond,
+                then: ir_then,
+                else_: ir_else,
+            })
         }
-        Stmt::For { init, cond, step, body, .. } => {
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
             // Lower for-loop to a while-loop equivalent
             let mut loop_body = lower_stmts(body, locals)?;
             if let Some(step_expr) = step {
@@ -353,7 +404,12 @@ fn lower_stmt(stmt: &Stmt, locals: &mut Vec<(String, IrType)>) -> Result<IrStmt,
             });
             Ok(IrStmt::Loop { body: loop_body })
         }
-        Stmt::Switch { expr, cases, default, .. } => {
+        Stmt::Switch {
+            expr,
+            cases,
+            default,
+            ..
+        } => {
             // Lower switch to chained if-else
             let switch_val = lower_expr(expr)?;
             let switch_local = format!("__switch_{}", locals.len());
@@ -437,10 +493,13 @@ fn lower_expr(expr: &Expr) -> Result<IrExpr, CompileError> {
             match target.as_ref() {
                 Expr::Ident(name) => {
                     // Emit as a special __assign call: codegen emits tee_local (set + return value)
-                    Ok(IrExpr::Call("__assign".into(), vec![
-                        IrExpr::GetLocal(name.clone()), // marker for which local
-                        ir_value,
-                    ]))
+                    Ok(IrExpr::Call(
+                        "__assign".into(),
+                        vec![
+                            IrExpr::GetLocal(name.clone()), // marker for which local
+                            ir_value,
+                        ],
+                    ))
                 }
                 Expr::Index { array: _, index } => {
                     // Buffer assignment: array[index] = value
@@ -453,55 +512,65 @@ fn lower_expr(expr: &Expr) -> Result<IrExpr, CompileError> {
         }
         Expr::Call { func, args } => {
             // Map MQL5 built-in functions to IR
-            let ir_args: Vec<IrExpr> = args.iter().map(|a| lower_expr(a)).collect::<Result<_, _>>()?;
+            let ir_args: Vec<IrExpr> = args
+                .iter()
+                .map(|a| lower_expr(a))
+                .collect::<Result<_, _>>()?;
             match func.as_str() {
                 "iOpen" if !ir_args.is_empty() => {
-                    let last = ir_args.into_iter().last()
-                        .ok_or_else(|| CompileError::Internal("expected arg after !is_empty guard".into()))?;
+                    let last = ir_args.into_iter().last().ok_or_else(|| {
+                        CompileError::Internal("expected arg after !is_empty guard".into())
+                    })?;
                     Ok(IrExpr::IOpen(Box::new(last)))
                 }
                 "iHigh" if !ir_args.is_empty() => {
-                    let last = ir_args.into_iter().last()
-                        .ok_or_else(|| CompileError::Internal("expected arg after !is_empty guard".into()))?;
+                    let last = ir_args.into_iter().last().ok_or_else(|| {
+                        CompileError::Internal("expected arg after !is_empty guard".into())
+                    })?;
                     Ok(IrExpr::IHigh(Box::new(last)))
                 }
                 "iLow" if !ir_args.is_empty() => {
-                    let last = ir_args.into_iter().last()
-                        .ok_or_else(|| CompileError::Internal("expected arg after !is_empty guard".into()))?;
+                    let last = ir_args.into_iter().last().ok_or_else(|| {
+                        CompileError::Internal("expected arg after !is_empty guard".into())
+                    })?;
                     Ok(IrExpr::ILow(Box::new(last)))
                 }
                 "iClose" if !ir_args.is_empty() => {
-                    let last = ir_args.into_iter().last()
-                        .ok_or_else(|| CompileError::Internal("expected arg after !is_empty guard".into()))?;
+                    let last = ir_args.into_iter().last().ok_or_else(|| {
+                        CompileError::Internal("expected arg after !is_empty guard".into())
+                    })?;
                     Ok(IrExpr::IClose(Box::new(last)))
                 }
                 "iVolume" if !ir_args.is_empty() => {
-                    let last = ir_args.into_iter().last()
-                        .ok_or_else(|| CompileError::Internal("expected arg after !is_empty guard".into()))?;
+                    let last = ir_args.into_iter().last().ok_or_else(|| {
+                        CompileError::Internal("expected arg after !is_empty guard".into())
+                    })?;
                     Ok(IrExpr::IVolume(Box::new(last)))
                 }
                 "iBars" => Ok(IrExpr::IBars),
                 "MathMax" if ir_args.len() == 2 => {
                     let mut it = ir_args.into_iter();
-                    let a = it.next().ok_or_else(|| CompileError::Internal("expected 2 args after len==2 guard".into()))?;
-                    let b = it.next().ok_or_else(|| CompileError::Internal("expected 2 args after len==2 guard".into()))?;
+                    let a = it.next().ok_or_else(|| {
+                        CompileError::Internal("expected 2 args after len==2 guard".into())
+                    })?;
+                    let b = it.next().ok_or_else(|| {
+                        CompileError::Internal("expected 2 args after len==2 guard".into())
+                    })?;
                     Ok(IrExpr::Call("math_max".into(), vec![a, b]))
                 }
                 "MathMin" if ir_args.len() == 2 => {
                     let mut it = ir_args.into_iter();
-                    let a = it.next().ok_or_else(|| CompileError::Internal("MathMin: expected 2 args".into()))?;
-                    let b = it.next().ok_or_else(|| CompileError::Internal("MathMin: expected 2 args".into()))?;
+                    let a = it
+                        .next()
+                        .ok_or_else(|| CompileError::Internal("MathMin: expected 2 args".into()))?;
+                    let b = it
+                        .next()
+                        .ok_or_else(|| CompileError::Internal("MathMin: expected 2 args".into()))?;
                     Ok(IrExpr::Call("math_min".into(), vec![a, b]))
                 }
-                "MathAbs" if ir_args.len() == 1 => {
-                    Ok(IrExpr::Call("math_abs".into(), ir_args))
-                }
-                "MathSqrt" if ir_args.len() == 1 => {
-                    Ok(IrExpr::Call("math_sqrt".into(), ir_args))
-                }
-                "MathLog" if ir_args.len() == 1 => {
-                    Ok(IrExpr::Call("math_log".into(), ir_args))
-                }
+                "MathAbs" if ir_args.len() == 1 => Ok(IrExpr::Call("math_abs".into(), ir_args)),
+                "MathSqrt" if ir_args.len() == 1 => Ok(IrExpr::Call("math_sqrt".into(), ir_args)),
+                "MathLog" if ir_args.len() == 1 => Ok(IrExpr::Call("math_log".into(), ir_args)),
                 _ => Ok(IrExpr::Call(func.clone(), ir_args)),
             }
         }
@@ -529,8 +598,12 @@ mod tests {
     #[test]
     fn ir_module_empty() {
         let m = IrModule {
-            buffers: vec![], inputs: vec![], functions: vec![],
-            on_calculate: None, on_init: None, globals: vec![],
+            buffers: vec![],
+            inputs: vec![],
+            functions: vec![],
+            on_calculate: None,
+            on_init: None,
+            globals: vec![],
         };
         assert!(m.buffers.is_empty());
         assert!(m.on_calculate.is_none());
@@ -538,7 +611,13 @@ mod tests {
 
     #[test]
     fn ir_type_variants() {
-        let types = [IrType::I32, IrType::I64, IrType::F64, IrType::Bool, IrType::String];
+        let types = [
+            IrType::I32,
+            IrType::I64,
+            IrType::F64,
+            IrType::Bool,
+            IrType::String,
+        ];
         assert_eq!(types.len(), 5);
     }
 
@@ -555,9 +634,21 @@ mod tests {
     fn extract_metadata_with_properties() {
         let p = Program {
             items: vec![
-                TopLevel::Property(Property { name: "indicator_separate_window".into(), value: Expr::IntLit(1), line: 1 }),
-                TopLevel::Property(Property { name: "indicator_buffers".into(), value: Expr::IntLit(3), line: 2 }),
-                TopLevel::Property(Property { name: "indicator_shortname".into(), value: Expr::StringLit("Test".into()), line: 3 }),
+                TopLevel::Property(Property {
+                    name: "indicator_separate_window".into(),
+                    value: Expr::IntLit(1),
+                    line: 1,
+                }),
+                TopLevel::Property(Property {
+                    name: "indicator_buffers".into(),
+                    value: Expr::IntLit(3),
+                    line: 2,
+                }),
+                TopLevel::Property(Property {
+                    name: "indicator_shortname".into(),
+                    value: Expr::StringLit("Test".into()),
+                    line: 3,
+                }),
             ],
         };
         let meta = extract_metadata(&p);
@@ -569,9 +660,12 @@ mod tests {
     #[test]
     fn extract_metadata_with_inputs() {
         let p = Program {
-            items: vec![
-                TopLevel::Input(InputDecl { type_name: "int".into(), name: "Period".into(), default: Some(Expr::IntLit(14)), line: 1 }),
-            ],
+            items: vec![TopLevel::Input(InputDecl {
+                type_name: "int".into(),
+                name: "Period".into(),
+                default: Some(Expr::IntLit(14)),
+                line: 1,
+            })],
         };
         let meta = extract_metadata(&p);
         assert_eq!(meta.inputs.len(), 1);

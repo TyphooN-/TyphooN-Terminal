@@ -12,14 +12,13 @@ pub fn is_valid_symbol(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= MAX_SYMBOL_LEN
         && !s.contains("..")
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '/' || c == '_')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '/' || c == '_')
 }
 
 /// Validate a timeframe string: alphanumeric only, bounded length.
 pub fn is_valid_timeframe(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= MAX_TIMEFRAME_LEN
-        && s.chars().all(|c| c.is_ascii_alphanumeric())
+    !s.is_empty() && s.len() <= MAX_TIMEFRAME_LEN && s.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 /// Maximum order quantity (prevents typos like 1000000 lots).
@@ -40,9 +39,21 @@ pub fn is_valid_order_side(s: &str) -> bool {
 pub fn is_valid_order_type(s: &str) -> bool {
     matches!(
         s,
-        "market" | "limit" | "stop" | "stop_limit" | "trailing_stop"
-        | "MARKET" | "LIMIT" | "STOP" | "STOP_LIMIT" | "TRAILING_STOP"
-        | "Market" | "Limit" | "Stop" | "StopLimit" | "TrailingStop"
+        "market"
+            | "limit"
+            | "stop"
+            | "stop_limit"
+            | "trailing_stop"
+            | "MARKET"
+            | "LIMIT"
+            | "STOP"
+            | "STOP_LIMIT"
+            | "TRAILING_STOP"
+            | "Market"
+            | "Limit"
+            | "Stop"
+            | "StopLimit"
+            | "TrailingStop"
     )
 }
 
@@ -55,8 +66,7 @@ pub fn is_valid_order_qty(q: f64) -> bool {
 pub fn is_valid_risk_mode(s: &str) -> bool {
     matches!(
         s,
-        "standard" | "fixed" | "dynamic" | "var"
-        | "Standard" | "Fixed" | "Dynamic" | "VaR" | "VAR"
+        "standard" | "fixed" | "dynamic" | "var" | "Standard" | "Fixed" | "Dynamic" | "VaR" | "VAR"
     )
 }
 
@@ -70,16 +80,15 @@ pub fn is_valid_alert_condition(s: &str) -> bool {
 
 /// Validate an indicator name: alphanumeric + underscores, bounded.
 pub fn is_valid_indicator_name(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 32
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    !s.is_empty() && s.len() <= 32 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Validate an alert ID: alphanumeric + dashes + underscores, bounded.
 pub fn is_valid_alert_id(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 // ── Client → Server ─────────────────────────────────────────────────
@@ -87,12 +96,19 @@ pub fn is_valid_alert_id(s: &str) -> bool {
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum WebCmd {
     /// First message must be Auth with passphrase.
-    Auth { passphrase: String },
+    Auth {
+        passphrase: String,
+    },
     GetAccount,
     GetPositions,
     GetOrders,
-    GetWatchlistQuotes { symbols: Vec<String> },
-    GetBars { symbol: String, timeframe: String },
+    GetWatchlistQuotes {
+        symbols: Vec<String>,
+    },
+    GetBars {
+        symbol: String,
+        timeframe: String,
+    },
     GetMarketClock,
     Ping,
 
@@ -103,52 +119,70 @@ pub enum WebCmd {
     PlaceOrder {
         symbol: String,
         qty: f64,
-        side: String,        // "buy" | "sell"
-        order_type: String,  // "market" | "limit" | "stop" | "trailing_stop"
+        side: String,       // "buy" | "sell"
+        order_type: String, // "market" | "limit" | "stop" | "trailing_stop"
         limit_price: Option<f64>,
         stop_price: Option<f64>,
-        broker: String,      // "alpaca" | "tastytrade"
+        broker: String, // "alpaca" | "tastytrade"
         // ── ADR-092: bracket + trailing + risk mode extensions ──
         take_profit: Option<f64>,
         stop_loss: Option<f64>,
         trail_percent: Option<f64>,
         trail_offset: Option<f64>,
-        risk_mode: Option<String>,  // "standard" | "fixed" | "dynamic" | "var"
+        risk_mode: Option<String>, // "standard" | "fixed" | "dynamic" | "var"
         risk_pct: Option<f64>,
     },
     /// Cancel an open order by broker order ID.
-    CancelOrder { order_id: String, broker: String },
+    CancelOrder {
+        order_id: String,
+        broker: String,
+    },
     /// Close an open position at market.
-    ClosePosition { symbol: String, broker: String },
+    ClosePosition {
+        symbol: String,
+        broker: String,
+    },
 
     // ── ADR-092: server-computed indicators ──
     /// Request indicator values computed on the server (GPU).
     GetIndicators {
         symbol: String,
         timeframe: String,
-        indicators: Vec<String>,  // e.g. ["SMA_200", "RSI_14", "EMA_21"]
+        indicators: Vec<String>, // e.g. ["SMA_200", "RSI_14", "EMA_21"]
     },
 
     // ── ADR-092: alerts ──
     CreateAlert {
         symbol: String,
-        condition: String,  // "crosses_above" | "crosses_below" | "reaches"
+        condition: String, // "crosses_above" | "crosses_below" | "reaches"
         price: f64,
         message: String,
     },
-    DeleteAlert { alert_id: String },
+    DeleteAlert {
+        alert_id: String,
+    },
     ListAlerts,
 
     // ── ADR-092: news ──
-    GetNews { symbol: Option<String> },
+    GetNews {
+        symbol: Option<String>,
+    },
 
     // ── ADR-092: subscribe to push updates for a symbol ──
-    Subscribe { symbol: String, timeframe: String },
-    Unsubscribe { symbol: String, timeframe: String },
+    Subscribe {
+        symbol: String,
+        timeframe: String,
+    },
+    Unsubscribe {
+        symbol: String,
+        timeframe: String,
+    },
 
     // ── ADR-093: live DARWIN web data ──
     /// Request live DARWIN web snapshots. None = all managed DARWINs.
-    GetDarwinWeb { ticker: Option<String> },
+    GetDarwinWeb {
+        ticker: Option<String>,
+    },
 }
 
 // ── Server → Client ─────────────────────────────────────────────────
@@ -156,25 +190,40 @@ pub enum WebCmd {
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum WebMsg {
     /// Authentication result.
-    AuthResult { ok: bool },
+    AuthResult {
+        ok: bool,
+    },
     Account(AccountSnapshot),
-    Positions { items: Vec<PositionSnapshot> },
-    Orders { items: Vec<OrderSnapshot> },
-    WatchlistQuotes { items: Vec<QuoteSnapshot> },
+    Positions {
+        items: Vec<PositionSnapshot>,
+    },
+    Orders {
+        items: Vec<OrderSnapshot>,
+    },
+    WatchlistQuotes {
+        items: Vec<QuoteSnapshot>,
+    },
     Bars {
         symbol: String,
         timeframe: String,
         bars: Vec<BarData>,
     },
-    MarketClock { info: String },
+    MarketClock {
+        info: String,
+    },
     QuoteTick {
         symbol: String,
         bid: f64,
         ask: f64,
     },
     /// Reply to PlaceOrder / CancelOrder / ClosePosition. Non-error feedback.
-    OrderResult { ok: bool, message: String },
-    Error { msg: String },
+    OrderResult {
+        ok: bool,
+        message: String,
+    },
+    Error {
+        msg: String,
+    },
     Pong,
 
     // ── ADR-092: push updates ──
@@ -185,7 +234,9 @@ pub enum WebMsg {
         bar: BarData,
     },
     /// Pushed when positions change (fill, close, etc.).
-    PositionUpdate { items: Vec<PositionSnapshot> },
+    PositionUpdate {
+        items: Vec<PositionSnapshot>,
+    },
     /// Pushed when account snapshot changes.
     AccountUpdate(AccountSnapshot),
 
@@ -203,10 +254,14 @@ pub enum WebMsg {
         symbol: String,
         message: String,
     },
-    AlertList { items: Vec<AlertSnapshot> },
+    AlertList {
+        items: Vec<AlertSnapshot>,
+    },
 
     // ── ADR-092: news ──
-    NewsFeed { items: Vec<NewsItem> },
+    NewsFeed {
+        items: Vec<NewsItem>,
+    },
 
     // ── ADR-093: live DARWIN web data ──
     /// Live DARWIN snapshots + correlation data from web scrape.
@@ -507,12 +562,19 @@ mod tests {
     #[test]
     fn webcmd_serde_roundtrip() {
         let cmds = vec![
-            WebCmd::Auth { passphrase: "test123".into() },
+            WebCmd::Auth {
+                passphrase: "test123".into(),
+            },
             WebCmd::GetAccount,
             WebCmd::GetPositions,
             WebCmd::GetOrders,
-            WebCmd::GetWatchlistQuotes { symbols: vec!["AAPL".into(), "MSFT".into()] },
-            WebCmd::GetBars { symbol: "XAUUSD".into(), timeframe: "1Day".into() },
+            WebCmd::GetWatchlistQuotes {
+                symbols: vec!["AAPL".into(), "MSFT".into()],
+            },
+            WebCmd::GetBars {
+                symbol: "XAUUSD".into(),
+                timeframe: "1Day".into(),
+            },
             WebCmd::GetMarketClock,
             WebCmd::Ping,
         ];
@@ -528,18 +590,30 @@ mod tests {
         let msgs = vec![
             WebMsg::AuthResult { ok: true },
             WebMsg::Account(AccountSnapshot {
-                equity: 10000.0, cash: 5000.0, buying_power: 20000.0,
-                portfolio_value: 10000.0, unrealized_pl: 500.0,
-                initial_margin: 2000.0, maintenance_margin: 1000.0,
+                equity: 10000.0,
+                cash: 5000.0,
+                buying_power: 20000.0,
+                portfolio_value: 10000.0,
+                unrealized_pl: 500.0,
+                initial_margin: 2000.0,
+                maintenance_margin: 1000.0,
                 currency: "USD".into(),
             }),
-            WebMsg::Positions { items: vec![PositionSnapshot {
-                symbol: "AAPL".into(), qty: 10.0, side: "long".into(),
-                avg_entry_price: 150.0, market_value: 1600.0,
-                unrealized_pl: 100.0, asset_class: "us_equity".into(),
-            }] },
+            WebMsg::Positions {
+                items: vec![PositionSnapshot {
+                    symbol: "AAPL".into(),
+                    qty: 10.0,
+                    side: "long".into(),
+                    avg_entry_price: 150.0,
+                    market_value: 1600.0,
+                    unrealized_pl: 100.0,
+                    asset_class: "us_equity".into(),
+                }],
+            },
             WebMsg::Pong,
-            WebMsg::Error { msg: "test error".into() },
+            WebMsg::Error {
+                msg: "test error".into(),
+            },
         ];
         for msg in msgs {
             let json = serde_json::to_string(&msg).unwrap();
@@ -602,13 +676,15 @@ mod tests {
     #[test]
     fn timeframe_boundary_length() {
         assert!(is_valid_timeframe("A".repeat(MAX_TIMEFRAME_LEN).as_str()));
-        assert!(!is_valid_timeframe("A".repeat(MAX_TIMEFRAME_LEN + 1).as_str()));
+        assert!(!is_valid_timeframe(
+            "A".repeat(MAX_TIMEFRAME_LEN + 1).as_str()
+        ));
     }
 
     #[test]
     fn symbol_rejects_unicode() {
         assert!(!is_valid_symbol("AAPL\u{200B}")); // zero-width space
-        assert!(!is_valid_symbol("A\u{00E9}PL"));  // accented e
+        assert!(!is_valid_symbol("A\u{00E9}PL")); // accented e
     }
 
     #[test]
@@ -623,7 +699,9 @@ mod tests {
 
     #[test]
     fn auth_cmd_roundtrip() {
-        let cmd = WebCmd::Auth { passphrase: "s3cr3t!@#$%".into() };
+        let cmd = WebCmd::Auth {
+            passphrase: "s3cr3t!@#$%".into(),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let back: WebCmd = serde_json::from_str(&json).unwrap();
         match back {
@@ -746,7 +824,13 @@ mod tests {
         let json = serde_json::to_string(&cmd).unwrap();
         let back: WebCmd = serde_json::from_str(&json).unwrap();
         match back {
-            WebCmd::PlaceOrder { take_profit, stop_loss, risk_mode, risk_pct, .. } => {
+            WebCmd::PlaceOrder {
+                take_profit,
+                stop_loss,
+                risk_mode,
+                risk_pct,
+                ..
+            } => {
                 assert_eq!(take_profit, Some(200.0));
                 assert_eq!(stop_loss, Some(140.0));
                 assert_eq!(risk_mode, Some("standard".into()));
@@ -776,7 +860,11 @@ mod tests {
         let json = serde_json::to_string(&cmd).unwrap();
         let back: WebCmd = serde_json::from_str(&json).unwrap();
         match back {
-            WebCmd::PlaceOrder { trail_percent, order_type, .. } => {
+            WebCmd::PlaceOrder {
+                trail_percent,
+                order_type,
+                ..
+            } => {
                 assert_eq!(trail_percent, Some(2.5));
                 assert_eq!(order_type, "trailing_stop");
             }
@@ -786,7 +874,10 @@ mod tests {
 
     #[test]
     fn cancel_order_serde_roundtrip() {
-        let cmd = WebCmd::CancelOrder { order_id: "ORD-123".into(), broker: "alpaca".into() };
+        let cmd = WebCmd::CancelOrder {
+            order_id: "ORD-123".into(),
+            broker: "alpaca".into(),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let back: WebCmd = serde_json::from_str(&json).unwrap();
         assert_eq!(format!("{back:?}"), format!("{cmd:?}"));
@@ -794,7 +885,10 @@ mod tests {
 
     #[test]
     fn close_position_serde_roundtrip() {
-        let cmd = WebCmd::ClosePosition { symbol: "AAPL".into(), broker: "tastytrade".into() };
+        let cmd = WebCmd::ClosePosition {
+            symbol: "AAPL".into(),
+            broker: "tastytrade".into(),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let back: WebCmd = serde_json::from_str(&json).unwrap();
         assert_eq!(format!("{back:?}"), format!("{cmd:?}"));
@@ -802,7 +896,10 @@ mod tests {
 
     #[test]
     fn order_result_msg_roundtrip() {
-        let msg = WebMsg::OrderResult { ok: true, message: "Order filled".into() };
+        let msg = WebMsg::OrderResult {
+            ok: true,
+            message: "Order filled".into(),
+        };
         let json = serde_json::to_string(&msg).unwrap();
         let back: WebMsg = serde_json::from_str(&json).unwrap();
         match back {
@@ -843,7 +940,9 @@ mod tests {
 
     #[test]
     fn delete_alert_roundtrip() {
-        let cmd = WebCmd::DeleteAlert { alert_id: "alert-001".into() };
+        let cmd = WebCmd::DeleteAlert {
+            alert_id: "alert-001".into(),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let back: WebCmd = serde_json::from_str(&json).unwrap();
         assert_eq!(format!("{back:?}"), format!("{cmd:?}"));
@@ -859,7 +958,9 @@ mod tests {
 
     #[test]
     fn get_news_roundtrip() {
-        let cmd = WebCmd::GetNews { symbol: Some("AAPL".into()) };
+        let cmd = WebCmd::GetNews {
+            symbol: Some("AAPL".into()),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let back: WebCmd = serde_json::from_str(&json).unwrap();
         assert_eq!(format!("{back:?}"), format!("{cmd:?}"));
@@ -872,7 +973,10 @@ mod tests {
 
     #[test]
     fn subscribe_roundtrip() {
-        let cmd = WebCmd::Subscribe { symbol: "AAPL".into(), timeframe: "1Min".into() };
+        let cmd = WebCmd::Subscribe {
+            symbol: "AAPL".into(),
+            timeframe: "1Min".into(),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let back: WebCmd = serde_json::from_str(&json).unwrap();
         assert_eq!(format!("{back:?}"), format!("{cmd:?}"));
@@ -880,7 +984,10 @@ mod tests {
 
     #[test]
     fn unsubscribe_roundtrip() {
-        let cmd = WebCmd::Unsubscribe { symbol: "AAPL".into(), timeframe: "1Min".into() };
+        let cmd = WebCmd::Unsubscribe {
+            symbol: "AAPL".into(),
+            timeframe: "1Min".into(),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let back: WebCmd = serde_json::from_str(&json).unwrap();
         assert_eq!(format!("{back:?}"), format!("{cmd:?}"));
@@ -891,7 +998,14 @@ mod tests {
         let msg = WebMsg::BarUpdate {
             symbol: "AAPL".into(),
             timeframe: "1Min".into(),
-            bar: BarData { timestamp: 1000, open: 150.0, high: 152.0, low: 149.0, close: 151.0, volume: 1000.0 },
+            bar: BarData {
+                timestamp: 1000,
+                open: 150.0,
+                high: 152.0,
+                low: 149.0,
+                close: 151.0,
+                volume: 1000.0,
+            },
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: WebMsg = serde_json::from_str(&json).unwrap();
@@ -902,9 +1016,13 @@ mod tests {
     fn position_update_msg_roundtrip() {
         let msg = WebMsg::PositionUpdate {
             items: vec![PositionSnapshot {
-                symbol: "AAPL".into(), qty: 10.0, side: "long".into(),
-                avg_entry_price: 150.0, market_value: 1520.0,
-                unrealized_pl: 20.0, asset_class: "us_equity".into(),
+                symbol: "AAPL".into(),
+                qty: 10.0,
+                side: "long".into(),
+                avg_entry_price: 150.0,
+                market_value: 1520.0,
+                unrealized_pl: 20.0,
+                asset_class: "us_equity".into(),
             }],
         };
         let json = serde_json::to_string(&msg).unwrap();
@@ -915,9 +1033,13 @@ mod tests {
     #[test]
     fn account_update_msg_roundtrip() {
         let msg = WebMsg::AccountUpdate(AccountSnapshot {
-            equity: 50000.0, cash: 25000.0, buying_power: 100000.0,
-            portfolio_value: 50000.0, unrealized_pl: 1500.0,
-            initial_margin: 10000.0, maintenance_margin: 5000.0,
+            equity: 50000.0,
+            cash: 25000.0,
+            buying_power: 100000.0,
+            portfolio_value: 50000.0,
+            unrealized_pl: 1500.0,
+            initial_margin: 10000.0,
+            maintenance_margin: 5000.0,
             currency: "USD".into(),
         });
         let json = serde_json::to_string(&msg).unwrap();
@@ -1046,7 +1168,9 @@ mod tests {
 
     #[test]
     fn get_darwin_web_roundtrip() {
-        let cmd = WebCmd::GetDarwinWeb { ticker: Some("TPN".into()) };
+        let cmd = WebCmd::GetDarwinWeb {
+            ticker: Some("TPN".into()),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let back: WebCmd = serde_json::from_str(&json).unwrap();
         assert_eq!(format!("{back:?}"), format!("{cmd:?}"));
@@ -1119,12 +1243,28 @@ mod tests {
             ticker: "TPN".into(),
             rows: vec![MonthlyReturnRow {
                 year: 2024,
-                months: [Some(1.2), None, Some(-0.5), None, None, None,
-                         None, None, None, None, None, None],
+                months: [
+                    Some(1.2),
+                    None,
+                    Some(-0.5),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
                 year_total: Some(0.7),
             }],
-            cagr: 10.5, best_month_pct: 5.0, worst_month_pct: -3.0,
-            avg_month_pct: 0.8, positive_months: 8, negative_months: 4,
+            cagr: 10.5,
+            best_month_pct: 5.0,
+            worst_month_pct: -3.0,
+            avg_month_pct: 0.8,
+            positive_months: 8,
+            negative_months: 4,
         };
         let json = serde_json::to_string(&mr).unwrap();
         let back: DarwinMonthlyReturns = serde_json::from_str(&json).unwrap();
@@ -1136,12 +1276,20 @@ mod tests {
     fn darwin_var_history_roundtrip() {
         let vh = DarwinVaRHistory {
             ticker: "TPN".into(),
-            points: vec![VaRPoint { timestamp_ms: 1700000000000, var_pct: 4.5 }],
-            current_var: 4.5, avg_var: 4.0, max_var: 6.5, min_var: 2.1,
+            points: vec![VaRPoint {
+                timestamp_ms: 1700000000000,
+                var_pct: 4.5,
+            }],
+            current_var: 4.5,
+            avg_var: 4.0,
+            max_var: 6.5,
+            min_var: 2.1,
             var_violations: 3,
             drawdown_periods: vec![DrawdownPeriod {
-                start_ms: 1700000000000, end_ms: 1700500000000,
-                depth_pct: 8.3, recovery_days: 15,
+                start_ms: 1700000000000,
+                end_ms: 1700500000000,
+                depth_pct: 8.3,
+                recovery_days: 15,
             }],
         };
         let json = serde_json::to_string(&vh).unwrap();
@@ -1152,7 +1300,10 @@ mod tests {
     #[test]
     fn darwin_allocation_roundtrip() {
         let alloc = DarwinAllocation {
-            ticker: "TPN".into(), weight_pct: 25.0, invested: 50000.0, pnl: 1234.56,
+            ticker: "TPN".into(),
+            weight_pct: 25.0,
+            invested: 50000.0,
+            pnl: 1234.56,
         };
         let json = serde_json::to_string(&alloc).unwrap();
         let back: DarwinAllocation = serde_json::from_str(&json).unwrap();
@@ -1163,9 +1314,12 @@ mod tests {
     #[test]
     fn portfolio_performance_roundtrip() {
         let pp = PortfolioPerformance {
-            total_return_pct: 45.2, cagr: 12.5,
-            best_month_pct: 8.3, worst_month_pct: -5.1,
-            monthly_returns: vec![], equity_points: vec![],
+            total_return_pct: 45.2,
+            cagr: 12.5,
+            best_month_pct: 8.3,
+            worst_month_pct: -5.1,
+            monthly_returns: vec![],
+            equity_points: vec![],
         };
         let json = serde_json::to_string(&pp).unwrap();
         let back: PortfolioPerformance = serde_json::from_str(&json).unwrap();
@@ -1175,7 +1329,8 @@ mod tests {
     #[test]
     fn portfolio_risk_roundtrip() {
         let pr = PortfolioRisk {
-            current_var: 4.5, max_drawdown_pct: 12.0,
+            current_var: 4.5,
+            max_drawdown_pct: 12.0,
             diversification_benefit_pct: 15.3,
             var_history: vec![],
         };
@@ -1202,16 +1357,37 @@ mod tests {
     #[test]
     fn darwin_web_snapshot_deny_unknown() {
         let snap = DarwinWebSnapshot {
-            ticker: "X".into(), timestamp_ms: 0, quote: 0.0,
-            daily_return_pct: 0.0, monthly_return_pct: 0.0, ytd_return_pct: 0.0,
-            all_time_return_pct: 0.0, dscore: 0.0, ds_experience: 0.0,
-            ds_risk_mgmt: 0.0, ds_risk_adjustment: 0.0, ds_performance: 0.0,
-            ds_scalability: 0.0, ds_market_correlation: 0.0, var_monthly: 0.0,
-            max_drawdown_pct: 0.0, volatility_annual: 0.0, sharpe_ratio: 0.0,
-            sortino_ratio: 0.0, investors: 0, aum: 0.0, capacity_remaining_pct: 0.0,
-            total_trades: 0, win_rate: 0.0, profit_factor: 0.0,
-            avg_holding_time_hours: 0.0, avg_trade_return_pct: 0.0, symbols_traded: 0,
-            excluded: false, exclusion_reason: String::new(), correlation_portfolio: 0.0,
+            ticker: "X".into(),
+            timestamp_ms: 0,
+            quote: 0.0,
+            daily_return_pct: 0.0,
+            monthly_return_pct: 0.0,
+            ytd_return_pct: 0.0,
+            all_time_return_pct: 0.0,
+            dscore: 0.0,
+            ds_experience: 0.0,
+            ds_risk_mgmt: 0.0,
+            ds_risk_adjustment: 0.0,
+            ds_performance: 0.0,
+            ds_scalability: 0.0,
+            ds_market_correlation: 0.0,
+            var_monthly: 0.0,
+            max_drawdown_pct: 0.0,
+            volatility_annual: 0.0,
+            sharpe_ratio: 0.0,
+            sortino_ratio: 0.0,
+            investors: 0,
+            aum: 0.0,
+            capacity_remaining_pct: 0.0,
+            total_trades: 0,
+            win_rate: 0.0,
+            profit_factor: 0.0,
+            avg_holding_time_hours: 0.0,
+            avg_trade_return_pct: 0.0,
+            symbols_traded: 0,
+            excluded: false,
+            exclusion_reason: String::new(),
+            correlation_portfolio: 0.0,
         };
         let mut json = serde_json::to_string(&snap).unwrap();
         json.pop();
@@ -1242,7 +1418,11 @@ mod tests {
         let json = serde_json::to_string(&cmd).unwrap();
         let back: WebCmd = serde_json::from_str(&json).unwrap();
         match back {
-            WebCmd::PlaceOrder { take_profit, stop_loss, .. } => {
+            WebCmd::PlaceOrder {
+                take_profit,
+                stop_loss,
+                ..
+            } => {
                 assert_eq!(take_profit, Some(500.0));
                 assert_eq!(stop_loss, Some(450.0));
             }
@@ -1265,16 +1445,37 @@ mod tests {
     #[test]
     fn darwin_web_snapshot_excluded_flag() {
         let snap = DarwinWebSnapshot {
-            ticker: "MFSO".into(), timestamp_ms: 0, quote: 0.0,
-            daily_return_pct: 0.0, monthly_return_pct: 0.0, ytd_return_pct: 0.0,
-            all_time_return_pct: 0.0, dscore: 0.0, ds_experience: 0.0,
-            ds_risk_mgmt: 0.0, ds_risk_adjustment: 0.0, ds_performance: 0.0,
-            ds_scalability: 0.0, ds_market_correlation: 0.0, var_monthly: 0.0,
-            max_drawdown_pct: 0.0, volatility_annual: 0.0, sharpe_ratio: 0.0,
-            sortino_ratio: 0.0, investors: 0, aum: 0.0, capacity_remaining_pct: 0.0,
-            total_trades: 0, win_rate: 0.0, profit_factor: 0.0,
-            avg_holding_time_hours: 0.0, avg_trade_return_pct: 0.0, symbols_traded: 0,
-            excluded: true, exclusion_reason: "correlation".into(), correlation_portfolio: 0.0,
+            ticker: "MFSO".into(),
+            timestamp_ms: 0,
+            quote: 0.0,
+            daily_return_pct: 0.0,
+            monthly_return_pct: 0.0,
+            ytd_return_pct: 0.0,
+            all_time_return_pct: 0.0,
+            dscore: 0.0,
+            ds_experience: 0.0,
+            ds_risk_mgmt: 0.0,
+            ds_risk_adjustment: 0.0,
+            ds_performance: 0.0,
+            ds_scalability: 0.0,
+            ds_market_correlation: 0.0,
+            var_monthly: 0.0,
+            max_drawdown_pct: 0.0,
+            volatility_annual: 0.0,
+            sharpe_ratio: 0.0,
+            sortino_ratio: 0.0,
+            investors: 0,
+            aum: 0.0,
+            capacity_remaining_pct: 0.0,
+            total_trades: 0,
+            win_rate: 0.0,
+            profit_factor: 0.0,
+            avg_holding_time_hours: 0.0,
+            avg_trade_return_pct: 0.0,
+            symbols_traded: 0,
+            excluded: true,
+            exclusion_reason: "correlation".into(),
+            correlation_portfolio: 0.0,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let back: DarwinWebSnapshot = serde_json::from_str(&json).unwrap();
