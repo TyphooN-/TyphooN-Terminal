@@ -736,7 +736,11 @@ impl SqliteCache {
 
     /// Store key-value data (fundamentals, news, etc.).
     pub fn put_kv(&self, key: &str, json_data: &str) -> Result<(), String> {
-        let compressed = zstd::encode_all(json_data.as_bytes(), 9)
+        // Level 3 (was 9): hot writers re-serialize the same blob on every change
+        // (AI sessions append a turn, fundamentals refresh, broker queue append).
+        // Level 9 burns 5-10x the CPU for ~30% smaller output — same rationale as
+        // put_bars. Backup export uses level 9 separately for archival.
+        let compressed = zstd::encode_all(json_data.as_bytes(), 3)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
 

@@ -59,6 +59,14 @@ pub struct GpuCompute {
     /// Shared 8-byte uniform buffer for `dispatch_indicator` params (period, bar_count).
     /// Reused across every call — avoids per-call alloc.
     ind_params_buffer: Option<wgpu::Buffer>,
+    /// Shared input buffer for `dispatch_custom_input_indicator` and `compute_anchored_vwap`.
+    /// Sized 4 × bar_count × 4 bytes — covers BOP's [O,H,L,C] interleaved (widest input)
+    /// and AVWAP's [tp, vol] interleaved (narrower). Avoids per-call buffer alloc on
+    /// every chart load and per-day-segment AVWAP dispatch (~250 segments / chart).
+    custom_in_buffer: Option<wgpu::Buffer>,
+    /// Shared output buffer for `dispatch_custom_input_indicator`. Sized 4 × bar_count
+    /// to cover ATR-projection's 4 outputs per bar.
+    custom_out_buffer: Option<wgpu::Buffer>,
     // ─── Compute pipelines ───
     sma_pipeline: wgpu::ComputePipeline,
     ema_pipeline: wgpu::ComputePipeline,
@@ -125,39 +133,27 @@ impl GpuCompute {
             return None;
         }
         let rb_buf = self.readback_buffer.as_ref()?;
+        let input_buf = self.custom_in_buffer.as_ref()?;
+        let out_buf = self.custom_out_buffer.as_ref()?;
+        let params_buffer = self.ind_params_buffer.as_ref()?;
         let n = closes.len() as u32;
+        let in_bytes = (n as u64) * 8;
+        if in_bytes > input_buf.size() {
+            return None;
+        }
 
         let mut interleaved = Vec::with_capacity(n as usize * 2);
         for i in 0..n as usize {
             interleaved.push(closes[i]);
             interleaved.push(volumes[i]);
         }
-
-        let input_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("avwap_in"),
-            size: (n as u64) * 8,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         self.queue
-            .write_buffer(&input_buf, 0, bytemuck_cast_slice(&interleaved));
+            .write_buffer(input_buf, 0, bytemuck_cast_slice(&interleaved));
 
         let out_size = (n as u64) * 4;
-        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("avwap_out"),
-            size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
         let params = [anchor_bar, n];
-        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("avwap_params"),
-            size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         self.queue
-            .write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+            .write_buffer(params_buffer, 0, bytemuck_cast_slice(&params));
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("avwap_bg"),
             layout: &self.bind_group_layout,
@@ -187,7 +183,7 @@ impl GpuCompute {
             pass.dispatch_workgroups(1, 1, 1);
         }
         let read_size = out_size.min(rb_buf.size());
-        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, read_size);
+        encoder.copy_buffer_to_buffer(out_buf, 0, rb_buf, 0, read_size);
         self.queue.submit(std::iter::once(encoder.finish()));
         let slice = rb_buf.slice(0..read_size);
         let (tx, rx) = std::sync::mpsc::channel();
@@ -417,6 +413,8 @@ impl GpuCompute {
             readback_buffer: None,
             ind_out_buffer: None,
             ind_params_buffer: None,
+            custom_in_buffer: None,
+            custom_out_buffer: None,
         }
     }
 
@@ -533,6 +531,24 @@ impl GpuCompute {
             self.ind_out_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("ind_out_shared"),
                 size: out_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }));
+            // Shared custom input/output buffers — sized for max width (4 floats per bar)
+            // so every dispatch_custom_input_indicator + compute_anchored_vwap call
+            // reuses one allocation instead of triggering a fresh device.create_buffer
+            // pair on every chart load (qstick / bop / mfi / ultosc / stochrsi /
+            // atr_proj / better_volume / sd_zones / ehlers_roof) and every per-day
+            // AVWAP segment (~250 segments × 3 buffers per chart load before this).
+            self.custom_in_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("custom_in_shared"),
+                size: out_size_4x,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.custom_out_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("custom_out_shared"),
+                size: out_size_4x,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             }));
@@ -724,31 +740,22 @@ impl GpuCompute {
             return None;
         }
         let rb_buf = self.readback_buffer.as_ref()?;
-        let input_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("custom_ind_in"),
-            size: (input.len() as u64) * 4,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let input_buf = self.custom_in_buffer.as_ref()?;
+        let out_buf = self.custom_out_buffer.as_ref()?;
+        let params_buffer = self.ind_params_buffer.as_ref()?;
+        // Pooled custom_in_buffer is sized for 4 × bar_count × 4 bytes; refuse if a
+        // caller ever exceeds that (no current caller does — BOP at 4× is widest).
+        let input_bytes = (input.len() as u64) * 4;
+        if input_bytes > input_buf.size() {
+            return None;
+        }
         self.queue
-            .write_buffer(&input_buf, 0, bytemuck_cast_slice(input));
+            .write_buffer(input_buf, 0, bytemuck_cast_slice(input));
 
         let out_size = (self.bar_count as u64) * (out_per_bar as u64) * 4;
-        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("custom_ind_out"),
-            size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
         let params = [period, self.bar_count];
-        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("custom_ind_params"),
-            size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         self.queue
-            .write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+            .write_buffer(params_buffer, 0, bytemuck_cast_slice(&params));
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("custom_ind_bg"),
@@ -784,7 +791,7 @@ impl GpuCompute {
             }
         }
         let read_size = out_size.min(rb_buf.size());
-        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, read_size);
+        encoder.copy_buffer_to_buffer(out_buf, 0, rb_buf, 0, read_size);
         self.queue.submit(std::iter::once(encoder.finish()));
 
         let slice = rb_buf.slice(0..read_size);
