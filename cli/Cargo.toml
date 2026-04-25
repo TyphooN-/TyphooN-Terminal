@@ -29,9 +29,9 @@ dirs = "6"
 
 # Credential decryption (shares format with GUI terminal)
 aes-gcm = "0.10"
-sha2 = "0.10"
-hmac = "0.12"
-pbkdf2 = "0.12"
+sha2 = "0.11"
+hmac = "0.13"
+pbkdf2 = "0.13"
 # rand = "0.10"  # Not used in CLI (used in engine for nonce generation)
 base64 = "0.22"
 zeroize = { version = "1", features = ["derive"] }

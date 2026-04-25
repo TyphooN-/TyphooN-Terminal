@@ -4630,7 +4630,7 @@ fn derive_secret(passphrase: &str) -> [u8; 32] {
 
 /// Compute HMAC-SHA256(challenge_bytes, secret) and return hex string.
 fn hmac_hex(challenge: &[u8], secret: &[u8; 32]) -> String {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
     let mut mac = match HmacSha256::new_from_slice(secret) {

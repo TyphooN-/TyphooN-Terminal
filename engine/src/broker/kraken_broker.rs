@@ -5,7 +5,7 @@
 //! See ADR-072 for the full integration plan.
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use reqwest::Client;
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashMap;
