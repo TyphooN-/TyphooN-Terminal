@@ -1,4 +1,4 @@
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
 //! TyphooN Terminal — Native GPU Renderer
 //!
 //! Pure Rust → egui + wgpu pipeline.

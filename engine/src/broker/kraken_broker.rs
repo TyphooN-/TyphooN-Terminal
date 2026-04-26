@@ -217,8 +217,8 @@ impl KrakenBroker {
     fn canonical_pair_forms(pair: &str) -> Vec<String> {
         let raw = Self::normalized_pair_key(pair);
         let mut forms = vec![raw.clone()];
-        if let Some(mapped) = crate::core::kraken::to_kraken_pair(&raw) {
-            let mapped = Self::normalized_pair_key(mapped);
+        if let Some(mapped) = crate::core::kraken::to_kraken_pair_lossy(&raw) {
+            let mapped = Self::normalized_pair_key(&mapped);
             if !forms.iter().any(|f| f == &mapped) {
                 forms.push(mapped);
             }
@@ -367,19 +367,20 @@ impl KrakenBroker {
         }
 
         let exit_side = if net_volume > 0.0 { "sell" } else { "buy" };
-        let order_pair = crate::core::kraken::to_kraken_pair(pair).unwrap_or(pair);
+        let order_pair = crate::core::kraken::to_kraken_pair_lossy(pair)
+            .unwrap_or_else(|| pair.to_string());
         let cancelled = self
             .cancel_live_exit_orders_for_pair(pair, exit_side)
             .await?;
         let mut placements = Vec::new();
         let qty_abs = net_volume.abs();
         if let Some(sl) = sl_price {
-            self.place_order(order_pair, exit_side, "stop-loss", qty_abs, Some(sl))
+            self.place_order(&order_pair, exit_side, "stop-loss", qty_abs, Some(sl))
                 .await?;
             placements.push(format!("SL {}", sl));
         }
         if let Some(tp) = tp_price {
-            self.place_order(order_pair, exit_side, "take-profit", qty_abs, Some(tp))
+            self.place_order(&order_pair, exit_side, "take-profit", qty_abs, Some(tp))
                 .await?;
             placements.push(format!("TP {}", tp));
         }
@@ -419,8 +420,9 @@ impl KrakenBroker {
         let _ = self
             .cancel_live_exit_orders_for_pair(pair, close_side)
             .await;
-        let order_pair = crate::core::kraken::to_kraken_pair(pair).unwrap_or(pair);
-        self.place_order(order_pair, close_side, "market", qty_abs, None)
+        let order_pair = crate::core::kraken::to_kraken_pair_lossy(pair)
+            .unwrap_or_else(|| pair.to_string());
+        self.place_order(&order_pair, close_side, "market", qty_abs, None)
             .await
     }
 

@@ -78,6 +78,57 @@ pub fn to_kraken_pair(sym: &str) -> Option<&'static str> {
     }
 }
 
+/// Normalize Kraken pair representations into TyphooN's canonical no-slash symbol
+/// form. Handles display names (`BTC/USD`), Kraken altnames (`XBTUSD`), and
+/// raw wrapped pairs (`XXBTZUSD`).
+pub fn normalize_pair_symbol(sym: &str) -> String {
+    let raw = sym.trim().replace('/', "").to_ascii_uppercase();
+    if raw.is_empty() {
+        return String::new();
+    }
+    let unwrapped = {
+        let bytes = raw.as_bytes();
+        if raw.len() == 8
+            && matches!(bytes[0] as char, 'X' | 'Z')
+            && matches!(bytes[4] as char, 'X' | 'Z')
+        {
+            format!("{}{}", &raw[1..4], &raw[5..8])
+        } else {
+            raw
+        }
+    };
+    if let Some(rest) = unwrapped.strip_prefix("XBT") {
+        format!("BTC{rest}")
+    } else if let Some(rest) = unwrapped.strip_prefix("XDG") {
+        format!("DOGE{rest}")
+    } else {
+        unwrapped
+    }
+}
+
+/// Best-effort Kraken pair encoder for dynamic pair universes.
+///
+/// The curated `to_kraken_pair()` table is still used first for aliases that
+/// need exact Kraken raw names. When no curated mapping exists, we fall back to
+/// Kraken altname-style pairs such as `ETHBTC` or `ETHEUR`, which Kraken's
+/// public endpoints accept for the broad pair universe.
+pub fn to_kraken_pair_lossy(sym: &str) -> Option<String> {
+    if let Some(mapped) = to_kraken_pair(sym) {
+        return Some(mapped.to_string());
+    }
+    let normalized = normalize_pair_symbol(sym);
+    if normalized.len() < 6 {
+        return None;
+    }
+    if let Some(rest) = normalized.strip_prefix("BTC") {
+        return Some(format!("XBT{rest}"));
+    }
+    if let Some(rest) = normalized.strip_prefix("DOGE") {
+        return Some(format!("XDG{rest}"));
+    }
+    Some(normalized)
+}
+
 /// Fetch OHLCV klines from Kraken public API.
 /// Kraken returns max 720 bars per request. We paginate with `since` parameter.
 pub async fn fetch_binance_klines(
@@ -98,7 +149,7 @@ pub async fn fetch_binance_klines(
 
     let interval = to_kraken_interval(timeframe)
         .ok_or_else(|| format!("Unsupported timeframe for Kraken: {}", timeframe))?;
-    let kraken_pair = to_kraken_pair(symbol)
+    let kraken_pair = to_kraken_pair_lossy(symbol)
         .ok_or_else(|| format!("Unsupported symbol for Kraken: {}", symbol))?;
 
     let mut all_bars = Vec::new();
@@ -274,7 +325,7 @@ fn aggregate_to_monthly(daily: &[serde_json::Value]) -> Vec<serde_json::Value> {
 
 /// Check if a symbol is supported by Kraken.
 pub fn is_binance_supported(symbol: &str) -> bool {
-    to_kraken_pair(symbol).is_some()
+    to_kraken_pair_lossy(symbol).is_some()
 }
 
 /// Get all supported crypto symbols from a list.
@@ -349,6 +400,23 @@ mod tests {
     fn kraken_pair_matic_pol_alias() {
         assert_eq!(to_kraken_pair("MATICUSD"), Some("MATICUSD"));
         assert_eq!(to_kraken_pair("POLUSD"), Some("MATICUSD"));
+    }
+
+    #[test]
+    fn normalize_pair_symbol_handles_display_and_wrapped_forms() {
+        assert_eq!(normalize_pair_symbol("BTC/USD"), "BTCUSD");
+        assert_eq!(normalize_pair_symbol("XBTUSD"), "BTCUSD");
+        assert_eq!(normalize_pair_symbol("XXBTZUSD"), "BTCUSD");
+        assert_eq!(normalize_pair_symbol("ETH/BTC"), "ETHBTC");
+        assert_eq!(normalize_pair_symbol("XDG/USD"), "DOGEUSD");
+    }
+
+    #[test]
+    fn kraken_pair_lossy_supports_dynamic_pairs() {
+        assert_eq!(to_kraken_pair_lossy("BTC/USD"), Some("XBTUSD".to_string()));
+        assert_eq!(to_kraken_pair_lossy("ETH/BTC"), Some("ETHBTC".to_string()));
+        assert_eq!(to_kraken_pair_lossy("ETH/EUR"), Some("ETHEUR".to_string()));
+        assert_eq!(to_kraken_pair_lossy("XXBTZUSD"), Some("XBTUSD".to_string()));
     }
 
     // ── is_binance_supported / get_binance_crypto_symbols ──

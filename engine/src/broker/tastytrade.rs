@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 const API_BASE: &str = "https://api.tastytrade.com";
-const SANDBOX_BASE: &str = "https://api.cert.tastytrade.com";
+const SANDBOX_BASE: &str = "https://api.cert.tastyworks.com";
 
 fn format_equity_order_price(price: f64) -> String {
     if price >= 1.0 {
@@ -572,6 +572,95 @@ impl TastytradeBroker {
             .unwrap_or_default())
     }
 
+    /// Fetch symbols from tastytrade's public watchlists.
+    pub async fn get_public_watchlist_symbols(&self) -> Result<Vec<String>, String> {
+        let url = format!("{}/public-watchlists", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("tastytrade public watchlists failed: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!(
+                "tastytrade public watchlists: HTTP {}",
+                resp.status()
+            ));
+        }
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("tastytrade public watchlists parse: {e}"))?;
+        let mut symbols = std::collections::BTreeSet::new();
+        for watchlist in json["data"]["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            for entry in watchlist["watchlist-entries"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                if let Some(symbol) = entry["symbol"].as_str() {
+                    let symbol = symbol.trim().to_ascii_uppercase();
+                    if !symbol.is_empty() {
+                        symbols.insert(symbol);
+                    }
+                }
+            }
+        }
+        Ok(symbols.into_iter().collect())
+    }
+
+    /// Fetch all active futures symbols tastytrade currently exposes.
+    pub async fn get_active_futures_symbols(&self) -> Result<Vec<String>, String> {
+        let url = format!("{}/instruments/futures", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("tastytrade futures instruments failed: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!(
+                "tastytrade futures instruments: HTTP {}",
+                resp.status()
+            ));
+        }
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("tastytrade futures instruments parse: {e}"))?;
+        let mut symbols = std::collections::BTreeSet::new();
+        for item in json["data"]["items"].as_array().into_iter().flatten() {
+            let active = item["active"].as_bool().unwrap_or(false);
+            if !active {
+                continue;
+            }
+            if let Some(symbol) = item["symbol"].as_str() {
+                let symbol = symbol.trim().to_ascii_uppercase();
+                if !symbol.is_empty() {
+                    symbols.insert(symbol);
+                }
+            }
+        }
+        Ok(symbols.into_iter().collect())
+    }
+
+    /// Best-effort tastytrade market-data universe currently available from
+    /// the public API: public watchlists plus all active futures contracts.
+    pub async fn get_market_data_universe_symbols(&self) -> Result<Vec<String>, String> {
+        let mut symbols = std::collections::BTreeSet::new();
+        for symbol in self.get_public_watchlist_symbols().await? {
+            symbols.insert(symbol);
+        }
+        for symbol in self.get_active_futures_symbols().await? {
+            symbols.insert(symbol);
+        }
+        Ok(symbols.into_iter().collect())
+    }
+
     /// Get option chain for a symbol.
     pub async fn get_option_chain(&self, symbol: &str) -> Result<Vec<TastyExpiration>, String> {
         let token = self.auth_header().ok_or("Not authenticated")?;
@@ -905,6 +994,12 @@ mod tests {
         assert_eq!(format_equity_order_price(12.3456), "12.35");
         assert_eq!(format_equity_order_price(0.123456), "0.1235");
         assert_eq!(format_equity_order_price(0.000321), "0.000321");
+    }
+
+    #[test]
+    fn sandbox_host_matches_official_docs() {
+        let broker = TastytradeBroker::new(true);
+        assert_eq!(broker.base_url, "https://api.cert.tastyworks.com");
     }
 
     #[test]
