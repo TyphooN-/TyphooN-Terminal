@@ -21,6 +21,7 @@ fn format_equity_order_price(price: f64) -> String {
 }
 
 /// tastytrade broker client.
+#[derive(Clone)]
 pub struct TastytradeBroker {
     client: reqwest::Client,
     base_url: String,

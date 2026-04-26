@@ -51,6 +51,13 @@ pub(super) struct AlpacaSyncCandidate {
     pub score: i64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct SyncCacheState {
+    pub last_bar_ts_s: i64,
+    pub write_ts_s: i64,
+    pub bar_count: i64,
+}
+
 /// Definitive "Alpaca has no bars for this symbol/timeframe" marker.
 /// Persisted as JSON under KV key `alpaca:no_data_pairs` so automated sync
 /// stops re-requesting pairs the broker never serves.
@@ -196,18 +203,38 @@ pub(super) fn alpaca_sync_target_bars(tf: &str) -> Option<u32> {
     }
 }
 
+pub(super) fn kraken_sync_target_bars(tf: &str) -> Option<u32> {
+    match tf {
+        "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week" => {
+            Some(720)
+        }
+        "1Month" => Some(24),
+        _ => None,
+    }
+}
+
+pub(super) fn tastytrade_sync_target_bars(tf: &str) -> Option<u32> {
+    alpaca_sync_target_bars(tf)
+}
+
 fn classify_alpaca_sync_candidate(
     now_s: i64,
     symbol: &str,
     timeframe: &str,
-    state: Option<(i64, i64)>,
+    state: Option<SyncCacheState>,
     focus: bool,
+    target_bars_for_tf: fn(&str) -> Option<u32>,
 ) -> Option<AlpacaSyncCandidate> {
     let timeframe = normalize_sync_timeframe_key(timeframe)?;
-    let target_bars = alpaca_sync_target_bars(timeframe)? as i64;
     let symbol = normalize_market_data_symbol(symbol).replace('/', "");
-    let (write_ts, bar_count) = state.unwrap_or((0, 0));
-    if write_ts <= 0 || bar_count <= 0 {
+    let state = state.unwrap_or_default();
+    let bar_count = state.bar_count;
+    let age_anchor_s = if state.last_bar_ts_s > 0 {
+        state.last_bar_ts_s
+    } else {
+        state.write_ts_s
+    };
+    if state.write_ts_s <= 0 || bar_count <= 0 {
         return Some(AlpacaSyncCandidate {
             symbol,
             timeframe: timeframe.to_string(),
@@ -217,18 +244,22 @@ fn classify_alpaca_sync_candidate(
         });
     }
 
-    let age_s = now_s.saturating_sub(write_ts);
-    if age_s >= 6 * 3600 {
-        return Some(AlpacaSyncCandidate {
-            symbol,
-            timeframe: timeframe.to_string(),
-            bucket: AlpacaSyncBucket::Stale,
-            focus,
-            score: age_s,
-        });
+    if let Some(period_s) = alpaca_sync_period_secs(timeframe) {
+        let age_s = now_s.saturating_sub(age_anchor_s);
+        if age_s >= period_s.saturating_mul(24) {
+            return Some(AlpacaSyncCandidate {
+                symbol,
+                timeframe: timeframe.to_string(),
+                bucket: AlpacaSyncBucket::Stale,
+                focus,
+                score: age_s,
+            });
+        }
     }
 
-    if bar_count * 100 < target_bars * 95 {
+    if let Some(target_bars) = target_bars_for_tf(timeframe).map(i64::from)
+        && bar_count * 100 < target_bars * 95
+    {
         return Some(AlpacaSyncCandidate {
             symbol,
             timeframe: timeframe.to_string(),
@@ -244,12 +275,13 @@ fn classify_alpaca_sync_candidate(
 pub(super) fn select_alpaca_sync_candidates(
     symbols: &[String],
     timeframes: &[String],
-    state_map: &HashMap<(String, String), (i64, i64)>,
+    state_map: &HashMap<(String, String), SyncCacheState>,
     focus_symbols: &HashSet<String>,
     no_data_pairs: &HashMap<String, AlpacaNoDataPair>,
     pending_fetches: &HashSet<String>,
     batch_size: usize,
     now_s: i64,
+    target_bars_for_tf: fn(&str) -> Option<u32>,
 ) -> Vec<AlpacaSyncCandidate> {
     if batch_size == 0 || symbols.is_empty() || timeframes.is_empty() {
         return Vec::new();
@@ -279,7 +311,14 @@ pub(super) fn select_alpaca_sync_candidates(
             }
             let state = state_map.get(&(symbol_key.clone(), tf.to_string())).copied();
             let Some(candidate) =
-                classify_alpaca_sync_candidate(now_s, &symbol_key, tf, state, focus)
+                classify_alpaca_sync_candidate(
+                    now_s,
+                    &symbol_key,
+                    tf,
+                    state,
+                    focus,
+                    target_bars_for_tf,
+                )
             else {
                 continue;
             };
@@ -337,13 +376,14 @@ pub(super) fn select_alpaca_sync_candidates(
 pub(super) fn select_alpaca_sync_workset(
     symbols: &[String],
     timeframes: &[String],
-    state_map: &HashMap<(String, String), (i64, i64)>,
+    state_map: &HashMap<(String, String), SyncCacheState>,
     focus_symbols: &HashSet<String>,
     no_data_pairs: &HashMap<String, AlpacaNoDataPair>,
     pending_fetches: &HashSet<String>,
     batch_size: usize,
     foreground_slots: usize,
     now_s: i64,
+    target_bars_for_tf: fn(&str) -> Option<u32>,
 ) -> Vec<AlpacaSyncCandidate> {
     if batch_size == 0 || timeframes.is_empty() {
         return Vec::new();
@@ -365,6 +405,7 @@ pub(super) fn select_alpaca_sync_workset(
             &staged_pending,
             foreground_budget,
             now_s,
+            target_bars_for_tf,
         );
         for candidate in foreground {
             if staged_pending.insert(alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)) {
@@ -386,6 +427,7 @@ pub(super) fn select_alpaca_sync_workset(
         &staged_pending,
         batch_size - selected.len(),
         now_s,
+        target_bars_for_tf,
     );
     for candidate in background {
         if selected.len() >= batch_size {
@@ -527,8 +569,22 @@ mod tests {
         let symbols = vec!["AAPL".to_string(), "MSFT".to_string(), "TSLA".to_string()];
         let timeframes = vec!["1Day".to_string()];
         let mut state_map = HashMap::new();
-        state_map.insert(("MSFT".to_string(), "1Day".to_string()), (now_s - 7 * 3600, 10_000));
-        state_map.insert(("TSLA".to_string(), "1Day".to_string()), (now_s - 60, 100));
+        state_map.insert(
+            ("MSFT".to_string(), "1Day".to_string()),
+            SyncCacheState {
+                last_bar_ts_s: now_s - 25 * 86_400,
+                write_ts_s: now_s - 7 * 3600,
+                bar_count: 10_000,
+            },
+        );
+        state_map.insert(
+            ("TSLA".to_string(), "1Day".to_string()),
+            SyncCacheState {
+                last_bar_ts_s: now_s - 60,
+                write_ts_s: now_s - 60,
+                bar_count: 100,
+            },
+        );
 
         let selected = select_alpaca_sync_candidates(
             &symbols,
@@ -539,6 +595,7 @@ mod tests {
             &HashSet::new(),
             3,
             now_s,
+            alpaca_sync_target_bars,
         );
 
         assert_eq!(selected.len(), 1);
@@ -562,6 +619,7 @@ mod tests {
             &HashSet::new(),
             2,
             now_s,
+            alpaca_sync_target_bars,
         );
 
         assert_eq!(selected.len(), 2);
@@ -594,6 +652,7 @@ mod tests {
             &HashSet::new(),
             2,
             now_s,
+            alpaca_sync_target_bars,
         );
 
         assert_eq!(selected.len(), 1);
@@ -616,6 +675,7 @@ mod tests {
             &HashSet::new(),
             4,
             now_s,
+            alpaca_sync_target_bars,
         );
 
         assert_eq!(selected.len(), 4);
@@ -634,7 +694,11 @@ mod tests {
         let focus = HashSet::from(["MSFT".to_string()]);
         let state_map = HashMap::from([(
             ("MSFT".to_string(), "1Day".to_string()),
-            (now_s - 7 * 3600, 10_000),
+            SyncCacheState {
+                last_bar_ts_s: now_s - 25 * 86_400,
+                write_ts_s: now_s - 7 * 3600,
+                bar_count: 10_000,
+            },
         )]);
 
         let selected = select_alpaca_sync_workset(
@@ -647,6 +711,7 @@ mod tests {
             2,
             1,
             now_s,
+            alpaca_sync_target_bars,
         );
 
         assert_eq!(selected.len(), 2);
@@ -673,6 +738,7 @@ mod tests {
             2,
             1,
             now_s,
+            alpaca_sync_target_bars,
         );
 
         assert_eq!(selected.len(), 2);
@@ -730,6 +796,65 @@ mod tests {
         assert!(plus.fetch_permits > basic.fetch_permits);
         assert!(plus.queue_window > basic.queue_window);
         assert!(plus.batch_size > basic.batch_size);
+    }
+
+    #[test]
+    fn stale_window_uses_timeframe_last_bar_age_not_write_age() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec!["AAPL".to_string()];
+        let timeframes = vec!["1Min".to_string()];
+        let state_map = HashMap::from([(
+            ("AAPL".to_string(), "1Min".to_string()),
+            SyncCacheState {
+                last_bar_ts_s: now_s - 25 * 60,
+                write_ts_s: now_s - 60,
+                bar_count: 50_000,
+            },
+        )]);
+
+        let selected = select_alpaca_sync_candidates(
+            &symbols,
+            &timeframes,
+            &state_map,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            1,
+            now_s,
+            alpaca_sync_target_bars,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].bucket, AlpacaSyncBucket::Stale);
+    }
+
+    #[test]
+    fn kraken_limited_history_target_does_not_force_permanent_backfill() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec!["BTCUSD".to_string()];
+        let timeframes = vec!["1Min".to_string()];
+        let state_map = HashMap::from([(
+            ("BTCUSD".to_string(), "1Min".to_string()),
+            SyncCacheState {
+                last_bar_ts_s: now_s - 60,
+                write_ts_s: now_s - 60,
+                bar_count: 720,
+            },
+        )]);
+
+        let selected = select_alpaca_sync_candidates(
+            &symbols,
+            &timeframes,
+            &state_map,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            1,
+            now_s,
+            kraken_sync_target_bars,
+        );
+
+        assert!(selected.is_empty());
     }
 
     #[test]
