@@ -32,6 +32,8 @@ pub enum Indicator {
 pub struct GpuCompute {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
+    /// Open prices in VRAM: open prices (f32 per bar) for multi-input indicators.
+    open_buffer: Option<wgpu::Buffer>,
     /// Bar data in VRAM: close prices (f32 per bar) for simple indicators
     bar_buffer: Option<wgpu::Buffer>,
     /// OHLC data in VRAM: [high, low, close] interleaved (3 × f32 per bar) for ATR/Stoch/ADX
@@ -51,6 +53,8 @@ pub struct GpuCompute {
     ema_buffer: Option<wgpu::Buffer>,
     /// Bind group layout for indicator shaders.
     bind_group_layout: wgpu::BindGroupLayout,
+    /// Multi-input bind group layout for indicators that consume open / OHLC / volume / aux buffers.
+    multi_bind_group_layout: wgpu::BindGroupLayout,
     /// Staging buffer for CPU readback.
     readback_buffer: Option<wgpu::Buffer>,
     /// Shared output buffer for `dispatch_indicator` (sized 1x bars).
@@ -59,14 +63,22 @@ pub struct GpuCompute {
     /// Shared 8-byte uniform buffer for `dispatch_indicator` params (period, bar_count).
     /// Reused across every call — avoids per-call alloc.
     ind_params_buffer: Option<wgpu::Buffer>,
-    /// Shared input buffer for `dispatch_custom_input_indicator` and `compute_anchored_vwap`.
-    /// Sized 4 × bar_count × 4 bytes — covers BOP's [O,H,L,C] interleaved (widest input)
-    /// and AVWAP's [tp, vol] interleaved (narrower). Avoids per-call buffer alloc on
-    /// every chart load and per-day-segment AVWAP dispatch (~250 segments / chart).
+    /// Shared scratch input buffer for `dispatch_custom_input_indicator` and auxiliary per-bar
+    /// series in multi-input dispatches (for example ATR in ATR projection).
+    /// Sized 4 × bar_count × 4 bytes — enough for legacy packed custom inputs and any
+    /// single-series auxiliary input.
     custom_in_buffer: Option<wgpu::Buffer>,
     /// Shared output buffer for `dispatch_custom_input_indicator`. Sized 4 × bar_count
     /// to cover ATR-projection's 4 outputs per bar.
     custom_out_buffer: Option<wgpu::Buffer>,
+    /// Shared 16-byte uniform buffer for multi-input dispatch params.
+    multi_params_buffer: Option<wgpu::Buffer>,
+    /// Cached bind group for close-only indicator dispatches.
+    indicator_bind_group: Option<wgpu::BindGroup>,
+    /// Cached bind group for legacy custom-input dispatches using `custom_in_buffer`.
+    custom_bind_group: Option<wgpu::BindGroup>,
+    /// Cached bind group for multi-input indicator dispatches.
+    multi_bind_group: Option<wgpu::BindGroup>,
     // ─── Compute pipelines ───
     sma_pipeline: wgpu::ComputePipeline,
     ema_pipeline: wgpu::ComputePipeline,
@@ -121,89 +133,40 @@ pub struct GpuCompute {
     prev_levels_pipeline: wgpu::ComputePipeline,
 }
 
+fn anchored_vwap_read_window(
+    bar_count: u32,
+    anchor_bar: u32,
+    end_bar_exclusive: u32,
+) -> Option<(u64, u64)> {
+    if bar_count == 0 || anchor_bar >= end_bar_exclusive || end_bar_exclusive > bar_count {
+        return None;
+    }
+    Some((
+        (anchor_bar as u64) * 4,
+        ((end_bar_exclusive - anchor_bar) as u64) * 4,
+    ))
+}
+
 impl GpuCompute {
-    /// Compute Anchored VWAP from anchor bar to end. Needs close+volume interleaved buffer.
+    /// Compute Anchored VWAP for a bar range on the already-uploaded chart buffers.
+    /// Returns one f32 per bar in `[anchor_bar, end_bar_exclusive)`.
     pub fn compute_anchored_vwap(
         &self,
-        closes: &[f32],
-        volumes: &[f32],
         anchor_bar: u32,
+        end_bar_exclusive: u32,
     ) -> Option<Vec<f32>> {
-        if closes.len() != volumes.len() || closes.is_empty() {
+        let (read_offset, read_size) =
+            anchored_vwap_read_window(self.bar_count, anchor_bar, end_bar_exclusive)?;
+        if self.ohlc_buffer.is_none() || self.vol_buffer.is_none() {
             return None;
         }
-        let rb_buf = self.readback_buffer.as_ref()?;
-        let input_buf = self.custom_in_buffer.as_ref()?;
-        let out_buf = self.custom_out_buffer.as_ref()?;
-        let params_buffer = self.ind_params_buffer.as_ref()?;
-        let n = closes.len() as u32;
-        let in_bytes = (n as u64) * 8;
-        if in_bytes > input_buf.size() {
-            return None;
-        }
-
-        let mut interleaved = Vec::with_capacity(n as usize * 2);
-        for i in 0..n as usize {
-            interleaved.push(closes[i]);
-            interleaved.push(volumes[i]);
-        }
-        self.queue
-            .write_buffer(input_buf, 0, bytemuck_cast_slice(&interleaved));
-
-        let out_size = (n as u64) * 4;
-        let params = [anchor_bar, n];
-        self.queue
-            .write_buffer(params_buffer, 0, bytemuck_cast_slice(&params));
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("avwap_bg"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: input_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: out_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-        let mut encoder = self.device.create_command_encoder(&Default::default());
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("avwap_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.anchored_vwap_pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(1, 1, 1);
-        }
-        let read_size = out_size.min(rb_buf.size());
-        encoder.copy_buffer_to_buffer(out_buf, 0, rb_buf, 0, read_size);
-        self.queue.submit(std::iter::once(encoder.finish()));
-        let slice = rb_buf.slice(0..read_size);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .ok();
-        if rx.recv().ok()?.is_err() {
-            return None;
-        }
-        let data = slice.get_mapped_range();
-        let result = bytemuck_cast_slice_to_f32(&data);
-        drop(data);
-        rb_buf.unmap();
-        Some(result)
+        self.dispatch_multi_indicator(
+            &self.anchored_vwap_pipeline,
+            [anchor_bar, self.bar_count, end_bar_exclusive, 0],
+            false,
+            read_offset,
+            read_size,
+        )
     }
 }
 
@@ -248,10 +211,91 @@ impl GpuCompute {
                 },
             ],
         });
+        let multi_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("multi_indicator_bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("indicator_pipeline_layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
+        });
+        let multi_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("multi_indicator_pipeline_layout"),
+            bind_group_layouts: &[Some(&multi_bind_group_layout)],
             immediate_size: 0,
         });
 
@@ -298,6 +342,20 @@ impl GpuCompute {
                 cache: None,
             })
         };
+        let make_multi_pipeline = |label: &str, source: &str| -> wgpu::ComputePipeline {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(label),
+                layout: Some(&multi_pipeline_layout),
+                module: &shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
         let rsi_pipeline = make_pipeline("rsi_pipeline", RSI_SHADER);
         let kama_pipeline = make_pipeline("kama_pipeline", KAMA_SHADER);
         let atr_pipeline = make_pipeline("atr_pipeline", ATR_SHADER);
@@ -309,17 +367,17 @@ impl GpuCompute {
         let wma_pipeline = make_pipeline("wma_pipeline", WMA_SHADER);
         let cci_pipeline = make_pipeline("cci_pipeline", CCI_SHADER);
         let williams_r_pipeline = make_pipeline("williams_r_pipeline", WILLIAMS_R_SHADER);
-        let obv_pipeline = make_pipeline("obv_pipeline", OBV_SHADER);
+        let obv_pipeline = make_multi_pipeline("obv_pipeline", OBV_SHADER);
         let momentum_pipeline = make_pipeline("momentum_pipeline", MOMENTUM_SHADER);
         let cmo_pipeline = make_pipeline("cmo_pipeline", CMO_SHADER);
-        let qstick_pipeline = make_pipeline("qstick_pipeline", QSTICK_SHADER);
+        let qstick_pipeline = make_multi_pipeline("qstick_pipeline", QSTICK_SHADER);
         let disparity_pipeline = make_pipeline("disparity_pipeline", DISPARITY_SHADER);
-        let bop_pipeline = make_pipeline("bop_pipeline", BOP_SHADER);
+        let bop_pipeline = make_multi_pipeline("bop_pipeline", BOP_SHADER);
         let stddev_pipeline = make_pipeline("stddev_pipeline", STDDEV_SHADER);
-        let mfi_pipeline = make_pipeline("mfi_pipeline", MFI_SHADER);
+        let mfi_pipeline = make_multi_pipeline("mfi_pipeline", MFI_SHADER);
         let trix_pipeline = make_pipeline("trix_pipeline", TRIX_SHADER);
         let ppo_pipeline = make_pipeline("ppo_pipeline", PPO_SHADER);
-        let ultosc_pipeline = make_pipeline("ultosc_pipeline", ULTOSC_SHADER);
+        let ultosc_pipeline = make_multi_pipeline("ultosc_pipeline", ULTOSC_SHADER);
         let stochrsi_pipeline = make_pipeline("stochrsi_pipeline", STOCHRSI_SHADER);
         let var_osc_pipeline = make_pipeline("var_osc_pipeline", VAR_OSCILLATOR_SHADER);
         let psar_pipeline = make_pipeline("psar_pipeline", PSAR_SHADER);
@@ -337,9 +395,10 @@ impl GpuCompute {
         let ehlers_mama_pipeline = make_pipeline("ehlers_mama_pipeline", EHLERS_MAMA_SHADER);
         let hma_pipeline = make_pipeline("hma_pipeline", HMA_SHADER);
         let sd_zones_pipeline = make_pipeline("sd_zones_pipeline", SUPPLY_DEMAND_SHADER);
-        let atr_proj_pipeline = make_pipeline("atr_proj_pipeline", ATR_PROJECTION_SHADER);
-        let better_vol_pipeline = make_pipeline("better_vol_pipeline", BETTER_VOLUME_SHADER);
-        let anchored_vwap_pipeline = make_pipeline("anchored_vwap_pipeline", ANCHORED_VWAP_SHADER);
+        let atr_proj_pipeline = make_multi_pipeline("atr_proj_pipeline", ATR_PROJECTION_SHADER);
+        let better_vol_pipeline = make_multi_pipeline("better_vol_pipeline", BETTER_VOLUME_SHADER);
+        let anchored_vwap_pipeline =
+            make_multi_pipeline("anchored_vwap_pipeline", ANCHORED_VWAP_SHADER);
         // ADR-094: GPU parity shaders
         let supertrend_pipeline = make_pipeline("supertrend_pipeline", SUPERTREND_SHADER);
         let donchian_pipeline = make_pipeline("donchian_pipeline", DONCHIAN_SHADER);
@@ -351,6 +410,7 @@ impl GpuCompute {
         Self {
             device,
             queue,
+            open_buffer: None,
             bar_buffer: None,
             ohlc_buffer: None,
             mid_buffer: None,
@@ -410,11 +470,16 @@ impl GpuCompute {
             squeeze_pipeline,
             prev_levels_pipeline,
             bind_group_layout,
+            multi_bind_group_layout,
             readback_buffer: None,
             ind_out_buffer: None,
             ind_params_buffer: None,
             custom_in_buffer: None,
             custom_out_buffer: None,
+            multi_params_buffer: None,
+            indicator_bind_group: None,
+            custom_bind_group: None,
+            multi_bind_group: None,
         }
     }
 
@@ -422,7 +487,7 @@ impl GpuCompute {
     /// `closes`: close prices (f32 per bar) — used by SMA, EMA, RSI, KAMA, Bollinger, MACD
     /// `highs`, `lows`: used by ATR, Stochastic, ADX, Fisher
     pub fn upload_bars(&mut self, closes: &[f32]) {
-        self.upload_bars_full(closes, &[], &[], &[]);
+        self.upload_bars_full(&[], closes, &[], &[], &[]);
     }
 
     /// Upload full OHLCV data to VRAM.
@@ -431,6 +496,7 @@ impl GpuCompute {
     /// when re-uploading the same chart (e.g., forming bar updates).
     pub fn upload_bars_full(
         &mut self,
+        opens: &[f32],
         closes: &[f32],
         highs: &[f32],
         lows: &[f32],
@@ -439,18 +505,37 @@ impl GpuCompute {
         let bar_count = closes.len() as u32;
         self.bar_count = bar_count;
         let same_size = bar_count == self.pooled_bar_count && self.bar_buffer.is_some();
+        let mut buffers_changed = !same_size;
 
         // Close prices buffer (used by most indicators)
-        if !same_size {
+        if !same_size || self.bar_buffer.is_none() {
             self.bar_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("bar_data"),
                 size: (bar_count as u64) * 4,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }));
+            buffers_changed = true;
         }
         if let Some(ref buf) = self.bar_buffer {
             self.queue.write_buffer(buf, 0, bytemuck_cast_slice(closes));
+        }
+
+        if opens.len() == closes.len() {
+            if !same_size || self.open_buffer.is_none() {
+                self.open_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("open_data"),
+                    size: (bar_count as u64) * 4,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+                buffers_changed = true;
+            }
+            if let Some(ref buf) = self.open_buffer {
+                self.queue.write_buffer(buf, 0, bytemuck_cast_slice(opens));
+            }
+        } else if self.open_buffer.take().is_some() {
+            buffers_changed = true;
         }
 
         // OHLC interleaved buffer [h0,l0,c0, h1,l1,c1, ...] for ATR/Stoch/ADX
@@ -468,6 +553,7 @@ impl GpuCompute {
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }));
+                buffers_changed = true;
             }
             if let Some(ref buf) = self.ohlc_buffer {
                 self.queue.write_buffer(buf, 0, bytemuck_cast_slice(&ohlc));
@@ -484,9 +570,17 @@ impl GpuCompute {
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }));
+                buffers_changed = true;
             }
             if let Some(ref buf) = self.mid_buffer {
                 self.queue.write_buffer(buf, 0, bytemuck_cast_slice(&mids));
+            }
+        } else {
+            if self.ohlc_buffer.take().is_some() {
+                buffers_changed = true;
+            }
+            if self.mid_buffer.take().is_some() {
+                buffers_changed = true;
             }
         }
 
@@ -499,15 +593,18 @@ impl GpuCompute {
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }));
+                buffers_changed = true;
             }
             if let Some(ref buf) = self.vol_buffer {
                 self.queue
                     .write_buffer(buf, 0, bytemuck_cast_slice(volumes));
             }
+        } else if self.vol_buffer.take().is_some() {
+            buffers_changed = true;
         }
 
         // Output buffers (reusable — allocate max size needed). PERF4: only realloc on size change.
-        if !same_size {
+        if !same_size || self.sma_buffer.is_none() || self.ema_buffer.is_none() {
             let out_size = (bar_count as u64) * 4;
             let out_size_4x = (bar_count as u64) * 16;
             self.sma_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -552,6 +649,7 @@ impl GpuCompute {
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             }));
+            buffers_changed = true;
             // params buffer is fixed 8-byte, only allocate once
             if self.ind_params_buffer.is_none() {
                 self.ind_params_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -560,9 +658,130 @@ impl GpuCompute {
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }));
+                buffers_changed = true;
             }
-            self.pooled_bar_count = bar_count;
         }
+        if self.multi_params_buffer.is_none() {
+            self.multi_params_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("multi_params_shared"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            buffers_changed = true;
+        }
+        self.pooled_bar_count = bar_count;
+        if buffers_changed {
+            self.rebuild_cached_bind_groups();
+        }
+    }
+
+    fn rebuild_cached_bind_groups(&mut self) {
+        self.indicator_bind_group = match (
+            self.bar_buffer.as_ref(),
+            self.ind_out_buffer.as_ref(),
+            self.ind_params_buffer.as_ref(),
+        ) {
+            (Some(bar_buf), Some(out_buf), Some(params_buf)) => {
+                Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("ind_bg_cached"),
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: bar_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: out_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: params_buf.as_entire_binding(),
+                        },
+                    ],
+                }))
+            }
+            _ => None,
+        };
+        self.custom_bind_group = match (
+            self.custom_in_buffer.as_ref(),
+            self.custom_out_buffer.as_ref(),
+            self.ind_params_buffer.as_ref(),
+        ) {
+            (Some(input_buf), Some(out_buf), Some(params_buf)) => {
+                Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("custom_ind_bg_cached"),
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: input_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: out_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: params_buf.as_entire_binding(),
+                        },
+                    ],
+                }))
+            }
+            _ => None,
+        };
+        self.multi_bind_group = if let (
+            Some(close_buf),
+            Some(out_buf),
+            Some(aux_buf),
+            Some(params_buf),
+        ) = (
+            self.bar_buffer.as_ref(),
+            self.custom_out_buffer.as_ref(),
+            self.custom_in_buffer.as_ref(),
+            self.multi_params_buffer.as_ref(),
+        ) {
+            let open_buf = self.open_buffer.as_ref().unwrap_or(close_buf);
+            let ohlc_buf = self.ohlc_buffer.as_ref().unwrap_or(close_buf);
+            let vol_buf = self.vol_buffer.as_ref().unwrap_or(close_buf);
+            Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("multi_ind_bg_cached"),
+                layout: &self.multi_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: open_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: ohlc_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: close_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: vol_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: aux_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: out_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: params_buf.as_entire_binding(),
+                    },
+                ],
+            }))
+        } else {
+            None
+        };
     }
 
     /// Generic dispatch: run a compute pipeline with close prices as input, return f32 per bar.
@@ -576,34 +795,15 @@ impl GpuCompute {
         if self.bar_count == 0 {
             return None;
         }
-        let bar_buf = self.bar_buffer.as_ref()?;
         let rb_buf = self.readback_buffer.as_ref()?;
         let out_buf = self.ind_out_buffer.as_ref()?;
         let params_buffer = self.ind_params_buffer.as_ref()?;
+        let bind_group = self.indicator_bind_group.as_ref()?;
 
         let out_size = (self.bar_count as u64) * 4;
         let params = [period, self.bar_count];
         self.queue
             .write_buffer(params_buffer, 0, bytemuck_cast_slice(&params));
-
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ind_bg"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: bar_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: out_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
@@ -612,7 +812,7 @@ impl GpuCompute {
                 timestamp_writes: None,
             });
             pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, bind_group, &[]);
             if parallel {
                 pass.dispatch_workgroups((self.bar_count + 255) / 256, 1, 1);
             } else {
@@ -743,6 +943,7 @@ impl GpuCompute {
         let input_buf = self.custom_in_buffer.as_ref()?;
         let out_buf = self.custom_out_buffer.as_ref()?;
         let params_buffer = self.ind_params_buffer.as_ref()?;
+        let bind_group = self.custom_bind_group.as_ref()?;
         // Pooled custom_in_buffer is sized for 4 × bar_count × 4 bytes; refuse if a
         // caller ever exceeds that (no current caller does — BOP at 4× is widest).
         let input_bytes = (input.len() as u64) * 4;
@@ -757,25 +958,6 @@ impl GpuCompute {
         self.queue
             .write_buffer(params_buffer, 0, bytemuck_cast_slice(&params));
 
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("custom_ind_bg"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: input_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: out_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -783,7 +965,7 @@ impl GpuCompute {
                 timestamp_writes: None,
             });
             pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, bind_group, &[]);
             if parallel {
                 pass.dispatch_workgroups((self.bar_count + 255) / 256, 1, 1);
             } else {
@@ -792,6 +974,65 @@ impl GpuCompute {
         }
         let read_size = out_size.min(rb_buf.size());
         encoder.copy_buffer_to_buffer(out_buf, 0, rb_buf, 0, read_size);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = rb_buf.slice(0..read_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok();
+        if rx.recv().ok()?.is_err() {
+            return None;
+        }
+        let data = slice.get_mapped_range();
+        let result = bytemuck_cast_slice_to_f32(&data);
+        drop(data);
+        rb_buf.unmap();
+        Some(result)
+    }
+
+    fn dispatch_multi_indicator(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        params: [u32; 4],
+        parallel: bool,
+        read_offset: u64,
+        read_size: u64,
+    ) -> Option<Vec<f32>> {
+        if self.bar_count == 0 || read_size == 0 {
+            return None;
+        }
+        let rb_buf = self.readback_buffer.as_ref()?;
+        let out_buf = self.custom_out_buffer.as_ref()?;
+        let params_buffer = self.multi_params_buffer.as_ref()?;
+        let bind_group = self.multi_bind_group.as_ref()?;
+        if read_size > rb_buf.size() || read_offset + read_size > out_buf.size() {
+            return None;
+        }
+        self.queue
+            .write_buffer(params_buffer, 0, bytemuck_cast_slice(&params));
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("multi_ind_pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
+            if parallel {
+                pass.dispatch_workgroups((self.bar_count + 255) / 256, 1, 1);
+            } else {
+                pass.dispatch_workgroups(1, 1, 1);
+            }
+        }
+        encoder.copy_buffer_to_buffer(out_buf, read_offset, rb_buf, 0, read_size);
         self.queue.submit(std::iter::once(encoder.finish()));
 
         let slice = rb_buf.slice(0..read_size);
@@ -854,22 +1095,18 @@ impl GpuCompute {
         self.dispatch_indicator(&self.cmo_pipeline, period, true)
     }
 
-    /// Compute QStick on GPU from interleaved [open, close] data.
-    pub fn compute_qstick_gpu(
-        &self,
-        opens: &[f32],
-        closes: &[f32],
-        period: u32,
-    ) -> Option<Vec<f32>> {
-        if opens.len() != closes.len() || opens.len() != self.bar_count as usize {
+    /// Compute QStick on GPU from resident open + close buffers.
+    pub fn compute_qstick_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        if self.open_buffer.is_none() || self.bar_count == 0 {
             return None;
         }
-        let mut interleaved = Vec::with_capacity(opens.len() * 2);
-        for i in 0..opens.len() {
-            interleaved.push(opens[i]);
-            interleaved.push(closes[i]);
-        }
-        self.dispatch_custom_input_indicator(&interleaved, &self.qstick_pipeline, period, 1, true)
+        self.dispatch_multi_indicator(
+            &self.qstick_pipeline,
+            [period, self.bar_count, 0, 0],
+            true,
+            0,
+            (self.bar_count as u64) * 4,
+        )
     }
 
     /// Compute Disparity Index on GPU. Returns f32 per bar.
@@ -877,30 +1114,18 @@ impl GpuCompute {
         self.dispatch_indicator(&self.disparity_pipeline, period, true)
     }
 
-    /// Compute BOP on GPU from interleaved [open, high, low, close] data.
-    pub fn compute_bop_gpu(
-        &self,
-        opens: &[f32],
-        highs: &[f32],
-        lows: &[f32],
-        closes: &[f32],
-        period: u32,
-    ) -> Option<Vec<f32>> {
-        if opens.len() != closes.len()
-            || highs.len() != closes.len()
-            || lows.len() != closes.len()
-            || closes.len() != self.bar_count as usize
-        {
+    /// Compute BOP on GPU from resident open + OHLC buffers.
+    pub fn compute_bop_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        if self.open_buffer.is_none() || self.ohlc_buffer.is_none() || self.bar_count == 0 {
             return None;
         }
-        let mut interleaved = Vec::with_capacity(opens.len() * 4);
-        for i in 0..opens.len() {
-            interleaved.push(opens[i]);
-            interleaved.push(highs[i]);
-            interleaved.push(lows[i]);
-            interleaved.push(closes[i]);
-        }
-        self.dispatch_custom_input_indicator(&interleaved, &self.bop_pipeline, period, 1, true)
+        self.dispatch_multi_indicator(
+            &self.bop_pipeline,
+            [period, self.bar_count, 0, 0],
+            true,
+            0,
+            (self.bar_count as u64) * 4,
+        )
     }
 
     /// Compute rolling sample standard deviation on GPU. Returns f32 per bar.
@@ -908,30 +1133,18 @@ impl GpuCompute {
         self.dispatch_indicator(&self.stddev_pipeline, period, true)
     }
 
-    /// Compute MFI on GPU from interleaved [high, low, close, volume] data.
-    pub fn compute_mfi_gpu(
-        &self,
-        highs: &[f32],
-        lows: &[f32],
-        closes: &[f32],
-        volumes: &[f32],
-        period: u32,
-    ) -> Option<Vec<f32>> {
-        if highs.len() != closes.len()
-            || lows.len() != closes.len()
-            || volumes.len() != closes.len()
-            || closes.len() != self.bar_count as usize
-        {
+    /// Compute MFI on GPU from resident OHLC + volume buffers.
+    pub fn compute_mfi_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        if self.ohlc_buffer.is_none() || self.vol_buffer.is_none() || self.bar_count == 0 {
             return None;
         }
-        let mut interleaved = Vec::with_capacity(closes.len() * 4);
-        for i in 0..closes.len() {
-            interleaved.push(highs[i]);
-            interleaved.push(lows[i]);
-            interleaved.push(closes[i]);
-            interleaved.push(volumes[i]);
-        }
-        self.dispatch_custom_input_indicator(&interleaved, &self.mfi_pipeline, period, 1, true)
+        self.dispatch_multi_indicator(
+            &self.mfi_pipeline,
+            [period, self.bar_count, 0, 0],
+            true,
+            0,
+            (self.bar_count as u64) * 4,
+        )
     }
 
     /// Compute TRIX on GPU from close prices. Output: [line, signal, hist] × bar_count.
@@ -964,27 +1177,19 @@ impl GpuCompute {
         self.dispatch_custom_input_indicator(closes, &self.ppo_pipeline, packed, 3, false)
     }
 
-    /// Compute Ultimate Oscillator on GPU from interleaved [high, low, close] data.
-    pub fn compute_ultosc_gpu(
-        &self,
-        highs: &[f32],
-        lows: &[f32],
-        closes: &[f32],
-    ) -> Option<Vec<f32>> {
-        if highs.len() != closes.len()
-            || lows.len() != closes.len()
-            || closes.len() != self.bar_count as usize
-        {
+    /// Compute Ultimate Oscillator on GPU from resident OHLC buffers.
+    pub fn compute_ultosc_gpu(&self) -> Option<Vec<f32>> {
+        if self.ohlc_buffer.is_none() || self.bar_count == 0 {
             return None;
         }
-        let mut interleaved = Vec::with_capacity(closes.len() * 3);
-        for i in 0..closes.len() {
-            interleaved.push(highs[i]);
-            interleaved.push(lows[i]);
-            interleaved.push(closes[i]);
-        }
         let packed = 7u32 | (14u32 << 8) | (28u32 << 16);
-        self.dispatch_custom_input_indicator(&interleaved, &self.ultosc_pipeline, packed, 1, false)
+        self.dispatch_multi_indicator(
+            &self.ultosc_pipeline,
+            [packed, self.bar_count, 0, 0],
+            false,
+            0,
+            (self.bar_count as u64) * 4,
+        )
     }
 
     /// Compute StochRSI on GPU from close prices. Output: [%K, %D] × bar_count.
@@ -1101,97 +1306,18 @@ impl GpuCompute {
         Some(result)
     }
 
-    /// Compute OBV on GPU using real volume data.
-    /// Caller provides pre-interleaved [close, volume] pairs.
-    pub fn compute_obv_gpu_with_cv(&self, cv_interleaved: &[f32]) -> Option<Vec<f32>> {
-        if self.bar_count == 0 {
+    /// Compute OBV on GPU using resident close + volume buffers.
+    pub fn compute_obv_gpu(&self) -> Option<Vec<f32>> {
+        if self.bar_count == 0 || self.vol_buffer.is_none() {
             return None;
         }
-        let rb_buf = self.readback_buffer.as_ref()?;
-        let n = self.bar_count as usize;
-        if cv_interleaved.len() != n * 2 {
-            return None;
-        }
-
-        let cv_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("obv_cv"),
-            size: (n as u64) * 8,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue
-            .write_buffer(&cv_buf, 0, bytemuck_cast_slice(cv_interleaved));
-
-        let out_size = (n as u64) * 4;
-        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("obv_out"),
-            size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let params = [0u32, self.bar_count];
-        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("obv_params"),
-            size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue
-            .write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
-
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("obv_bg"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: cv_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: out_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("obv_dispatch"),
-            });
-        {
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.obv_pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(1, 1, 1);
-        }
-        let read_size = out_size.min(rb_buf.size());
-        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, read_size);
-        self.queue.submit(std::iter::once(encoder.finish()));
-
-        let slice = rb_buf.slice(0..read_size);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .ok();
-        if rx.recv().ok()?.is_err() {
-            return None;
-        }
-        let data = slice.get_mapped_range();
-        let result = bytemuck_cast_slice_to_f32(&data);
-        drop(data);
-        rb_buf.unmap();
-        Some(result)
+        self.dispatch_multi_indicator(
+            &self.obv_pipeline,
+            [0, self.bar_count, 0, 0],
+            false,
+            0,
+            (self.bar_count as u64) * 4,
+        )
     }
 
     /// Compute Ehlers Super Smoother on GPU. Returns f32 per bar.
@@ -1209,205 +1335,43 @@ impl GpuCompute {
         self.dispatch_ohlc_indicator(&self.fractals_pipeline, 0, 2)
     }
 
-    /// Compute ATR Projection on GPU. Needs custom [open, atr] interleaved buffer.
+    /// Compute ATR Projection on GPU. Uses resident open prices plus an auxiliary ATR scratch buffer.
     /// Returns [upper, lower] × bar_count.
-    pub fn compute_atr_projection_gpu(&self, opens: &[f32], atrs: &[f32]) -> Option<Vec<f32>> {
-        if self.bar_count == 0 || opens.len() != atrs.len() {
-            return None;
-        }
-        let rb_buf = self.readback_buffer.as_ref()?;
-        let n = opens.len() as u32;
-
-        // Create interleaved [open, atr] buffer
-        let mut interleaved = Vec::with_capacity(n as usize * 2);
-        for i in 0..n as usize {
-            interleaved.push(opens[i]);
-            interleaved.push(atrs[i]);
-        }
-
-        let input_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("atr_proj_in"),
-            size: (n as u64) * 8,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue
-            .write_buffer(&input_buf, 0, bytemuck_cast_slice(&interleaved));
-
-        let out_size = (n as u64) * 8; // 2 floats per bar
-        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("atr_proj_out"),
-            size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let params = [0u32, n];
-        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("atr_proj_params"),
-            size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue
-            .write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("atr_proj_bg"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: input_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: out_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-        let mut encoder = self.device.create_command_encoder(&Default::default());
+    pub fn compute_atr_projection_gpu(&self, atrs: &[f32]) -> Option<Vec<f32>> {
+        if self.bar_count == 0
+            || self.open_buffer.is_none()
+            || atrs.len() != self.bar_count as usize
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("atr_proj_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.atr_proj_pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups((n + 255) / 256, 1, 1);
-        }
-        let read_size = out_size.min(rb_buf.size());
-        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, read_size);
-        self.queue.submit(std::iter::once(encoder.finish()));
-        let slice = rb_buf.slice(0..read_size);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .ok();
-        if rx.recv().ok()?.is_err() {
             return None;
         }
-        let data = slice.get_mapped_range();
-        let result = bytemuck_cast_slice_to_f32(&data);
-        drop(data);
-        rb_buf.unmap();
-        Some(result)
+        let aux_buf = self.custom_in_buffer.as_ref()?;
+        self.queue.write_buffer(aux_buf, 0, bytemuck_cast_slice(atrs));
+        self.dispatch_multi_indicator(
+            &self.atr_proj_pipeline,
+            [0, self.bar_count, 0, 0],
+            true,
+            0,
+            (self.bar_count as u64) * 8,
+        )
     }
 
-    /// Full BetterVolume GPU dispatch with all OHLCV data.
-    /// Accepts all 5 arrays directly from CPU to build proper interleaved buffer.
-    pub fn compute_better_volume_gpu_full(
-        &self,
-        opens: &[f32],
-        highs: &[f32],
-        lows: &[f32],
-        closes: &[f32],
-        volumes: &[f32],
-        lookback: u32,
-    ) -> Option<Vec<f32>> {
+    /// Full BetterVolume GPU dispatch with resident OHLCV buffers.
+    pub fn compute_better_volume_gpu_full(&self, lookback: u32) -> Option<Vec<f32>> {
         let n = self.bar_count;
-        if n == 0 || opens.len() != n as usize {
-            return None;
-        }
-        let rb_buf = self.readback_buffer.as_ref()?;
-
-        // Build OHLCV interleaved: [O,H,L,C,V] × 5 per bar
-        let mut ohlcv = Vec::with_capacity(n as usize * 5);
-        for i in 0..n as usize {
-            ohlcv.push(opens[i]);
-            ohlcv.push(highs[i]);
-            ohlcv.push(lows[i]);
-            ohlcv.push(closes[i]);
-            ohlcv.push(volumes[i]);
-        }
-
-        let input_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bvol_ohlcv"),
-            size: (n as u64) * 20, // 5 × f32 per bar
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue
-            .write_buffer(&input_buf, 0, bytemuck_cast_slice(&ohlcv));
-
-        let out_size = (n as u64) * 4;
-        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bvol_out"),
-            size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let params = [lookback, n];
-        let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bvol_params"),
-            size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue
-            .write_buffer(&params_buf, 0, bytemuck_cast_slice(&params));
-
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("bvol_bg"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: input_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: out_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: params_buf.as_entire_binding(),
-                },
-            ],
-        });
-
-        let workgroups = (n + 255) / 256;
-        let mut encoder = self.device.create_command_encoder(&Default::default());
+        if n == 0
+            || self.open_buffer.is_none()
+            || self.ohlc_buffer.is_none()
+            || self.vol_buffer.is_none()
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("bvol_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.better_vol_pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(workgroups, 1, 1);
-        }
-        let read_size = out_size.min(rb_buf.size());
-        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, read_size);
-        self.queue.submit(std::iter::once(encoder.finish()));
-
-        let slice = rb_buf.slice(0..read_size);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .ok();
-        if rx.recv().ok()?.is_err() {
             return None;
         }
-        let data = slice.get_mapped_range();
-        let result = bytemuck_cast_slice_to_f32(&data);
-        drop(data);
-        rb_buf.unmap();
-        Some(result)
+        self.dispatch_multi_indicator(
+            &self.better_vol_pipeline,
+            [lookback, n, 0, 0],
+            true,
+            0,
+            (n as u64) * 4,
+        )
     }
 
     /// Compute Supply/Demand zones on GPU. Returns [type, high, low] × bar_count. Parallel.
@@ -3200,11 +3164,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 "#;
 
 const OBV_SHADER: &str = r#"
-// On-Balance Volume — sequential (cumulative)
+// On-Balance Volume — sequential (cumulative) using resident close + volume buffers.
 struct Params { period: u32, bar_count: u32, }
-@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [close, volume] interleaved (2 per bar)
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
-@group(0) @binding(2) var<uniform> params: Params;
+@group(0) @binding(2) var<storage, read> close_bars: array<f32>;
+@group(0) @binding(3) var<storage, read> volumes: array<f32>;
+@group(0) @binding(5) var<storage, read_write> output: array<f32>;
+@group(0) @binding(6) var<uniform> params: Params;
 
 @compute @workgroup_size(1)
 fn main() {
@@ -3212,9 +3177,9 @@ fn main() {
     output[0] = 0.0;
     var obv: f32 = 0.0;
     for (var i: u32 = 1u; i < params.bar_count; i = i + 1u) {
-        let close = bars[i * 2u];
-        let prev_close = bars[(i - 1u) * 2u];
-        let vol = bars[i * 2u + 1u];
+        let close = close_bars[i];
+        let prev_close = close_bars[i - 1u];
+        let vol = volumes[i];
         if (close > prev_close) { obv = obv + vol; }
         else if (close < prev_close) { obv = obv - vol; }
         output[i] = obv;
@@ -3274,11 +3239,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 "#;
 
 const QSTICK_SHADER: &str = r#"
-// QStick — parallel SMA of candle body using [open, close] pairs.
+// QStick — parallel SMA of candle body using resident open + close buffers.
 struct Params { period: u32, bar_count: u32, }
-@group(0) @binding(0) var<storage, read> bars: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
-@group(0) @binding(2) var<uniform> params: Params;
+@group(0) @binding(0) var<storage, read> open_bars: array<f32>;
+@group(0) @binding(2) var<storage, read> close_bars: array<f32>;
+@group(0) @binding(5) var<storage, read_write> output: array<f32>;
+@group(0) @binding(6) var<uniform> params: Params;
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -3291,8 +3257,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var sum: f32 = 0.0;
     let start = i + 1u - params.period;
     for (var j: u32 = start; j <= i; j = j + 1u) {
-        let open = bars[j * 2u];
-        let close = bars[j * 2u + 1u];
+        let open = open_bars[j];
+        let close = close_bars[j];
         sum = sum + (close - open);
     }
     output[i] = sum / f32(params.period);
@@ -3329,11 +3295,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 "#;
 
 const BOP_SHADER: &str = r#"
-// BOP — parallel SMA of (close-open)/(high-low) using [open, high, low, close] quads.
+// BOP — parallel SMA of (close-open)/(high-low) using resident open + OHLC buffers.
 struct Params { period: u32, bar_count: u32, }
-@group(0) @binding(0) var<storage, read> bars: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
-@group(0) @binding(2) var<uniform> params: Params;
+@group(0) @binding(0) var<storage, read> open_bars: array<f32>;
+@group(0) @binding(1) var<storage, read> ohlc_bars: array<f32>;
+@group(0) @binding(5) var<storage, read_write> output: array<f32>;
+@group(0) @binding(6) var<uniform> params: Params;
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -3346,11 +3313,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var sum: f32 = 0.0;
     let start = i + 1u - params.period;
     for (var j: u32 = start; j <= i; j = j + 1u) {
-        let base = j * 4u;
-        let open = bars[base];
-        let high = bars[base + 1u];
-        let low = bars[base + 2u];
-        let close = bars[base + 3u];
+        let base = j * 3u;
+        let open = open_bars[j];
+        let high = ohlc_bars[base];
+        let low = ohlc_bars[base + 1u];
+        let close = ohlc_bars[base + 2u];
         let range = max(high - low, 1e-6);
         sum = sum + (close - open) / range;
     }
@@ -3389,11 +3356,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 "#;
 
 const MFI_SHADER: &str = r#"
-// MFI — parallel Money Flow Index using [high, low, close, volume] quads.
+// MFI — parallel Money Flow Index using resident OHLC + volume buffers.
 struct Params { period: u32, bar_count: u32, }
-@group(0) @binding(0) var<storage, read> bars: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
-@group(0) @binding(2) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> ohlc_bars: array<f32>;
+@group(0) @binding(3) var<storage, read> volumes: array<f32>;
+@group(0) @binding(5) var<storage, read_write> output: array<f32>;
+@group(0) @binding(6) var<uniform> params: Params;
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -3407,11 +3375,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var neg_sum: f32 = 0.0;
     let start = i + 1u - params.period;
     for (var j: u32 = start; j <= i; j = j + 1u) {
-        let base = j * 4u;
-        let prev_base = (j - 1u) * 4u;
-        let tp = (bars[base] + bars[base + 1u] + bars[base + 2u]) / 3.0;
-        let prev_tp = (bars[prev_base] + bars[prev_base + 1u] + bars[prev_base + 2u]) / 3.0;
-        let money_flow = tp * max(bars[base + 3u], 0.0);
+        let base = j * 3u;
+        let prev_base = (j - 1u) * 3u;
+        let tp = (ohlc_bars[base] + ohlc_bars[base + 1u] + ohlc_bars[base + 2u]) / 3.0;
+        let prev_tp =
+            (ohlc_bars[prev_base] + ohlc_bars[prev_base + 1u] + ohlc_bars[prev_base + 2u]) / 3.0;
+        let money_flow = tp * max(volumes[j], 0.0);
         if (tp > prev_tp) {
             pos_sum = pos_sum + money_flow;
         } else if (tp < prev_tp) {
@@ -3527,12 +3496,12 @@ fn main() {
 "#;
 
 const ULTOSC_SHADER: &str = r#"
-// Ultimate Oscillator — sequential weighted BP/TR average using [high, low, close] triplets.
+// Ultimate Oscillator — sequential weighted BP/TR average using resident OHLC buffers.
 // params.period encodes: [7:0]=short, [15:8]=mid, [23:16]=long.
 struct Params { period: u32, bar_count: u32, }
-@group(0) @binding(0) var<storage, read> bars: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
-@group(0) @binding(2) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> ohlc_bars: array<f32>;
+@group(0) @binding(5) var<storage, read_write> output: array<f32>;
+@group(0) @binding(6) var<uniform> params: Params;
 
 fn true_low(low: f32, prev_close: f32) -> f32 {
     return min(low, prev_close);
@@ -3566,10 +3535,10 @@ fn main() {
         for (var j: u32 = i + 1u - p3; j <= i; j = j + 1u) {
             let base = j * 3u;
             let prev_base = (j - 1u) * 3u;
-            let prev_close = bars[prev_base + 2u];
-            let high = bars[base];
-            let low = bars[base + 1u];
-            let close = bars[base + 2u];
+            let prev_close = ohlc_bars[prev_base + 2u];
+            let high = ohlc_bars[base];
+            let low = ohlc_bars[base + 1u];
+            let close = ohlc_bars[base + 2u];
             let bp = close - true_low(low, prev_close);
             let tr = max(true_high(high, prev_close) - true_low(low, prev_close), 1e-6);
             bp3 = bp3 + bp;
@@ -4364,20 +4333,19 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 "#;
 
 const ATR_PROJECTION_SHADER: &str = r#"
-// ATR Projection — parallel per-bar: open ± ATR
-// Input binding 0: [open, atr] interleaved (2 floats per bar)
-// Output: [upper, lower] per bar (2 floats)
+// ATR Projection — parallel per-bar: open ± ATR using resident open + aux ATR buffers.
 struct Params { period: u32, bar_count: u32, }
-@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [open0, atr0, open1, atr1, ...]
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
-@group(0) @binding(2) var<uniform> params: Params;
+@group(0) @binding(0) var<storage, read> open_bars: array<f32>;
+@group(0) @binding(4) var<storage, read> atr_values: array<f32>;
+@group(0) @binding(5) var<storage, read_write> output: array<f32>;
+@group(0) @binding(6) var<uniform> params: Params;
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x;
     if (i >= params.bar_count) { return; }
-    let open_val = bars[i * 2u];
-    let atr_val = bars[i * 2u + 1u];
+    let open_val = open_bars[i];
+    let atr_val = atr_values[i];
     if (atr_val > 0.0) {
         output[i * 2u] = open_val + atr_val;
         output[i * 2u + 1u] = open_val - atr_val;
@@ -4390,12 +4358,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 const BETTER_VOLUME_SHADER: &str = r#"
 // BetterVolume — Full Emini-Watch algorithm (1:1 parity with CPU/MQL5)
-// Input: [O,H,L,C,V] interleaved = 5 floats per bar
 // Output: classification f32: 0=low_vol, 1=climax_up, 2=climax_dn, 3=churn, 4=climax_churn, 5=normal
 struct Params { period: u32, bar_count: u32, }
-@group(0) @binding(0) var<storage, read> bars: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
-@group(0) @binding(2) var<uniform> params: Params;
+@group(0) @binding(0) var<storage, read> open_bars: array<f32>;
+@group(0) @binding(1) var<storage, read> ohlc_bars: array<f32>;
+@group(0) @binding(3) var<storage, read> volumes: array<f32>;
+@group(0) @binding(5) var<storage, read_write> output: array<f32>;
+@group(0) @binding(6) var<uniform> params: Params;
 
 // Estimate buy/sell volume from candle structure (matching MQL5 EstimateBuySell)
 fn estimate_buy(o: f32, h: f32, l: f32, c: f32, vol: f32) -> f32 {
@@ -4423,11 +4392,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let min_range: f32 = 0.0000000001;
 
     // Current bar OHLCV
-    let o = bars[i * 5u];
-    let h = bars[i * 5u + 1u];
-    let l = bars[i * 5u + 2u];
-    let c = bars[i * 5u + 3u];
-    let vol = bars[i * 5u + 4u];
+    let base = i * 3u;
+    let o = open_bars[i];
+    let h = ohlc_bars[base];
+    let l = ohlc_bars[base + 1u];
+    let c = ohlc_bars[base + 2u];
+    let vol = volumes[i];
     let range = max(h - l, min_range);
 
     let buy_vol = estimate_buy(o, h, l, c, vol);
@@ -4449,11 +4419,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     for (var j: u32 = 1u; j <= lb; j = j + 1u) {
         let bi = i - j;
-        let bo = bars[bi * 5u];
-        let bh = bars[bi * 5u + 1u];
-        let bl = bars[bi * 5u + 2u];
-        let bc = bars[bi * 5u + 3u];
-        let bv = bars[bi * 5u + 4u];
+        let bbase = bi * 3u;
+        let bo = open_bars[bi];
+        let bh = ohlc_bars[bbase];
+        let bl = ohlc_bars[bbase + 1u];
+        let bc = ohlc_bars[bbase + 2u];
+        let bv = volumes[bi];
         let br = max(bh - bl, min_range);
 
         let bbuy = estimate_buy(bo, bh, bl, bc, bv);
@@ -4487,11 +4458,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // 2-bar analysis (matching MQL5 InpUse2Bars=true)
     if (i >= lb + 1u) {
         let pi = i - 1u;
-        let po = bars[pi * 5u];
-        let ph = bars[pi * 5u + 1u];
-        let pl = bars[pi * 5u + 2u];
-        let pc = bars[pi * 5u + 3u];
-        let pv = bars[pi * 5u + 4u];
+        let pbase = pi * 3u;
+        let po = open_bars[pi];
+        let ph = ohlc_bars[pbase];
+        let pl = ohlc_bars[pbase + 1u];
+        let pc = ohlc_bars[pbase + 2u];
+        let pv = volumes[pi];
 
         let pbuy = estimate_buy(po, ph, pl, pc, pv);
         let psell = pv - pbuy;
@@ -4519,10 +4491,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             if (b1i == 0u) { break; }
             let b2i = b1i - 1u;
 
-            let o1 = bars[b1i * 5u]; let h1 = bars[b1i * 5u + 1u]; let l1 = bars[b1i * 5u + 2u];
-            let c1 = bars[b1i * 5u + 3u]; let v1 = bars[b1i * 5u + 4u];
-            let o2 = bars[b2i * 5u]; let h2 = bars[b2i * 5u + 1u]; let l2 = bars[b2i * 5u + 2u];
-            let c2 = bars[b2i * 5u + 3u]; let v2 = bars[b2i * 5u + 4u];
+            let base1 = b1i * 3u;
+            let base2 = b2i * 3u;
+            let o1 = open_bars[b1i]; let h1 = ohlc_bars[base1]; let l1 = ohlc_bars[base1 + 1u];
+            let c1 = ohlc_bars[base1 + 2u]; let v1 = volumes[b1i];
+            let o2 = open_bars[b2i]; let h2 = ohlc_bars[base2]; let l2 = ohlc_bars[base2 + 1u];
+            let c2 = ohlc_bars[base2 + 2u]; let v2 = volumes[b2i];
 
             let tb = estimate_buy(o1, h1, l1, c1, v1) + estimate_buy(o2, h2, l2, c2, v2);
             let ts = (v1 - estimate_buy(o1, h1, l1, c1, v1)) + (v2 - estimate_buy(o2, h2, l2, c2, v2));
@@ -4556,11 +4530,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 const ANCHORED_VWAP_SHADER: &str = r#"
 // Anchored VWAP — sequential from anchor bar to end
 // Cumulative (price × volume) / cumulative volume from anchor point
-// Input: [close, volume] interleaved (2 per bar), anchor_bar in params.period
 struct Params { period: u32, bar_count: u32, }  // period = anchor bar index
-@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [close0, vol0, close1, vol1, ...]
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
-@group(0) @binding(2) var<uniform> params: Params;
+@group(0) @binding(2) var<storage, read> close_bars: array<f32>;
+@group(0) @binding(3) var<storage, read> volumes: array<f32>;
+@group(0) @binding(5) var<storage, read_write> output: array<f32>;
+@group(0) @binding(6) var<uniform> params: Params;
 
 @compute @workgroup_size(1)
 fn main() {
@@ -4570,8 +4544,8 @@ fn main() {
 
     for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
         if (i < anchor) { output[i] = 0.0; continue; }
-        let close = bars[i * 2u];
-        let vol = bars[i * 2u + 1u];
+        let close = close_bars[i];
+        let vol = volumes[i];
         cum_pv = cum_pv + close * vol;
         cum_vol = cum_vol + vol;
         output[i] = select(cum_pv / cum_vol, close, cum_vol < 0.000001);
@@ -6719,3 +6693,21 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     output[i * 2u + 1u] = pl;
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::anchored_vwap_read_window;
+
+    #[test]
+    fn anchored_vwap_read_window_computes_expected_offset_and_size() {
+        assert_eq!(anchored_vwap_read_window(10, 3, 7), Some((12, 16)));
+    }
+
+    #[test]
+    fn anchored_vwap_read_window_rejects_invalid_ranges() {
+        assert_eq!(anchored_vwap_read_window(0, 0, 1), None);
+        assert_eq!(anchored_vwap_read_window(10, 4, 4), None);
+        assert_eq!(anchored_vwap_read_window(10, 8, 7), None);
+        assert_eq!(anchored_vwap_read_window(10, 8, 11), None);
+    }
+}

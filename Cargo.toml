@@ -19,3 +19,6 @@ codegen-units = 1    # single codegen unit for max optimization
 strip = true
 panic = "abort"      # smaller binary, no unwind tables
 debug = false
+
+[patch.crates-io]
+thirtyfour = { path = "vendor/thirtyfour" }
