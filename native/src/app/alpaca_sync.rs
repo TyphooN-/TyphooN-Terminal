@@ -71,6 +71,21 @@ pub(super) struct AlpacaNoDataPair {
     pub reason: String,
 }
 
+/// Persisted "bounded full-history fetch already exhausted available Alpaca
+/// data" marker. Unlike `AlpacaNoDataPair`, these pairs still participate in
+/// Missing/Stale sync; only repeat Backfill scheduling is suppressed.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct AlpacaBackfillCompletePair {
+    pub symbol: String,
+    pub timeframe: String,
+    #[serde(default)]
+    pub marked_at: i64,
+    #[serde(default)]
+    pub bar_count: i64,
+    #[serde(default)]
+    pub target_bars: i64,
+}
+
 pub(super) fn normalize_sync_timeframe_key(tf: &str) -> Option<&'static str> {
     STANDARD_SYNC_TIMEFRAMES.iter().find_map(|(short, cache)| {
         if tf.eq_ignore_ascii_case(short) || tf.eq_ignore_ascii_case(cache) {
@@ -195,10 +210,12 @@ pub(super) fn alpaca_sync_target_bars(tf: &str) -> Option<u32> {
         "15Min" => Some(30_000),
         "30Min" => Some(30_000),
         "1Hour" => Some(30_000),
-        "4Hour" => Some(20_000),
-        "1Day" => Some(10_000),
-        "1Week" => Some(10_000),
-        "1Month" => Some(10_000),
+        // Keep high-TF targets inside Alpaca's bounded targeted lookback
+        // windows so successful fetches can converge instead of thrashing.
+        "4Hour" => Some(14_000),
+        "1Day" => Some(3_500),
+        "1Week" => Some(1_000),
+        "1Month" => Some(240),
         _ => None,
     }
 }
@@ -278,6 +295,7 @@ pub(super) fn select_alpaca_sync_candidates(
     state_map: &HashMap<(String, String), SyncCacheState>,
     focus_symbols: &HashSet<String>,
     no_data_pairs: &HashMap<String, AlpacaNoDataPair>,
+    backfill_complete_pairs: &HashSet<String>,
     pending_fetches: &HashSet<String>,
     batch_size: usize,
     now_s: i64,
@@ -306,7 +324,8 @@ pub(super) fn select_alpaca_sync_candidates(
             if no_data_pairs.contains_key(&alpaca_fetch_key(symbol, tf)) {
                 continue;
             }
-            if pending_fetches.contains(&alpaca_fetch_key(symbol, tf)) {
+            let fetch_key = alpaca_fetch_key(symbol, tf);
+            if pending_fetches.contains(&fetch_key) {
                 continue;
             }
             let state = state_map.get(&(symbol_key.clone(), tf.to_string())).copied();
@@ -322,6 +341,11 @@ pub(super) fn select_alpaca_sync_candidates(
             else {
                 continue;
             };
+            if candidate.bucket == AlpacaSyncBucket::Backfill
+                && backfill_complete_pairs.contains(&fetch_key)
+            {
+                continue;
+            }
             match candidate.bucket {
                 AlpacaSyncBucket::Missing => missing_by_tf
                     .entry(tf.to_string())
@@ -379,6 +403,7 @@ pub(super) fn select_alpaca_sync_workset(
     state_map: &HashMap<(String, String), SyncCacheState>,
     focus_symbols: &HashSet<String>,
     no_data_pairs: &HashMap<String, AlpacaNoDataPair>,
+    backfill_complete_pairs: &HashSet<String>,
     pending_fetches: &HashSet<String>,
     batch_size: usize,
     foreground_slots: usize,
@@ -402,6 +427,7 @@ pub(super) fn select_alpaca_sync_workset(
             state_map,
             focus_symbols,
             no_data_pairs,
+            backfill_complete_pairs,
             &staged_pending,
             foreground_budget,
             now_s,
@@ -424,6 +450,7 @@ pub(super) fn select_alpaca_sync_workset(
         state_map,
         focus_symbols,
         no_data_pairs,
+        backfill_complete_pairs,
         &staged_pending,
         batch_size - selected.len(),
         now_s,
@@ -593,6 +620,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             &HashSet::new(),
+            &HashSet::new(),
             3,
             now_s,
             alpaca_sync_target_bars,
@@ -616,6 +644,7 @@ mod tests {
             &HashMap::new(),
             &focus,
             &HashMap::new(),
+            &HashSet::new(),
             &HashSet::new(),
             2,
             now_s,
@@ -650,6 +679,7 @@ mod tests {
             &HashSet::new(),
             &no_data,
             &HashSet::new(),
+            &HashSet::new(),
             2,
             now_s,
             alpaca_sync_target_bars,
@@ -672,6 +702,7 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
+            &HashSet::new(),
             &HashSet::new(),
             4,
             now_s,
@@ -708,6 +739,7 @@ mod tests {
             &focus,
             &HashMap::new(),
             &HashSet::new(),
+            &HashSet::new(),
             2,
             1,
             now_s,
@@ -734,6 +766,7 @@ mod tests {
             &HashMap::new(),
             &focus,
             &HashMap::new(),
+            &HashSet::new(),
             &HashSet::new(),
             2,
             1,
@@ -819,6 +852,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             &HashSet::new(),
+            &HashSet::new(),
             1,
             now_s,
             alpaca_sync_target_bars,
@@ -849,9 +883,41 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             &HashSet::new(),
+            &HashSet::new(),
             1,
             now_s,
             kraken_sync_target_bars,
+        );
+
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn select_alpaca_sync_candidates_skips_backfill_complete_pairs() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec!["LUMN".to_string()];
+        let timeframes = vec!["1Month".to_string()];
+        let state_map = HashMap::from([(
+            ("LUMN".to_string(), "1Month".to_string()),
+            SyncCacheState {
+                last_bar_ts_s: now_s - 60,
+                write_ts_s: now_s - 60,
+                bar_count: 70,
+            },
+        )]);
+        let backfill_complete = HashSet::from([alpaca_fetch_key("LUMN", "1Month")]);
+
+        let selected = select_alpaca_sync_candidates(
+            &symbols,
+            &timeframes,
+            &state_map,
+            &HashSet::new(),
+            &HashMap::new(),
+            &backfill_complete,
+            &HashSet::new(),
+            1,
+            now_s,
+            alpaca_sync_target_bars,
         );
 
         assert!(selected.is_empty());
