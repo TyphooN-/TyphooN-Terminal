@@ -5,7 +5,7 @@ impl TyphooNApp {
         if !self.show_sync_status {
             return;
         }
-        let rows = compute_bar_sync_stats(&self.bg.bar_ts_cache);
+        let rows = compute_bar_sync_stats(&self.bg.detailed_stats, &self.bg.bar_ts_cache);
         let broker_totals = compute_bar_sync_broker_totals(&rows);
         let mut sync_save_after = false;
         let mut show_sync_status = self.show_sync_status;

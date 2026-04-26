@@ -1,4 +1,5 @@
 use super::BgDarwinData;
+use super::alpaca_sync::normalize_sync_timeframe_key;
 
 /// Per-(broker,TF) bar-sync health snapshot for the Sync Status window + the
 /// compact Storage Manager banner. When Research / Backtest sync tallies land
@@ -22,6 +23,7 @@ pub(super) struct SyncStatsRow {
 /// broker that's configured but hasn't started syncing yet (e.g. Tastytrade
 /// before the first bar fetch).
 pub(super) fn compute_bar_sync_stats(
+    detailed_stats: &[(String, i64, i64)],
     bar_ts_cache: &std::collections::HashMap<String, (i64, i64, i64)>,
 ) -> Vec<SyncStatsRow> {
     use std::collections::BTreeMap;
@@ -64,22 +66,42 @@ pub(super) fn compute_bar_sync_stats(
     }
 
     let now_ms = chrono::Utc::now().timestamp_millis();
-    for (key, (_first_ms, last_ms, _weight)) in bar_ts_cache {
-        let parts: Vec<&str> = key.splitn(3, ':').collect();
-        if parts.len() != 3 {
-            continue;
-        }
-        let Some(broker) = broker_for_prefix(parts[0]) else {
+    for (key, bar_count, write_ts_s) in detailed_stats {
+        let mut parts = key.splitn(3, ':');
+        let Some(prefix) = parts.next() else {
             continue;
         };
-        let tf = parts[2];
+        let Some(symbol) = parts.next() else {
+            continue;
+        };
+        let Some(raw_tf) = parts.next() else {
+            continue;
+        };
+        let Some(broker) = broker_for_prefix(prefix) else {
+            continue;
+        };
+        if symbol.is_empty() || symbol.starts_with("__") {
+            continue;
+        }
+        let Some(tf) = normalize_sync_timeframe_key(raw_tf) else {
+            continue;
+        };
         let entry = groups
             .entry((broker.to_string(), tf.to_string()))
             .or_default();
-        if *last_ms <= 0 {
+        if *bar_count <= 0 {
+            entry.2 += 1;
+            continue;
+        }
+        let last_ms = bar_ts_cache
+            .get(key)
+            .map(|(_, last_ms, _)| *last_ms)
+            .filter(|last_ms| *last_ms > 0)
+            .unwrap_or_else(|| write_ts_s.saturating_mul(1000));
+        if last_ms <= 0 {
             entry.2 += 1;
         } else if let Some(period) = period_ms.get(tf) {
-            if now_ms - *last_ms > period * 24 {
+            if now_ms - last_ms > period * 24 {
                 entry.1 += 1;
             } else {
                 entry.0 += 1;
@@ -201,4 +223,36 @@ pub(super) fn format_bytes_human(bytes: i64) -> String {
         unit_idx += 1;
     }
     format!("{value:.1} {}", units[unit_idx])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_bar_sync_stats_counts_current_detailed_rows() {
+        let rows = compute_bar_sync_stats(
+            &[
+                ("alpaca:AAPL:1Day".into(), 42, 1_700_000_000),
+                ("alpaca:MSFT:1Day".into(), 42, 1_700_000_000),
+                ("alpaca:__META__:1Day".into(), 42, 1_700_000_000),
+                ("alpaca:QQQ:W1".into(), 10, 1_700_000_000),
+            ],
+            &std::collections::HashMap::from([
+                ("alpaca:AAPL:1Day".into(), (1, chrono::Utc::now().timestamp_millis(), 1)),
+            ]),
+        );
+
+        let day = rows
+            .iter()
+            .find(|row| row.broker == "Alpaca" && row.tf == "1Day")
+            .expect("missing 1Day row");
+        assert_eq!(day.total, 2);
+
+        let week = rows
+            .iter()
+            .find(|row| row.broker == "Alpaca" && row.tf == "1Week")
+            .expect("missing 1Week row");
+        assert_eq!(week.total, 1);
+    }
 }
