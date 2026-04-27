@@ -616,9 +616,11 @@ impl TastytradeBroker {
     /// Fetch symbols from tastytrade's public watchlists.
     pub async fn get_public_watchlist_symbols(&self) -> Result<Vec<String>, String> {
         let url = format!("{}/public-watchlists", self.base_url);
-        let resp = self
-            .client
-            .get(&url)
+        let mut req = self.client.get(&url);
+        if let Some(token) = self.auth_header() {
+            req = req.header("Authorization", token);
+        }
+        let resp = req
             .send()
             .await
             .map_err(|e| format!("tastytrade public watchlists failed: {e}"))?;
@@ -656,10 +658,14 @@ impl TastytradeBroker {
 
     /// Fetch all active futures symbols tastytrade currently exposes.
     pub async fn get_active_futures_symbols(&self) -> Result<Vec<String>, String> {
+        let token = self
+            .auth_header()
+            .ok_or_else(|| "tastytrade futures instruments: not authenticated".to_string())?;
         let url = format!("{}/instruments/futures", self.base_url);
         let resp = self
             .client
             .get(&url)
+            .header("Authorization", &token)
             .send()
             .await
             .map_err(|e| format!("tastytrade futures instruments failed: {e}"))?;
