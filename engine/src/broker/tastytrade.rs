@@ -10,6 +10,46 @@ use serde::{Deserialize, Serialize};
 const API_BASE: &str = "https://api.tastytrade.com";
 const SANDBOX_BASE: &str = "https://api.cert.tastyworks.com";
 
+fn merge_market_data_universe_sources(
+    watchlists: Result<Vec<String>, String>,
+    futures: Result<Vec<String>, String>,
+) -> Result<Vec<String>, String> {
+    let mut symbols = std::collections::BTreeSet::new();
+    let mut errors = Vec::new();
+
+    match watchlists {
+        Ok(items) => {
+            for symbol in items {
+                let symbol = symbol.trim().to_ascii_uppercase();
+                if !symbol.is_empty() {
+                    symbols.insert(symbol);
+                }
+            }
+        }
+        Err(e) => errors.push(format!("public watchlists: {e}")),
+    }
+
+    match futures {
+        Ok(items) => {
+            for symbol in items {
+                let symbol = symbol.trim().to_ascii_uppercase();
+                if !symbol.is_empty() {
+                    symbols.insert(symbol);
+                }
+            }
+        }
+        Err(e) => errors.push(format!("active futures: {e}")),
+    }
+
+    if !symbols.is_empty() {
+        Ok(symbols.into_iter().collect())
+    } else if errors.is_empty() {
+        Ok(Vec::new())
+    } else {
+        Err(errors.join(" | "))
+    }
+}
+
 fn format_equity_order_price(price: f64) -> String {
     if price >= 1.0 {
         format!("{:.2}", price)
@@ -652,14 +692,10 @@ impl TastytradeBroker {
     /// Best-effort tastytrade market-data universe currently available from
     /// the public API: public watchlists plus all active futures contracts.
     pub async fn get_market_data_universe_symbols(&self) -> Result<Vec<String>, String> {
-        let mut symbols = std::collections::BTreeSet::new();
-        for symbol in self.get_public_watchlist_symbols().await? {
-            symbols.insert(symbol);
-        }
-        for symbol in self.get_active_futures_symbols().await? {
-            symbols.insert(symbol);
-        }
-        Ok(symbols.into_iter().collect())
+        merge_market_data_universe_sources(
+            self.get_public_watchlist_symbols().await,
+            self.get_active_futures_symbols().await,
+        )
     }
 
     /// Get option chain for a symbol.
@@ -1001,6 +1037,27 @@ mod tests {
     fn sandbox_host_matches_official_docs() {
         let broker = TastytradeBroker::new(true);
         assert_eq!(broker.base_url, "https://api.cert.tastyworks.com");
+    }
+
+    #[test]
+    fn merge_market_data_universe_sources_keeps_partial_success() {
+        let merged = merge_market_data_universe_sources(
+            Err("HTTP 502".into()),
+            Ok(vec!["/ESM6".into(), "/NQM6".into(), "/esm6".into()]),
+        )
+        .unwrap();
+        assert_eq!(merged, vec!["/ESM6".to_string(), "/NQM6".to_string()]);
+    }
+
+    #[test]
+    fn merge_market_data_universe_sources_reports_total_failure() {
+        let err = merge_market_data_universe_sources(
+            Err("HTTP 502".into()),
+            Err("HTTP 503".into()),
+        )
+        .unwrap_err();
+        assert!(err.contains("public watchlists"));
+        assert!(err.contains("active futures"));
     }
 
     #[test]
