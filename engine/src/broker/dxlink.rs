@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const DXLINK_VERSION: &str = "0.1-DXF-JS/0.3.0";
+const USER_AGENT: &str = "TyphooN-Terminal/1.0";
 
 /// DXLink streaming token + URL from tastytrade REST API.
 #[derive(Debug, Clone)]
@@ -46,18 +47,29 @@ pub async fn get_streaming_token(
     base_url: &str,
     session_token: &str,
 ) -> Result<DxLinkToken, String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .build()
+        .unwrap_or_default();
     let url = format!("{}/api-quote-tokens", base_url);
 
     let resp = client
         .get(&url)
+        .header("Accept", "application/json")
         .header("Authorization", session_token)
         .send()
         .await
         .map_err(|e| format!("Get streaming token failed: {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!("Streaming token request failed: {}", resp.status()));
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        let clean = clean_http_error_body(&text);
+        return Err(if clean.is_empty() {
+            format!("Streaming token request failed at {url}: {status}")
+        } else {
+            format!("Streaming token request failed at {url}: {status} — {clean}")
+        });
     }
 
     let data: serde_json::Value = resp
@@ -65,16 +77,38 @@ pub async fn get_streaming_token(
         .await
         .map_err(|e| format!("Parse streaming token failed: {e}"))?;
 
+    parse_streaming_token_response(&data)
+}
+
+fn parse_streaming_token_response(data: &serde_json::Value) -> Result<DxLinkToken, String> {
     let token = data["data"]["token"]
         .as_str()
         .ok_or("No token in response")?
         .to_string();
     let ws_url = data["data"]["dxlink-url"]
         .as_str()
+        .or_else(|| data["data"]["websocket-url"].as_str())
         .ok_or("No dxlink-url in response")?
         .to_string();
 
     Ok(DxLinkToken { token, url: ws_url })
+}
+
+fn clean_http_error_body(text: &str) -> String {
+    let text = text.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    let clean = if text.contains('<') {
+        text.lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with('<') && !line.ends_with('>'))
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        text.to_string()
+    };
+    clean.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Fetch historical candles via DXLink WebSocket.
@@ -580,6 +614,40 @@ mod tests {
         };
         assert_eq!(tok.token, "abc123");
         assert_eq!(tok.url, "wss://example.com/feed");
+    }
+
+    #[test]
+    fn parse_streaming_token_accepts_dxlink_url() {
+        let json = serde_json::json!({
+            "data": {
+                "token": "tok",
+                "dxlink-url": "wss://dxlink.example/realtime"
+            }
+        });
+
+        let tok = parse_streaming_token_response(&json).unwrap();
+        assert_eq!(tok.token, "tok");
+        assert_eq!(tok.url, "wss://dxlink.example/realtime");
+    }
+
+    #[test]
+    fn parse_streaming_token_accepts_legacy_websocket_url() {
+        let json = serde_json::json!({
+            "data": {
+                "token": "tok",
+                "websocket-url": "wss://dxlink.example/demo"
+            }
+        });
+
+        let tok = parse_streaming_token_response(&json).unwrap();
+        assert_eq!(tok.token, "tok");
+        assert_eq!(tok.url, "wss://dxlink.example/demo");
+    }
+
+    #[test]
+    fn clean_http_error_body_strips_html_noise() {
+        let body = "<html>\n<body>\nquote token unavailable\n</body>\n</html>";
+        assert_eq!(clean_http_error_body(body), "quote token unavailable");
     }
 
     #[test]

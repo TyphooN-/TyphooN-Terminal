@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-const API_BASE: &str = "https://api.tastytrade.com";
+const API_BASE: &str = "https://api.tastyworks.com";
 const SANDBOX_BASE: &str = "https://api.cert.tastyworks.com";
 
 fn merge_market_data_universe_sources(
@@ -1043,6 +1043,12 @@ mod tests {
     fn sandbox_host_matches_official_docs() {
         let broker = TastytradeBroker::new(true);
         assert_eq!(broker.base_url, "https://api.cert.tastyworks.com");
+    }
+
+    #[test]
+    fn production_host_matches_official_sdk() {
+        let broker = TastytradeBroker::new(false);
+        assert_eq!(broker.base_url, "https://api.tastyworks.com");
     }
 
     #[test]

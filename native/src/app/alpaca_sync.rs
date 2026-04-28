@@ -231,7 +231,16 @@ pub(super) fn kraken_sync_target_bars(tf: &str) -> Option<u32> {
 }
 
 pub(super) fn tastytrade_sync_target_bars(tf: &str) -> Option<u32> {
-    alpaca_sync_target_bars(tf)
+    match normalize_sync_timeframe_key(tf)? {
+        // DXLink historical candle snapshots have materially shallower practical
+        // limits than Alpaca. Keep targets below the provider cap so successful
+        // fetches converge instead of repeatedly entering shallow-cache backfill.
+        "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" => Some(7_500),
+        "1Day" => Some(3_500),
+        "1Week" => Some(1_000),
+        "1Month" => Some(240),
+        _ => None,
+    }
 }
 
 fn classify_alpaca_sync_candidate(
@@ -468,7 +477,7 @@ pub(super) fn select_alpaca_sync_workset(
     selected
 }
 
-fn alpaca_sync_period_secs(timeframe: &str) -> Option<i64> {
+pub(super) fn sync_timeframe_period_secs(timeframe: &str) -> Option<i64> {
     match normalize_sync_timeframe_key(timeframe)? {
         "1Min" => Some(60),
         "5Min" => Some(300),
@@ -481,6 +490,10 @@ fn alpaca_sync_period_secs(timeframe: &str) -> Option<i64> {
         "1Month" => Some(2592000),
         _ => None,
     }
+}
+
+fn alpaca_sync_period_secs(timeframe: &str) -> Option<i64> {
+    sync_timeframe_period_secs(timeframe)
 }
 
 pub(super) fn alpaca_incremental_fetch_limit_at(
@@ -887,6 +900,44 @@ mod tests {
             1,
             now_s,
             kraken_sync_target_bars,
+        );
+
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn tastytrade_targets_fit_dxlink_snapshot_depth() {
+        assert_eq!(tastytrade_sync_target_bars("1Min"), Some(7_500));
+        assert_eq!(tastytrade_sync_target_bars("4Hour"), Some(7_500));
+        assert_eq!(tastytrade_sync_target_bars("1Day"), Some(3_500));
+        assert_eq!(tastytrade_sync_target_bars("1Month"), Some(240));
+    }
+
+    #[test]
+    fn tastytrade_limited_history_target_does_not_force_permanent_backfill() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec!["AAPL".to_string()];
+        let timeframes = vec!["1Hour".to_string()];
+        let state_map = HashMap::from([(
+            ("AAPL".to_string(), "1Hour".to_string()),
+            SyncCacheState {
+                last_bar_ts_s: now_s - 3600,
+                write_ts_s: now_s - 60,
+                bar_count: 7_500,
+            },
+        )]);
+
+        let selected = select_alpaca_sync_candidates(
+            &symbols,
+            &timeframes,
+            &state_map,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            1,
+            now_s,
+            tastytrade_sync_target_bars,
         );
 
         assert!(selected.is_empty());
