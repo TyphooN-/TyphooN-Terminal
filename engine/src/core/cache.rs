@@ -2052,6 +2052,23 @@ impl SqliteCache {
         Ok(())
     }
 
+    /// Count bar_cache rows below a target zstd level. Used by the auto-compact
+    /// scheduler to decide whether a recompression pass is worth waking up for —
+    /// already-compacted entries are skipped by `compact_storage`, so the work
+    /// budget is bounded by this count.
+    pub fn count_uncompacted_bars(&self, target: i32) -> Result<i64, String> {
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
+        conn.query_row(
+            "SELECT COUNT(*) FROM bar_cache WHERE zstd_level < ?1",
+            params![target],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(|e| format!("count_uncompacted_bars failed: {e}"))
+    }
+
     /// Scan bar_cache for entries with bar_count=0 and repair from TTBR header.
     /// BarCacheWriter stores bar_count correctly, but LAN sync and earlier versions
     /// may have left stale 0 values. Returns number of entries repaired.
