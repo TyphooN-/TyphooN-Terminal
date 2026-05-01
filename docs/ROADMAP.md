@@ -127,6 +127,9 @@
 ### Phase 13: Kraken Broker
 - [x] Public OHLCV ingest (gap-fill source)
 - [x] HMAC-SHA512 signed REST trading (ADR-072)
+- [x] Full Spot REST AddOrder parameters: stop/take-profit/trailing variants, price2, displayvol iceberg, settle-position, margin/reduce-only, flags, TIF, client IDs, STP, validate-only, conditional close
+- [x] Batch orders, order amend/edit, batch cancel, cancel-all, dead-man cancel
+- [x] LAN web/mobile order, cancel, and close routing for Kraken
 - [x] Position summaries unified into PositionInfo shape (ADR-201)
 - [x] Display-pair normalization (XBTUSD → BTCUSD)
 

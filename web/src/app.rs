@@ -623,6 +623,7 @@ impl WebApp {
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.order_broker, "alpaca".into(), "Alpaca");
                         ui.selectable_value(&mut self.order_broker, "tastytrade".into(), "Tastytrade");
+                        ui.selectable_value(&mut self.order_broker, "kraken".into(), "Kraken");
                     });
                 ui.end_row();
 

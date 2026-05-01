@@ -37,29 +37,42 @@ pub fn is_valid_order_side(s: &str) -> bool {
 
 /// Validate an order type string.
 pub fn is_valid_order_type(s: &str) -> bool {
+    let normalized = s.trim().replace('-', "_").to_ascii_lowercase();
     matches!(
-        s,
+        normalized.as_str(),
         "market"
             | "limit"
             | "stop"
+            | "stoplimit"
             | "stop_limit"
             | "trailing_stop"
-            | "MARKET"
-            | "LIMIT"
-            | "STOP"
-            | "STOP_LIMIT"
-            | "TRAILING_STOP"
-            | "Market"
-            | "Limit"
-            | "Stop"
-            | "StopLimit"
-            | "TrailingStop"
+            | "stoploss"
+            | "stop_loss"
+            | "stoploss_limit"
+            | "stop_loss_limit"
+            | "takeprofit"
+            | "take_profit"
+            | "takeprofit_limit"
+            | "take_profit_limit"
+            | "trailingstop"
+            | "trailingstop_limit"
+            | "trailing_stop_limit"
+            | "iceberg"
+            | "settle_position"
     )
 }
 
 /// Validate an order qty: positive, finite, bounded.
 pub fn is_valid_order_qty(q: f64) -> bool {
     q.is_finite() && q > 0.0 && q <= MAX_ORDER_QTY
+}
+
+/// Validate broker names accepted for order routing.
+pub fn is_valid_order_broker(s: &str) -> bool {
+    matches!(
+        s.to_ascii_lowercase().as_str(),
+        "alpaca" | "tastytrade" | "kraken"
+    )
 }
 
 /// Validate a risk mode string.
@@ -120,10 +133,10 @@ pub enum WebCmd {
         symbol: String,
         qty: f64,
         side: String,       // "buy" | "sell"
-        order_type: String, // "market" | "limit" | "stop" | "trailing_stop"
+        order_type: String, // common order type or broker-specific Kraken variant
         limit_price: Option<f64>,
         stop_price: Option<f64>,
-        broker: String, // "alpaca" | "tastytrade"
+        broker: String, // "alpaca" | "tastytrade" | "kraken"
         // ── ADR-092: bracket + trailing + risk mode extensions ──
         take_profit: Option<f64>,
         stop_loss: Option<f64>,
@@ -740,9 +753,22 @@ mod tests {
         assert!(is_valid_order_type("limit"));
         assert!(is_valid_order_type("stop"));
         assert!(is_valid_order_type("stop_limit"));
+        assert!(is_valid_order_type("stop-loss-limit"));
+        assert!(is_valid_order_type("take_profit"));
+        assert!(is_valid_order_type("trailing-stop-limit"));
+        assert!(is_valid_order_type("iceberg"));
         assert!(is_valid_order_type("MARKET"));
         assert!(!is_valid_order_type(""));
         assert!(!is_valid_order_type("asap"));
+    }
+
+    #[test]
+    fn order_broker_validation_accepts_kraken() {
+        assert!(is_valid_order_broker("alpaca"));
+        assert!(is_valid_order_broker("tastytrade"));
+        assert!(is_valid_order_broker("kraken"));
+        assert!(is_valid_order_broker("Kraken"));
+        assert!(!is_valid_order_broker("binance"));
     }
 
     #[test]

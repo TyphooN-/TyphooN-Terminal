@@ -1,71 +1,130 @@
 # ADR-072: Kraken as Full Broker (Data + Trading)
 
-**Status:** Proposed | **Date:** 2026-04-05
+**Status:** Accepted | **Date:** 2026-05-01
 
 ## Context
 
-Kraken is a US-friendly cryptocurrency exchange with comprehensive REST + WebSocket APIs. Currently TyphooN-Terminal uses Kraken as a **data-only** source (OHLCV bars via public OHLC endpoint). Full broker integration would enable trading directly from the terminal.
+Kraken is the terminal's crypto exchange integration. TyphooN uses it in two
+separate ways:
 
-## Current Integration (Data Only)
+- `engine/src/core/kraken.rs` fetches public OHLCV bars for crypto gap-fill.
+- `engine/src/broker/kraken_broker.rs` owns authenticated account and order
+  REST calls.
 
-- `engine/src/core/kraken.rs` — OHLCV bar fetching via public `GET /0/public/OHLC`
-- 40+ crypto pairs mapped (BTC, ETH, SOL, XMR, ZEC, DASH, etc.)
-- Monthly aggregation from daily bars
-- No authentication required for data
+The official Spot REST surface includes market data, account data, trading,
+funding, subaccounts, earn, and transparency endpoints. The trading surface
+includes `AddOrder`, `AmendOrder`, `CancelOrder`, `CancelAll`,
+`CancelAllOrdersAfter`, `GetWebSocketsToken`, `AddOrderBatch`,
+`CancelOrderBatch`, and `EditOrder`.
 
-## Proposed: Full Broker Integration
+## Decision
 
-### Phase 1: Authentication + Account
-- API key + secret storage in system keyring
-- `GET /0/private/Balance` — account balances
-- `GET /0/private/OpenPositions` — open positions
-- `GET /0/private/OpenOrders` — pending orders
-- HMAC-SHA512 request signing (Kraken's auth scheme)
+Kraken remains a first-class broker beside Alpaca and tastytrade. The engine
+centralizes Kraken nonce generation, request signing, form encoding, response
+error handling, pair normalization, and order construction in
+`KrakenBroker`.
 
-### Phase 2: Order Placement *(Implemented)*
-- [x] `POST /0/private/AddOrder` — market orders via `KrakenPlaceOrder` BrokerCmd
-- [x] `POST /0/private/CancelOrder` — cancel by txid via `KrakenCancelOrder` BrokerCmd
-- [x] `POST /0/private/CancelAll` — `KrakenCancelAll` BrokerCmd (ADR-094)
-- [x] Support for leverage (Kraken margin trading) — `place_order_with_leverage()` accepts `leverage` param (e.g. "2:1", "5:1")
+Signed requests follow Kraken's REST authentication scheme:
 
-### Phase 3: WebSocket Streaming
-- `wss://ws.kraken.com` — real-time trades, orderbook, OHLC
-- `wss://ws-auth.kraken.com` — authenticated own-trades, open-orders
-- Feed into BarBuilder for real-time bar construction
+- `API-Key` header carries the public key.
+- `API-Sign` is `HMAC-SHA512(uri_path + SHA256(nonce + POST data))` using the
+  base64-decoded API secret.
+- `nonce` is generated monotonically per broker instance.
+- Form bodies are percent-encoded before signing so fields such as
+  `close[ordertype]`, `+2%`, client order IDs, and batch payloads sign exactly
+  as submitted.
 
-### Implementation
+## Order Coverage
 
-New file: `engine/src/broker/kraken_broker.rs` (separate from existing `core/kraken.rs` data module)
+`KrakenOrderRequest` models the full AddOrder mechanism used by Spot REST and
+authenticated WebSocket v1:
 
-```rust
-pub struct KrakenBroker {
-    client: reqwest::Client,
-    api_key: String,
-    api_secret: String, // base64-encoded
-    rate_limiter: RateLimiter,
-}
-```
+- Order types: `market`, `limit`, `iceberg`, `stop-loss`,
+  `stop-loss-limit`, `take-profit`, `take-profit-limit`, `trailing-stop`,
+  `trailing-stop-limit`, `settle-position`.
+- Primary and secondary prices: `price`, `price2`, including relative strings
+  such as `+2%`.
+- Iceberg display size: REST `displayvol`; `iceberg` is accepted by the typed
+  request and submitted as `ordertype=limit` with `displayvol`, matching
+  Kraken REST examples.
+- Margin settlement: `settle-position` accepts `volume=0` so margin positions
+  can be settled without precomputing exact remaining size.
+- Margin controls: `leverage`, `margin`, `reduce_only`.
+- Flags: `oflags` (`post`, `fciq`, `fcib`, `nompp`, `viqc`).
+- Scheduling and expiry: `starttm`, `expiretm`, `deadline`, `timeinforce`.
+- Client identifiers: `cl_ord_id`, `userref`, `sender_sub_id`, `reqid`.
+- Self-trade prevention: `stp_type`.
+- Dry-run validation: `validate=true`.
+- Conditional OTO close fields: `close[ordertype]`, `close[price]`,
+  `close[price2]`.
 
-### Advantages
-- **US-friendly** — Kraken operates legally in most US states
-- **No 15-minute delay** — real-time data (vs Alpaca free tier)
-- **Deep crypto liquidity** — BTC, ETH, SOL, XMR, ZEC, 200+ pairs
-- **Margin trading** — up to 5x leverage on select pairs
-- **Staking** — earn yield on holdings
-- **Fiat on/off ramp** — USD deposits/withdrawals
+The older helper `place_order_with_leverage()` remains for simple callers but
+delegates to `KrakenOrderRequest`, so all new validation and encoding behavior
+is shared.
 
-### Data Coverage
-- 200+ trading pairs against USD, EUR, BTC, ETH
-- OHLCV data back to exchange inception (~2013 for BTC)
-- Real-time orderbook depth
-- Trade history
+## REST Endpoint Coverage
+
+Typed or pass-through wrappers exist for the actively used account/trading
+surface:
+
+- Account: `Balance`, `BalanceEx`, `TradeBalance`, `OpenOrders`,
+  `ClosedOrders`, `QueryOrders`, `OrderAmends`, `TradesHistory`,
+  `QueryTrades`, `OpenPositions`, `Ledgers`, `QueryLedgers`, `TradeVolume`,
+  `GetApiKeyInfo`.
+- Trading: `AddOrder`, `AddOrderBatch`, `AmendOrder`, `EditOrder`,
+  `CancelOrder`, `CancelOrderBatch`, `CancelAll`, `CancelAllOrdersAfter`,
+  `GetWebSocketsToken`.
+- Public: `AssetPairs` for pair discovery; OHLC remains in `core/kraken.rs`.
+
+For less common Kraken REST endpoints, `private_post_owned()` is intentionally
+public inside the broker module API. This keeps signing and nonce handling
+centralized while allowing funding, earn, subaccount, and export/report calls
+to be added without copying authentication code.
+
+## UI And Web Routing
+
+Native quick-trade and chart-position controls can route crypto orders to
+Kraken. Close-all, partial-close, cancel-order, and exit synchronization use
+the same MT5 EA semantics as Alpaca and tastytrade (ADR-201).
+
+The LAN web/mobile protocol now accepts `kraken` for order, cancel, and close
+commands. Web order types are normalized to Kraken names:
+
+- `stop` / `stop_loss` -> `stop-loss`
+- `stop_limit` / `stop_loss_limit` -> `stop-loss-limit`
+- `take_profit` -> `take-profit`
+- `take_profit_limit` -> `take-profit-limit`
+- `trailing_stop` -> `trailing-stop`
+- `trailing_stop_limit` -> `trailing-stop-limit`
+
+If the web/mobile order includes stop-loss or take-profit bracket fields,
+TyphooN submits the entry order and then queues a Kraken exit sync once the
+position is visible.
 
 ## Consequences
 
-- **Pro:** Full trading capability for US crypto traders
-- **Pro:** Real-time data without Alpaca's 15-min delay
-- **Pro:** Deep history for 200+ crypto assets
-- **Pro:** Complements Alpaca (stocks) + tastytrade (options) + MT5 (CFDs)
-- **Con:** HMAC-SHA512 signing adds complexity vs Alpaca's simple header auth
-- **Con:** Kraken rate limits are stricter than Alpaca (15 requests/second)
-- **Con:** Kraken doesn't support US equities — crypto only
+- **Pro:** Kraken order support now covers the documented order-type matrix,
+  margin/reduce-only controls, time-in-force, post-only/fee flags, validation
+  mode, client IDs, STP, conditional close fields, batch add/cancel, amend, and
+  edit.
+- **Pro:** Signed form encoding is tested against Kraken's published
+  `AddOrder` signature vector.
+- **Pro:** Mobile/web order routing no longer treats Kraken as close/cancel
+  only.
+- **Con:** Kraken's REST API does not provide a native two-leg OCO bracket for
+  both SL and TP in one `AddOrder`; TyphooN continues to place and resync exit
+  orders independently for MT5-style SL+TP behavior.
+- **Con:** Funding, earn, subaccount, and export/report workflows are broker
+  API-capable through `private_post_owned()` but still need dedicated UI
+  surfaces before users can operate them directly from the terminal.
+
+## References
+
+- Kraken Spot REST authentication guide:
+  https://docs.kraken.com/api/docs/guides/spot-rest-auth/
+- Kraken Spot REST Add Order:
+  https://docs.kraken.com/api/docs/rest-api/add-order/
+- Kraken Spot REST Add Order Batch:
+  https://docs.kraken.com/api/docs/rest-api/add-order-batch/
+- Kraken WebSocket v1 Add Order parameter matrix:
+  https://docs.kraken.com/api/docs/websocket-v1/addorder/

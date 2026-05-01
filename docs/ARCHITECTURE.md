@@ -33,7 +33,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  Engine Library (typhoon-engine crate)          │
 │  - AlpacaBroker (REST + WebSocket)              │
 │  - TastytradeBroker (REST + DXLink WebSocket)   │
-│  - KrakenBroker (REST trade + public OHLCV)     │
+│  - KrakenBroker (full Spot REST orders + OHLCV) │
 │  - SqliteCache (TTBR binary, zstd compression)  │
 │  - DarwinDB (80+ analytics, 100% wired)         │
 │  - RiskEngine (VaR, TRIM, martingale)           │
@@ -63,10 +63,10 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 | 1 | MT5 via BarCacheWriter v1.435 | 895 symbols × 9 TFs, weekday authority (Darwinex). TF gating, 16MB cache, /dev/shm ramdisk. |
 | 2 | tastytrade DXLink | Real-time bars + quotes for funded accounts. |
 | 3 | Alpaca | US equities + crypto, free IEX or paid SIP. Tier-autotuned sync (ADR-203). |
-| 4 | Kraken | Crypto trading + public OHLCV gap-fill (720 bars, weekend coverage). |
+| 4 | Kraken | Crypto trading (full Spot REST order surface) + public OHLCV gap-fill (720 bars, weekend coverage). |
 | 5 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request, hourly+ TFs. |
 
-MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade execution flows through Alpaca / tastytrade / Kraken with MT5 EA semantics (partial close, close-all, cancel-exits-before-close — see ADR-201). DARWIN account analytics are imported via XLSX trade history exports. Alpaca auto-connects on startup if credentials are saved in the system keyring. tastytrade fully integrated: REST API (auth, positions, orders, quotes, market metrics, option chains) + DXLink WebSocket (historical bars). See ADR-022. Kraken supports both crypto trading and public-OHLCV-only modes (ADR-072). See ADR-037 for cross-source priority hierarchy.
+MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade execution flows through Alpaca / tastytrade / Kraken with MT5 EA semantics (partial close, close-all, cancel-exits-before-close — see ADR-201). DARWIN account analytics are imported via XLSX trade history exports. Alpaca auto-connects on startup if credentials are saved in the system keyring. tastytrade fully integrated: REST API (auth, positions, orders, quotes, market metrics, option chains) + DXLink WebSocket (historical bars). See ADR-022. Kraken supports public-OHLCV-only mode and authenticated Spot REST trading with full AddOrder parameters, batch orders, amend/edit, dead-man cancel, cancel-all, balances, orders, trades, ledgers, and positions (ADR-072). See ADR-037 for cross-source priority hierarchy.
 
 ## Technology Stack
 
@@ -122,7 +122,7 @@ TyphooN-Terminal/
 │   │   └── broker/
 │   │       ├── alpaca.rs       # REST + WebSocket (ADR-203 autotune)
 │   │       ├── tastytrade.rs   # REST + DXLink (ADR-022)
-│   │       ├── kraken_broker.rs # Trading (ADR-072)
+│   │       ├── kraken_broker.rs # Kraken Spot REST trading (ADR-072)
 │   │       └── dxlink.rs       # DXLink WebSocket
 │   └── Cargo.toml
 ├── cli/                    # Standalone TUI (ratatui, SSH-ready)

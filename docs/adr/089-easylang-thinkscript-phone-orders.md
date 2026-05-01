@@ -97,10 +97,10 @@ PlaceOrder {
     symbol: String,
     qty: f64,
     side: String,         // "buy" | "sell"
-    order_type: String,   // "market" | "limit" | "stop"
+    order_type: String,   // "market" | "limit" | "stop" | broker-specific stop/take-profit/trailing variants
     limit_price: Option<f64>,
     stop_price: Option<f64>,
-    broker: String,       // "alpaca" | "tastytrade"
+    broker: String,       // "alpaca" | "tastytrade" | "kraken"
 }
 CancelOrder { order_id: String, broker: String }
 ClosePosition { symbol: String, broker: String }
@@ -114,16 +114,16 @@ OrderResult { ok: bool, message: String }
 
 **Validation (web-server `run_websocket_session`):**
 Each new command is pattern-matched in the dispatch loop and validated before being relayed to the native app:
-- `PlaceOrder`: symbol format, qty bounds (0 < q ≤ 100,000, finite), side whitelist, order_type whitelist, broker whitelist (`alpaca`/`tastytrade`), limit/stop prices finite and positive
+- `PlaceOrder`: symbol format, qty bounds (0 < q ≤ 100,000, finite), side whitelist, order_type whitelist, broker whitelist (`alpaca`/`tastytrade`/`kraken`), limit/stop prices finite and positive
 - `CancelOrder`: order_id length (≤64), alphanumeric + `-` + `_` only, broker whitelist
 - `ClosePosition`: symbol format, broker whitelist
 
 Invalid commands are dropped with a `tracing::warn!` and never reach the native app.
 
 **Native relay (`native/src/app.rs` web cmd drain):**
-- `PlaceOrder` → translates to the appropriate `BrokerCmd::AlpacaMarketOrder` / `AlpacaLimitOrder` / `AlpacaStopOrder` / `TastytradeEquityOrder` depending on broker + type
-- `CancelOrder` → `BrokerCmd::AlpacaCancelOrder` (Alpaca) or `BrokerCmd::TastytradeCancelOrder` (tastytrade, wired in ADR-094)
-- `ClosePosition` → `BrokerCmd::ClosePosition` (Alpaca) or `BrokerCmd::TastytradeClosePosition` (Tasty, from ADR-088)
+- `PlaceOrder` → translates to the appropriate `BrokerCmd::AlpacaMarketOrder` / `AlpacaLimitOrder` / `AlpacaStopOrder` / `TastytradeEquityOrder` / `KrakenPlaceOrderAdvanced` depending on broker + type
+- `CancelOrder` → `BrokerCmd::AlpacaCancelOrder` (Alpaca), `BrokerCmd::TastytradeCancelOrder` (tastytrade, wired in ADR-094), or `BrokerCmd::KrakenCancelOrder`
+- `ClosePosition` → `BrokerCmd::ClosePosition` (Alpaca), `BrokerCmd::TastytradeClosePosition` (Tasty, from ADR-088), or `BrokerCmd::KrakenClosePosition`
 
 Every dispatch replies via `web_msg_tx` with a `WebMsg::OrderResult { ok, message }` confirming which broker received the order. The host operator also sees a local log line mirroring every web-originated order so they can't miss them.
 

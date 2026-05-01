@@ -288,7 +288,7 @@ async fn run_websocket_session(
                                     || !typhoon_web_protocol::is_valid_order_qty(*qty)
                                     || !typhoon_web_protocol::is_valid_order_side(side)
                                     || !typhoon_web_protocol::is_valid_order_type(order_type)
-                                    || !matches!(broker.as_str(), "alpaca" | "tastytrade")
+                                    || !typhoon_web_protocol::is_valid_order_broker(broker)
                                     || limit_price
                                         .map(|p| !p.is_finite() || p <= 0.0)
                                         .unwrap_or(false)
@@ -328,7 +328,7 @@ async fn run_websocket_session(
                                     || !order_id
                                         .chars()
                                         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-                                    || !matches!(broker.as_str(), "alpaca" | "tastytrade")
+                                    || !typhoon_web_protocol::is_valid_order_broker(broker)
                                 {
                                     tracing::warn!(
                                         "Web client {client_ip} sent invalid CancelOrder"
@@ -338,7 +338,7 @@ async fn run_websocket_session(
                             }
                             WebCmd::ClosePosition { symbol, broker } => {
                                 if !typhoon_web_protocol::is_valid_symbol(symbol)
-                                    || !matches!(broker.as_str(), "alpaca" | "tastytrade")
+                                    || !typhoon_web_protocol::is_valid_order_broker(broker)
                                 {
                                     tracing::warn!(
                                         "Web client {client_ip} sent invalid ClosePosition"

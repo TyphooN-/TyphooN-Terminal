@@ -18,7 +18,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Drawing Tools** | 7 types (HLine, Trendline, Fibonacci, VLine, Rectangle, Ray, Channel) |
 | **Harmonic Patterns** | 10 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives) |
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
-| **Data Sources** | MT5 (Darwinex), Alpaca, CryptoCompare, Kraken, tastytrade (auth only, roadmap) |
+| **Data Sources** | MT5 (Darwinex), Alpaca, tastytrade, CryptoCompare, Kraken |
 | **DARWIN Analytics** | 80 functions wired (VaR, correlation, equity, streaks, Monte Carlo, stress tests, rebalance, floating equity, D-Score, tax lots, CAGR, recovery factor, divergence index, risk budget, replication quality, performance attribution) |
 | **Cost** | Free for personal use ([commercial licensing](LICENSE-COMMERCIAL) available) |
 
@@ -242,6 +242,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [045](docs/adr/045-darwin-analytics-expansion.md) | DARWIN analytics expansion |
 | [048](docs/adr/ADR-048-bookmap-depth-heatmap.md) | Bookmap depth heatmap |
 | [049](docs/adr/049-harmonic-pattern-detection.md) | Scott Carney harmonic pattern detection |
+| [072](docs/adr/072-kraken-broker.md) | Kraken full broker integration (Spot REST trading + public OHLCV) |
 | [050](docs/adr/050-gpu-compute-architecture.md) | GPU compute architecture (28 wgpu compute shaders) |
 | [051](docs/adr/051-dependency-alignment.md) | Dependency version alignment |
 | [052](docs/adr/052-performance-architecture.md) | Performance architecture |

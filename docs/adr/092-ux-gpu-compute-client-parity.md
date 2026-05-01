@@ -86,6 +86,7 @@ rendering using `egui::Painter` primitives:
 | **Alerts tab** | New `Tab::Alerts`, create/delete/list with `AlertSnapshot` display |
 | **Bracket orders** | TP/SL fields in order form, sent via extended `PlaceOrder` |
 | **Trailing stops** | Trail % or offset field, conditional on order type |
+| **Kraken routing** | `broker="kraken"` accepted for web/mobile order, cancel, and close commands; order types normalize to Kraken names per ADR-072 |
 | **Risk modes** | Dropdown: Standard/Fixed/Dynamic/VaR with risk % input |
 | **Push updates** | Handle `BarUpdate`/`PositionUpdate`/`AccountUpdate`, remove polling |
 | **Quote ticks** | Render `QuoteTick` messages as live bid/ask in header |

@@ -18,6 +18,216 @@ type HmacSha512 = Hmac<Sha512>;
 
 const KRAKEN_BASE_URL: &str = "https://api.kraken.com";
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct KrakenConditionalClose {
+    pub order_type: String,
+    pub price: Option<String>,
+    pub price2: Option<String>,
+}
+
+impl KrakenConditionalClose {
+    pub fn new(order_type: impl Into<String>) -> Self {
+        Self {
+            order_type: order_type.into(),
+            price: None,
+            price2: None,
+        }
+    }
+}
+
+/// Full Kraken Spot REST AddOrder request.
+///
+/// This uses Kraken's REST/WebSocket v1 field names because REST AddOrder is a
+/// form endpoint: `type`, `ordertype`, `price`, `price2`, `oflags`, `starttm`,
+/// `expiretm`, `timeinforce`, and `close[...]`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct KrakenOrderRequest {
+    pub pair: String,
+    pub side: String,
+    pub order_type: String,
+    pub volume: String,
+    pub price: Option<String>,
+    pub price2: Option<String>,
+    pub display_volume: Option<String>,
+    pub leverage: Option<String>,
+    pub margin: Option<bool>,
+    pub reduce_only: bool,
+    pub oflags: Vec<String>,
+    pub start_time: Option<String>,
+    pub expire_time: Option<String>,
+    pub deadline: Option<String>,
+    pub client_order_id: Option<String>,
+    pub userref: Option<String>,
+    pub sender_sub_id: Option<String>,
+    pub stp_type: Option<String>,
+    pub validate: bool,
+    pub time_in_force: Option<String>,
+    pub close: Option<KrakenConditionalClose>,
+    pub req_id: Option<i64>,
+}
+
+impl KrakenOrderRequest {
+    pub fn basic(
+        pair: impl Into<String>,
+        side: impl Into<String>,
+        order_type: impl Into<String>,
+        volume: f64,
+    ) -> Self {
+        Self {
+            pair: pair.into(),
+            side: side.into(),
+            order_type: order_type.into(),
+            volume: format_f64_param(volume),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_price(mut self, price: f64) -> Self {
+        self.price = Some(format_f64_param(price));
+        self
+    }
+
+    pub fn with_price2(mut self, price2: f64) -> Self {
+        self.price2 = Some(format_f64_param(price2));
+        self
+    }
+
+    pub fn with_display_volume(mut self, display_volume: f64) -> Self {
+        self.display_volume = Some(format_f64_param(display_volume));
+        self
+    }
+
+    fn normalized_order_type(&self) -> String {
+        normalize_kraken_order_type(&self.order_type)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.pair.trim().is_empty() {
+            return Err("Kraken order pair is required".to_string());
+        }
+        if !matches!(self.side.to_ascii_lowercase().as_str(), "buy" | "sell") {
+            return Err(format!("Unsupported Kraken order side: {}", self.side));
+        }
+        let order_type = self.normalized_order_type();
+        if !is_supported_kraken_order_type(&order_type) {
+            return Err(format!(
+                "Unsupported Kraken order type: {}",
+                self.order_type
+            ));
+        }
+        let volume = self
+            .volume
+            .parse::<f64>()
+            .map_err(|_| format!("Invalid Kraken order volume: {}", self.volume))?;
+        if !volume.is_finite() || (volume <= 0.0 && order_type != "settle-position") {
+            return Err(format!("Invalid Kraken order volume: {}", self.volume));
+        }
+        if order_type == "iceberg" && self.display_volume.as_deref().unwrap_or("").is_empty() {
+            return Err("Kraken iceberg order requires displayvol".to_string());
+        }
+        if requires_primary_price(&order_type) && self.price.as_deref().unwrap_or("").is_empty() {
+            return Err(format!("Kraken {order_type} order requires price"));
+        }
+        if requires_secondary_price(&order_type) && self.price2.as_deref().unwrap_or("").is_empty()
+        {
+            return Err(format!("Kraken {order_type} order requires price2"));
+        }
+        if self.client_order_id.is_some() && self.userref.is_some() {
+            return Err("Kraken cl_ord_id and userref are mutually exclusive".to_string());
+        }
+        if let Some(tif) = &self.time_in_force {
+            let tif = tif.to_ascii_uppercase();
+            if !matches!(tif.as_str(), "GTC" | "GTD" | "IOC") {
+                return Err(format!("Unsupported Kraken timeinforce: {tif}"));
+            }
+        }
+        if let Some(stp) = &self.stp_type {
+            if !matches!(
+                stp.to_ascii_lowercase().as_str(),
+                "cancel_newest" | "cancel_oldest" | "cancel_both"
+            ) {
+                return Err(format!("Unsupported Kraken stp_type: {stp}"));
+            }
+        }
+        if let Some(close) = &self.close {
+            let close_type = normalize_kraken_order_type(&close.order_type);
+            if !is_supported_kraken_close_order_type(&close_type) {
+                return Err(format!(
+                    "Unsupported Kraken conditional close order type: {}",
+                    close.order_type
+                ));
+            }
+            if requires_primary_price(&close_type)
+                && close.price.as_deref().unwrap_or("").is_empty()
+            {
+                return Err(format!("Kraken conditional {close_type} requires price"));
+            }
+            if requires_secondary_price(&close_type)
+                && close.price2.as_deref().unwrap_or("").is_empty()
+            {
+                return Err(format!("Kraken conditional {close_type} requires price2"));
+            }
+        }
+        Ok(())
+    }
+
+    fn to_params(&self) -> Vec<(String, String)> {
+        let mut params = vec![
+            ("pair".to_string(), self.pair.clone()),
+            ("type".to_string(), self.side.to_ascii_lowercase()),
+            ("ordertype".to_string(), self.rest_order_type()),
+            ("volume".to_string(), self.volume.clone()),
+        ];
+        push_opt_param(&mut params, "price", self.price.as_deref());
+        push_opt_param(&mut params, "price2", self.price2.as_deref());
+        push_opt_param(&mut params, "displayvol", self.display_volume.as_deref());
+        push_opt_param(&mut params, "leverage", self.leverage.as_deref());
+        if let Some(margin) = self.margin {
+            params.push(("margin".to_string(), margin.to_string()));
+        }
+        if self.reduce_only {
+            params.push(("reduce_only".to_string(), "true".to_string()));
+        }
+        if !self.oflags.is_empty() {
+            params.push(("oflags".to_string(), self.oflags.join(",")));
+        }
+        push_opt_param(&mut params, "starttm", self.start_time.as_deref());
+        push_opt_param(&mut params, "expiretm", self.expire_time.as_deref());
+        push_opt_param(&mut params, "deadline", self.deadline.as_deref());
+        push_opt_param(&mut params, "cl_ord_id", self.client_order_id.as_deref());
+        push_opt_param(&mut params, "userref", self.userref.as_deref());
+        push_opt_param(&mut params, "sender_sub_id", self.sender_sub_id.as_deref());
+        push_opt_param(&mut params, "stp_type", self.stp_type.as_deref());
+        if self.validate {
+            params.push(("validate".to_string(), "true".to_string()));
+        }
+        if let Some(tif) = &self.time_in_force {
+            params.push(("timeinforce".to_string(), tif.to_ascii_uppercase()));
+        }
+        if let Some(close) = &self.close {
+            params.push((
+                "close[ordertype]".to_string(),
+                normalize_kraken_order_type(&close.order_type),
+            ));
+            push_opt_param(&mut params, "close[price]", close.price.as_deref());
+            push_opt_param(&mut params, "close[price2]", close.price2.as_deref());
+        }
+        if let Some(req_id) = self.req_id {
+            params.push(("reqid".to_string(), req_id.to_string()));
+        }
+        params
+    }
+
+    fn rest_order_type(&self) -> String {
+        let order_type = self.normalized_order_type();
+        if order_type == "iceberg" {
+            "limit".to_string()
+        } else {
+            order_type
+        }
+    }
+}
+
 /// Shared HTTP client for Kraken API requests (reuses TCP connections).
 fn kraken_client() -> &'static Client {
     static CLIENT: OnceLock<Client> = OnceLock::new();
@@ -28,6 +238,98 @@ fn kraken_client() -> &'static Client {
             .build()
             .unwrap_or_else(|_| Client::new())
     })
+}
+
+fn format_f64_param(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn push_opt_param(params: &mut Vec<(String, String)>, key: &str, value: Option<&str>) {
+    if let Some(value) = value {
+        if !value.is_empty() {
+            params.push((key.to_string(), value.to_string()));
+        }
+    }
+}
+
+fn normalize_kraken_order_type(order_type: &str) -> String {
+    order_type.trim().replace('_', "-").to_ascii_lowercase()
+}
+
+fn is_supported_kraken_order_type(order_type: &str) -> bool {
+    matches!(
+        order_type,
+        "market"
+            | "limit"
+            | "iceberg"
+            | "stop-loss"
+            | "stop-loss-limit"
+            | "take-profit"
+            | "take-profit-limit"
+            | "trailing-stop"
+            | "trailing-stop-limit"
+            | "settle-position"
+    )
+}
+
+fn is_supported_kraken_close_order_type(order_type: &str) -> bool {
+    matches!(
+        order_type,
+        "limit"
+            | "stop-loss"
+            | "stop-loss-limit"
+            | "take-profit"
+            | "take-profit-limit"
+            | "trailing-stop"
+            | "trailing-stop-limit"
+    )
+}
+
+fn requires_primary_price(order_type: &str) -> bool {
+    matches!(
+        order_type,
+        "limit"
+            | "iceberg"
+            | "stop-loss"
+            | "stop-loss-limit"
+            | "take-profit"
+            | "take-profit-limit"
+            | "trailing-stop"
+            | "trailing-stop-limit"
+    )
+}
+
+fn requires_secondary_price(order_type: &str) -> bool {
+    matches!(
+        order_type,
+        "stop-loss-limit" | "take-profit-limit" | "trailing-stop-limit"
+    )
+}
+
+fn encode_form_component(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+fn encode_form_params(params: &[(String, String)]) -> String {
+    params
+        .iter()
+        .map(|(k, v)| format!("{}={}", encode_form_component(k), encode_form_component(v)))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 /// Kraken broker client with HMAC-SHA512 request signing.
@@ -100,6 +402,22 @@ impl KrakenBroker {
         path: &str,
         extra_params: &[(&str, &str)],
     ) -> Result<serde_json::Value, String> {
+        let params = extra_params
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect::<Vec<_>>();
+        self.private_post_owned(path, &params).await
+    }
+
+    /// Execute a signed POST request to a Kraken private endpoint with owned
+    /// parameter pairs. This is the escape hatch for the full Spot REST surface:
+    /// callers can pass any current Kraken parameter while keeping nonce,
+    /// signing, encoding, and error handling centralized.
+    pub async fn private_post_owned(
+        &self,
+        path: &str,
+        extra_params: &[(String, String)],
+    ) -> Result<serde_json::Value, String> {
         if !self.is_authenticated() {
             return Err("Kraken API credentials not configured".to_string());
         }
@@ -107,14 +425,10 @@ impl KrakenBroker {
         let nonce = self.next_nonce();
         let nonce_str = nonce.to_string();
 
-        // Build POST body
-        let mut params: Vec<(&str, &str)> = vec![("nonce", &nonce_str)];
+        let mut params = Vec::with_capacity(extra_params.len() + 1);
+        params.push(("nonce".to_string(), nonce_str));
         params.extend_from_slice(extra_params);
-        let post_data: String = params
-            .iter()
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect::<Vec<_>>()
-            .join("&");
+        let post_data = encode_form_params(&params);
 
         let signature = self.sign_request(path, nonce, &post_data);
         let url = format!("{}{}", KRAKEN_BASE_URL, path);
@@ -367,21 +681,26 @@ impl KrakenBroker {
         }
 
         let exit_side = if net_volume > 0.0 { "sell" } else { "buy" };
-        let order_pair = crate::core::kraken::to_kraken_pair_lossy(pair)
-            .unwrap_or_else(|| pair.to_string());
+        let order_pair =
+            crate::core::kraken::to_kraken_pair_lossy(pair).unwrap_or_else(|| pair.to_string());
         let cancelled = self
             .cancel_live_exit_orders_for_pair(pair, exit_side)
             .await?;
         let mut placements = Vec::new();
         let qty_abs = net_volume.abs();
         if let Some(sl) = sl_price {
-            self.place_order(&order_pair, exit_side, "stop-loss", qty_abs, Some(sl))
-                .await?;
+            let mut order = KrakenOrderRequest::basic(&order_pair, exit_side, "stop-loss", qty_abs)
+                .with_price(sl);
+            order.reduce_only = true;
+            self.place_order_request(&order).await?;
             placements.push(format!("SL {}", sl));
         }
         if let Some(tp) = tp_price {
-            self.place_order(&order_pair, exit_side, "take-profit", qty_abs, Some(tp))
-                .await?;
+            let mut order =
+                KrakenOrderRequest::basic(&order_pair, exit_side, "take-profit", qty_abs)
+                    .with_price(tp);
+            order.reduce_only = true;
+            self.place_order_request(&order).await?;
             placements.push(format!("TP {}", tp));
         }
         if placements.is_empty() {
@@ -420,10 +739,11 @@ impl KrakenBroker {
         let _ = self
             .cancel_live_exit_orders_for_pair(pair, close_side)
             .await;
-        let order_pair = crate::core::kraken::to_kraken_pair_lossy(pair)
-            .unwrap_or_else(|| pair.to_string());
-        self.place_order(&order_pair, close_side, "market", qty_abs, None)
-            .await
+        let order_pair =
+            crate::core::kraken::to_kraken_pair_lossy(pair).unwrap_or_else(|| pair.to_string());
+        let mut order = KrakenOrderRequest::basic(&order_pair, close_side, "market", qty_abs);
+        order.reduce_only = true;
+        self.place_order_request(&order).await
     }
 
     pub async fn close_all_positions(&self) -> Result<usize, String> {
@@ -467,25 +787,81 @@ impl KrakenBroker {
         price: Option<f64>,
         leverage: Option<&str>,
     ) -> Result<serde_json::Value, String> {
-        let vol_str = volume.to_string();
-        let mut params: Vec<(&str, &str)> = vec![
-            ("pair", pair),
-            ("type", side),
-            ("ordertype", order_type),
-            ("volume", &vol_str),
-        ];
-
-        let price_str;
+        let mut order = KrakenOrderRequest::basic(pair, side, order_type, volume);
         if let Some(p) = price {
-            price_str = p.to_string();
-            params.push(("price", &price_str));
+            order.price = Some(format_f64_param(p));
         }
-
         if let Some(lev) = leverage {
-            params.push(("leverage", lev));
+            order.leverage = Some(lev.to_string());
         }
+        self.place_order_request(&order).await
+    }
 
-        self.private_post("/0/private/AddOrder", &params).await
+    /// Place a full Kraken Spot REST AddOrder request.
+    pub async fn place_order_request(
+        &self,
+        order: &KrakenOrderRequest,
+    ) -> Result<serde_json::Value, String> {
+        order.validate()?;
+        self.private_post_owned("/0/private/AddOrder", &order.to_params())
+            .await
+    }
+
+    /// Add a batch of orders using Kraken's `/private/AddOrderBatch`.
+    ///
+    /// Kraken currently requires 2-15 orders, all for one pair. `orders_json`
+    /// is passed through so callers can track new Kraken fields without waiting
+    /// for a TyphooN release.
+    pub async fn add_order_batch(
+        &self,
+        pair: &str,
+        orders_json: &str,
+        validate: bool,
+    ) -> Result<serde_json::Value, String> {
+        let params = vec![
+            ("pair".to_string(), pair.to_string()),
+            ("orders".to_string(), orders_json.to_string()),
+            ("validate".to_string(), validate.to_string()),
+        ];
+        self.private_post_owned("/0/private/AddOrderBatch", &params)
+            .await
+    }
+
+    /// Amend an order in place using Kraken's `/private/AmendOrder`.
+    pub async fn amend_order(
+        &self,
+        params: &[(String, String)],
+    ) -> Result<serde_json::Value, String> {
+        self.private_post_owned("/0/private/AmendOrder", params)
+            .await
+    }
+
+    /// Edit an order using Kraken's legacy cancel-and-replace endpoint.
+    pub async fn edit_order(
+        &self,
+        params: &[(String, String)],
+    ) -> Result<serde_json::Value, String> {
+        self.private_post_owned("/0/private/EditOrder", params)
+            .await
+    }
+
+    /// Cancel a batch of open orders by txid/userref/cl_ord_id.
+    pub async fn cancel_order_batch(&self, txids: &[String]) -> Result<serde_json::Value, String> {
+        let txid = txids.join(",");
+        self.private_post_owned("/0/private/CancelOrderBatch", &[("txid".to_string(), txid)])
+            .await
+    }
+
+    /// Configure Kraken's dead man's switch. `timeout = 0` disables it.
+    pub async fn cancel_all_orders_after(
+        &self,
+        timeout_secs: u32,
+    ) -> Result<serde_json::Value, String> {
+        self.private_post_owned(
+            "/0/private/CancelAllOrdersAfter",
+            &[("timeout".to_string(), timeout_secs.to_string())],
+        )
+        .await
     }
 
     /// Cancel an order by transaction ID.
@@ -497,6 +873,95 @@ impl KrakenBroker {
     /// Cancel all open orders.
     pub async fn cancel_all_orders(&self) -> Result<serde_json::Value, String> {
         self.private_post("/0/private/CancelAll", &[]).await
+    }
+
+    pub async fn get_extended_balance(&self) -> Result<serde_json::Value, String> {
+        self.private_post("/0/private/BalanceEx", &[]).await
+    }
+
+    pub async fn get_trade_balance(
+        &self,
+        asset: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        match asset {
+            Some(asset) => {
+                self.private_post("/0/private/TradeBalance", &[("asset", asset)])
+                    .await
+            }
+            None => self.private_post("/0/private/TradeBalance", &[]).await,
+        }
+    }
+
+    pub async fn get_closed_orders(
+        &self,
+        params: &[(String, String)],
+    ) -> Result<serde_json::Value, String> {
+        self.private_post_owned("/0/private/ClosedOrders", params)
+            .await
+    }
+
+    pub async fn query_orders(
+        &self,
+        params: &[(String, String)],
+    ) -> Result<serde_json::Value, String> {
+        self.private_post_owned("/0/private/QueryOrders", params)
+            .await
+    }
+
+    pub async fn get_order_amends(
+        &self,
+        params: &[(String, String)],
+    ) -> Result<serde_json::Value, String> {
+        self.private_post_owned("/0/private/OrderAmends", params)
+            .await
+    }
+
+    pub async fn get_trades_history(
+        &self,
+        params: &[(String, String)],
+    ) -> Result<serde_json::Value, String> {
+        self.private_post_owned("/0/private/TradesHistory", params)
+            .await
+    }
+
+    pub async fn query_trades(
+        &self,
+        params: &[(String, String)],
+    ) -> Result<serde_json::Value, String> {
+        self.private_post_owned("/0/private/QueryTrades", params)
+            .await
+    }
+
+    pub async fn get_ledgers(
+        &self,
+        params: &[(String, String)],
+    ) -> Result<serde_json::Value, String> {
+        self.private_post_owned("/0/private/Ledgers", params).await
+    }
+
+    pub async fn query_ledgers(
+        &self,
+        params: &[(String, String)],
+    ) -> Result<serde_json::Value, String> {
+        self.private_post_owned("/0/private/QueryLedgers", params)
+            .await
+    }
+
+    pub async fn get_trade_volume(
+        &self,
+        params: &[(String, String)],
+    ) -> Result<serde_json::Value, String> {
+        self.private_post_owned("/0/private/TradeVolume", params)
+            .await
+    }
+
+    pub async fn get_api_key_info(&self) -> Result<serde_json::Value, String> {
+        self.private_post("/0/private/GetApiKeyInfo", &[]).await
+    }
+
+    pub async fn get_websockets_token(&self) -> Result<serde_json::Value, String> {
+        self.private_post("/0/private/GetWebSocketsToken", &[])
+            .await
     }
 
     /// Get all tradeable asset pairs (public endpoint, no auth required).
@@ -584,6 +1049,97 @@ mod tests {
         let sig1 = broker.sign_request("/0/private/Balance", 100, "nonce=100");
         let sig2 = broker.sign_request("/0/private/Balance", 100, "nonce=100");
         assert_eq!(sig1, sig2);
+    }
+
+    #[test]
+    fn sign_request_matches_kraken_doc_vector() {
+        let broker = KrakenBroker::new(
+            "key".into(),
+            "kQH5HW/8p1uGOVjbgWA7FunAmGO8lsSUXNsu3eow76sz84Q18fWxnyRzBHCd3pd5nE9qa99HAZtuZuj6F1huXg=="
+                .into(),
+        );
+        let post_data =
+            "nonce=1616492376594&ordertype=limit&pair=XBTUSD&price=37500&type=buy&volume=1.25";
+        let sig = broker.sign_request("/0/private/AddOrder", 1616492376594, post_data);
+        assert_eq!(
+            sig,
+            "4/dpxb3iT4tp/ZCVEwSnEsLxx0bqyhLpdfOpc6fn7OR8+UClSV5n9E6aSS8MPtnRfp32bAb0nmbRn6H8ndwLUQ=="
+        );
+    }
+
+    #[test]
+    fn encode_form_params_percent_encodes_order_fields() {
+        let params = vec![
+            ("price".to_string(), "+2%".to_string()),
+            (
+                "close[ordertype]".to_string(),
+                "stop-loss-limit".to_string(),
+            ),
+            ("close[price2]".to_string(), "28400".to_string()),
+        ];
+        assert_eq!(
+            encode_form_params(&params),
+            "price=%2B2%25&close%5Bordertype%5D=stop-loss-limit&close%5Bprice2%5D=28400"
+        );
+    }
+
+    #[test]
+    fn kraken_order_request_builds_full_add_order_params() {
+        let mut order = KrakenOrderRequest::basic("XBTUSD", "BUY", "stop_loss_limit", 1.25)
+            .with_price(37000.0)
+            .with_price2(36950.0);
+        order.leverage = Some("2".to_string());
+        order.reduce_only = true;
+        order.oflags = vec!["post".to_string(), "fciq".to_string()];
+        order.time_in_force = Some("gtd".to_string());
+        order.expire_time = Some("+60".to_string());
+        order.client_order_id = Some("typhoon-kr-0001".to_string());
+        order.close = Some(KrakenConditionalClose {
+            order_type: "take_profit".to_string(),
+            price: Some("39000".to_string()),
+            price2: None,
+        });
+
+        order.validate().unwrap();
+        let params = order.to_params();
+        assert!(params.contains(&("pair".to_string(), "XBTUSD".to_string())));
+        assert!(params.contains(&("type".to_string(), "buy".to_string())));
+        assert!(params.contains(&("ordertype".to_string(), "stop-loss-limit".to_string())));
+        assert!(params.contains(&("price".to_string(), "37000".to_string())));
+        assert!(params.contains(&("price2".to_string(), "36950".to_string())));
+        assert!(params.contains(&("reduce_only".to_string(), "true".to_string())));
+        assert!(params.contains(&("oflags".to_string(), "post,fciq".to_string())));
+        assert!(params.contains(&("timeinforce".to_string(), "GTD".to_string())));
+        assert!(params.contains(&("close[ordertype]".to_string(), "take-profit".to_string())));
+    }
+
+    #[test]
+    fn kraken_order_request_rejects_missing_stop_limit_price2() {
+        let order =
+            KrakenOrderRequest::basic("XBTUSD", "sell", "stop-loss-limit", 1.0).with_price(37000.0);
+        let err = order.validate().unwrap_err();
+        assert!(err.contains("price2"));
+    }
+
+    #[test]
+    fn kraken_iceberg_uses_rest_displayvol() {
+        let order = KrakenOrderRequest::basic("XBTUSD", "sell", "iceberg", 10.0)
+            .with_price(50000.0)
+            .with_display_volume(1.0);
+        order.validate().unwrap();
+        let params = order.to_params();
+        assert!(params.contains(&("ordertype".to_string(), "limit".to_string())));
+        assert!(params.contains(&("displayvol".to_string(), "1".to_string())));
+    }
+
+    #[test]
+    fn kraken_settle_position_allows_zero_volume() {
+        let mut order = KrakenOrderRequest::basic("XBTUSD", "buy", "settle-position", 0.0);
+        order.leverage = Some("5".to_string());
+        order.validate().unwrap();
+        let params = order.to_params();
+        assert!(params.contains(&("ordertype".to_string(), "settle-position".to_string())));
+        assert!(params.contains(&("volume".to_string(), "0".to_string())));
     }
 
     #[test]
