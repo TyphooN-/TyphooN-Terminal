@@ -3,6 +3,11 @@
 **Status:** Implemented (Updated 2026-04-03)
 **Date:** 2026-03-22 | **Updated:** 2026-03-27
 
+> 2026-05-01 update: CryptoCompare remains the deep-history extension for
+> crypto before or beyond exchange-listed history. Kraken Spot/xStocks is now
+> also synchronized as its own primary public market-data source under
+> `kraken:SYMBOL:TF`; it is no longer only a weekend gap-fill source.
+
 ## Context
 
 Crypto symbols at Darwinex (MT5) have weekend gaps — markets close Friday and reopen Monday. For continuous charting and accurate risk analytics (VaR, drawdown), weekend price data must be backfilled from a 24/7 exchange.

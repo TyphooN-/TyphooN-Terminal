@@ -1,4 +1,4 @@
-//! Crypto exchange data — Kraken public API for OHLCV klines.
+//! Kraken public Spot/xStocks market data via the public REST OHLC endpoint.
 //!
 //! Kraken is used instead of Binance (geo-blocked in US/Canada).
 //! No API key needed. No geo-restrictions.
@@ -21,7 +21,7 @@ fn to_kraken_interval(tf: &str) -> Option<u32> {
     }
 }
 
-/// Map TyphooN crypto symbols to Kraken trading pairs.
+/// Map common TyphooN crypto symbols to Kraken trading pairs.
 pub fn to_kraken_pair(sym: &str) -> Option<&'static str> {
     let clean = sym.replace("/", "").to_uppercase();
     match clean.as_str() {

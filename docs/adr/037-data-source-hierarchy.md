@@ -57,6 +57,11 @@ Previously, the system treated the connected broker (Alpaca) as the primary data
 
 ### Crypto-Specific Hierarchy (ADR-040)
 
+> 2026-05-01 update: Kraken Spot/xStocks has since been promoted to an
+> independent primary market-data source stored under `kraken:SYMBOL:TF`.
+> The older weekend-only language below describes the original MT5 crypto
+> gap-fill decision, not the current Kraken primary sync behavior.
+
 Crypto symbols have a 3-tier hierarchy due to MT5's weekend closure (Fri 23:00 → Sun 23:05 UTC):
 
 ```

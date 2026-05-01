@@ -18,7 +18,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Drawing Tools** | 7 types (HLine, Trendline, Fibonacci, VLine, Rectangle, Ray, Channel) |
 | **Harmonic Patterns** | 10 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives) |
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
-| **Data Sources** | MT5 (Darwinex), Alpaca, tastytrade, CryptoCompare, Kraken |
+| **Data Sources** | MT5 (Darwinex), Alpaca, tastytrade, Kraken Spot/xStocks, CryptoCompare |
 | **DARWIN Analytics** | 80 functions wired (VaR, correlation, equity, streaks, Monte Carlo, stress tests, rebalance, floating equity, D-Score, tax lots, CAGR, recovery factor, divergence index, risk budget, replication quality, performance attribution) |
 | **Cost** | Free for personal use ([commercial licensing](LICENSE-COMMERCIAL) available) |
 
@@ -106,7 +106,8 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **GPU Chart Engine** | Native wgpu candlesticks, drawing tools, sub-panes, price lines, histograms, fills — all on GPU |
 | **Draggable Panel Splitter** | Resize chart/sidebar panels by dragging the divider — layout persists across sessions |
 | **Economic Calendar** | Finnhub economic events: FOMC, NFP, CPI, PMI with impact ratings (~ →ECON) |
-| **CryptoCompare Deep History** | BTC from 2010, ETH from 2015, 2000 bars/request — replaces Kraken as primary crypto backfill |
+| **Kraken Primary Market Data** | Public Spot/xStocks universe sync with no API key; authenticated keys only for account/trading |
+| **CryptoCompare Deep History** | BTC from 2010, ETH from 2015, 2000 bars/request — extends history before exchange listings where available |
 | **Weekend Crypto Live** | Adaptive polling: 60s (M1), 2.5min (M15), 5min (H1+) — magenta-colored weekend candles |
 | **Chart Right Margin** | 5-bar right margin (MT5 chart shift style) for price action breathing room |
 | **Unusual Volume Scanner** | Detect abnormal volume spikes across symbols (~ →UNUSUAL_VOLUME) |

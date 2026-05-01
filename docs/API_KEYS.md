@@ -30,15 +30,15 @@ Optional API keys that unlock additional features. All are free to register.
 - **Rate limit:** Generous (no key = lower tier, but sufficient for backfill)
 - **Note:** 2000 bars per request with proper backward pagination. No geo-restrictions.
 
-## Kraken (Crypto Trading)
+## Kraken (Primary Market Data + Trading)
 
-**Used for:** Authenticated crypto balances, open orders, open positions, order placement, amend/edit, cancel-all, batch orders, and public tradeable-pair discovery.
+**Used for:** Public Spot/xStocks market data, public tradeable-pair discovery, and authenticated crypto/xStocks balances, open orders, open positions, order placement, amend/edit, cancel-all, and batch orders.
 
 - **Sign up:** https://pro.kraken.com/
 - **Cost:** Free API keys; trading fees apply on filled orders
 - **Key format:** API key + base64 API secret
 - **Required permissions:** Balance/positions for account display; order create/modify and cancel/close for trading
-- **Note:** Public OHLCV gap-fill does not require credentials. Authenticated keys are only needed for trading/account features.
+- **Note:** Public Spot/xStocks OHLCV and tradeable-pair discovery do not require credentials. Authenticated keys are only needed for trading/account features.
 
 ## Anthropic (Claude AI)
 
