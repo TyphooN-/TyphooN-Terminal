@@ -7,7 +7,9 @@
 Kraken is the terminal's crypto exchange integration. TyphooN uses it in two
 separate ways:
 
-- `engine/src/core/kraken.rs` fetches public OHLCV bars for crypto gap-fill.
+- `engine/src/core/kraken.rs` fetches public Spot/xStocks OHLCV bars.
+- `engine/src/core/kraken_futures.rs` fetches public Futures instruments and
+  chart candles.
 - `engine/src/broker/kraken_broker.rs` owns authenticated account and order
   REST calls.
 
@@ -74,7 +76,9 @@ surface:
 - Trading: `AddOrder`, `AddOrderBatch`, `AmendOrder`, `EditOrder`,
   `CancelOrder`, `CancelOrderBatch`, `CancelAll`, `CancelAllOrdersAfter`,
   `GetWebSocketsToken`.
-- Public: `AssetPairs` for pair discovery; OHLC remains in `core/kraken.rs`.
+- Public: `AssetPairs` for Spot/xStocks pair discovery; Spot/xStocks OHLC
+  remains in `core/kraken.rs`; Kraken Futures instruments and chart candles
+  remain in `core/kraken_futures.rs`.
 
 For less common Kraken REST endpoints, `private_post_owned()` is intentionally
 public inside the broker module API. This keeps signing and nonce handling

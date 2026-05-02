@@ -129,8 +129,86 @@ pub fn to_kraken_pair_lossy(sym: &str) -> Option<String> {
     Some(normalized)
 }
 
+fn parse_kraken_number(value: &serde_json::Value) -> Option<f64> {
+    match value {
+        serde_json::Value::String(s) => s.parse::<f64>().ok(),
+        serde_json::Value::Number(n) => n.as_f64(),
+        _ => None,
+    }
+    .filter(|v| v.is_finite())
+}
+
+fn parse_kraken_ohlc_response(
+    body: &serde_json::Value,
+    start_ms: i64,
+    end_ms: i64,
+) -> Result<Vec<serde_json::Value>, String> {
+    if let Some(errors) = body["error"].as_array() {
+        if !errors.is_empty() {
+            let err_msg = errors
+                .iter()
+                .filter_map(|e| e.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            if !err_msg.is_empty() {
+                return Err(format!("Kraken error: {}", err_msg));
+            }
+        }
+    }
+
+    let result = &body["result"];
+    let mut bars = Vec::new();
+    for (key, val) in result.as_object().unwrap_or(&serde_json::Map::new()) {
+        if key == "last" {
+            continue;
+        }
+        if let Some(arr) = val.as_array() {
+            bars.reserve(arr.len());
+            for kline in arr {
+                let Some(k) = kline.as_array() else {
+                    continue;
+                };
+                // Kraken OHLCVT: [timestamp, open, high, low, close, vwap, volume, count]
+                if k.len() < 7 {
+                    continue;
+                }
+                let ts = k[0].as_i64().unwrap_or(0);
+                if ts == 0 {
+                    continue;
+                }
+                let ts_ms = ts.saturating_mul(1000);
+                if ts_ms < start_ms || ts_ms > end_ms {
+                    continue;
+                }
+                let Some(dt) = chrono::DateTime::from_timestamp(ts, 0) else {
+                    continue;
+                };
+                let open = parse_kraken_number(&k[1]).unwrap_or(0.0);
+                let high = parse_kraken_number(&k[2]).unwrap_or(0.0);
+                let low = parse_kraken_number(&k[3]).unwrap_or(0.0);
+                let close = parse_kraken_number(&k[4]).unwrap_or(0.0);
+                let volume = parse_kraken_number(&k[6]).unwrap_or(0.0);
+
+                if open > 0.0 && high > 0.0 && low > 0.0 && close > 0.0 && high >= low {
+                    bars.push(serde_json::json!({
+                        "timestamp": dt.to_rfc3339(),
+                        "open": open,
+                        "high": high,
+                        "low": low,
+                        "close": close,
+                        "volume": volume.max(0.0),
+                    }));
+                }
+            }
+        }
+    }
+    Ok(bars)
+}
+
 /// Fetch OHLCV klines from Kraken public API.
-/// Kraken returns max 720 bars per request. We paginate with `since` parameter.
+/// Kraken's public OHLC endpoint returns a recent bounded window, so TyphooN
+/// performs one request per `(symbol, timeframe)` and lets the async scheduler
+/// provide concurrency.
 pub async fn fetch_binance_klines(
     client: &reqwest::Client,
     symbol: &str,
@@ -152,119 +230,29 @@ pub async fn fetch_binance_klines(
     let kraken_pair = to_kraken_pair_lossy(symbol)
         .ok_or_else(|| format!("Unsupported symbol for Kraken: {}", symbol))?;
 
-    let mut all_bars = Vec::new();
-    let mut since = start_ms / 1000; // Kraken uses seconds
+    let since = (start_ms / 1000).max(0);
+    let url = format!(
+        "https://api.kraken.com/0/public/OHLC?pair={}&interval={}&since={}",
+        kraken_pair, interval, since
+    );
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Kraken request failed: {e}"))?;
 
-    loop {
-        let url = format!(
-            "https://api.kraken.com/0/public/OHLC?pair={}&interval={}&since={}",
-            kraken_pair, interval, since
-        );
-
-        let resp = client
-            .get(&url)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| format!("Kraken request failed: {e}"))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Kraken API error {}: {}", status, body));
-        }
-
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Kraken JSON parse failed: {e}"))?;
-
-        // Check for errors
-        if let Some(errors) = body["error"].as_array() {
-            if !errors.is_empty() {
-                let err_msg = errors
-                    .iter()
-                    .filter_map(|e| e.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                if !err_msg.is_empty() {
-                    return Err(format!("Kraken error: {}", err_msg));
-                }
-            }
-        }
-
-        // Parse result — Kraken returns { "result": { "PAIR": [[...], ...], "last": N } }
-        let result = &body["result"];
-        let last = result["last"].as_i64().unwrap_or(0);
-
-        // Find the data array (key varies by pair)
-        let mut bars_in_page = Vec::new();
-        for (key, val) in result.as_object().unwrap_or(&serde_json::Map::new()) {
-            if key == "last" {
-                continue;
-            }
-            if let Some(arr) = val.as_array() {
-                for kline in arr {
-                    if let Some(k) = kline.as_array() {
-                        // Kraken OHLCVT: [timestamp, open, high, low, close, vwap, volume, count]
-                        if k.len() < 7 {
-                            continue;
-                        }
-                        let ts = k[0].as_i64().unwrap_or(0);
-                        if ts == 0 {
-                            continue;
-                        }
-                        let ts_ms = ts * 1000;
-                        if ts_ms < start_ms || ts_ms > end_ms {
-                            continue;
-                        }
-
-                        let dt = chrono::DateTime::from_timestamp(ts, 0).unwrap_or_default();
-                        let open = k[1]
-                            .as_str()
-                            .and_then(|s| s.parse::<f64>().ok())
-                            .unwrap_or(0.0);
-                        let high = k[2]
-                            .as_str()
-                            .and_then(|s| s.parse::<f64>().ok())
-                            .unwrap_or(0.0);
-                        let low = k[3]
-                            .as_str()
-                            .and_then(|s| s.parse::<f64>().ok())
-                            .unwrap_or(0.0);
-                        let close = k[4]
-                            .as_str()
-                            .and_then(|s| s.parse::<f64>().ok())
-                            .unwrap_or(0.0);
-                        let volume = k[6]
-                            .as_str()
-                            .and_then(|s| s.parse::<f64>().ok())
-                            .unwrap_or(0.0);
-
-                        if open > 0.0 {
-                            bars_in_page.push(serde_json::json!({
-                                "timestamp": dt.to_rfc3339(),
-                                "open": open, "high": high, "low": low, "close": close, "volume": volume,
-                            }));
-                        }
-                    }
-                }
-            }
-        }
-
-        let page_count = bars_in_page.len();
-        all_bars.extend(bars_in_page);
-
-        // Kraken: if `last` didn't advance or we got < 720 bars, we're done
-        if last <= since || page_count < 700 {
-            break;
-        }
-        since = last;
-
-        // Rate limit: Kraken allows ~15 calls per minute for public endpoints
-        // Use 4s between paginated calls to stay well under limit
-        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Kraken API error {}: {}", status, body));
     }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Kraken JSON parse failed: {e}"))?;
+    let mut all_bars = parse_kraken_ohlc_response(&body, start_ms.max(0), end_ms)?;
 
     // Sort by timestamp and deduplicate
     all_bars.sort_by(|a, b| {
@@ -431,7 +419,7 @@ mod tests {
 
     #[test]
     fn is_not_supported_unknown() {
-        assert!(!is_binance_supported("FAKEUSD"));
+        assert!(!is_binance_supported("AAPL"));
         assert!(!is_binance_supported(""));
     }
 
@@ -444,9 +432,10 @@ mod tests {
             "AAPL".to_string(),
         ];
         let result = get_binance_crypto_symbols(&syms);
-        assert_eq!(result.len(), 2);
+        assert_eq!(result.len(), 3);
         assert!(result.contains(&"BTCUSD".to_string()));
         assert!(result.contains(&"ETHUSD".to_string()));
+        assert!(result.contains(&"FAKEUSD".to_string()));
     }
 
     #[test]
@@ -619,6 +608,40 @@ mod tests {
 
         assert_eq!(parsed_bars[1]["open"].as_f64().unwrap(), 42200.0);
         assert_eq!(parsed_bars[1]["close"].as_f64().unwrap(), 42800.0);
+    }
+
+    #[test]
+    fn parse_kraken_ohlc_response_helper_filters_and_sorts_input_shape() {
+        let mock_response = json!({
+            "error": [],
+            "result": {
+                "XBTUSD": [
+                    [1704067200, "42000.0", "42500.0", "41500.0", "42200.0", "42100.0", "150.5", 1000],
+                    [1704070800, "0.0", "43000.0", "42000.0", "42800.0", "42500.0", "200.3", 1200],
+                    [1704074400, "42800.0", "43100.0", "42700.0", "43000.0", "42900.0", "50.0", 500],
+                ],
+                "last": 1704074400
+            }
+        });
+        let bars = parse_kraken_ohlc_response(
+            &mock_response,
+            1704067200_i64 * 1000,
+            1704074400_i64 * 1000,
+        )
+        .unwrap();
+        assert_eq!(bars.len(), 2);
+        assert_eq!(bars[0]["open"].as_f64().unwrap(), 42000.0);
+        assert_eq!(bars[1]["close"].as_f64().unwrap(), 43000.0);
+    }
+
+    #[test]
+    fn parse_kraken_ohlc_response_helper_returns_api_error() {
+        let mock_response = json!({
+            "error": ["EGeneral:Too many requests"],
+            "result": {}
+        });
+        let err = parse_kraken_ohlc_response(&mock_response, 0, i64::MAX).unwrap_err();
+        assert!(err.contains("Too many requests"));
     }
 
     #[test]

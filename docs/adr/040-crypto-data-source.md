@@ -7,6 +7,8 @@
 > crypto before or beyond exchange-listed history. Kraken Spot/xStocks is now
 > also synchronized as its own primary public market-data source under
 > `kraken:SYMBOL:TF`; it is no longer only a weekend gap-fill source.
+> Kraken Futures uses a separate public charts path and cache prefix:
+> `kraken-futures:SYMBOL:TF`.
 
 ## Context
 
@@ -56,6 +58,7 @@ mt5:SYMBOL:TF           — MT5 BarCacheWriter data (authoritative)
 alpaca:SYMBOL:TF         — Live Alpaca bar fetch
 cryptocompare:SYMBOL:TF  — CryptoCompare deep history
 kraken:SYMBOL:TF         — Kraken sub-hourly + weekend gap-fill (complementary, not replaced)
+kraken-futures:SYMBOL:TF — Kraken Futures public chart candles
 ```
 
 ### Auto-Cleanup

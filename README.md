@@ -18,7 +18,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Drawing Tools** | 7 types (HLine, Trendline, Fibonacci, VLine, Rectangle, Ray, Channel) |
 | **Harmonic Patterns** | 10 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives) |
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
-| **Data Sources** | MT5 (Darwinex), Alpaca, tastytrade, Kraken Spot/xStocks, CryptoCompare |
+| **Data Sources** | MT5 (Darwinex), Alpaca, tastytrade, Kraken Spot/xStocks, Kraken Futures, CryptoCompare |
 | **DARWIN Analytics** | 80 functions wired (VaR, correlation, equity, streaks, Monte Carlo, stress tests, rebalance, floating equity, D-Score, tax lots, CAGR, recovery factor, divergence index, risk budget, replication quality, performance attribution) |
 | **Cost** | Free for personal use ([commercial licensing](LICENSE-COMMERCIAL) available) |
 
@@ -107,6 +107,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Draggable Panel Splitter** | Resize chart/sidebar panels by dragging the divider — layout persists across sessions |
 | **Economic Calendar** | Finnhub economic events: FOMC, NFP, CPI, PMI with impact ratings (~ →ECON) |
 | **Kraken Primary Market Data** | Public Spot/xStocks universe sync with no API key; authenticated keys only for account/trading |
+| **Kraken Futures Market Data** | Public futures instrument discovery + OHLCV sync under `kraken-futures:SYMBOL:TF`; no API key needed |
 | **CryptoCompare Deep History** | BTC from 2010, ETH from 2015, 2000 bars/request — extends history before exchange listings where available |
 | **Weekend Crypto Live** | Adaptive polling: 60s (M1), 2.5min (M15), 5min (H1+) — magenta-colored weekend candles |
 | **Chart Right Margin** | 5-bar right margin (MT5 chart shift style) for price action breathing room |
@@ -235,7 +236,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [022](docs/adr/022-tastytrade-broker.md) | tastytrade broker integration |
 | [032](docs/adr/032-ehlers-dsp-indicators.md) | 8 Ehlers DSP indicators |
 | [033](docs/adr/033-free-api-expansion.md) | Free API expansion — 30+ data sources |
-| [037](docs/adr/037-data-source-hierarchy.md) | Data source hierarchy (MT5 → Broker → CryptoCompare → Kraken) |
+| [037](docs/adr/037-data-source-hierarchy.md) | Data source hierarchy (MT5 → Broker → CryptoCompare → Kraken → Kraken Futures) |
 | [038](docs/adr/038-data-source-indicator.md) | Data source indicator UI |
 | [040](docs/adr/040-crypto-data-source.md) | Crypto data sources (CryptoCompare + Kraken gap-fill) |
 | [041](docs/adr/041-darwin-import-analytics.md) | DARWIN import pipeline & analytics engine |
@@ -243,7 +244,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [045](docs/adr/045-darwin-analytics-expansion.md) | DARWIN analytics expansion |
 | [048](docs/adr/ADR-048-bookmap-depth-heatmap.md) | Bookmap depth heatmap |
 | [049](docs/adr/049-harmonic-pattern-detection.md) | Scott Carney harmonic pattern detection |
-| [072](docs/adr/072-kraken-broker.md) | Kraken full broker integration (Spot REST trading + public OHLCV) |
+| [072](docs/adr/072-kraken-broker.md) | Kraken full broker integration (Spot REST trading + public Spot/xStocks/Futures market data) |
 | [050](docs/adr/050-gpu-compute-architecture.md) | GPU compute architecture (28 wgpu compute shaders) |
 | [051](docs/adr/051-dependency-alignment.md) | Dependency version alignment |
 | [052](docs/adr/052-performance-architecture.md) | Performance architecture |

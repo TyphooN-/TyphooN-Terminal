@@ -1,6 +1,7 @@
 //! Pluggable data source hierarchy (ADR-038 Phase 2).
 //!
-//! Formalizes the cache key prefix routing (mt5: > alpaca: > cryptocompare: > kraken:)
+//! Formalizes the cache key prefix routing
+//! (mt5: > alpaca: > cryptocompare: > kraken: > kraken-futures:)
 //! into a trait-based system with per-source health tracking, per-symbol overrides,
 //! and configurable priority ordering.
 
@@ -101,7 +102,16 @@ impl Default for DataSourceManager {
                     priority: 5,
                     healthy: true,
                     last_success_ts: 0,
-                    asset_classes: vec!["crypto".into()],
+                    asset_classes: vec!["crypto".into(), "tokenized_equity".into(), "etf".into()],
+                },
+                DataSourceEntry {
+                    id: "kraken-futures".into(),
+                    cache_prefix: "kraken-futures".into(),
+                    label: "Kraken Futures".into(),
+                    priority: 6,
+                    healthy: true,
+                    last_success_ts: 0,
+                    asset_classes: vec!["crypto_futures".into(), "futures".into()],
                 },
             ],
             overrides: Vec::new(),
@@ -226,10 +236,11 @@ mod tests {
     #[test]
     fn default_sources_ordered() {
         let mgr = DataSourceManager::default();
-        assert_eq!(mgr.sources.len(), 5);
+        assert_eq!(mgr.sources.len(), 6);
         assert_eq!(mgr.sources[0].id, "mt5-darwinex");
         assert_eq!(mgr.sources[0].priority, 1);
         assert_eq!(mgr.sources[4].id, "kraken");
+        assert_eq!(mgr.sources[5].id, "kraken-futures");
     }
 
     #[test]
@@ -241,7 +252,8 @@ mod tests {
         assert_eq!(candidates[2], "tastytrade:EURUSD:1Hour");
         assert_eq!(candidates[3], "cryptocompare:EURUSD:1Hour");
         assert_eq!(candidates[4], "kraken:EURUSD:1Hour");
-        assert_eq!(candidates[5], "EURUSD:1Hour"); // bare key
+        assert_eq!(candidates[5], "kraken-futures:EURUSD:1Hour");
+        assert_eq!(candidates[6], "EURUSD:1Hour"); // bare key
     }
 
     #[test]
@@ -293,7 +305,7 @@ mod tests {
         let mgr = DataSourceManager::default();
         let json = serde_json::to_string(&mgr).unwrap();
         let back: DataSourceManager = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.sources.len(), 5);
+        assert_eq!(back.sources.len(), 6);
         assert_eq!(back.health_timeout_secs, 900);
     }
 
@@ -316,7 +328,7 @@ mod tests {
     fn status_summary() {
         let mgr = DataSourceManager::default();
         let summary = mgr.status_summary();
-        assert_eq!(summary.len(), 5);
+        assert_eq!(summary.len(), 6);
         assert!(summary[0].2); // mt5 healthy
     }
 
@@ -374,6 +386,6 @@ mod tests {
         mgr.mark_success("nonexistent");
         mgr.mark_failure("nonexistent");
         // No panic, no change
-        assert_eq!(mgr.sources.len(), 5);
+        assert_eq!(mgr.sources.len(), 6);
     }
 }

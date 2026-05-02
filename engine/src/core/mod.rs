@@ -13,6 +13,7 @@ pub mod fred;
 pub mod fundamentals;
 pub mod keyring;
 pub mod kraken;
+pub mod kraken_futures;
 pub mod lan_sync;
 pub mod margin;
 pub mod mql5_export;
