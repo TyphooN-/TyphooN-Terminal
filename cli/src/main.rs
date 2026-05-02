@@ -23,12 +23,74 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, Tabs, Wrap},
 };
+use std::future::pending;
 use std::io::stdout;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use typhoon_engine::core::cache::SqliteCache;
+use typhoon_engine::core::keyring;
+use typhoon_engine::core::lan_sync::{LanSyncClient, LanSyncServer};
 
 mod broker;
 mod creds;
+
+fn dirs_home() -> PathBuf {
+    let mut p = if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home)
+    } else {
+        PathBuf::from("/tmp")
+    };
+    p.push(".config");
+    p.push("typhoon-terminal");
+    p
+}
+
+fn cache_location_file() -> PathBuf {
+    dirs_home().join("cache_location.txt")
+}
+
+fn read_custom_cache_dir() -> Option<PathBuf> {
+    let s = std::fs::read_to_string(cache_location_file()).ok()?;
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() { Some(path) } else { None }
+}
+
+fn default_cache_dir() -> PathBuf {
+    dirs_home().join("cache")
+}
+
+fn resolve_cache_dir(explicit: Option<&PathBuf>) -> std::io::Result<PathBuf> {
+    let dir = if let Some(path) = explicit {
+        path.clone()
+    } else if let Some(custom) = read_custom_cache_dir().filter(|p| p.is_dir()) {
+        custom
+    } else {
+        default_cache_dir()
+    };
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+fn load_saved_lan_passphrase(cache: &SqliteCache) -> Option<String> {
+    match keyring::load(keyring::keys::LAN_SYNC_PASS) {
+        Ok(Some(passphrase)) if !passphrase.is_empty() => return Some(passphrase),
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!("LAN passphrase keyring load failed: {e}");
+        }
+    }
+
+    cache
+        .get_kv(&format!("cred:{}", keyring::keys::LAN_SYNC_PASS))
+        .ok()
+        .flatten()
+        .filter(|passphrase| !passphrase.is_empty())
+}
 
 // ── Multi-Account Registry (MT5 CSV Import) ─────────────────────
 
@@ -422,11 +484,11 @@ fn aggregate_bars(bars: &[broker::Bar], factor: usize) -> Vec<broker::Bar> {
 )]
 struct Args {
     /// API key (or set ALPACA_API_KEY env var)
-    #[arg(long, env = "ALPACA_API_KEY")]
+    #[arg(long, env = "ALPACA_API_KEY", hide_env_values = true)]
     api_key: Option<String>,
 
     /// Secret key (or set ALPACA_SECRET_KEY env var)
-    #[arg(long, env = "ALPACA_SECRET_KEY")]
+    #[arg(long, env = "ALPACA_SECRET_KEY", hide_env_values = true)]
     secret_key: Option<String>,
 
     /// Paper trading (default: true)
@@ -456,6 +518,31 @@ struct Args {
     /// Symbol to load on startup
     #[arg(long, short = 's')]
     symbol: Option<String>,
+
+    /// Directory containing typhoon_cache.db. Defaults to the GUI cache setting, then ~/.config/typhoon-terminal/cache.
+    #[arg(long, env = "TYPHOON_CACHE_DIR", value_name = "PATH")]
+    cache_dir: Option<PathBuf>,
+
+    /// Run the shared LAN sync server in CLI/headless mode.
+    #[arg(long, conflicts_with = "lan_client")]
+    lan_server: bool,
+
+    /// Run the shared LAN sync client in CLI/headless mode and connect to this server host/IP.
+    #[arg(long, conflicts_with = "lan_server", value_name = "HOST")]
+    lan_client: Option<String>,
+
+    /// LAN sync TCP port.
+    #[arg(long, env = "TYPHOON_LAN_PORT", default_value_t = 9847)]
+    lan_port: u16,
+
+    /// Override the saved LAN sync passphrase. Defaults to GUI keyring/KV cache.
+    #[arg(
+        long,
+        env = "TYPHOON_LAN_PASSPHRASE",
+        value_name = "PASSPHRASE",
+        hide_env_values = true
+    )]
+    lan_passphrase: Option<String>,
 }
 
 /// App state
@@ -2442,9 +2529,73 @@ fn draw(f: &mut Frame, app: &App) {
     draw_log(f, app, main_layout[3]);
 }
 
+async fn run_lan_mode(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            std::env::var("RUST_LOG")
+                .unwrap_or_else(|_| "typhoon_engine=info,typhoon_cli=info".into()),
+        )
+        .try_init();
+
+    let cache_dir = resolve_cache_dir(args.cache_dir.as_ref())?;
+    let db_path = cache_dir.join("typhoon_cache.db");
+    let cache = Arc::new(SqliteCache::open(&db_path).map_err(std::io::Error::other)?);
+    let passphrase = match args.lan_passphrase.clone() {
+        Some(passphrase) if !passphrase.is_empty() => passphrase,
+        _ => load_saved_lan_passphrase(Arc::as_ref(&cache)).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "LAN mode requires a saved LAN sync passphrase. Set it once in the GUI LAN Sync panel so keyring/KV contains cred:lan_sync_passphrase.",
+            )
+        })?,
+    };
+
+    if args.lan_server {
+        let _server = LanSyncServer::start(cache.clone(), args.lan_port, &passphrase)
+            .await
+            .map_err(std::io::Error::other)?;
+        println!(
+            "TyphooN LAN sync server running on wss://0.0.0.0:{}",
+            args.lan_port
+        );
+        println!("Cache: {}", db_path.display());
+        pending::<()>().await;
+    }
+
+    if let Some(host) = args.lan_client.as_deref() {
+        println!("TyphooN LAN sync client using cache {}", db_path.display());
+        loop {
+            match LanSyncClient::connect(cache.clone(), host, args.lan_port, &passphrase).await {
+                Ok((client, _remote_tx)) => {
+                    println!("Connected to wss://{}:{}", host, args.lan_port);
+                    client.wait().await;
+                    eprintln!("LAN sync disconnected; reconnecting in 30s...");
+                }
+                Err(e) => {
+                    eprintln!(
+                        "LAN sync connect to wss://{}:{} failed: {}; retrying in 30s...",
+                        host, args.lan_port, e
+                    );
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "LAN mode requires --lan-server or --lan-client HOST",
+    )
+    .into())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+
+    if args.lan_server || args.lan_client.is_some() {
+        return run_lan_mode(&args).await;
+    }
 
     // Load keys: CLI args → env vars → GUI terminal's encrypted storage
     let (api_key, secret_key) = match (args.api_key.clone(), args.secret_key.clone()) {

@@ -6336,6 +6336,9 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "typhoon-engine",
  "zeroize",
  "zstd",
 ]

@@ -83,6 +83,12 @@ WebSocket messages over TLS-encrypted TCP (wss://), authenticated with PBKDF2-de
 - Resync buttons: Resync Bars, Resync DARWIN Analytics, Resync Positions
 - SEC filing content fetched directly (public EDGAR URLs, not forwarded to server)
 
+#### Headless CLI Mode
+
+The CLI links the same `typhoon_engine::core::lan_sync::{LanSyncServer, LanSyncClient}` types as the GUI. `typhoon-cli --lan-server` starts the same WSS listener and `typhoon-cli --lan-client <host>` runs the same sync loop. Cache resolution is shared with the GUI cache-location contract: explicit `--cache-dir` / `TYPHOON_CACHE_DIR`, then `~/.config/typhoon-terminal/cache_location.txt`, then `~/.config/typhoon-terminal/cache`. Passphrase resolution also matches GUI mode: OS keyring key `lan_sync_passphrase`, then cache KV key `cred:lan_sync_passphrase`.
+
+This keeps LAN server/client compatibility at the protocol and database level. Docker, Kubernetes, and Terraform deployments mount a user-provided local or NAS path to `/cache` and run the CLI with `--cache-dir /cache`.
+
 #### Full Data Sync Protocol (13 tables)
 
 The LAN sync transfers all SQLite tables in phases:

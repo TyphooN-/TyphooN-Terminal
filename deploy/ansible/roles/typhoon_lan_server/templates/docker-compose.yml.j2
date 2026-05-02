@@ -1,0 +1,32 @@
+services:
+  lan-server:
+{% if typhoon_lan_server_build_context | length > 0 %}
+    build:
+      context: {{ typhoon_lan_server_build_context | to_json }}
+      dockerfile: {{ typhoon_lan_server_build_dockerfile | to_json }}
+{% endif %}
+    image: {{ typhoon_lan_server_image | to_json }}
+    container_name: {{ typhoon_lan_server_container_name | to_json }}
+    restart: unless-stopped
+    command:
+      - --lan-server
+      - --cache-dir
+      - /cache
+      - --lan-port
+      - "{{ typhoon_lan_server_lan_port }}"
+    environment:
+      TYPHOON_CACHE_DIR: /cache
+      RUST_LOG: {{ typhoon_lan_server_rust_log | to_json }}
+    volumes:
+      - type: bind
+        source: {{ typhoon_lan_server_cache_host_path | to_json }}
+        target: /cache
+    ports:
+      - "{{ typhoon_lan_server_lan_port }}:9847"
+      - "{{ typhoon_lan_server_metrics_port }}:9090"
+    healthcheck:
+      test: ["CMD", "typhoon-cli", "--help"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 5s

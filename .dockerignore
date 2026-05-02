@@ -1,37 +1,36 @@
-# Build artifacts
-target/
-
-# Version control
-.git/
+.git
+.github
 .gitignore
-
-# Documentation
-docs/
+.terraform
+target
+**/target
+native
+web
+web-protocol
+web-server
+docs
+deploy
+scripts
+build-windows.sh
+launch.sh
 *.md
 LICENSE*
 NOTICE
 CLA.md
 CONTRIBUTING.md
-
-# IDE / editor
-.vscode/
-.idea/
+*.log
+*.tmp
+.vscode
+.idea
 *.swp
 *.swo
 *~
-
-# Node (if any)
-node_modules/
-
-# Environment / secrets
+node_modules
 .env
 .env.*
-
-# OS junk
+!.env.example
 .DS_Store
 Thumbs.db
-
-# Scripts not needed in image
-scripts/
-build-windows.sh
-launch.sh
+deploy/terraform/**/.terraform
+deploy/terraform/**/*.tfstate
+deploy/terraform/**/*.tfstate.*

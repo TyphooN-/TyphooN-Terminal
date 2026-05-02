@@ -210,6 +210,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [ROADMAP.md](docs/ROADMAP.md) | Current status and future plans |
 | [DESIGN_PHILOSOPHY.md](docs/DESIGN_PHILOSOPHY.md) | Core design principles |
 | [API_KEYS.md](docs/API_KEYS.md) | Data source API key setup |
+| [deployment/lan-server.md](docs/deployment/lan-server.md) | Docker, Kubernetes, and Terraform LAN server deployment |
 | [docs/adr/](docs/adr/) | Architecture Decision Records |
 
 ### ADR Index
@@ -256,6 +257,9 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [058](docs/adr/058-gpu-strategy-optimizer.md) | GPU strategy optimizer |
 | [059](docs/adr/059-security-by-design.md) | Security by design (credential & data protection) |
 | [060](docs/adr/060-mql5-compiler-pipeline.md) | MQL5 compiler pipeline |
+| [206](docs/adr/206-headless-lan-server-deployment.md) | Headless LAN server deployment |
+| [207](docs/adr/207-encrypted-cache-at-rest.md) | Password-encrypted cache at rest |
+| [208](docs/adr/208-xynth-feature-parity.md) | Xynth feature parity target |
 
 ---
 
@@ -303,9 +307,13 @@ cd cli && ./typhoon.sh              # Interactive TUI
 ./typhoon.sh --accounts             # All accounts (Alpaca + MT5 imports)
 ./typhoon.sh -s BTC/USD             # Start with specific symbol
 ./typhoon.sh --import-mt5 DARWIN_EUR:/path/to/statement.csv
+./typhoon.sh --lan-server --cache-dir /mnt/nas/typhoon-cache
+./typhoon.sh --lan-client 192.168.1.20
 ```
 
 The CLI shares encrypted credentials with the GUI — no need to re-enter API keys. 6.5MB standalone binary, works over SSH on any VPS.
+
+CLI LAN server/client mode uses the same encrypted LAN sync protocol, saved LAN passphrase, and `typhoon_cache.db` cache as the GUI. For Docker, Kubernetes, Terraform, and Ansible examples with a user-provided local or NAS cache path, see [LAN server deployment](docs/deployment/lan-server.md).
 
 | CLI Feature | Command |
 |---|---|

@@ -1,0 +1,43 @@
+---
+- name: Ensure TyphooN LAN server directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ typhoon_lan_server_stack_dir }}"
+    - "{{ typhoon_lan_server_cache_host_path }}"
+
+- name: Render TyphooN LAN server compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ typhoon_lan_server_stack_dir }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  register: typhoon_lan_server_compose
+
+- name: Pull TyphooN LAN server image
+  ansible.builtin.command:
+    cmd: docker compose pull
+    chdir: "{{ typhoon_lan_server_stack_dir }}"
+  register: typhoon_lan_server_pull_result
+  changed_when: "'Downloaded newer image' in typhoon_lan_server_pull_result.stdout"
+  when: typhoon_lan_server_pull | bool
+
+- name: Start TyphooN LAN server
+  ansible.builtin.command:
+    cmd: >-
+      docker compose
+      -p {{ typhoon_lan_server_compose_project }}
+      up -d{{ ' --build' if typhoon_lan_server_build_context | length > 0 else '' }}
+    chdir: "{{ typhoon_lan_server_stack_dir }}"
+  register: typhoon_lan_server_up
+  changed_when: >
+    typhoon_lan_server_compose.changed
+    or 'Creating' in typhoon_lan_server_up.stdout
+    or 'Recreating' in typhoon_lan_server_up.stdout
+    or 'Started' in typhoon_lan_server_up.stdout
+    or 'Built' in typhoon_lan_server_up.stdout

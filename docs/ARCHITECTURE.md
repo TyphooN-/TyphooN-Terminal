@@ -117,15 +117,19 @@ TyphooN-Terminal/
 │   │   │   ├── cryptocompare.rs # CryptoCompare deep history
 │   │   │   ├── ai_sessions.rs # ADR-157 chat persistence
 │   │   │   ├── ai_response_cache.rs # ADR-162 cross-client cache
-│   │   │   ├── lan_sync.rs    # TLS + PBKDF2 LAN sync (ADR-065)
-│   │   │   └── ...
+│   │   │   └── lan_sync.rs    # TLS + PBKDF2 LAN sync (ADR-065)
 │   │   └── broker/
 │   │       ├── alpaca.rs       # REST + WebSocket (ADR-203 autotune)
 │   │       ├── tastytrade.rs   # REST + DXLink (ADR-022)
 │   │       ├── kraken_broker.rs # Kraken Spot REST trading (ADR-072)
 │   │       └── dxlink.rs       # DXLink WebSocket
 │   └── Cargo.toml
-├── cli/                    # Standalone TUI (ratatui, SSH-ready)
+├── cli/                    # TUI plus headless LAN server/client
+│   ├── src/main.rs         # --lan-server / --lan-client, shared cache dir
+│   └── Cargo.toml
+├── deploy/                 # Docker, Kubernetes, Terraform LAN server assets
+│   ├── kubernetes/
+│   └── terraform/
 ├── mql5-compiler/          # MQL5 + PineScript + 8 transpiler backends
 ├── web/                    # WASM LAN client (ADR-073)
 ├── web-protocol/           # Shared web ↔ server message types

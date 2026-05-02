@@ -15,6 +15,7 @@ ratatui = "0.30"
 crossterm = "0.29"
 
 # Shared with main terminal
+typhoon-engine = { path = "../engine" }
 reqwest = { version = "0.13", features = ["json", "query"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "io-util"] }
 serde = { version = "1", features = ["derive"] }
@@ -22,6 +23,8 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
 zstd = "0.13"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # CLI-specific
 clap = { version = "4", features = ["derive", "env"] }
