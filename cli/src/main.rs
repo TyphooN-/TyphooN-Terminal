@@ -92,6 +92,21 @@ fn load_saved_lan_passphrase(cache: &SqliteCache) -> Option<String> {
         .filter(|passphrase| !passphrase.is_empty())
 }
 
+fn save_lan_passphrase(cache: &SqliteCache, passphrase: &str) {
+    if passphrase.is_empty() {
+        return;
+    }
+    if let Err(e) = cache.put_kv(
+        &format!("cred:{}", keyring::keys::LAN_SYNC_PASS),
+        passphrase,
+    ) {
+        tracing::warn!("LAN passphrase KV store failed: {e}");
+    }
+    if let Err(e) = keyring::store(keyring::keys::LAN_SYNC_PASS, passphrase) {
+        tracing::warn!("LAN passphrase keyring store failed: {e}");
+    }
+}
+
 // ── Multi-Account Registry (MT5 CSV Import) ─────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -535,7 +550,7 @@ struct Args {
     #[arg(long, env = "TYPHOON_LAN_PORT", default_value_t = 9847)]
     lan_port: u16,
 
-    /// Override the saved LAN sync passphrase. Defaults to GUI keyring/KV cache.
+    /// Bootstrap LAN sync passphrase when no saved GUI keyring/KV value exists.
     #[arg(
         long,
         env = "TYPHOON_LAN_PASSPHRASE",
@@ -2540,14 +2555,20 @@ async fn run_lan_mode(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let cache_dir = resolve_cache_dir(args.cache_dir.as_ref())?;
     let db_path = cache_dir.join("typhoon_cache.db");
     let cache = Arc::new(SqliteCache::open(&db_path).map_err(std::io::Error::other)?);
-    let passphrase = match args.lan_passphrase.clone() {
-        Some(passphrase) if !passphrase.is_empty() => passphrase,
-        _ => load_saved_lan_passphrase(Arc::as_ref(&cache)).ok_or_else(|| {
-            std::io::Error::new(
+    let saved_passphrase = load_saved_lan_passphrase(Arc::as_ref(&cache));
+    let passphrase = match (saved_passphrase, args.lan_passphrase.clone()) {
+        (Some(saved), _) => saved,
+        (None, Some(provided)) if !provided.is_empty() => {
+            save_lan_passphrase(Arc::as_ref(&cache), &provided);
+            provided
+        }
+        (None, _) => {
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "LAN mode requires a saved LAN sync passphrase. Set it once in the GUI LAN Sync panel so keyring/KV contains cred:lan_sync_passphrase.",
+                "LAN mode requires a saved LAN sync passphrase or --lan-passphrase/TYPHOON_LAN_PASSPHRASE for first-time bootstrap.",
             )
-        })?,
+            .into());
+        }
     };
 
     if args.lan_server {

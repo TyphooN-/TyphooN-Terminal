@@ -11,4 +11,4 @@ terraform apply \
 
 `cache_host_path` can be a local disk path or a NAS mount. If the cluster has multiple nodes, set `node_selector` so the pod lands on the node where that path is mounted.
 
-Configure the LAN passphrase once in the GUI LAN Sync panel before deployment. The headless CLI server reads the same keyring/KV value from the mounted cache, so Terraform does not manage the passphrase.
+Existing caches need no passphrase variable. For a fresh cache, add `-var='lan_bootstrap_passphrase=change-this'`; the CLI server persists it into the same keyring/KV locations used by GUI mode.

@@ -11,6 +11,22 @@ resource "kubernetes_namespace_v1" "typhoon" {
   }
 }
 
+resource "kubernetes_secret_v1" "lan_sync_bootstrap" {
+  count = var.lan_bootstrap_passphrase == "" ? 0 : 1
+
+  metadata {
+    name      = "${var.name}-bootstrap"
+    namespace = kubernetes_namespace_v1.typhoon.metadata[0].name
+    labels    = local.labels
+  }
+
+  data = {
+    passphrase = var.lan_bootstrap_passphrase
+  }
+
+  type = "Opaque"
+}
+
 resource "kubernetes_persistent_volume_v1" "cache" {
   metadata {
     name   = "${var.name}-cache"
@@ -106,6 +122,19 @@ resource "kubernetes_deployment_v1" "lan_server" {
           env {
             name  = "RUST_LOG"
             value = var.rust_log
+          }
+
+          dynamic "env" {
+            for_each = var.lan_bootstrap_passphrase == "" ? [] : [1]
+            content {
+              name = "TYPHOON_LAN_PASSPHRASE"
+              value_from {
+                secret_key_ref {
+                  name = kubernetes_secret_v1.lan_sync_bootstrap[0].metadata[0].name
+                  key  = "passphrase"
+                }
+              }
+            }
           }
 
           port {

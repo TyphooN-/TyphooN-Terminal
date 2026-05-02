@@ -4,6 +4,15 @@ metadata:
   name: ${TYPHOON_NAMESPACE}
 ---
 apiVersion: v1
+kind: Secret
+metadata:
+  name: typhoon-lan-sync-bootstrap
+  namespace: ${TYPHOON_NAMESPACE}
+type: Opaque
+stringData:
+  passphrase: ${TYPHOON_LAN_BOOTSTRAP_PASSPHRASE}
+---
+apiVersion: v1
 kind: PersistentVolume
 metadata:
   name: typhoon-cache
@@ -67,6 +76,12 @@ spec:
           env:
             - name: TYPHOON_CACHE_DIR
               value: /cache
+            - name: TYPHOON_LAN_PASSPHRASE
+              valueFrom:
+                secretKeyRef:
+                  name: typhoon-lan-sync-bootstrap
+                  key: passphrase
+                  optional: true
             - name: RUST_LOG
               value: ${TYPHOON_RUST_LOG}
           ports:

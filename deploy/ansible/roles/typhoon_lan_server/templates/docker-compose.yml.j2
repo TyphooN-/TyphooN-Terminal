@@ -16,6 +16,9 @@ services:
       - "{{ typhoon_lan_server_lan_port }}"
     environment:
       TYPHOON_CACHE_DIR: /cache
+{% if typhoon_lan_server_bootstrap_passphrase | length > 0 %}
+      TYPHOON_LAN_PASSPHRASE: {{ typhoon_lan_server_bootstrap_passphrase | to_json }}
+{% endif %}
       RUST_LOG: {{ typhoon_lan_server_rust_log | to_json }}
     volumes:
       - type: bind

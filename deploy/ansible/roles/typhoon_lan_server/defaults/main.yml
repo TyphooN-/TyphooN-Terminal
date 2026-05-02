@@ -7,6 +7,7 @@ typhoon_lan_server_lan_port: 9847
 typhoon_lan_server_metrics_port: 9090
 typhoon_lan_server_rust_log: typhoon_engine=info,typhoon_cli=info
 typhoon_lan_server_compose_project: typhoon
+typhoon_lan_server_bootstrap_passphrase: ""
 
 # Optional local build context on the target host. Leave empty to use
 # typhoon_lan_server_image as a prebuilt/pulled image.

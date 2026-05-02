@@ -17,12 +17,22 @@ For Docker and Kubernetes, mount any local directory or NAS-mounted directory to
 
 ## LAN Passphrase Contract
 
-Do not pass the LAN server password through Docker, Kubernetes, Terraform, or Ansible. Configure it once in the GUI LAN Sync panel. The GUI stores it in the OS keyring under `lan_sync_passphrase` and mirrors it into the cache KV key `cred:lan_sync_passphrase`; CLI/headless mode reads the same locations.
+Existing cache servers do not need a password variable. Configure the LAN password once in the GUI LAN Sync panel; the GUI stores it in the OS keyring under `lan_sync_passphrase` and mirrors it into the cache KV key `cred:lan_sync_passphrase`; CLI/headless mode reads the same locations.
+
+Fresh cache servers can be bootstrapped by passing the password once. If CLI/headless mode receives `--lan-passphrase` or `TYPHOON_LAN_PASSPHRASE` and no saved LAN password already exists, it writes that value into the same keyring/KV locations. Saved values win over bootstrap values on later starts.
 
 ## Docker Compose
 
 ```bash
 export TYPHOON_CACHE_HOST_PATH=/mnt/nas/typhoon-cache
+docker compose up -d --build lan-server
+```
+
+For a fresh cache:
+
+```bash
+export TYPHOON_CACHE_HOST_PATH=/mnt/nas/typhoon-cache
+export TYPHOON_LAN_PASSPHRASE='change-this'
 docker compose up -d --build lan-server
 ```
 
@@ -48,6 +58,7 @@ export TYPHOON_IMAGE=typhoon-terminal:lan-server
 export TYPHOON_IMAGE_PULL_POLICY=IfNotPresent
 export TYPHOON_CACHE_HOST_PATH=/mnt/nas/typhoon-cache
 export TYPHOON_CACHE_SIZE=100Gi
+export TYPHOON_LAN_BOOTSTRAP_PASSPHRASE=
 export TYPHOON_LAN_PORT=9847
 export TYPHOON_NODE_PORT=30947
 export TYPHOON_HOST_NETWORK=true
@@ -55,6 +66,8 @@ export TYPHOON_RUST_LOG=typhoon_engine=info,typhoon_cli=info
 
 envsubst < deploy/kubernetes/lan-server.yaml.tpl | kubectl apply -f -
 ```
+
+For a fresh cache, set `TYPHOON_LAN_BOOTSTRAP_PASSPHRASE` before rendering.
 
 When `TYPHOON_HOST_NETWORK=true`, LAN clients can use `<node-ip>:9847`. Otherwise use the `NodePort` value.
 
@@ -68,6 +81,8 @@ terraform apply \
   -var='image=typhoon-terminal:lan-server'
 ```
 
+For a fresh cache, add `-var='lan_bootstrap_passphrase=change-this'`.
+
 For a NAS path, mount the NAS on the selected Kubernetes node before applying. If multiple nodes can schedule the pod, set `node_selector` so the pod lands on the node that has the cache path mounted.
 
 ## Ansible
@@ -79,3 +94,4 @@ ansible-playbook -i inventory deploy/ansible/playbooks/lan-server.yml \
 ```
 
 Set `typhoon_lan_server_build_context` if the target host should build from a local repository checkout instead of using a prebuilt image.
+For a fresh cache, add `-e typhoon_lan_server_bootstrap_passphrase=change-this` or provide that variable from Ansible Vault.

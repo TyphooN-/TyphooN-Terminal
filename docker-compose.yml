@@ -14,6 +14,7 @@ services:
       - ${TYPHOON_LAN_PORT:-9847}
     environment:
       TYPHOON_CACHE_DIR: /cache
+      TYPHOON_LAN_PASSPHRASE: ${TYPHOON_LAN_PASSPHRASE:-}
       RUST_LOG: ${RUST_LOG:-typhoon_engine=info,typhoon_cli=info}
     volumes:
       - type: bind

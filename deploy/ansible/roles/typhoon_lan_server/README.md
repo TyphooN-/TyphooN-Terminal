@@ -2,7 +2,7 @@
 
 Deploys the headless TyphooN CLI LAN sync server with Docker Compose.
 
-The role does not manage the LAN passphrase. Configure it once in the GUI LAN Sync panel; the CLI server reads the same `lan_sync_passphrase` from the OS keyring when available and from the mounted cache KV key `cred:lan_sync_passphrase`.
+The role normally uses the LAN passphrase already stored by the GUI. For a fresh cache server, set `typhoon_lan_server_bootstrap_passphrase`; the CLI server will persist it into the same keyring/KV locations and reuse the saved value after that.
 
 ## Variables
 
@@ -13,6 +13,7 @@ typhoon_lan_server_image: typhoon-terminal:lan-server
 typhoon_lan_server_lan_port: 9847
 typhoon_lan_server_metrics_port: 9090
 typhoon_lan_server_build_context: ""
+typhoon_lan_server_bootstrap_passphrase: ""
 ```
 
 Set `typhoon_lan_server_build_context` to a repo path on the target host if the role should build the image locally. Leave it empty to use `typhoon_lan_server_image`.

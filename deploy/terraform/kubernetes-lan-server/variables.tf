@@ -39,6 +39,13 @@ variable "lan_port" {
   default     = 9847
 }
 
+variable "lan_bootstrap_passphrase" {
+  description = "Optional first-run LAN sync passphrase. Used only when the mounted cache/keyring does not already contain a LAN passphrase."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "service_type" {
   description = "Kubernetes service type. Use NodePort for bare-metal LAN clusters, LoadBalancer where available."
   type        = string
