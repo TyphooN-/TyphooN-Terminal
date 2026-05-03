@@ -498,7 +498,7 @@ under the 100 ms UI-latency budget.
 Engine test suite: **801 passed / 0 failed / 3 ignored** (786 from
 Round 17 + 15 new).
 
-## Future work
+## Historical Follow-up Context
 
 The parity sweep continues. Candidates for Round 19, still pure
 compute over existing caches:

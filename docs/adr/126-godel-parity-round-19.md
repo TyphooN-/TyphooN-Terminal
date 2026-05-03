@@ -445,7 +445,7 @@ unrepresentative of the sector as a whole.
 Engine test suite: **821 passed / 0 failed / 3 ignored** (806 from
 Round 18 + 15 new).
 
-## Future work
+## Historical Follow-up Context
 
 The parity sweep continues. Candidates for Round 20, still pure
 compute over existing caches:

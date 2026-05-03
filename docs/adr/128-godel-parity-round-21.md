@@ -279,7 +279,7 @@ packet / ADR / test pattern established by Rounds 8 through 20.
 - Engine test suite: 840 (Round 20) → 859 passing (+19 = 5 roundtrip
   + 14 compute).
 
-## Future work
+## Historical Follow-up Context
 
 Continue the Godel-parity arc with additional surfaces the future-work
 list has flagged:

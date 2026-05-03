@@ -66,7 +66,7 @@
 - [x] Bid/ask spread display
 
 ### Phase 8: Data & Analytics
-- [x] Crypto backfill (CryptoCompare — BTC from 2010, 2000 bars/request; Kraken retained for weekend gap-fill)
+- [x] Crypto backfill (CryptoCompare — BTC from 2010, 2000 bars/request; Kraken retained for async recent/gap-fill)
 - [x] DARWIN signal vs quote comparison
 - [x] MTF SMA (H1/H4/D1/W1 200SMA + W1/MN1 100SMA — Tomato + Magenta)
 - [x] ATR Projection MTF (M15/H1/H4/D1/W1/MN1 horizontal levels)
@@ -121,11 +121,11 @@
 - [x] WGSL backend (GPU execution via wgpu compute shaders)
 - [x] PineScript v5 parser (indicator, input.*, ta.*, plot, math.*)
 - [x] 8 transpiler frontends/backends: MQL4, PineScript, ThinkScript, EasyLanguage, AFL, ACSIL, cAlgo, NinjaScript, ProBuilder
-- [ ] Hot-reload custom indicators from file
-- [ ] Indicator marketplace / import UI
+- Deferred: hot-reload custom indicators from file and an indicator marketplace/import UI remain outside the current native parity target.
 
 ### Phase 13: Kraken Broker
 - [x] Public OHLCV ingest (gap-fill source)
+- [x] Async Kraken bar sync acceleration: 16 public fetch permits, larger bounded queue windows, background CryptoCompare + Kraken union work, non-blocking cache writes (ADR-210)
 - [x] HMAC-SHA512 signed REST trading (ADR-072)
 - [x] Full Spot REST AddOrder parameters: stop/take-profit/trailing variants, price2, displayvol iceberg, settle-position, margin/reduce-only, flags, TIF, client IDs, STP, validate-only, conditional close
 - [x] Batch orders, order amend/edit, batch cancel, cancel-all, dead-man cancel
@@ -162,7 +162,7 @@
 - [x] Godel-Terminal-documented features (options chain, expirations calendar, earnings whispers, institutional ownership, insider transactions)
 - [x] Research-packet pipeline as the AI-agent-readable surface (ADR-188)
 - [x] Chart-parity reopened for chartable oscillator/stat bundles (ADR-200)
-- [ ] Chart-overlay candlestick pattern marks (deferred — ADR-188)
+- Deferred: chart-overlay candlestick pattern marks remain intentionally research-packet-first per ADR-188.
 
 ### Phase 19: MT5 EA Trading-Flow Alignment
 - [x] One net position per symbol across Alpaca / tastytrade / Kraken (ADR-201)
@@ -173,6 +173,7 @@
 ### Phase 20: Performance & Compile-Speed
 - [x] native/app.rs split into submodules: ai, settings, storage, sync_status, tool_windows, strategy_windows (ADR-202)
 - [x] Alpaca sync autotuning by data tier (ADR-203)
+- [x] Kraken public bar sync no longer blocked behind CryptoCompare deep-history work; cache merge/write moved off async workers (ADR-210)
 - [x] Header-driven rate-limit pacing, cache-depth-aware window sizing
 - [x] No-data symbol skip set
 - [x] Dependency audit + RustSec advisory closure (ADR-204)
@@ -185,13 +186,12 @@
 - [x] Compose `observability` profile + Ansible/Kubernetes/Terraform Prometheus + Grafana with provisioned LAN dashboard (ADR-209)
 - [x] Compose `kafka` profile + Ansible/Kubernetes/Terraform single-node Apache Kafka KRaft broker (ADR-209)
 
-## Future
+## Deferred / Data-Gated
 
-### Phase 13: Bookmap
-- [ ] Order book depth heatmap (ADR-048)
-- [ ] wgpu compute shader pipeline
-- [ ] Level 2 WebSocket data
+### Bookmap / L2
+- Current status: Bookmap window, orderbook DOM, and Alpaca crypto orderbook snapshot fetch are wired.
+- Deferred: true streaming L2 heatmap with a dedicated wgpu compute texture remains data-entitlement and scope gated (ADR-048).
 
-### Phase 14: Pattern Recognition
-- [ ] Classic chart patterns (double top/bottom, H&S, wedge, triangle)
-- [ ] Auto-detection with confirmation signals
+### Pattern Recognition
+- Current status: harmonic pattern auto-detection is implemented and chart drawing tools include manual pattern annotations.
+- Deferred: automatic classic chart-pattern detection (double top/bottom, H&S, wedge, triangle) is not part of the current active roadmap.

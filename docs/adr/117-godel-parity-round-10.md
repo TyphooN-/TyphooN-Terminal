@@ -377,7 +377,7 @@ Key new tests:
 - `compute_short_interest_high_risk_squeeze` — 50M short + 1K ADV →
   DTC 50000 → EXTREME label.
 
-## Future Work
+## Historical Follow-up Context
 
 - **Altman Z-score / Piotroski F-score companion metrics for LEV.**
   Needs retained earnings, working capital, and a few additional

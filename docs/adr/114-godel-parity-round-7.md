@@ -270,7 +270,7 @@ Key new tests:
 - `compute_relative_valuation_z_scores` — subject P/E of 30 against 7
   peers with tight distribution; percentile within [60, 80].
 
-## Future Work
+## Historical Follow-up Context
 
 - **Batched OpenFIGI mapping** — the free tier allows up to 100 tickers per
   POST. ASKAI pre-flights could pre-populate FIGI for the entire symbol

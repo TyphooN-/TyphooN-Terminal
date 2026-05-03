@@ -451,7 +451,7 @@ Engine test suite: **740 passed / 0 failed / 3 ignored**
 the extra baseline test came from an existing roundtrip that
 runs under the new schema v14 path.
 
-## Future work
+## Historical Follow-up Context
 
 The parity sweep continues. Candidates for Round 15, all pure
 compute over existing caches:

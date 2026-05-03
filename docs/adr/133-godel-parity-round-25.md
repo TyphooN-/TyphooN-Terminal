@@ -387,7 +387,7 @@ established by Rounds 8 through 24:
 - Engine test suite: 338 → 352 research tests passing
   (+14 = 5 roundtrip + 9 compute).
 
-## Future work
+## Historical Follow-up Context
 
 Continue the Godel-parity arc with additional surfaces the future-
 work list has flagged:

@@ -347,7 +347,7 @@ Key new tests:
 - `compute_volatility_skew_basic_smile` — injected smile chain produces
   non-empty strike points and the sign of the skew matches.
 
-## Future Work
+## Historical Follow-up Context
 
 - **Cross-sector / index-universe COR** — today COR uses `research::get_peers`
   as the peer set. Let the user override via a text field so they can

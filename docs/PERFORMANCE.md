@@ -45,7 +45,11 @@ The Storage Manager (`STORAGE` command) can recompress all bar_cache entries at 
 
 ### Auto MT5 Sync
 
-Bar data from MT5 (via BarCacheWriter EA) is automatically synced every ~5 minutes (1200 frames at 250ms). This picks up new bars without manual refresh.
+Bar data from MT5 (via BarCacheWriter EA) is automatically synced about once per minute when the cache is loaded and the terminal is not a LAN client. The sync is smart enough to skip unchanged keys.
+
+### Kraken Public Bar Sync
+
+Kraken Spot/xStocks and Futures public bars run on tokio tasks with a shared 16-permit public fetch semaphore. Direct Kraken requests spawn one task per timeframe, while combined CryptoCompare backfills now run in the background and launch their Kraken leg immediately. CryptoCompare deep-history pagination is separately capped at two concurrent tasks. SQLite/zstd cache merge and write work is offloaded with `spawn_blocking`, so network tasks stay responsive and active charts can reload as each Kraken timeframe lands.
 
 ### Cache Format
 

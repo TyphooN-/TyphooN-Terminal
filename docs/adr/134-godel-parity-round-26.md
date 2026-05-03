@@ -317,7 +317,7 @@ Ship Round 26 as a five-surface additive bundle using schema v27
 - Engine test suite: 352 → 367 research tests passing
   (+15 = 5 roundtrip + 10 compute).
 
-## Future work
+## Historical Follow-up Context
 
 Continue the Godel-parity arc with additional surfaces:
 

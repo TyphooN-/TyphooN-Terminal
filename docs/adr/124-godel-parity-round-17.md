@@ -463,7 +463,7 @@ extracting.
 Engine test suite: **786 passed / 0 failed / 3 ignored** (771 from
 Round 16 + 15 new).
 
-## Future work
+## Historical Follow-up Context
 
 The parity sweep continues. Candidates for Round 18, all still pure
 compute over existing caches:

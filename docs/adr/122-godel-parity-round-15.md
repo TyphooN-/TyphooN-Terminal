@@ -489,7 +489,7 @@ Round 14's net state + 15 new). The 741 baseline is one above the
 Round 14 ADR's reported 740 because a latent roundtrip test was
 caught by a reachability sweep during Round 15 wiring.
 
-## Future work
+## Historical Follow-up Context
 
 The parity sweep continues. Candidates for Round 16, all pure compute
 over existing caches:

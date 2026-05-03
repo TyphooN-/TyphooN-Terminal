@@ -219,7 +219,7 @@ chart state.
 - ADR-110 — Round 3 (FA, MGMT, COT)
 - ADR-111 — Round 4 (SPLT, ETF, ANR, ESG, MEMB) + AI chat overhaul
 
-## Future Work
+## Historical Follow-up Context
 
 Explicitly deferred out of this round:
 

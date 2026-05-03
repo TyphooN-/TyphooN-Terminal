@@ -107,7 +107,7 @@ This makes the "spare cycles" model work without ever surprising the user mid-tr
 - Changing the backup level from 9 (appropriate for one-shot exports).
 - Changing the manual `STORAGE` compact level from 22.
 
-## Future Work
+## Deferred Tuning Knobs
 
 - ~~Wire the auto-compact scheduler with the gating described in §3.~~ (Shipped 2026-04-29.)
 - ~~Expose the on/off toggle and last-run readout in the Storage Manager UI.~~ (Shipped 2026-04-29.)

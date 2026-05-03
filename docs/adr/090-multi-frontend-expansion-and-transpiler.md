@@ -315,7 +315,7 @@ transpile between the five line-scanner languages freely.
   (single-position vs netted, OCO support, etc.). All frontends are
   indicator-only.
 
-## Deferred / Future Work
+## Deferred Follow-up Context
 
 ### Phase 2 — transpile sources
 - **MQL5 → IR**: refactor the pest-grammar-backed lowering to expose a

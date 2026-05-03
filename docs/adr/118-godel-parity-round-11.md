@@ -351,7 +351,7 @@ Engine test suite: **686 passed / 0 failed / 3 ignored**
 (671 from Round 10 + 15 new — 14 Round 11 plus one previously-counted
 delta from the Round 10 baseline).
 
-## Future work
+## Historical Follow-up Context
 
 The parity sweep is not done. Candidates for Round 12, all pure-compute
 over existing caches:

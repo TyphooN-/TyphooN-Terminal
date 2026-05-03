@@ -85,6 +85,16 @@ public inside the broker module API. This keeps signing and nonce handling
 centralized while allowing funding, earn, subaccount, and export/report calls
 to be added without copying authentication code.
 
+## Public Bar Sync
+
+Kraken Spot/xStocks and Kraken Futures public market-data fetches are
+asynchronous and bounded by a shared public semaphore. As of ADR-210, the
+terminal keeps 16 public Kraken requests in flight, uses larger Spot/Futures
+queue windows, offloads cache merge/write work to blocking tasks, and runs the
+Kraken leg of combined CryptoCompare backfills concurrently with CryptoCompare
+pagination. This keeps recent Kraken bars arriving as soon as possible while
+CryptoCompare continues to fill deeper history.
+
 ## UI And Web Routing
 
 Native quick-trade and chart-position controls can route crypto orders to

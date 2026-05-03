@@ -323,7 +323,7 @@ run yet.
 - ADR-111 — Round 4 (SPLT, ETF, ANR, ESG, MEMB) + AI chat overhaul
 - ADR-112 — Round 5 (INS, HDS, FLOAT, HP, EPS)
 
-## Future Work
+## Historical Follow-up Context
 
 Explicitly deferred out of this round:
 

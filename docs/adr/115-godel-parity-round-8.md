@@ -299,7 +299,7 @@ Key new tests:
 - `compute_ivol_rank` / `compute_ivol_percentile` — synthetic history;
   rank / percentile match manual computation.
 
-## Future Work
+## Historical Follow-up Context
 
 - **Two-stage DCF** — add a high-growth phase before steady-state growth for
   symbols whose TTM growth clearly exceeds terminal. Additive schema bump.

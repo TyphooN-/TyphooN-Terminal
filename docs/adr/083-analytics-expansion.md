@@ -52,9 +52,9 @@ Comprehensive audit identified feature gaps vs TradingView/Bloomberg in options 
 - 5 WGSL pipelines: eval, nnfx, walk_forward, robustness, monte_carlo
 - BacktestResult: net_pnl, max_drawdown, sharpe, sortino, win_rate, profit_factor, trade_count, avg_hold_bars, robustness_score
 
-## Remaining Feature Gaps (Data-Blocked)
-- [ ] Market Breadth indicators (Advance/Decline, McClellan — needs exchange-level breadth data feed)
-- [ ] Put/Call Ratio visualization (needs options volume data from CBOE or similar)
+## Data-Blocked Items
+- Market Breadth indicators (Advance/Decline, McClellan) need an exchange-level breadth data feed.
+- Put/Call Ratio visualization needs options volume data from CBOE or a comparable feed.
 
 ## Consequences
 

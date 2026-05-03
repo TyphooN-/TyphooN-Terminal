@@ -1,6 +1,6 @@
-# ADR-048: Bookmap-Style Depth Heatmap (Future)
+# ADR-048: Bookmap-Style Depth Heatmap
 
-## Status: Partial (2026-04-05) — Volume heatmap window implemented, real L2 streaming planned
+## Status: Partial (updated 2026-05-03) - Snapshot L2/DOM implemented, streaming heatmap deferred
 
 ## Context
 
@@ -11,7 +11,18 @@
 - Iceberg orders (hidden liquidity revealed by trade flow)
 - Vacuum zones (empty areas with no resting orders)
 
-## Decision
+## Current Implementation
+
+The terminal has a Bookmap window, an orderbook DOM, and an Alpaca crypto
+orderbook snapshot path (`AlpacaBroker::get_orderbook`). The current Bookmap
+view can fetch depth on demand and render a heatmap-like view from available
+bar/orderbook context.
+
+True streaming L2 history remains deferred because it depends on broker data
+entitlements and a dedicated ring-buffer/texture pipeline that is separate
+from the normal chart renderer.
+
+## Original Decision
 
 Build a native Bookmap-style depth heatmap in the TyphooN Terminal using wgpu compute shaders for real-time rendering.
 
@@ -80,14 +91,14 @@ struct OrderBookSnapshot {
 - GPU compute shader for texture generation (not CPU)
 - Ring buffer with zero-copy GPU upload via `wgpu::Buffer::write`
 
-## Implementation Phase
+## Deferred Streaming Phase
 
-After core chart engine reaches parity (Phases 2-5). Bookmap requires:
-- Working WebSocket streaming (Phase 5)
-- wgpu compute shader pipeline (new)
-- Order book depth data from Alpaca (existing `get_orderbook` command)
-
-Estimated effort: ~1 week after Phase 5 is complete.
+The remaining work is the real-time streaming heatmap, not the user-facing
+window shell. It requires:
+- A broker entitlement that supplies continuous Level 2 snapshots for the
+  target symbols.
+- A ring buffer of order book snapshots and trade prints.
+- A dedicated wgpu texture/compute pipeline for the depth heatmap.
 
 ## Consequences
 

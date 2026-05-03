@@ -78,7 +78,7 @@ Applied to: HLine, TrendLine, VLine, Rectangle, Ray, Channel, ExtendedLine, HRay
 - `draw_width`, `draw_line_style`, `snap_enabled` saved/restored
 - `drawing_styles: Vec<(f32, LineStyle)>` parallel to `drawings` vec
 
-## Remaining Work
+## Deferred Drawing Work
 
 ### Gap #1 & #2: Hit-testing + drag
 1. On mouse click in chart area (not on existing drawing): check distance to each drawing

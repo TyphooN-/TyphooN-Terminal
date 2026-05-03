@@ -266,7 +266,7 @@ packet / ADR / test pattern established by Rounds 8 through 19.
   tests + 4 Round 19 tests that had been written but missed in the
   earlier count).
 
-## Future work
+## Historical Follow-up Context
 
 Continue the Godel-parity arc with additional surfaces the future-work
 list has flagged:

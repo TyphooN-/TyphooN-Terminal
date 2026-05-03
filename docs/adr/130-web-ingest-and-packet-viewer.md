@@ -357,7 +357,7 @@ populates the whole terminal farm.
   as every other Round N window. The underlying parser/store paths
   are fully covered.
 
-## Future work
+## Historical Follow-up Context
 
 1. **Auto-parse ingest blocks in ASKCLAUDE/ASKGEMINI subprocess
    output** — The CLI subprocess readers already capture the agent

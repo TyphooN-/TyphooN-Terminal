@@ -459,7 +459,7 @@ peers per sector in the cached universe).
 Engine test suite: **771 passed / 0 failed / 3 ignored** (756 from
 Round 15 + 15 new).
 
-## Future work
+## Historical Follow-up Context
 
 The parity sweep continues. Candidates for Round 17, all still pure
 compute over existing caches:

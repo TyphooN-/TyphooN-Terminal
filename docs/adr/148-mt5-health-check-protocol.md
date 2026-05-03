@@ -218,7 +218,7 @@ Additionally the EA now re-reads `demand.txt` every 10 cycles
     service ahead of normal track-time path, burst-exit check,
     heartbeat write at end of cycle.
 
-## Future work (not blocking)
+## Historical Follow-up Context (not blocking)
 
 - Add a UI banner in the terminal that surfaces `received_at` staleness
   and `init_burst_active=true`. Current wiring only stores the data;

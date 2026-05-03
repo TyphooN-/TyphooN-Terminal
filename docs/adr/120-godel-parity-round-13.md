@@ -467,7 +467,7 @@ requires all four inputs to be missing or zero.
 Engine test suite: **724 passed / 0 failed / 3 ignored**
 (706 from Round 12 + 18 new).
 
-## Future work
+## Historical Follow-up Context
 
 The parity sweep is not done. Candidates for Round 14, all
 pure-compute over existing caches:

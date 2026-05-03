@@ -12,10 +12,10 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **CLI Binary** | 6.5MB standalone TUI (SSH/VPS ready) |
 | **Memory Usage** | ~50-100MB (vs thinkorswim ~2GB+) |
 | **Startup Time** | < 2 seconds |
-| **Lines of Code** | ~17,000+ GUI + ~12,000 engine (pure Rust) |
-| **Indicators** | 32+ (NNFX + Ehlers DSP + standard + harmonics) |
-| **Commands** | 120 Quake-console style (~) |
-| **Drawing Tools** | 7 types (HLine, Trendline, Fibonacci, VLine, Rectangle, Ray, Channel) |
+| **Lines of Code** | 150K+ native GUI + 90K+ engine/research (pure Rust) |
+| **Indicators** | 46+ chart indicators plus ~375 TA-Lib/Godel research surfaces |
+| **Commands** | 205+ Quake-console style (~) |
+| **Drawing Tools** | 89 drawing and annotation types |
 | **Harmonic Patterns** | 10 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives) |
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
 | **Data Sources** | MT5 (Darwinex), Alpaca, tastytrade, Kraken Spot/xStocks, Kraken Futures, CryptoCompare |
@@ -40,12 +40,12 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Stock Screener** | Filter by price, volume, sector, change%, tradable/shortable flags |
 | **Command Palette** | ~ (tilde) Quake-console: DARWIN, BACKTEST, RISK_CALC, SCREENER, EXPORT_CSV |
 | **Watchlist** | Multi-symbol quote monitor with live prices and daily change |
-| **LAN Sync** | Export/import cache data between machines on local network |
+| **LAN Sync** | TLS/PBKDF2 LAN sync plus headless server/client deployment |
 | **Storage Manager** | View, delete, and compact (zstd-22) cache data by symbol/source |
 | **Multi-Window** | Open additional terminal windows (NEW_WINDOW/POPOUT) for multi-monitor setups |
 | **Chart Templates** | Save/load indicator configs and order mode |
 | **Workspace Profiles** | Save/load entire layout (tabs, indicators, pane sizes) |
-| **Drawing Tools** | 44 types: trend, fib, ray, ruler, rectangle, channel, pitchfork, Elliott, Gann, regression, arrows, labels + GPU rendering |
+| **Drawing Tools** | 89 types: trend, fib, ray, ruler, rectangle, channel, pitchfork, Elliott, Gann, regression, arrows, labels + GPU rendering |
 | **Multi-Chart Layouts** | MTF grid (2-5 timeframes with full NNFX indicators per cell) |
 | **Screenshot Export** | Ctrl+Shift+S to clipboard with toast notification |
 | **Push Notifications** | Pushover + ntfy.sh for mobile alerts |
@@ -92,7 +92,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Community Chat** | Matrix protocol chat via ~ (tilde) → CHAT, no server needed |
 | **Broker Abstraction** | BrokerTrait — extensible to any broker via single Rust file |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS-native keyring credential storage |
-| **Indicators** | 32+ indicators: NNFX system (9) + standard (21) + Ehlers DSP (8) + MTF overlays (MTF SMA, ATR Projection MTF, Previous Candle Levels) |
+| **Indicators** | 46+ chart indicators: NNFX system, standard overlays/oscillators, Ehlers DSP, MTF overlays, volume/supply-demand, and GPU/CPU parity paths |
 | **Security** | 21-pass audit (97 findings): OS-native keyring credentials, input validation, HTTP timeouts, path traversal, CSP, config bounds, zeroize, async lock optimization |
 | **Analyst Ratings** | Finnhub consensus: stacked buy/hold/sell chart + price targets (~ →ANR) |
 | **Fear & Greed** | Market sentiment gauge (0-100) + 30-day sparkline (~ →FEAR) |
@@ -106,8 +106,8 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **GPU Chart Engine** | Native wgpu candlesticks, drawing tools, sub-panes, price lines, histograms, fills — all on GPU |
 | **Draggable Panel Splitter** | Resize chart/sidebar panels by dragging the divider — layout persists across sessions |
 | **Economic Calendar** | Finnhub economic events: FOMC, NFP, CPI, PMI with impact ratings (~ →ECON) |
-| **Kraken Primary Market Data** | Public Spot/xStocks universe sync with no API key; authenticated keys only for account/trading |
-| **Kraken Futures Market Data** | Public futures instrument discovery + OHLCV sync under `kraken-futures:SYMBOL:TF`; no API key needed |
+| **Kraken Primary Market Data** | Public Spot/xStocks universe sync with no API key; async 16-permit OHLCV scheduler for fast chart catch-up |
+| **Kraken Futures Market Data** | Public futures instrument discovery + async OHLCV sync under `kraken-futures:SYMBOL:TF`; no API key needed |
 | **CryptoCompare Deep History** | BTC from 2010, ETH from 2015, 2000 bars/request — extends history before exchange listings where available |
 | **Weekend Crypto Live** | Adaptive polling: 60s (M1), 2.5min (M15), 5min (H1+) — magenta-colored weekend candles |
 | **Chart Right Margin** | 5-bar right margin (MT5 chart shift style) for price action breathing room |
@@ -115,7 +115,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Multi-Signal Anomaly Scanner** | 4-dimensional scan: VaR + EV + ATR + SEC with tradability indicators (~ →ANOMALY) |
 | **MTF Grid Visibility** | Per-tab checkboxes to show/hide individual timeframes in multi-timeframe grid |
 | **Storage Pagination** | Paginated storage manager for large cache databases |
-| **120 Commands** | Quake-console command palette with fuzzy search |
+| **205+ Commands** | Quake-console command palette with fuzzy search |
 
 ---
 
@@ -261,6 +261,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [207](docs/adr/207-encrypted-cache-at-rest.md) | Password-encrypted cache at rest |
 | [208](docs/adr/208-xynth-feature-parity.md) | Xynth feature parity target |
 | [209](docs/adr/209-lan-observability-kafka.md) | LAN observability and Kafka deployment |
+| [210](docs/adr/210-kraken-async-bar-sync.md) | Kraken async bar sync acceleration |
 
 ---
 
