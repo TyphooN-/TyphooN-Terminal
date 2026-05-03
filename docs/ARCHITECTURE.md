@@ -127,9 +127,12 @@ TyphooN-Terminal/
 ├── cli/                    # TUI plus headless LAN server/client
 │   ├── src/main.rs         # --lan-server / --lan-client, shared cache dir
 │   └── Cargo.toml
-├── deploy/                 # Docker, Kubernetes, Terraform LAN server assets
-│   ├── kubernetes/
-│   └── terraform/
+├── deploy/                 # Docker, Kubernetes, Terraform, Ansible, Grafana/Prometheus/Kafka assets
+│   ├── ansible/            # LAN host role with optional observability + Kafka (ADR-209)
+│   ├── grafana/            # Provisioned datasource + LAN server dashboard
+│   ├── kubernetes/         # lan-server + observability-kafka manifests
+│   ├── prometheus/         # Prometheus scrape config for /metrics
+│   └── terraform/          # Kubernetes module incl. observability + Kafka resources
 ├── mql5-compiler/          # MQL5 + PineScript + 8 transpiler backends
 ├── web/                    # WASM LAN client (ADR-073)
 ├── web-protocol/           # Shared web ↔ server message types
@@ -158,7 +161,7 @@ TyphooN-Terminal/
 
 ### LAN Sync
 
-TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates (no pinning — PBKDF2 passphrase handles auth). 15-second periodic re-sync. Server and client auto-start on startup. Full data sync: bars + DARWIN tables + KV cache + 34 pre-computed analytics fields. LAN clients are read-only viewers — zero local deal computation, all analytics from server KV. Broker positions/orders/account synced via KV for read-only display. 14 remote commands wired (SEC_SCRAPE, DARWIN_IMPORT, FETCH_BARS, etc.). Connected client IPs shown in server UI. Trading buttons disabled on LAN client. Implemented in `engine/src/core/lan_sync.rs`.
+TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates (no pinning — PBKDF2 passphrase handles auth). 15-second periodic re-sync. Server and client auto-start on startup. Full data sync: bars + DARWIN tables + KV cache + 34 pre-computed analytics fields. LAN clients are read-only viewers — zero local deal computation, all analytics from server KV. Broker positions/orders/account synced via KV for read-only display. 14 remote commands wired (SEC_SCRAPE, DARWIN_IMPORT, FETCH_BARS, etc.). Connected client IPs shown in server UI. Trading buttons disabled on LAN client. CLI/headless mode exposes Prometheus metrics for cache size, cache rows, per-series bar counts, liveness, and uptime. Implemented in `engine/src/core/lan_sync.rs` with CLI deployment in `cli/src/main.rs`.
 
 ### Storage Manager
 

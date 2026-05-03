@@ -68,7 +68,7 @@ WORKDIR /home/typhoon
 ENV XDG_DATA_HOME=/data
 ENV TYPHOON_CACHE_DIR=/cache
 
-# LAN sync (wss://) and future Prometheus metrics endpoint.
+# LAN sync (wss://) and Prometheus metrics endpoint.
 EXPOSE 9847 9090
 
 ENTRYPOINT ["typhoon-cli"]

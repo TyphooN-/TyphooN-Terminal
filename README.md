@@ -210,7 +210,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [ROADMAP.md](docs/ROADMAP.md) | Current status and future plans |
 | [DESIGN_PHILOSOPHY.md](docs/DESIGN_PHILOSOPHY.md) | Core design principles |
 | [API_KEYS.md](docs/API_KEYS.md) | Data source API key setup |
-| [deployment/lan-server.md](docs/deployment/lan-server.md) | Docker, Kubernetes, and Terraform LAN server deployment |
+| [deployment/lan-server.md](docs/deployment/lan-server.md) | Docker, Kubernetes, Terraform, Ansible, Prometheus, Grafana, and Kafka LAN server deployment |
 | [docs/adr/](docs/adr/) | Architecture Decision Records |
 
 ### ADR Index
@@ -260,6 +260,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [206](docs/adr/206-headless-lan-server-deployment.md) | Headless LAN server deployment |
 | [207](docs/adr/207-encrypted-cache-at-rest.md) | Password-encrypted cache at rest |
 | [208](docs/adr/208-xynth-feature-parity.md) | Xynth feature parity target |
+| [209](docs/adr/209-lan-observability-kafka.md) | LAN observability and Kafka deployment |
 
 ---
 
@@ -313,7 +314,7 @@ cd cli && ./typhoon.sh              # Interactive TUI
 
 The CLI shares encrypted credentials with the GUI — no need to re-enter API keys. 6.5MB standalone binary, works over SSH on any VPS.
 
-CLI LAN server/client mode uses the same encrypted LAN sync protocol, saved LAN passphrase, and `typhoon_cache.db` cache as the GUI. For Docker, Kubernetes, Terraform, and Ansible examples with a user-provided local or NAS cache path, see [LAN server deployment](docs/deployment/lan-server.md).
+CLI LAN server/client mode uses the same encrypted LAN sync protocol, saved LAN passphrase, and `typhoon_cache.db` cache as the GUI. Headless mode also exposes Prometheus metrics with `--metrics-port`. For Docker, Kubernetes, Terraform, Ansible, Grafana, Prometheus, and Kafka examples with a user-provided local or NAS cache path, see [LAN server deployment](docs/deployment/lan-server.md).
 
 | CLI Feature | Command |
 |---|---|

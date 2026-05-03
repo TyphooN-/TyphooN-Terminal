@@ -25,7 +25,7 @@ use ratatui::{
 };
 use std::future::pending;
 use std::io::stdout;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use typhoon_engine::core::cache::SqliteCache;
@@ -105,6 +105,179 @@ fn save_lan_passphrase(cache: &SqliteCache, passphrase: &str) {
     if let Err(e) = keyring::store(keyring::keys::LAN_SYNC_PASS, passphrase) {
         tracing::warn!("LAN passphrase keyring store failed: {e}");
     }
+}
+
+fn prometheus_label_value(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn split_cache_key(key: &str) -> (&str, &str) {
+    key.rsplit_once(':').unwrap_or((key, "unknown"))
+}
+
+fn render_lan_metrics(
+    cache: &SqliteCache,
+    db_path: &Path,
+    started_at: Instant,
+    mode: &str,
+) -> String {
+    let mut out = String::with_capacity(8192);
+    let uptime = started_at.elapsed().as_secs_f64();
+    let db = prometheus_label_value(&db_path.display().to_string());
+    let mode_label = prometheus_label_value(mode);
+
+    out.push_str("# HELP typhoon_lan_server_up 1 when the headless LAN process is running.\n");
+    out.push_str("# TYPE typhoon_lan_server_up gauge\n");
+    out.push_str(&format!(
+        "typhoon_lan_server_up{{mode=\"{mode_label}\"}} 1\n"
+    ));
+    out.push_str(
+        "# HELP typhoon_lan_server_uptime_seconds Headless LAN process uptime in seconds.\n",
+    );
+    out.push_str("# TYPE typhoon_lan_server_uptime_seconds gauge\n");
+    out.push_str(&format!(
+        "typhoon_lan_server_uptime_seconds{{mode=\"{mode_label}\"}} {uptime:.3}\n"
+    ));
+
+    match cache.stats() {
+        Ok((bar_entries, kv_entries, cache_size_bytes)) => {
+            out.push_str("# HELP typhoon_cache_bar_entries_total Number of bar cache rows.\n");
+            out.push_str("# TYPE typhoon_cache_bar_entries_total gauge\n");
+            out.push_str(&format!(
+                "typhoon_cache_bar_entries_total{{db=\"{db}\"}} {bar_entries}\n"
+            ));
+            out.push_str(
+                "# HELP typhoon_cache_kv_entries_total Number of non-migration KV cache rows.\n",
+            );
+            out.push_str("# TYPE typhoon_cache_kv_entries_total gauge\n");
+            out.push_str(&format!(
+                "typhoon_cache_kv_entries_total{{db=\"{db}\"}} {kv_entries}\n"
+            ));
+            out.push_str("# HELP typhoon_cache_size_bytes SQLite cache disk footprint including WAL/SHM sidecars.\n");
+            out.push_str("# TYPE typhoon_cache_size_bytes gauge\n");
+            out.push_str(&format!(
+                "typhoon_cache_size_bytes{{db=\"{db}\"}} {cache_size_bytes}\n"
+            ));
+        }
+        Err(e) => {
+            let error = prometheus_label_value(&e);
+            out.push_str("# HELP typhoon_cache_stats_error Cache stats collection failure.\n");
+            out.push_str("# TYPE typhoon_cache_stats_error gauge\n");
+            out.push_str(&format!(
+                "typhoon_cache_stats_error{{error=\"{error}\"}} 1\n"
+            ));
+        }
+    }
+
+    match cache.detailed_stats() {
+        Ok(rows) => {
+            out.push_str(
+                "# HELP typhoon_cache_entry_bars Number of bars stored for each cache key.\n",
+            );
+            out.push_str("# TYPE typhoon_cache_entry_bars gauge\n");
+            out.push_str("# HELP typhoon_cache_entry_updated_timestamp_ms Last update timestamp for each cache key in epoch milliseconds.\n");
+            out.push_str("# TYPE typhoon_cache_entry_updated_timestamp_ms gauge\n");
+            for (key, bar_count, timestamp) in rows {
+                let (symbol, timeframe) = split_cache_key(&key);
+                let key = prometheus_label_value(&key);
+                let symbol = prometheus_label_value(symbol);
+                let timeframe = prometheus_label_value(timeframe);
+                out.push_str(&format!(
+                    "typhoon_cache_entry_bars{{key=\"{key}\",symbol=\"{symbol}\",timeframe=\"{timeframe}\"}} {bar_count}\n"
+                ));
+                out.push_str(&format!(
+                    "typhoon_cache_entry_updated_timestamp_ms{{key=\"{key}\",symbol=\"{symbol}\",timeframe=\"{timeframe}\"}} {timestamp}\n"
+                ));
+            }
+        }
+        Err(e) => {
+            let error = prometheus_label_value(&e);
+            out.push_str(
+                "# HELP typhoon_cache_detail_stats_error Cache detail stats collection failure.\n",
+            );
+            out.push_str("# TYPE typhoon_cache_detail_stats_error gauge\n");
+            out.push_str(&format!(
+                "typhoon_cache_detail_stats_error{{error=\"{error}\"}} 1\n"
+            ));
+        }
+    }
+
+    out
+}
+
+fn start_lan_metrics_server(cache: Arc<SqliteCache>, db_path: PathBuf, port: u16, mode: String) {
+    let started_at = Instant::now();
+    tokio::spawn(async move {
+        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+        let listener = match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => listener,
+            Err(e) => {
+                tracing::warn!("Failed to bind Prometheus metrics server on {addr}: {e}");
+                return;
+            }
+        };
+        tracing::info!("Prometheus metrics server listening on http://{addr}/metrics");
+
+        loop {
+            let (mut stream, _peer) = match listener.accept().await {
+                Ok(accepted) => accepted,
+                Err(e) => {
+                    tracing::warn!("Prometheus metrics accept failed: {e}");
+                    continue;
+                }
+            };
+            let cache = cache.clone();
+            let db_path = db_path.clone();
+            let mode = mode.clone();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+                let mut request = [0_u8; 1024];
+                let read = match stream.read(&mut request).await {
+                    Ok(read) => read,
+                    Err(e) => {
+                        tracing::warn!("Prometheus metrics request read failed: {e}");
+                        return;
+                    }
+                };
+                let request = String::from_utf8_lossy(&request[..read]);
+                let first_line = request.lines().next().unwrap_or_default();
+                let (status, content_type, body) = if first_line.starts_with("GET /metrics ")
+                    || first_line.starts_with("GET /metrics?")
+                {
+                    (
+                        "200 OK",
+                        "text/plain; version=0.0.4; charset=utf-8",
+                        render_lan_metrics(Arc::as_ref(&cache), &db_path, started_at, &mode),
+                    )
+                } else if first_line.starts_with("GET /healthz ") {
+                    ("200 OK", "text/plain; charset=utf-8", "ok\n".to_string())
+                } else {
+                    (
+                        "404 Not Found",
+                        "text/plain; charset=utf-8",
+                        "not found\n".to_string(),
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                if let Err(e) = stream.write_all(response.as_bytes()).await {
+                    tracing::warn!("Prometheus metrics response write failed: {e}");
+                }
+            });
+        }
+    });
 }
 
 // ── Multi-Account Registry (MT5 CSV Import) ─────────────────────
@@ -549,6 +722,10 @@ struct Args {
     /// LAN sync TCP port.
     #[arg(long, env = "TYPHOON_LAN_PORT", default_value_t = 9847)]
     lan_port: u16,
+
+    /// Prometheus metrics port for CLI/headless LAN mode. Set to 0 to disable.
+    #[arg(long, env = "TYPHOON_METRICS_PORT", default_value_t = 9090)]
+    metrics_port: u16,
 
     /// Bootstrap LAN sync passphrase when no saved GUI keyring/KV value exists.
     #[arg(
@@ -2570,6 +2747,16 @@ async fn run_lan_mode(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             .into());
         }
     };
+
+    if args.metrics_port != 0 {
+        let mode = if args.lan_server { "server" } else { "client" };
+        start_lan_metrics_server(
+            cache.clone(),
+            db_path.clone(),
+            args.metrics_port,
+            mode.to_string(),
+        );
+    }
 
     if args.lan_server {
         let _server = LanSyncServer::start(cache.clone(), args.lan_port, &passphrase)

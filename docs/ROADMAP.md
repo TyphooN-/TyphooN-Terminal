@@ -177,6 +177,14 @@
 - [x] No-data symbol skip set
 - [x] Dependency audit + RustSec advisory closure (ADR-204)
 
+### Phase 21: Headless LAN & Observability
+- [x] CLI `--lan-server` / `--lan-client` headless mode reusing GUI keyring/KV passphrase (ADR-206)
+- [x] `--lan-passphrase` / `TYPHOON_LAN_PASSPHRASE` bootstrap for fresh caches (ADR-206)
+- [x] Docker, Docker Compose, Kubernetes (envsubst + hostPath PV), Terraform module, Ansible role (ADR-206)
+- [x] CLI `--metrics-port` Prometheus text endpoint with cache size, row counts, per-series bar counts, liveness, uptime (ADR-209)
+- [x] Compose `observability` profile + Ansible/Kubernetes/Terraform Prometheus + Grafana with provisioned LAN dashboard (ADR-209)
+- [x] Compose `kafka` profile + Ansible/Kubernetes/Terraform single-node Apache Kafka KRaft broker (ADR-209)
+
 ## Future
 
 ### Phase 13: Bookmap

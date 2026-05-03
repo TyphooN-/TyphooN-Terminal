@@ -3,6 +3,7 @@ locals {
     "app.kubernetes.io/name"      = var.name
     "app.kubernetes.io/component" = "lan-sync"
   }
+  grafana_enabled = var.enable_grafana && var.enable_prometheus
 }
 
 resource "kubernetes_namespace_v1" "typhoon" {
@@ -112,6 +113,8 @@ resource "kubernetes_deployment_v1" "lan_server" {
             "/cache",
             "--lan-port",
             tostring(var.lan_port),
+            "--metrics-port",
+            tostring(var.metrics_port),
           ]
 
           env {
@@ -146,7 +149,7 @@ resource "kubernetes_deployment_v1" "lan_server" {
 
           port {
             name           = "metrics"
-            container_port = 9090
+            container_port = var.metrics_port
             protocol       = "TCP"
           }
 
@@ -188,7 +191,7 @@ resource "kubernetes_service_v1" "lan_server" {
 
     port {
       name        = "metrics"
-      port        = 9090
+      port        = var.metrics_port
       target_port = "metrics"
       protocol    = "TCP"
     }

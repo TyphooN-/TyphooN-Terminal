@@ -17,3 +17,20 @@ typhoon_lan_server_bootstrap_passphrase: ""
 ```
 
 Set `typhoon_lan_server_build_context` to a repo path on the target host if the role should build the image locally. Leave it empty to use `typhoon_lan_server_image`.
+
+Enable the optional observability stack:
+
+```yaml
+typhoon_lan_server_prometheus_enabled: true
+typhoon_lan_server_grafana_enabled: true
+typhoon_lan_server_grafana_admin_password: change-this
+```
+
+Enable the optional single-node Kafka broker:
+
+```yaml
+typhoon_lan_server_kafka_enabled: true
+typhoon_lan_server_kafka_advertised_host: 192.168.1.20
+```
+
+The CLI metrics endpoint is available on `typhoon_lan_server_metrics_port` unless the CLI is run manually with `--metrics-port 0`.

@@ -9,6 +9,24 @@ typhoon_lan_server_rust_log: typhoon_engine=info,typhoon_cli=info
 typhoon_lan_server_compose_project: typhoon
 typhoon_lan_server_bootstrap_passphrase: ""
 
+typhoon_lan_server_prometheus_enabled: false
+typhoon_lan_server_prometheus_image: prom/prometheus:latest
+typhoon_lan_server_prometheus_port: 9091
+typhoon_lan_server_prometheus_scrape_interval: 15s
+typhoon_lan_server_prometheus_retention: 15d
+
+typhoon_lan_server_grafana_enabled: false
+typhoon_lan_server_grafana_image: grafana/grafana-oss:latest
+typhoon_lan_server_grafana_port: 3000
+typhoon_lan_server_grafana_admin_user: admin
+typhoon_lan_server_grafana_admin_password: admin
+
+typhoon_lan_server_kafka_enabled: false
+typhoon_lan_server_kafka_image: apache/kafka:4.2.0
+typhoon_lan_server_kafka_port: 9092
+typhoon_lan_server_kafka_advertised_host: localhost
+typhoon_lan_server_kafka_cluster_id: 4L6g3nShT-eMCtK--X86sw
+
 # Optional local build context on the target host. Leave empty to use
 # typhoon_lan_server_image as a prebuilt/pulled image.
 typhoon_lan_server_build_context: ""

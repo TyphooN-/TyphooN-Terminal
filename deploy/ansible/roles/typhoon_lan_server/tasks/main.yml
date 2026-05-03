@@ -9,6 +9,46 @@
   loop:
     - "{{ typhoon_lan_server_stack_dir }}"
     - "{{ typhoon_lan_server_cache_host_path }}"
+    - "{{ typhoon_lan_server_stack_dir }}/prometheus"
+    - "{{ typhoon_lan_server_stack_dir }}/grafana/provisioning/datasources"
+    - "{{ typhoon_lan_server_stack_dir }}/grafana/provisioning/dashboards"
+    - "{{ typhoon_lan_server_stack_dir }}/grafana/dashboards"
+
+- name: Render Prometheus scrape config
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: "{{ typhoon_lan_server_stack_dir }}/prometheus/prometheus.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  when: typhoon_lan_server_prometheus_enabled | bool
+
+- name: Render Grafana Prometheus datasource
+  ansible.builtin.template:
+    src: grafana-datasource.yml.j2
+    dest: "{{ typhoon_lan_server_stack_dir }}/grafana/provisioning/datasources/prometheus.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  when: typhoon_lan_server_grafana_enabled | bool
+
+- name: Render Grafana dashboard provider
+  ansible.builtin.template:
+    src: grafana-dashboard-provider.yml.j2
+    dest: "{{ typhoon_lan_server_stack_dir }}/grafana/provisioning/dashboards/typhoon.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  when: typhoon_lan_server_grafana_enabled | bool
+
+- name: Render Grafana LAN server dashboard
+  ansible.builtin.template:
+    src: grafana-dashboard.json.j2
+    dest: "{{ typhoon_lan_server_stack_dir }}/grafana/dashboards/typhoon-lan-server.json"
+    owner: root
+    group: root
+    mode: "0644"
+  when: typhoon_lan_server_grafana_enabled | bool
 
 - name: Render TyphooN LAN server compose file
   ansible.builtin.template:

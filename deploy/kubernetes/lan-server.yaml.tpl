@@ -73,6 +73,8 @@ spec:
             - /cache
             - --lan-port
             - "${TYPHOON_LAN_PORT}"
+            - --metrics-port
+            - "${TYPHOON_METRICS_PORT}"
           env:
             - name: TYPHOON_CACHE_DIR
               value: /cache
@@ -89,7 +91,7 @@ spec:
               containerPort: ${TYPHOON_LAN_PORT}
               protocol: TCP
             - name: metrics
-              containerPort: 9090
+              containerPort: ${TYPHOON_METRICS_PORT}
               protocol: TCP
           volumeMounts:
             - name: cache
@@ -115,6 +117,6 @@ spec:
       nodePort: ${TYPHOON_NODE_PORT}
       protocol: TCP
     - name: metrics
-      port: 9090
+      port: ${TYPHOON_METRICS_PORT}
       targetPort: metrics
       protocol: TCP
