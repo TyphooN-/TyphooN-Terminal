@@ -77,7 +77,7 @@
 - [x] Divergence Index (signal vs quote return divergence)
 - [x] CAGR, Recovery Factor, Drawdown Duration
 - [x] LAN Sync (export/import cache data between machines)
-- [x] Storage Manager (view, delete, compact zstd-22 per symbol/source)
+- [x] Storage Manager (view, delete, compact zstd-22 per symbol/source, configurable idle auto-compact)
 - [x] Multi-window support (NEW_WINDOW/POPOUT for multi-monitor)
 - [x] Collapsible right panel sections
 - [x] Sortable columns (SEC filings, insider trades tables)
@@ -88,14 +88,14 @@
 - [x] Multi-signal Anomaly Scanner (VaR + EV + ATR + SEC with tradability indicators)
 - [x] MTF Grid tab visibility checkboxes
 - [x] Storage Manager pagination
-- [x] Data hierarchy: MT5 > Broker > CryptoCompare > Kraken
+- [x] Data hierarchy: MT5 > Alpaca > tastytrade > CryptoCompare > Kraken > Kraken Futures
 
 ### Phase 9: tastytrade Integration
 - [x] tastytrade REST API client (session-based login, balances, positions, orders)
 - [x] Market data via DXLink WebSocket (historical bars: SETUP→AUTH→FEED protocol)
 - [x] Option chains + Greeks (nested expiration/strike, IV rank/percentile via market metrics)
 - [x] Quote snapshots + market metrics (bid/ask, IV rank, IV percentile, beta)
-- [x] 5-source bar priority: MT5 → Alpaca → tastytrade → CryptoCompare → Kraken
+- [x] 6-source bar priority: MT5 → Alpaca → tastytrade → CryptoCompare → Kraken → Kraken Futures
 
 ### Phase 10: Advanced Features
 - [x] More drawing tools (pitchfork, Elliott, Gann — all implemented, 89 total)
@@ -171,7 +171,7 @@
 - [x] Display-symbol normalization to EA's symbol table
 
 ### Phase 20: Performance & Compile-Speed
-- [x] native/app.rs split into submodules: ai, settings, storage, sync_status, tool_windows, strategy_windows (ADR-202)
+- [x] native/app.rs split into submodules: ai, settings, storage, sync_status, tool_windows, strategy_windows, alpaca_sync, bar_sync, auto_compact (ADR-202)
 - [x] Alpaca sync autotuning by data tier (ADR-203)
 - [x] Kraken public bar sync no longer blocked behind CryptoCompare deep-history work; cache merge/write moved off async workers (ADR-210)
 - [x] Header-driven rate-limit pacing, cache-depth-aware window sizing

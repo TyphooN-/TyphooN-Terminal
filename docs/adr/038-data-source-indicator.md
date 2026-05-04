@@ -83,11 +83,11 @@ DataSourceManager {
 - `DataSourceEntry` struct: id, cache_prefix, label, priority, healthy, last_success_ts, asset_classes
 - `SymbolOverride` struct: pattern (supports `*` wildcard), ordered source IDs
 - `DataSourceManager`: resolve_candidates(), mark_success/failure(), update_health(), add_override()
-- Default 5 sources: MT5 (prio 1), Alpaca (2), tastytrade (3), CryptoCompare (4), Kraken (5)
+- Default 6 sources: MT5 (prio 1), Alpaca (2), tastytrade (3), CryptoCompare (4), Kraken (5), Kraken Futures (6)
 - `SOURCES` console command shows health dashboard with result card
 - `find_cache_key()` uses `DataSourceManager::resolve_candidates()` for priority-ordered lookup
-- 11 unit tests (roundtrip, health, overrides, deny_unknown_fields)
-- Vec<DataSourceEntry> (not HashMap) — 5 entries fits L1 cache, no hash overhead
+- 17 unit tests (roundtrip, health, overrides, deny_unknown_fields, source ordering)
+- Vec<DataSourceEntry> (not HashMap) — 6 entries fits L1 cache, no hash overhead
 
 ## Consequences
 

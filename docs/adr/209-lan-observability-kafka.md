@@ -36,7 +36,7 @@ Add deployment support:
 - Terraform variables/resources for optional Prometheus, Grafana, and Kafka.
 - Ansible role variables/templates for the same optional services.
 
-The Kafka broker is intentionally optional and standalone. TyphooN does not publish application events to Kafka yet; this change provides the deployable broker and service discovery surface for follow-up producer/consumer work.
+The Kafka broker is intentionally optional and standalone. TyphooN does not publish application events to Kafka in the current implementation; this ADR only standardizes the deployable broker and service discovery surface. Producer/consumer wiring is out of scope until a concrete event contract is accepted.
 
 References:
 

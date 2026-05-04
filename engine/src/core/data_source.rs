@@ -1,7 +1,7 @@
 //! Pluggable data source hierarchy (ADR-038 Phase 2).
 //!
 //! Formalizes the cache key prefix routing
-//! (mt5: > alpaca: > cryptocompare: > kraken: > kraken-futures:)
+//! (mt5: > alpaca: > tastytrade: > cryptocompare: > kraken: > kraken-futures:)
 //! into a trait-based system with per-source health tracking, per-symbol overrides,
 //! and configurable priority ordering.
 

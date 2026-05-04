@@ -15,14 +15,20 @@ Previously, the system treated the connected broker (Alpaca) as the primary data
 
 ## Decision
 
-**MT5 is the master data source.** When MT5 data exists for a symbol:timeframe, use it exclusively. Alpaca is a fallback only for symbols not in MT5.
+**MT5 is the master data source.** When MT5 data exists for a symbol:timeframe, use it first. Non-MT5 symbols fall through the configured source queue.
 
-### Data Source Priority
+### Current Data Source Priority
 
 ```
-1. MT5 (mt5: prefix) — authoritative, real-time, deepest history
-2. Connected broker (Alpaca/etc.) — fallback for non-MT5 symbols only
+1. MT5 (mt5: prefix) — authoritative Darwinex/BarCacheWriter data
+2. Alpaca (alpaca: prefix) — US equities/crypto broker feed
+3. tastytrade (tastytrade: prefix) — DXLink bars and options market context
+4. CryptoCompare (cryptocompare: prefix) — deep crypto history
+5. Kraken Spot/xStocks (kraken: prefix) — public recent/gap-fill bars + authenticated Spot trading
+6. Kraken Futures (kraken-futures: prefix) — public futures chart candles
 ```
+
+`engine/src/core/data_source.rs::DataSourceManager` formalizes this order, with per-symbol overrides and health-based fallback. Fast chart reloads in `native/src/app.rs::ChartState::try_load` use the same six-source order.
 
 ### MT5 Coverage via BarCacheWriter
 
@@ -57,25 +63,7 @@ Previously, the system treated the connected broker (Alpaca) as the primary data
 
 ### Crypto-Specific Hierarchy (ADR-040)
 
-> 2026-05-01 update: Kraken Spot/xStocks has since been promoted to an
-> independent primary market-data source stored under `kraken:SYMBOL:TF`.
-> Kraken Futures is synchronized independently under
-> `kraken-futures:SYMBOL:TF`.
-> The older weekend-only language below describes the original MT5 crypto
-> gap-fill decision, not the current Kraken primary sync behavior.
-
-Crypto symbols have a 3-tier hierarchy due to MT5's weekend closure (Fri 23:00 → Sun 23:05 UTC):
-
-```
-Weekday: MT5 (Darwinex) — authoritative, real-time
-Weekend: Alpaca (if connected) > Kraken (backfill data in cache)
-Backfill: Kraken — fills ALL weekend gaps from 2013, stored in MT5 cache keys
-```
-
-Kraken is **never** a live data source — it only fills historical gaps. On weekends:
-- Alpaca provides live crypto prices (if the Alpaca connection is active)
-- Kraken data in cache provides continuous chart history (no weekend gaps)
-- Weekend bars are tinted blue on charts to visually distinguish from MT5 weekday data
+Crypto symbols still prefer MT5 when Darwinex data exists, but non-primary crypto bars are no longer a weekend-only special case. CryptoCompare provides deep history, Kraken Spot/xStocks provides recent public OHLCV under `kraken:SYMBOL:TF`, and Kraken Futures syncs independently under `kraken-futures:SYMBOL:TF`. Non-primary merged bars are tracked as gap-fill timestamps and rendered magenta on charts.
 
 ## Consequences
 

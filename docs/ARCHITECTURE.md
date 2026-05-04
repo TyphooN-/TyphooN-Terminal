@@ -61,10 +61,11 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 | Priority | Source | Coverage |
 |----------|--------|----------|
 | 1 | MT5 via BarCacheWriter v1.435 | 895 symbols × 9 TFs, weekday authority (Darwinex). TF gating, 16MB cache, /dev/shm ramdisk. |
-| 2 | tastytrade DXLink | Real-time bars + quotes for funded accounts. |
-| 3 | Alpaca | US equities + crypto, free IEX or paid SIP. Tier-autotuned sync (ADR-203). |
-| 4 | Kraken | Crypto/xStocks trading (full Spot REST order surface) + public OHLCV gap-fill. Async 16-permit scheduler for immediate recent bars. |
-| 5 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request, hourly+ TFs. |
+| 2 | Alpaca | US equities + crypto, free IEX or paid SIP. Tier-autotuned sync (ADR-203). |
+| 3 | tastytrade DXLink | Real-time historical bars + quotes for funded accounts. |
+| 4 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request, hourly+ TFs. |
+| 5 | Kraken Spot/xStocks | Crypto/xStocks trading (full Spot REST order surface) + public OHLCV recent/gap-fill. Async 16-permit scheduler for immediate recent bars. |
+| 6 | Kraken Futures | Public futures instrument discovery and chart candles under `kraken-futures:SYMBOL:TF`. |
 
 MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade execution flows through Alpaca / tastytrade / Kraken with MT5 EA semantics (partial close, close-all, cancel-exits-before-close — see ADR-201). DARWIN account analytics are imported via XLSX trade history exports. Alpaca auto-connects on startup if credentials are saved in the system keyring. tastytrade fully integrated: REST API (auth, positions, orders, quotes, market metrics, option chains) + DXLink WebSocket (historical bars). See ADR-022. Kraken supports public-OHLCV-only mode and authenticated Spot REST trading with full AddOrder parameters, batch orders, amend/edit, dead-man cancel, cancel-all, balances, orders, trades, ledgers, and positions (ADR-072). Kraken public bar sync is fully async: direct Spot/Futures fetches spawn per-timeframe tasks, combined CryptoCompare backfills run in the background, and the Kraken leg starts immediately under a shared 16-permit semaphore (ADR-210). See ADR-037 for cross-source priority hierarchy.
 
@@ -93,6 +94,9 @@ TyphooN-Terminal/
 │   │   ├── app/            # Window renderers (ADR-202 split)
 │   │   │   ├── ai.rs               # AI Chat / Claude / Gemini /
 │   │   │   │                       # Codex / Sessions / Response Cache
+│   │   │   ├── alpaca_sync.rs      # Broker sync capacities, TF filters, no-data marks
+│   │   │   ├── auto_compact.rs     # zstd-22 idle auto-compact gate (ADR-205)
+│   │   │   ├── bar_sync.rs         # Bar sync health rows for Sync Status / Storage
 │   │   │   ├── settings.rs         # Settings window
 │   │   │   ├── storage.rs          # Storage Manager
 │   │   │   ├── sync_status.rs      # Sync Status (per-broker %)
@@ -168,8 +172,9 @@ TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal 
 ### Storage Manager
 
 The `STORAGE` command opens a cache storage manager with:
-- View and delete data by symbol/source (color-coded by prefix: MT5/Kraken/Alpaca)
+- View and delete data by symbol/source (color-coded by prefix: MT5, Alpaca, tastytrade, CryptoCompare, Kraken, Kraken Futures)
 - **Compact (zstd-22):** Recompress all bar_cache entries at maximum compression (decompression speed unaffected)
+- **Auto-compact:** Configurable cadence, weekday/hour window, min-row threshold, last-run, next-window, skip-reason, and running-state readout
 - **Purge All Bar Data:** Delete all bar_cache + bar_track entries (with red confirmation prompt)
 - **Purge All DARWIN Data:** Delete all DARWIN accounts, deals, positions, equity snapshots (with red confirmation prompt)
 

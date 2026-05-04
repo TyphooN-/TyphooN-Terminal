@@ -43,6 +43,8 @@ Large DarwinIA datasets (>128MB) are processed via chunked batching in the GPU c
 
 The Storage Manager (`STORAGE` command) can recompress all bar_cache entries at zstd level 22 for maximum compression. Decompression speed is identical regardless of compression level — only on-disk storage shrinks. Progress is reported per 200 entries.
 
+Auto-compact uses the same compaction path, but only runs when the configured cadence/window, AC-power, idle, and min-row gates pass. Defaults are weekly Sunday 04:00-05:00 local and at least 100 uncompacted rows; the Storage Manager exposes those knobs plus last-run, next-window, skip-reason, and running-state readouts.
+
 ### Auto MT5 Sync
 
 Bar data from MT5 (via BarCacheWriter EA) is automatically synced about once per minute when the cache is loaded and the terminal is not a LAN client. The sync is smart enough to skip unchanged keys.

@@ -1,6 +1,6 @@
 # TyphooN-Terminal
 
-A native desktop trading terminal + TUI CLI with full risk management, multi-timeframe charting, and hedged martingale support — built in pure Rust with native GPU rendering (egui + wgpu) for Alpaca Markets.
+A native desktop trading terminal + TUI CLI with full risk management, multi-timeframe charting, and hedged martingale support — built in pure Rust with native GPU rendering (egui + wgpu) for MT5/Darwinex, Alpaca, tastytrade, Kraken, and CryptoCompare-backed market data.
 
 **Website:** [MarketWizardry.org](https://www.marketwizardry.org/) | **License:** [BSL 1.1](LICENSE) ([Commercial](LICENSE-COMMERCIAL))
 
@@ -41,7 +41,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Command Palette** | ~ (tilde) Quake-console: DARWIN, BACKTEST, RISK_CALC, SCREENER, EXPORT_CSV |
 | **Watchlist** | Multi-symbol quote monitor with live prices and daily change |
 | **LAN Sync** | TLS/PBKDF2 LAN sync plus headless server/client deployment |
-| **Storage Manager** | View, delete, and compact (zstd-22) cache data by symbol/source |
+| **Storage Manager** | View, delete, compact (zstd-22), and schedule idle auto-compaction by symbol/source |
 | **Multi-Window** | Open additional terminal windows (NEW_WINDOW/POPOUT) for multi-monitor setups |
 | **Chart Templates** | Save/load indicator configs and order mode |
 | **Workspace Profiles** | Save/load entire layout (tabs, indicators, pane sizes) |
@@ -56,7 +56,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Position Calculator** | Risk-based sizing with R:R ratio (~ →CALC) |
 | **Chart Annotations** | Text markers on chart bars (~ →ANNOTATE) |
 | **Regime Detection** | ADX-based trending/ranging/choppy state in dashboard |
-| **Pattern Recognition** | Auto-detect double top/bottom, head & shoulders (~ →PATTERNS) |
+| **Pattern Recognition** | Harmonic pattern auto-detection plus manual H&S/triangle/pattern annotation tools; classic double-top/H&S auto-detection is deferred |
 | **Sentiment Analysis** | Keyword-based bullish/bearish scoring from news (~ →SENTIMENT) |
 | **Volatility Surface** | Options IV heatmap by strike×expiry (~ →VOLSURF) |
 | **Portfolio Heat Map** | Finviz-style colored boxes by P&L (~ →HEATMAP) |
@@ -87,8 +87,8 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Options P&L Calc** | Multi-leg payoff diagram with canvas rendering (~ →OPTCALC) |
 | **Sector Rotation** | S&P 500 sector ETF heatmap with daily/weekly % (~ →SECTORS) |
 | **Options Strategy** | Live chain viewer, presets (spreads, condors), aggregate Greeks (~ →OPTSTRAT) |
-| **Auto-Trading** | JS plugin → live order execution, paper-only safety (~ →AUTOTRADE) |
-| **Headless CLI** | `--backtest` mode: run strategies from command line, no GUI needed (VPS/SSH) |
+| **Headless LAN** | `--lan-server` / `--lan-client` reuse the GUI cache/passphrase and expose Prometheus metrics for VPS/NAS deployment |
+| **CLI/TUI** | Interactive SSH-ready TUI plus positions/account/import/LAN commands; strategy backtests run in the native GUI |
 | **Community Chat** | Matrix protocol chat via ~ (tilde) → CHAT, no server needed |
 | **Broker Abstraction** | BrokerTrait — extensible to any broker via single Rust file |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS-native keyring credential storage |
@@ -204,7 +204,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | Document | Purpose |
 |---|---|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Native GPU architecture, data flow, project structure |
-| [INDICATORS.md](docs/INDICATORS.md) | All 32+ indicators with parameters and colors |
+| [INDICATORS.md](docs/INDICATORS.md) | All 46+ chart indicators with parameters and colors |
 | [KEYBOARD_SHORTCUTS.md](docs/KEYBOARD_SHORTCUTS.md) | Keybindings, commands, menu reference |
 | [PERFORMANCE.md](docs/PERFORMANCE.md) | Benchmarks, data pipeline timing, cache format |
 | [ROADMAP.md](docs/ROADMAP.md) | Current status and future plans |
@@ -333,9 +333,13 @@ CLI LAN server/client mode uses the same encrypted LAN sync protocol, saved LAN 
 
 ---
 
-## Broker
+## Brokers
 
-**Alpaca Markets** — stocks, ETFs, options, crypto. Paper and live trading via REST API + WebSocket streaming. IEX (free) or SIP (paid) market data.
+**Alpaca Markets** — stocks, ETFs, options, and crypto via REST + WebSocket streaming. IEX (free) or SIP (paid) market data.
+
+**tastytrade** — account, positions, orders, option chains, quote snapshots, market metrics, and DXLink historical bars.
+
+**Kraken** — public Spot/xStocks and Futures market data without keys, plus authenticated Spot REST trading for crypto/xStocks accounts.
 
 ---
 

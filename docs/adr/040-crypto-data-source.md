@@ -1,7 +1,7 @@
 # ADR-040: Crypto Data Source Hierarchy — CryptoCompare + Kraken
 
-**Status:** Implemented (Updated 2026-04-03)
-**Date:** 2026-03-22 | **Updated:** 2026-03-27
+**Status:** Implemented
+**Date:** 2026-03-22 | **Updated:** 2026-05-04
 
 > 2026-05-01 update: CryptoCompare remains the deep-history extension for
 > crypto before or beyond exchange-listed history. Kraken Spot/xStocks is now
@@ -34,21 +34,23 @@ CryptoCompare provides the deepest free crypto history with proper pagination:
 - **Endpoints**: `histoday`, `histohour`, `histominute`
 - **OHLCV data**: open, high, low, close, volumefrom, volumeto
 
-### Kraken (Complementary for Sub-Hourly)
-Kraken provides 720 recent bars per request — complementary to CryptoCompare for sub-hourly TFs. CryptoCompare only has 7 days of minute data; Kraken extends coverage for weekend gap-fill and indicator lookback. Both sources stored independently; chart lookup checks both prefixes.
+### Kraken Spot/xStocks (Primary Recent Public Sync + Complementary Gap-Fill)
+Kraken provides recent public OHLCV without an API key. It is stored independently under `kraken:SYMBOL:TF` and participates in the normal six-source chart lookup after CryptoCompare. CryptoCompare remains the deep-history source; Kraken extends recent coverage, sub-hourly lookback, weekend continuity, and xStocks coverage.
 
-### Crypto Backfill Flow (2026-04-02)
+### Crypto Backfill Flow (updated 2026-05-04)
 The "Backfill ALL Crypto" button fetches 10 symbols × 8 TFs:
 1. CryptoCompare: all 8 TFs (1Day through 5Min). Deep history for hourly+; 7-day limit for sub-hourly.
-2. Kraken: automatically fetched for sub-hourly TFs (5Min, 15Min, 30Min) after CryptoCompare completes. Provides 720 bars (~2.5 days M5, ~7.5 days M15, ~15 days M30) for weekend gap-fill and extra indicator lookback.
+2. Kraken: launched immediately as the recent/gap-fill leg of the same background backfill task, under the shared Kraken public-request semaphore. It no longer waits behind CryptoCompare pagination.
 
-### Data Hierarchy (4-tier)
+### Data Hierarchy (6-tier)
 
 ```
-Priority 1: MT5 (Darwinex)      — weekday authority, signal account data
-Priority 2: Alpaca/tastytrade   — where user actually trades
-Priority 3: CryptoCompare       — deep history backfill (2010+)
-Priority 4: Kraken              — sub-hourly gap-fill (720 recent bars, no rate limit)
+Priority 1: MT5 (Darwinex)      — authority where BarCacheWriter has data
+Priority 2: Alpaca              — broker bars for non-MT5 symbols
+Priority 3: tastytrade          — DXLink bars for funded accounts
+Priority 4: CryptoCompare       — deep crypto history backfill (2010+)
+Priority 5: Kraken Spot/xStocks — public recent/gap-fill OHLCV
+Priority 6: Kraken Futures      — public futures chart candles
 ```
 
 ### Cache Key Prefixes
@@ -57,12 +59,12 @@ Priority 4: Kraken              — sub-hourly gap-fill (720 recent bars, no rat
 mt5:SYMBOL:TF           — MT5 BarCacheWriter data (authoritative)
 alpaca:SYMBOL:TF         — Live Alpaca bar fetch
 cryptocompare:SYMBOL:TF  — CryptoCompare deep history
-kraken:SYMBOL:TF         — Kraken sub-hourly + weekend gap-fill (complementary, not replaced)
+kraken:SYMBOL:TF         — Kraken Spot/xStocks public recent + gap-fill bars
 kraken-futures:SYMBOL:TF — Kraken Futures public chart candles
 ```
 
-### Auto-Cleanup
-When CryptoCompare backfill completes for a symbol, old Kraken data for the same symbol/timeframes is automatically deleted from cache (superseded by deeper CryptoCompare data).
+### Independent Prefixes
+CryptoCompare, Kraken Spot/xStocks, and Kraken Futures rows are kept under separate prefixes. Chart lookup and merge logic decide which rows to use; the CryptoCompare backfill path does not delete Kraken rows.
 
 ### Symbol Handling
 CryptoCompare uses standard symbols: `fsym=BTC&tsym=USD`. The module normalizes TyphooN symbols: `BTCUSD` → `BTC`, `SOL/USD` → `SOL`.
@@ -83,17 +85,17 @@ Note: 1Min history limited to ~7 days at CryptoCompare. All sub-hourly TFs aggre
 | Layer | Source | When | Coverage |
 |-------|--------|------|----------|
 | Daily refresh | CryptoCompare | Once per session | 10 symbols × 3 TFs (1Day, 1Hour, 4Hour) |
-| Weekend live | Kraken | Continuous adaptive polling | All visible crypto charts, current TF |
+| Recent public sync | Kraken | Continuous/adaptive polling + backfill union | Visible crypto/xStocks charts and requested TFs |
 | Deep history | CryptoCompare | Manual button | 10 symbols × 8 TFs (excludes 1Min) |
 
-CryptoCompare handles deep history (2000 bars/request, back to 2010). Kraken handles live weekend gap-fill (720 recent bars, no rate limit). Rate limit retry with exponential backoff (2s→16s) for CryptoCompare.
+CryptoCompare handles deep history (2000 bars/request, back to 2010). Kraken handles recent public OHLCV and gap-fill without requiring credentials. Rate limit retry with exponential backoff (2s→16s) for CryptoCompare.
 
 ## Consequences
 
 - **Pro**: Full crypto history from 2010 (BTC) — deepest available
 - **Pro**: No API key, no geo-blocking, no rate limit issues
 - **Pro**: 2000 bars/request with proper backward pagination
-- **Pro**: Automatically supersedes and cleans up limited Kraken data
+- **Pro**: Independent prefixes preserve provenance while chart lookup merges useful recent/gap-fill bars
 - **Pro**: Weekend gaps filled for all crypto symbols
 - **Con**: CryptoCompare may have slightly different prices than Darwinex/Kraken
 - **Con**: Lower timeframes (1Min) have limited history (~7 days at CryptoCompare)

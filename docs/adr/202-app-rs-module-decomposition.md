@@ -35,12 +35,23 @@ native/src/app.rs                  — TyphooNApp, chart, palette, dispatch
 native/src/app/ai.rs               — AI Chat, Claude Code, Gemini CLI,
                                      Codex CLI, AI Sessions, AI Response
                                      Cache (six related windows)
+native/src/app/alpaca_sync.rs      — broker sync capacities, TF filters,
+                                     no-data/backfill-complete marks
+native/src/app/auto_compact.rs     — zstd-22 idle auto-compact gate
+                                     and schedule helpers
+native/src/app/bar_sync.rs         — bar-sync health aggregates for
+                                     Sync Status and Storage Manager
 native/src/app/settings.rs         — Settings window
 native/src/app/storage.rs          — Storage Manager + filtered bulk delete
 native/src/app/sync_status.rs      — Sync Status (per-broker % healthy)
 native/src/app/tool_windows.rs     — Indicator + analytical tool windows
 native/src/app/strategy_windows.rs — Strategy / backtest / optimizer windows
 ```
+
+The original 2026-04-23 split moved the six renderer bundles. Subsequent
+compile-speed and storage/sync passes added `alpaca_sync.rs`,
+`auto_compact.rs`, and `bar_sync.rs` so sync policy and scheduler code no
+longer live as anonymous helper islands inside `app.rs`.
 
 Each submodule is a sibling of `app.rs`, declared as `mod` from the parent.
 Window functions take `&mut self` on `TyphooNApp` so state mutation works
@@ -58,7 +69,7 @@ The two-step split was deliberate:
 - **1c667fb0 (2026-04-23 09:03)** — second peel: tool windows and
   strategy windows.
 
-`app.rs` is still the largest file in the crate (~155k lines), but the
+`app.rs` is still the largest file in the crate (~158k lines), but the
 peeled-off submodules now rebuild in isolation when they are the only
 thing changed.
 

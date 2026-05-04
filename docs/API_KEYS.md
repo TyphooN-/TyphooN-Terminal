@@ -1,16 +1,25 @@
-# TyphooN-Terminal — Free API Keys
+# TyphooN-Terminal — API Keys and Broker Credentials
 
-Optional API keys that unlock additional features. All are free to register.
+Optional API keys and broker credentials that unlock additional features.
 
-## Alpaca Markets (Required)
+## Alpaca Markets (Optional Broker/Data Source)
 
-**Used for:** Trading, bar data, news, options, corporate actions, WebSocket streaming
+**Used for:** Alpaca trading, bar data, news, options, corporate actions, WebSocket streaming
 
 - **Sign up:** https://app.alpaca.markets/signup
 - **Paper trading:** Free, instant activation
 - **Live trading:** Requires identity verification
 - **Data:** IEX (free) or SIP (paid) market data feeds
 - **Rate limit:** 200 requests/minute (free plan)
+
+## tastytrade (Optional Broker)
+
+**Used for:** tastytrade account display, positions, orders, option chains, quote snapshots, market metrics, and DXLink historical bars.
+
+- **Sign up:** https://tastytrade.com/
+- **Cost:** Free account; trading fees apply on filled orders
+- **Credentials:** tastytrade username + password, stored in the OS-native keyring
+- **Note:** tastytrade does not use API keys in TyphooN; the terminal creates a session token from the saved login.
 
 ## FRED (Federal Reserve Economic Data)
 

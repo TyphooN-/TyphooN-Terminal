@@ -10,7 +10,7 @@
 - **29 BrokerMsg variants** — all sent/received
 - **89 drawing tools** with live preview, OHLC snap, undo/redo, color picker, line width/style, selection hit-test (8px), Delete-to-remove-selected
 - **LAN sync** — 34 KV-synced analytics fields, 14 remote commands wired, 15s incremental resync, TLS encryption
-- **Multi-source bar loading** — MT5 → Alpaca → tastytrade → CryptoCompare → Kraken (5-source priority) with timezone-aware dedup
+- **Multi-source bar loading** — MT5 → Alpaca → tastytrade → CryptoCompare → Kraken → Kraken Futures (6-source priority) with timezone-aware dedup
 - **Supply/demand zones** — 1:1 MT5 parity (GPU + CPU paths, BACK_LIMIT=1000)
 - **Crypto backfill** — CryptoCompare deep history + Kraken sub-hourly, skip-if-cached
 - **BarCacheWriter v1.435** — TF gating, 16MB cache, /dev/shm ramdisk support
@@ -59,4 +59,4 @@
 
 ## Consequences
 - All user-facing features are production ready
-- Future: hot-reload indicator files, indicator import UI, chart pattern recognition
+- Deferred/data-gated items remain tracked outside this completeness audit: hot-reload indicator files, indicator import UI, and automatic classic chart-pattern recognition.

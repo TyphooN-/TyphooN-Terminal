@@ -1,7 +1,7 @@
 # ADR-205: ZSTD Compression Level Policy and Auto-Compaction
 
 **Status:** Implemented
-**Date:** 2026-04-28 (decision), 2026-04-29 (auto-compact wired)
+**Date:** 2026-04-28 (decision), 2026-04-29 (auto-compact wired), 2026-05-03 (Storage Manager schedule controls)
 **Related:** ADR-003 (SQLite + zstd cache), ADR-052 (performance architecture), ADR-079 (LAN sync bandwidth), `engine/src/core/cache.rs`, `native/src/app/auto_compact.rs`, `native/src/app.rs::BrokerCmd::CompactStorage`
 
 ## Context
@@ -64,29 +64,29 @@ The current tiered model is the standard zstd-recommended pattern: fast levels f
 
 Periodic auto-compact is allowed and recommended, but conservative:
 
-- **Cadence:** weekly, off-hours (default Sunday 04:00 local). Hard-coded for now; configurable in a follow-up.
+- **Cadence:** configurable from Storage Manager; defaults to weekly, Sunday 04:00-05:00 local.
 - **Gating, all required** (`auto_compact::evaluate_gate`):
   - AC power detected (skips on battery, Linux only — non-Linux assumes AC).
   - User idle ≥ 5 minutes (no input events seen).
-  - `COUNT(*) FROM bar_cache WHERE zstd_level < 22` exceeds a threshold (default 100). Small deltas are not worth waking up for.
-  - Local time inside the configured weekday + hour window (defaults: Sunday, 04:00–05:00 local).
-  - Cadence: at least 7 days since the last run.
+  - `COUNT(*) FROM bar_cache WHERE zstd_level < 22` exceeds the configured threshold (default 100). Small deltas are not worth waking up for.
+  - Local time inside the configured weekday + hour window.
+  - Cadence: at least the configured number of days since the last run.
 - **Dispatch:** the gate sends `BrokerCmd::CompactStorage { level: 22 }` — the same command the manual button uses. The existing handler (`app.rs::BrokerCmd::CompactStorage`) already sets `importing_flag` so the background stats worker yields, runs `compact_storage` on a worker thread, and calls `incremental_vacuum(10000)` on success. No duplicated logic.
 - **Incrementality:** `compact_storage` already skips entries with `zstd_level >= target` (`cache.rs:2181`). Steady-state work is bounded by the fresh-data delta since the last run, not the full cache.
-- **User opt-out:** "Auto-compact weekly" checkbox in Storage Manager. The manual `Compact (zstd-22)` button always works regardless.
-- **Stale-flag recovery:** if the in-progress flag has been set for > 8 hours and no completion log arrived, the next tick resets it so the gate can recover from a lost completion message.
+- **User opt-out/config:** "Auto-compact" checkbox plus cadence, weekday, start/end hour, and min-row controls in Storage Manager. The manual `Compact (zstd-22)` button always works regardless.
+- **Stale-flag recovery:** the dispatch timestamp is tracked separately; if the in-progress flag has been set for > 8 hours and no completion log arrived, the next tick resets it so the gate can recover from a lost completion message.
 
 This makes the "spare cycles" model work without ever surprising the user mid-trade.
 
 ### Implementation pointers
 
-- Gate logic + tests: `native/src/app/auto_compact.rs` (10 unit tests).
+- Gate logic + tests: `native/src/app/auto_compact.rs` (14 unit tests).
 - Tick: `TyphooNApp::tick_auto_compact` in `native/src/app.rs`, called once per `update()` and self-throttled to one evaluation per minute.
 - User-input timestamp updated each frame from `ctx.input(|i| !i.events.is_empty())`.
-- Persistence: `auto_compact_enabled` and `auto_compact_last_run_ms` ride in `app:sync_preferences` KV (alongside `crypto_backfill_enabled`).
+- Persistence: `auto_compact_enabled`, `auto_compact_last_run_ms`, and the schedule/threshold fields ride in `app:sync_preferences` KV (alongside `crypto_backfill_enabled`).
 - Completion / failure: `BrokerMsg::OrderResult` matches the `Compact complete:` prefix to clear in-progress and stamp `last_run_ms`; `BrokerMsg::Error` matching `Compact failed:` clears in-progress without bumping the timestamp so the cadence keeps trying.
 - New cache helper: `SqliteCache::count_uncompacted_bars(target)` (`engine/src/core/cache.rs`).
-- UI: Storage Manager checkbox + `last: <duration>` / `(skip: <reason>)` / `running…` readout, immediately under the manual `Compact (zstd-22)` button.
+- UI: Storage Manager checkbox, schedule controls, `last: <duration>` / `next: <time>` / `(skip: <reason>)` / `running…` readout, immediately under the manual `Compact (zstd-22)` button.
 
 ## Consequences
 
@@ -107,10 +107,10 @@ This makes the "spare cycles" model work without ever surprising the user mid-tr
 - Changing the backup level from 9 (appropriate for one-shot exports).
 - Changing the manual `STORAGE` compact level from 22.
 
-## Deferred Tuning Knobs
+## Remaining Tuning Knob
 
 - ~~Wire the auto-compact scheduler with the gating described in §3.~~ (Shipped 2026-04-29.)
 - ~~Expose the on/off toggle and last-run readout in the Storage Manager UI.~~ (Shipped 2026-04-29.)
-- Make the cadence, weekday, hour window, and uncompacted-row threshold user-configurable from the Storage Manager (currently hard-coded constants in `auto_compact.rs`).
-- Expose `next_auto_compact_at` (next time the gate will be re-evaluated against the schedule) so users can see what is scheduled rather than only when it last ran.
+- ~~Make the cadence, weekday, hour window, and uncompacted-row threshold user-configurable from the Storage Manager.~~ (Shipped 2026-05-03.)
+- ~~Expose `next_auto_compact_at` (next time the gate will be re-evaluated against the schedule) so users can see what is scheduled rather than only when it last ran.~~ (Shipped 2026-05-03 as `next: <local time>`.)
 - AC-power detection on Windows / macOS — currently those platforms always pass the AC gate. Low priority since the trading rigs in scope are Linux desktops.

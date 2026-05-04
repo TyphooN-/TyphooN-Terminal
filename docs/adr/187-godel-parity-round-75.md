@@ -1,6 +1,6 @@
-# ADR-187: TA-Lib Parity Round 75 — CDLHARAMICROSS / CDLLONGLEGGEDDOJI / CDLMARUBOZU / CDLSPINNINGTOP / CDLTRISTAR (research-layer, chart-overlay TBD)
+# ADR-187: TA-Lib Parity Round 75 — CDLHARAMICROSS / CDLLONGLEGGEDDOJI / CDLMARUBOZU / CDLSPINNINGTOP / CDLTRISTAR (research-layer, chart overlay deferred)
 
-**Status:** Accepted
+**Status:** Implemented (research layer); chart overlay deferred by ADR-188
 **Date:** 2026-04-19
 **Supersedes/extends:** ADR-108 through ADR-186
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
@@ -9,19 +9,19 @@
 
 | Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
 | --- | --- | --- | --- | --- | --- |
-| CDLHARAMICROSS | No | Yes (`CDLHARAMICROSS`) | Yes | Yes | No (track B) |
-| CDLLONGLEGGEDDOJI | No | Yes (`CDLLONGLEGGEDDOJI`) | Yes | Yes | No (track B) |
-| CDLMARUBOZU | No | Yes (`CDLMARUBOZU`) | Yes | Yes | No (track B) |
-| CDLSPINNINGTOP | No | Yes (`CDLSPINNINGTOP`) | Yes | Yes | No (track B) |
-| CDLTRISTAR | No | Yes (`CDLTRISTAR`) | Yes | Yes | No (track B) |
+| CDLHARAMICROSS | No | Yes (`CDLHARAMICROSS`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLLONGLEGGEDDOJI | No | Yes (`CDLLONGLEGGEDDOJI`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLMARUBOZU | No | Yes (`CDLMARUBOZU`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLSPINNINGTOP | No | Yes (`CDLSPINNINGTOP`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLTRISTAR | No | Yes (`CDLTRISTAR`) | Yes | Yes | No (deferred — ADR-188) |
 
 **Round classification:** pure TA-Lib candlestick-library coverage; not
 derived from Godel Terminal's publicly documented feature set. The
 program is reframed from "Godel Parity" to **"TA-Lib + Godel Parity"**
 going forward, with per-feature classification tables in every round
-ADR (ADR-108..ADR-186 backfilled by the audit ADR). Track B (chart-
-overlay surfacing of existing research-layer CDL\* snapshots) is
-tracked separately — see ADR-188.
+ADR (ADR-108..ADR-186 backfilled by the audit ADR). Chart-overlay
+surfacing of existing research-layer CDL\* snapshots is deferred
+separately — see ADR-188.
 
 ## Context
 
