@@ -47,7 +47,7 @@ Optional API keys and broker credentials that unlock additional features.
 - **Cost:** Free API keys; trading fees apply on filled orders
 - **Key format:** API key + base64 API secret
 - **Required permissions:** Balance/positions for account display; order create/modify and cancel/close for trading
-- **Note:** Public Spot/xStocks OHLCV, Spot/xStocks pair discovery, Kraken Futures instrument discovery, and Kraken Futures chart candles do not require credentials. The terminal syncs these bars asynchronously for fast crypto chart catch-up; authenticated keys are only needed for trading/account features.
+- **Note:** Public Spot/xStocks OHLCV, Spot/xStocks pair discovery, Kraken Futures instrument discovery, and Kraken Futures chart candles do not require credentials. The terminal syncs these bars asynchronously but paces Spot OHLC requests to Kraken's documented public limits; authenticated keys are only needed for trading/account features.
 
 ## Anthropic (Claude AI)
 

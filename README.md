@@ -106,7 +106,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **GPU Chart Engine** | Native wgpu candlesticks, drawing tools, sub-panes, price lines, histograms, fills — all on GPU |
 | **Draggable Panel Splitter** | Resize chart/sidebar panels by dragging the divider — layout persists across sessions |
 | **Economic Calendar** | Finnhub economic events: FOMC, NFP, CPI, PMI with impact ratings (~ →ECON) |
-| **Kraken Primary Market Data** | Public Spot/xStocks universe sync with no API key; async 16-permit OHLCV scheduler for fast chart catch-up |
+| **Kraken Primary Market Data** | Public Spot/xStocks universe sync with no API key; async OHLCV queueing paced to Kraken's public limits with cooldown |
 | **Kraken Futures Market Data** | Public futures instrument discovery + async OHLCV sync under `kraken-futures:SYMBOL:TF`; no API key needed |
 | **CryptoCompare Deep History** | BTC from 2010, ETH from 2015, 2000 bars/request — extends history before exchange listings where available |
 | **Weekend Crypto Live** | Adaptive polling: 60s (M1), 2.5min (M15), 5min (H1+) — magenta-colored weekend candles |
@@ -262,6 +262,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [208](docs/adr/208-xynth-feature-parity.md) | Xynth feature parity target |
 | [209](docs/adr/209-lan-observability-kafka.md) | LAN observability and Kafka deployment |
 | [210](docs/adr/210-kraken-async-bar-sync.md) | Kraken async bar sync acceleration |
+| [211](docs/adr/211-kraken-rate-limit-cooldown.md) | Kraken rate-limit pacing and cooldown |
 
 ---
 

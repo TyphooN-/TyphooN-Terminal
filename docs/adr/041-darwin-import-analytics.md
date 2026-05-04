@@ -24,12 +24,15 @@ TyphooN-Terminal needed the ability to import MT5 trade history from 6 live DARW
 - 47 unit tests with in-memory SQLite test database
 - All functions are pure computation on SQLite data — no external API calls
 
-### Data Sources (3-tier crypto, ADR-040)
+### Data Sources (current hierarchy, ADR-037 / ADR-040)
 
 ```
-Priority 1: MT5 (Darwinex)  — weekday authority, 895 symbols × 9 TFs
-Priority 2: Kraken          — 24/7 crypto, fills weekend gaps from 2013
-Priority 3: Alpaca          — live trading execution
+Priority 1: MT5 (Darwinex)      — authority where BarCacheWriter has data
+Priority 2: Alpaca              — broker bars for non-MT5 symbols
+Priority 3: tastytrade          — DXLink bars for funded accounts
+Priority 4: CryptoCompare       — deep crypto history backfill
+Priority 5: Kraken Spot/xStocks — recent public OHLCV + gap-fill
+Priority 6: Kraken Futures      — public futures chart candles
 ```
 
 ### Frontend Commands
@@ -39,7 +42,7 @@ Priority 3: Alpaca          — live trading execution
 | DARWIN | 21 | Per-account analytics |
 | DARWINS | 33 | Combined portfolio |
 | DARWIN-RADAR | 1 | FTP screener (50K+ DARWINs) |
-| CRYPTO-BACKFILL | 1 | Kraken gap-fill |
+| CRYPTO-BACKFILL | 1 | CryptoCompare deep history + Kraken recent/gap-fill |
 | SOURCES | 5 | Data provider manager |
 
 ### Analytics Categories
@@ -68,8 +71,10 @@ Priority 3: Alpaca          — live trading execution
 
 - **Pro**: Complete trade analytics without leaving the terminal
 - **Pro**: Independent VaR/risk computation — verify Darwinex's numbers
-- **Pro**: 24/7 crypto charting via Kraken gap-fill
+- **Pro**: 24/7 crypto charting via CryptoCompare deep history plus Kraken recent/gap-fill
 - **Pro**: Portfolio-level risk aggregation across 6 accounts
 - **Con**: XLSX re-export required for trade history updates (until investor mode)
-- **Con**: Kraken rate limit (15 req/min) makes full backfill slow (~5-10 min)
+- **Con**: Kraken Spot public pacing (ADR-211) intentionally slows large
+  recent/gap-fill backfills so OHLC requests stay under Kraken's documented
+  public limit.
 - **Con**: darwin.rs is large (7,000+ lines) — self-contained for now, module split if complexity grows further

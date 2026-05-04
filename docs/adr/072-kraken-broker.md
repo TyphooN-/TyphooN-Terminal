@@ -88,12 +88,19 @@ to be added without copying authentication code.
 ## Public Bar Sync
 
 Kraken Spot/xStocks and Kraken Futures public market-data fetches are
-asynchronous and bounded by a shared public semaphore. As of ADR-210, the
-terminal keeps 16 public Kraken requests in flight, uses larger Spot/Futures
-queue windows, offloads cache merge/write work to blocking tasks, and runs the
-Kraken leg of combined CryptoCompare backfills concurrently with CryptoCompare
-pagination. This keeps recent Kraken bars arriving as soon as possible while
-CryptoCompare continues to fill deeper history.
+asynchronous and bounded by a shared public semaphore. As of ADR-210 and
+ADR-211, the terminal still queues public Kraken tasks concurrently, but
+Spot/xStocks OHLC HTTP calls are paced at Kraken's documented public level
+(about one request per second, process-wide and per pair) and enter cooldown on
+rate-limit responses. Kraken Futures public candles remain under the shared
+semaphore because Kraken's Futures REST budget assigns no request cost to
+public endpoints. Cache merge/write work is offloaded to blocking tasks, and
+the Kraken leg of combined CryptoCompare backfills runs concurrently with
+CryptoCompare pagination.
+
+Authenticated account/history requests use a local Spot REST counter matching
+Kraken's default verified-account guidance. Trading-limit order rejections are
+reported rather than automatically retried, avoiding duplicate order intent.
 
 ## UI And Web Routing
 
@@ -142,3 +149,7 @@ position is visible.
   https://docs.kraken.com/api/docs/rest-api/add-order-batch/
 - Kraken WebSocket v1 Add Order parameter matrix:
   https://docs.kraken.com/api/docs/websocket-v1/addorder/
+- Kraken Spot REST rate limits:
+  https://docs.kraken.com/api/docs/guides/spot-rest-ratelimits/
+- Kraken Spot trading limits:
+  https://docs.kraken.com/api/docs/guides/spot-ratelimits/

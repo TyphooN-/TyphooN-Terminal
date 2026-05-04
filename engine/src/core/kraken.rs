@@ -4,6 +4,130 @@
 //! No API key needed. No geo-restrictions.
 //! History: BTC from 2013, ETH from 2016, most alts from 2017+.
 
+use std::collections::HashMap;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use tokio::sync::Mutex;
+
+const SPOT_PUBLIC_INTERVAL: Duration = Duration::from_millis(1_100);
+const SPOT_PUBLIC_BASE_COOLDOWN: Duration = Duration::from_secs(5);
+const SPOT_PUBLIC_MAX_COOLDOWN: Duration = Duration::from_secs(60);
+const SPOT_PUBLIC_MAX_ATTEMPTS: usize = 3;
+
+static SPOT_PUBLIC_LIMITER: LazyLock<KrakenSpotPublicLimiter> =
+    LazyLock::new(KrakenSpotPublicLimiter::new);
+
+#[derive(Debug, Default)]
+struct KrakenSpotPublicState {
+    global_next_allowed: Option<Instant>,
+    pair_next_allowed: HashMap<String, Instant>,
+    cooldown_until: Option<Instant>,
+    cooldown: Duration,
+}
+
+#[derive(Debug)]
+struct KrakenSpotPublicLimiter {
+    state: Mutex<KrakenSpotPublicState>,
+}
+
+impl KrakenSpotPublicLimiter {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(KrakenSpotPublicState::default()),
+        }
+    }
+
+    async fn wait_ohlc(&self, pair: &str) {
+        let wait = {
+            let now = Instant::now();
+            let mut state = self.state.lock().await;
+            if state
+                .cooldown_until
+                .is_some_and(|cooldown_until| cooldown_until <= now)
+            {
+                state.cooldown_until = None;
+                state.cooldown = Duration::ZERO;
+            }
+            state
+                .pair_next_allowed
+                .retain(|_, next_allowed| *next_allowed > now);
+
+            let mut ready_at = now;
+            if let Some(cooldown_until) = state.cooldown_until {
+                ready_at = ready_at.max(cooldown_until);
+            }
+            if let Some(next_allowed) = state.global_next_allowed {
+                ready_at = ready_at.max(next_allowed);
+            }
+            if let Some(next_allowed) = state.pair_next_allowed.get(pair) {
+                ready_at = ready_at.max(*next_allowed);
+            }
+
+            let next_allowed = ready_at + SPOT_PUBLIC_INTERVAL;
+            state.global_next_allowed = Some(next_allowed);
+            state
+                .pair_next_allowed
+                .insert(pair.to_string(), next_allowed);
+            ready_at.saturating_duration_since(now)
+        };
+
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
+        }
+    }
+
+    async fn record_success(&self) {
+        let now = Instant::now();
+        let mut state = self.state.lock().await;
+        if state
+            .cooldown_until
+            .is_some_and(|cooldown_until| cooldown_until <= now)
+        {
+            state.cooldown_until = None;
+            state.cooldown = Duration::ZERO;
+        }
+    }
+
+    async fn record_rate_limited(&self, message: &str) -> Duration {
+        let explicit_wait = kraken_throttled_wait(message).map(|wait| {
+            if wait.is_zero() {
+                SPOT_PUBLIC_BASE_COOLDOWN
+            } else {
+                wait.min(SPOT_PUBLIC_MAX_COOLDOWN)
+            }
+        });
+        let now = Instant::now();
+        let mut state = self.state.lock().await;
+        let wait = if let Some(wait) = explicit_wait {
+            wait
+        } else if state.cooldown_until.is_some_and(|until| until > now) {
+            state
+                .cooldown
+                .max(SPOT_PUBLIC_BASE_COOLDOWN)
+                .saturating_mul(2)
+                .min(SPOT_PUBLIC_MAX_COOLDOWN)
+        } else {
+            SPOT_PUBLIC_BASE_COOLDOWN
+        };
+        state.cooldown = wait;
+        let cooldown_until = now + wait;
+        state.cooldown_until = Some(
+            state
+                .cooldown_until
+                .map(|existing| existing.max(cooldown_until))
+                .unwrap_or(cooldown_until),
+        );
+        state.global_next_allowed = Some(
+            state
+                .global_next_allowed
+                .map(|existing| existing.max(cooldown_until))
+                .unwrap_or(cooldown_until),
+        );
+        wait
+    }
+}
+
 /// Map TyphooN timeframes to Kraken interval (minutes).
 fn to_kraken_interval(tf: &str) -> Option<u32> {
     match tf {
@@ -138,22 +262,46 @@ fn parse_kraken_number(value: &serde_json::Value) -> Option<f64> {
     .filter(|v| v.is_finite())
 }
 
+fn kraken_response_error(body: &serde_json::Value) -> Option<String> {
+    let errors = body.get("error")?.as_array()?;
+    let err_msg = errors
+        .iter()
+        .filter_map(|e| e.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    (!err_msg.is_empty()).then_some(err_msg)
+}
+
+pub(crate) fn is_kraken_rate_limit_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("too many requests")
+        || lower.contains("rate limit")
+        || lower.contains("ratelimit")
+        || lower.contains("throttled")
+        || lower.contains("429")
+}
+
+pub(crate) fn kraken_throttled_wait(message: &str) -> Option<Duration> {
+    let lower = message.to_ascii_lowercase();
+    let idx = lower.find("throttled:")?;
+    let tail = &message[idx + "throttled:".len()..];
+    let digits = tail
+        .chars()
+        .skip_while(|ch| !ch.is_ascii_digit())
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    let retry_at = digits.parse::<u64>().ok()?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+    Some(Duration::from_secs(retry_at.saturating_sub(now)))
+}
+
 fn parse_kraken_ohlc_response(
     body: &serde_json::Value,
     start_ms: i64,
     end_ms: i64,
 ) -> Result<Vec<serde_json::Value>, String> {
-    if let Some(errors) = body["error"].as_array() {
-        if !errors.is_empty() {
-            let err_msg = errors
-                .iter()
-                .filter_map(|e| e.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            if !err_msg.is_empty() {
-                return Err(format!("Kraken error: {}", err_msg));
-            }
-        }
+    if let Some(err_msg) = kraken_response_error(body) {
+        return Err(format!("Kraken error: {}", err_msg));
     }
 
     let result = &body["result"];
@@ -235,34 +383,80 @@ pub async fn fetch_binance_klines(
         "https://api.kraken.com/0/public/OHLC?pair={}&interval={}&since={}",
         kraken_pair, interval, since
     );
-    let resp = client
-        .get(&url)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|e| format!("Kraken request failed: {e}"))?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Kraken API error {}: {}", status, body));
+    let mut last_rate_limit_error = None;
+    for attempt in 0..SPOT_PUBLIC_MAX_ATTEMPTS {
+        SPOT_PUBLIC_LIMITER.wait_ohlc(&kraken_pair).await;
+
+        let resp = client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| format!("Kraken request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let err = format!("Kraken API error {}: {}", status, body);
+            if is_kraken_rate_limit_error(&err) {
+                let wait = SPOT_PUBLIC_LIMITER.record_rate_limited(&err).await;
+                last_rate_limit_error = Some(err.clone());
+                if attempt + 1 < SPOT_PUBLIC_MAX_ATTEMPTS {
+                    tracing::warn!(
+                        "Kraken public OHLC rate-limited for {} {}; cooling down {}s before retry {}/{}",
+                        kraken_pair,
+                        timeframe,
+                        wait.as_secs(),
+                        attempt + 2,
+                        SPOT_PUBLIC_MAX_ATTEMPTS
+                    );
+                    continue;
+                }
+            }
+            return Err(err);
+        }
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Kraken JSON parse failed: {e}"))?;
+
+        if let Some(err_msg) = kraken_response_error(&body) {
+            let err = format!("Kraken error: {}", err_msg);
+            if is_kraken_rate_limit_error(&err) {
+                let wait = SPOT_PUBLIC_LIMITER.record_rate_limited(&err).await;
+                last_rate_limit_error = Some(err.clone());
+                if attempt + 1 < SPOT_PUBLIC_MAX_ATTEMPTS {
+                    tracing::warn!(
+                        "Kraken public OHLC rate-limited for {} {}; cooling down {}s before retry {}/{}",
+                        kraken_pair,
+                        timeframe,
+                        wait.as_secs(),
+                        attempt + 2,
+                        SPOT_PUBLIC_MAX_ATTEMPTS
+                    );
+                    continue;
+                }
+            }
+            return Err(err);
+        }
+
+        let mut all_bars = parse_kraken_ohlc_response(&body, start_ms.max(0), end_ms)?;
+
+        // Sort by timestamp and deduplicate
+        all_bars.sort_by(|a, b| {
+            let ta = a["timestamp"].as_str().unwrap_or("");
+            let tb = b["timestamp"].as_str().unwrap_or("");
+            ta.cmp(tb)
+        });
+        all_bars.dedup_by(|a, b| a["timestamp"] == b["timestamp"]);
+
+        SPOT_PUBLIC_LIMITER.record_success().await;
+        return Ok(all_bars);
     }
 
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("Kraken JSON parse failed: {e}"))?;
-    let mut all_bars = parse_kraken_ohlc_response(&body, start_ms.max(0), end_ms)?;
-
-    // Sort by timestamp and deduplicate
-    all_bars.sort_by(|a, b| {
-        let ta = a["timestamp"].as_str().unwrap_or("");
-        let tb = b["timestamp"].as_str().unwrap_or("");
-        ta.cmp(tb)
-    });
-    all_bars.dedup_by(|a, b| a["timestamp"] == b["timestamp"]);
-
-    Ok(all_bars)
+    Err(last_rate_limit_error.unwrap_or_else(|| "Kraken OHLC request failed".to_string()))
 }
 
 /// Aggregate daily bars into monthly OHLCV.
@@ -654,6 +848,31 @@ mod tests {
         assert!(!errors.is_empty());
         let err_msg: Vec<&str> = errors.iter().filter_map(|e| e.as_str()).collect();
         assert_eq!(err_msg[0], "EGeneral:Too many requests");
+    }
+
+    #[test]
+    fn kraken_rate_limit_detection_covers_public_and_rest_errors() {
+        assert!(is_kraken_rate_limit_error("EGeneral:Too many requests"));
+        assert!(is_kraken_rate_limit_error("EAPI:Rate limit exceeded"));
+        assert!(is_kraken_rate_limit_error(
+            "EService: Throttled: 1999999999"
+        ));
+        assert!(is_kraken_rate_limit_error(
+            "Kraken API error 429: retry later"
+        ));
+        assert!(!is_kraken_rate_limit_error("EQuery:Unknown asset pair"));
+    }
+
+    #[test]
+    fn kraken_throttled_wait_parses_retry_timestamp() {
+        let retry_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 30;
+        let wait = kraken_throttled_wait(&format!("EService: Throttled: {retry_at}")).unwrap();
+        assert!(wait <= Duration::from_secs(30));
+        assert!(wait >= Duration::from_secs(20));
     }
 
     #[test]

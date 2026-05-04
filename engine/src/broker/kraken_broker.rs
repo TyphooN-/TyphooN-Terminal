@@ -11,12 +11,147 @@ use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
 type HmacSha512 = Hmac<Sha512>;
 
 const KRAKEN_BASE_URL: &str = "https://api.kraken.com";
+const KRAKEN_PRIVATE_REST_MAX_COUNTER: f64 = 20.0;
+const KRAKEN_PRIVATE_REST_DECAY_PER_SEC: f64 = 0.5;
+const KRAKEN_PRIVATE_REST_BASE_COOLDOWN: Duration = Duration::from_secs(5);
+const KRAKEN_PRIVATE_REST_MAX_COOLDOWN: Duration = Duration::from_secs(60);
+const KRAKEN_PRIVATE_REST_MAX_ATTEMPTS: usize = 3;
+
+#[derive(Debug)]
+struct KrakenPrivateRestLimiter {
+    state: Mutex<KrakenPrivateRestState>,
+}
+
+#[derive(Debug)]
+struct KrakenPrivateRestState {
+    counter: f64,
+    last_decay: Instant,
+    cooldown_until: Option<Instant>,
+    cooldown: Duration,
+}
+
+impl KrakenPrivateRestLimiter {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(KrakenPrivateRestState {
+                counter: 0.0,
+                last_decay: Instant::now(),
+                cooldown_until: None,
+                cooldown: Duration::ZERO,
+            }),
+        }
+    }
+
+    async fn wait(&self, cost: f64) {
+        if cost <= 0.0 {
+            return;
+        }
+
+        loop {
+            let wait = {
+                let now = Instant::now();
+                let mut state = self.state.lock().await;
+                state.decay(now);
+
+                let cooldown_wait = if let Some(cooldown_until) = state.cooldown_until {
+                    if cooldown_until > now {
+                        Some(cooldown_until.saturating_duration_since(now))
+                    } else {
+                        state.cooldown_until = None;
+                        state.cooldown = Duration::ZERO;
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(wait) = cooldown_wait {
+                    Some(wait)
+                } else if state.counter + cost <= KRAKEN_PRIVATE_REST_MAX_COUNTER {
+                    state.counter += cost;
+                    None
+                } else {
+                    let excess = (state.counter + cost) - KRAKEN_PRIVATE_REST_MAX_COUNTER;
+                    Some(Duration::from_secs_f64(
+                        (excess / KRAKEN_PRIVATE_REST_DECAY_PER_SEC).max(0.25),
+                    ))
+                }
+            };
+
+            if let Some(wait) = wait {
+                if !wait.is_zero() {
+                    tokio::time::sleep(wait).await;
+                }
+                continue;
+            }
+            return;
+        }
+    }
+
+    async fn record_rate_limited(&self, message: &str) -> Duration {
+        let explicit_wait = crate::core::kraken::kraken_throttled_wait(message).map(|wait| {
+            if wait.is_zero() {
+                KRAKEN_PRIVATE_REST_BASE_COOLDOWN
+            } else {
+                wait.min(KRAKEN_PRIVATE_REST_MAX_COOLDOWN)
+            }
+        });
+        let now = Instant::now();
+        let mut state = self.state.lock().await;
+        state.decay(now);
+        let wait = if let Some(wait) = explicit_wait {
+            wait
+        } else if state.cooldown_until.is_some_and(|until| until > now) {
+            state
+                .cooldown
+                .max(KRAKEN_PRIVATE_REST_BASE_COOLDOWN)
+                .saturating_mul(2)
+                .min(KRAKEN_PRIVATE_REST_MAX_COOLDOWN)
+        } else {
+            KRAKEN_PRIVATE_REST_BASE_COOLDOWN
+        };
+        state.cooldown = wait;
+        let cooldown_until = now + wait;
+        state.cooldown_until = Some(
+            state
+                .cooldown_until
+                .map(|existing| existing.max(cooldown_until))
+                .unwrap_or(cooldown_until),
+        );
+        wait
+    }
+
+    async fn record_success(&self) {
+        let now = Instant::now();
+        let mut state = self.state.lock().await;
+        state.decay(now);
+        if state
+            .cooldown_until
+            .is_some_and(|cooldown_until| cooldown_until <= now)
+        {
+            state.cooldown_until = None;
+            state.cooldown = Duration::ZERO;
+        }
+    }
+}
+
+impl KrakenPrivateRestState {
+    fn decay(&mut self, now: Instant) {
+        let elapsed = now.saturating_duration_since(self.last_decay);
+        if !elapsed.is_zero() {
+            self.counter =
+                (self.counter - elapsed.as_secs_f64() * KRAKEN_PRIVATE_REST_DECAY_PER_SEC).max(0.0);
+            self.last_decay = now;
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct KrakenConditionalClose {
@@ -332,12 +467,37 @@ fn encode_form_params(params: &[(String, String)]) -> String {
         .join("&")
 }
 
+fn kraken_private_rest_counter_cost(path: &str) -> f64 {
+    let endpoint = path.rsplit('/').next().unwrap_or(path);
+    if matches!(
+        endpoint,
+        "AddOrder"
+            | "AddOrderBatch"
+            | "AmendOrder"
+            | "EditOrder"
+            | "CancelOrder"
+            | "CancelOrderBatch"
+            | "CancelAll"
+            | "CancelAllOrdersAfter"
+    ) {
+        0.0
+    } else if matches!(
+        endpoint,
+        "Ledgers" | "QueryLedgers" | "TradesHistory" | "QueryTrades" | "ClosedOrders"
+    ) {
+        4.0
+    } else {
+        1.0
+    }
+}
+
 /// Kraken broker client with HMAC-SHA512 request signing.
 pub struct KrakenBroker {
     client: &'static Client,
     api_key: Zeroizing<String>,
     api_secret: Zeroizing<String>, // base64-encoded, zeroized on drop
     nonce: AtomicU64,
+    private_limiter: KrakenPrivateRestLimiter,
 }
 
 impl KrakenBroker {
@@ -355,6 +515,7 @@ impl KrakenBroker {
             api_key,
             api_secret,
             nonce: AtomicU64::new(now),
+            private_limiter: KrakenPrivateRestLimiter::new(),
         }
     }
 
@@ -422,44 +583,93 @@ impl KrakenBroker {
             return Err("Kraken API credentials not configured".to_string());
         }
 
-        let nonce = self.next_nonce();
-        let nonce_str = nonce.to_string();
+        let cost = kraken_private_rest_counter_cost(path);
+        let max_attempts = if cost > 0.0 {
+            KRAKEN_PRIVATE_REST_MAX_ATTEMPTS
+        } else {
+            1
+        };
 
-        let mut params = Vec::with_capacity(extra_params.len() + 1);
-        params.push(("nonce".to_string(), nonce_str));
-        params.extend_from_slice(extra_params);
-        let post_data = encode_form_params(&params);
+        for attempt in 0..max_attempts {
+            self.private_limiter.wait(cost).await;
 
-        let signature = self.sign_request(path, nonce, &post_data);
-        let url = format!("{}{}", KRAKEN_BASE_URL, path);
+            let nonce = self.next_nonce();
+            let nonce_str = nonce.to_string();
 
-        let resp = self
-            .client
-            .post(&url)
-            .header("API-Key", self.api_key.as_str())
-            .header("API-Sign", &signature)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(post_data)
-            .send()
-            .await
-            .map_err(|e| format!("Kraken request failed: {}", e))?;
+            let mut params = Vec::with_capacity(extra_params.len() + 1);
+            params.push(("nonce".to_string(), nonce_str));
+            params.extend_from_slice(extra_params);
+            let post_data = encode_form_params(&params);
 
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Kraken response parse failed: {}", e))?;
+            let signature = self.sign_request(path, nonce, &post_data);
+            let url = format!("{}{}", KRAKEN_BASE_URL, path);
 
-        // Kraken returns {"error": [...], "result": {...}}
-        if let Some(errors) = body.get("error").and_then(|e| e.as_array()) {
-            let errs: Vec<&str> = errors.iter().filter_map(|e| e.as_str()).collect();
-            if !errs.is_empty() {
-                return Err(format!("Kraken API error: {}", errs.join(", ")));
+            let resp = self
+                .client
+                .post(&url)
+                .header("API-Key", self.api_key.as_str())
+                .header("API-Sign", &signature)
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .body(post_data)
+                .send()
+                .await
+                .map_err(|e| format!("Kraken request failed: {}", e))?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                let err = format!("Kraken API error {status}: {body}");
+                if cost > 0.0 && crate::core::kraken::is_kraken_rate_limit_error(&err) {
+                    let wait = self.private_limiter.record_rate_limited(&err).await;
+                    if attempt + 1 < max_attempts {
+                        tracing::warn!(
+                            "Kraken private REST rate-limited on {}; cooling down {}s before retry {}/{}",
+                            path,
+                            wait.as_secs(),
+                            attempt + 2,
+                            max_attempts
+                        );
+                        continue;
+                    }
+                }
+                return Err(err);
             }
+
+            let body: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| format!("Kraken response parse failed: {}", e))?;
+
+            // Kraken returns {"error": [...], "result": {...}}
+            if let Some(errors) = body.get("error").and_then(|e| e.as_array()) {
+                let errs: Vec<&str> = errors.iter().filter_map(|e| e.as_str()).collect();
+                if !errs.is_empty() {
+                    let err = format!("Kraken API error: {}", errs.join(", "));
+                    if cost > 0.0 && crate::core::kraken::is_kraken_rate_limit_error(&err) {
+                        let wait = self.private_limiter.record_rate_limited(&err).await;
+                        if attempt + 1 < max_attempts {
+                            tracing::warn!(
+                                "Kraken private REST rate-limited on {}; cooling down {}s before retry {}/{}",
+                                path,
+                                wait.as_secs(),
+                                attempt + 2,
+                                max_attempts
+                            );
+                            continue;
+                        }
+                    }
+                    return Err(err);
+                }
+            }
+
+            self.private_limiter.record_success().await;
+            return body
+                .get("result")
+                .cloned()
+                .ok_or_else(|| "Kraken response missing 'result' field".to_string());
         }
 
-        body.get("result")
-            .cloned()
-            .ok_or_else(|| "Kraken response missing 'result' field".to_string())
+        Err("Kraken private REST request failed after rate-limit retries".to_string())
     }
 
     /// Get account balances. Returns asset → balance map.
@@ -1080,6 +1290,25 @@ mod tests {
         assert_eq!(
             encode_form_params(&params),
             "price=%2B2%25&close%5Bordertype%5D=stop-loss-limit&close%5Bprice2%5D=28400"
+        );
+    }
+
+    #[test]
+    fn kraken_private_rest_counter_cost_matches_rate_limit_docs() {
+        assert_eq!(kraken_private_rest_counter_cost("/0/private/Balance"), 1.0);
+        assert_eq!(
+            kraken_private_rest_counter_cost("/0/private/OpenOrders"),
+            1.0
+        );
+        assert_eq!(kraken_private_rest_counter_cost("/0/private/Ledgers"), 4.0);
+        assert_eq!(
+            kraken_private_rest_counter_cost("/0/private/QueryTrades"),
+            4.0
+        );
+        assert_eq!(kraken_private_rest_counter_cost("/0/private/AddOrder"), 0.0);
+        assert_eq!(
+            kraken_private_rest_counter_cost("/0/private/CancelOrder"),
+            0.0
         );
     }
 

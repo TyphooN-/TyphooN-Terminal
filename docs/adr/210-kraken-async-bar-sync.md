@@ -19,9 +19,14 @@ starting.
 
 Kraken public bar sync now follows a fully async, queue-friendly model:
 
-- Public Kraken concurrency is raised to 16 shared permits.
+- Public Kraken tasks are still queued behind a shared 16-permit semaphore, but
+  Spot/xStocks OHLC HTTP calls are now additionally paced by ADR-211: one
+  request about every 1.1 seconds process-wide and per pair, with cooldown on
+  Kraken rate-limit responses.
 - Spot and Futures queue windows are enlarged so refill scheduling can keep the
-  public pipeline saturated while still bounded.
+  public pipeline bounded. Futures public requests can still use the semaphore
+  directly because Kraken's published Futures REST budget assigns no cost to
+  public endpoints.
 - Direct Spot and Futures fetches keep the one-task-per-timeframe model.
 - Cache merge/write work for Kraken and Kraken Futures runs inside
   `spawn_blocking`, keeping tokio workers focused on network I/O.
@@ -45,9 +50,9 @@ Kraken public bar sync now follows a fully async, queue-friendly model:
 - **Pro:** Synchronous SQLite/zstd merge writes no longer occupy async runtime
   workers.
 - **Pro:** Kraken Futures shares the same non-blocking cache-write behavior.
-- **Con:** Public Kraken fetches are more parallel. The semaphore remains the
-  backpressure point and should be tuned down if Kraken starts returning public
-  rate-limit responses on a target network.
+- **Con:** Spot Kraken fetches no longer saturate the semaphore at the HTTP
+  boundary; large Spot backfills trade peak speed for Kraken-documented public
+  pacing.
 
 ## Implementation
 
@@ -58,6 +63,8 @@ Kraken public bar sync now follows a fully async, queue-friendly model:
   - `CRYPTOCOMPARE_BACKFILL_PERMITS = 2`
   - `store_json_bars_in_cache()` for blocking cache merge/write work
   - `run_crypto_compare_backfill_task()` for background CC + Kraken union work
+- `engine/src/core/kraken.rs`
+  - Spot public OHLC limiter and cooldown (ADR-211)
 
 ## References
 
@@ -65,3 +72,4 @@ Kraken public bar sync now follows a fully async, queue-friendly model:
 - ADR-040: Crypto data source
 - ADR-072: Kraken as full broker
 - ADR-203: Alpaca sync autotuning
+- ADR-211: Kraken rate-limit pacing and cooldown

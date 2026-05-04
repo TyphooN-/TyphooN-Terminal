@@ -40,7 +40,7 @@ Kraken provides recent public OHLCV without an API key. It is stored independent
 ### Crypto Backfill Flow (updated 2026-05-04)
 The "Backfill ALL Crypto" button fetches 10 symbols × 8 TFs:
 1. CryptoCompare: all 8 TFs (1Day through 5Min). Deep history for hourly+; 7-day limit for sub-hourly.
-2. Kraken: launched immediately as the recent/gap-fill leg of the same background backfill task, under the shared Kraken public-request semaphore. It no longer waits behind CryptoCompare pagination.
+2. Kraken: launched immediately as the recent/gap-fill leg of the same background backfill task. It no longer waits behind CryptoCompare pagination, but Spot OHLC HTTP calls are paced by ADR-211 to Kraken's documented public rate-limit level.
 
 ### Data Hierarchy (6-tier)
 
@@ -88,7 +88,7 @@ Note: 1Min history limited to ~7 days at CryptoCompare. All sub-hourly TFs aggre
 | Recent public sync | Kraken | Continuous/adaptive polling + backfill union | Visible crypto/xStocks charts and requested TFs |
 | Deep history | CryptoCompare | Manual button | 10 symbols × 8 TFs (excludes 1Min) |
 
-CryptoCompare handles deep history (2000 bars/request, back to 2010). Kraken handles recent public OHLCV and gap-fill without requiring credentials. Rate limit retry with exponential backoff (2s→16s) for CryptoCompare.
+CryptoCompare handles deep history (2000 bars/request, back to 2010). Kraken handles recent public OHLCV and gap-fill without requiring credentials, with Spot public pacing/cooldown per ADR-211. Rate limit retry with exponential backoff (2s->16s) remains specific to CryptoCompare.
 
 ## Consequences
 
@@ -99,3 +99,5 @@ CryptoCompare handles deep history (2000 bars/request, back to 2010). Kraken han
 - **Pro**: Weekend gaps filled for all crypto symbols
 - **Con**: CryptoCompare may have slightly different prices than Darwinex/Kraken
 - **Con**: Lower timeframes (1Min) have limited history (~7 days at CryptoCompare)
+- **Con**: Kraken Spot OHLC backfills intentionally run slower than raw HTTP
+  concurrency so they stay under Kraken's public rate guidance.

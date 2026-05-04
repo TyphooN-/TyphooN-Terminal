@@ -51,7 +51,7 @@ Bar data from MT5 (via BarCacheWriter EA) is automatically synced about once per
 
 ### Kraken Public Bar Sync
 
-Kraken Spot/xStocks and Futures public bars run on tokio tasks with a shared 16-permit public fetch semaphore. Direct Kraken requests spawn one task per timeframe, while combined CryptoCompare backfills now run in the background and launch their Kraken leg immediately. CryptoCompare deep-history pagination is separately capped at two concurrent tasks. SQLite/zstd cache merge and write work is offloaded with `spawn_blocking`, so network tasks stay responsive and active charts can reload as each Kraken timeframe lands.
+Kraken Spot/xStocks and Futures public bars run on tokio tasks with a shared 16-permit public fetch semaphore. Direct Kraken requests spawn one task per timeframe, while combined CryptoCompare backfills run in the background and launch their Kraken leg immediately. Spot/xStocks OHLC HTTP calls are then paced at the engine boundary to Kraken's documented public level: about one request per second process-wide and per pair, with 5s -> 60s cooldown on rate-limit responses. Kraken Futures public endpoints remain semaphore-bound because Kraken documents no REST request cost for public Futures calls. CryptoCompare deep-history pagination is separately capped at two concurrent tasks. SQLite/zstd cache merge and write work is offloaded with `spawn_blocking`, so network tasks stay responsive and active charts can reload as each Kraken timeframe lands.
 
 ### Cache Format
 

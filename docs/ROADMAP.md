@@ -125,7 +125,7 @@
 
 ### Phase 13: Kraken Broker
 - [x] Public OHLCV ingest (gap-fill source)
-- [x] Async Kraken bar sync acceleration: 16 public fetch permits, larger bounded queue windows, background CryptoCompare + Kraken union work, non-blocking cache writes (ADR-210)
+- [x] Async Kraken bar sync acceleration: bounded public task queue, documented Spot OHLC pacing/cooldown, background CryptoCompare + Kraken union work, non-blocking cache writes (ADR-210, ADR-211)
 - [x] HMAC-SHA512 signed REST trading (ADR-072)
 - [x] Full Spot REST AddOrder parameters: stop/take-profit/trailing variants, price2, displayvol iceberg, settle-position, margin/reduce-only, flags, TIF, client IDs, STP, validate-only, conditional close
 - [x] Batch orders, order amend/edit, batch cancel, cancel-all, dead-man cancel
@@ -174,7 +174,7 @@
 - [x] native/app.rs split into submodules: ai, settings, storage, sync_status, tool_windows, strategy_windows, alpaca_sync, bar_sync, auto_compact (ADR-202)
 - [x] Alpaca sync autotuning by data tier (ADR-203)
 - [x] Kraken public bar sync no longer blocked behind CryptoCompare deep-history work; cache merge/write moved off async workers (ADR-210)
-- [x] Header-driven rate-limit pacing, cache-depth-aware window sizing
+- [x] Documented Kraken Spot public/private rate-limit pacing, cache-depth-aware window sizing
 - [x] No-data symbol skip set
 - [x] Dependency audit + RustSec advisory closure (ADR-204)
 
