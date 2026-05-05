@@ -3,7 +3,7 @@
 **Status:** Implemented
 **Date:** 2026-03-23
 
-> **Note:** Extends [ADR-039](039-portable-backup.md) (Portable Backup) and [ADR-020](020-cache-optimization.md) (SQLite Cache).
+> **Note:** Extends the portable backup and SQLite cache work that predated the retained ADR set. Later LAN security/deployment updates are tracked by [ADR-065](065-lan-sync-tls-encryption.md), [ADR-066](066-lan-sync-remote-requests.md), [ADR-079](079-lan-sync-bandwidth.md), [ADR-206](206-headless-lan-server-deployment.md), and [ADR-209](209-lan-observability-kafka.md).
 
 ## Context
 
@@ -14,9 +14,9 @@ TyphooN-Terminal stores all bar data, DARWIN analytics, and key-value cache in a
 
 ## Decision
 
-### 1. Portable Backup (ADR-039 — Implemented)
+### 1. Portable Backup (Implemented)
 
-See [ADR-039](039-portable-backup.md) for full details. Summary:
+Summary:
 
 - `export_backup`: `VACUUM INTO` → zstd level 9 → `.typhoon-backup` file
 - `import_backup`: zstd decompress → `ATTACH DATABASE` → newer-wins merge
@@ -78,7 +78,7 @@ WebSocket messages over TLS-encrypted TCP (wss://), authenticated with PBKDF2-de
 - **15-minute periodic re-sync**: pulls updated bars, KV, DARWIN, research tables automatically (force-reconnect triggers incremental sync; picks up weekend crypto backfill bars)
 - Auto-connects on startup if `lan_client_enabled` is saved in session
 - Read-only view of server's Alpaca positions/orders/account (from KV cache `broker:*`)
-- **23 DARWIN analytics fields** from server KV — zero local deal queries. Positions, portfolio, exposure, correlations, VaR, Monte Carlo, optimal allocation, rebalance, stress tests, drawdown, signal decay, etc. All identical to server.
+- **23+ DARWIN analytics fields** from server KV — zero local deal queries. Positions, portfolio, exposure, correlations, VaR, Monte Carlo, optimal allocation, rebalance, stress tests, drawdown, signal decay, etc. All identical to server.
 - BG thread checks `lan_client_flag` — never calls `get_portfolio_open_positions()` or any deal-dependent computation locally.
 - Resync buttons: Resync Bars, Resync DARWIN Analytics, Resync Positions
 - SEC filing content fetched directly (public EDGAR URLs, not forwarded to server)
@@ -89,14 +89,14 @@ The CLI links the same `typhoon_engine::core::lan_sync::{LanSyncServer, LanSyncC
 
 This keeps LAN server/client compatibility at the protocol and database level. Docker, Kubernetes, and Terraform deployments mount a user-provided local or NAS path to `/cache` and run the CLI with `--cache-dir /cache`.
 
-#### Full Data Sync Protocol (13 tables)
+#### Full Data Sync Protocol (bar cache + KV + whitelisted research tables)
 
 The LAN sync transfers all SQLite tables in phases:
 
 1. **Bar cache** (`bar_cache`): Binary batch, all symbols x timeframes
 2. **DARWIN tables** (4): `darwin_accounts`, `darwin_deals`, `darwin_positions`, `darwin_equity_snapshots` — always full sync (deal data is static XLSX import)
 3. **KV cache** (`kv_cache`): Fundamentals, news, SEC, FRED, etc.
-4. **Research tables** (8 via `SYNCABLE_TABLES` whitelist): `darwin_equity_snapshots`, `sec_filings`, `sec_insider_trades`, `sec_filing_alerts`, `sec_scrape_index`, `fundamentals`, `quarterly_financials`, `institutional_holders`
+4. **Research tables** via `SYNCABLE_TABLES` whitelist (440 tables as of 2026-05-05): SEC, fundamentals, quarterly financials, institutional holders, research/news/earnings/dividend surfaces, and the later TA-Lib + Godel parity snapshot tables.
 5. **Sync state** (`sync_state`): Tracks `last_sync_ts` per table for incremental sync
 
 #### Incremental Sync Protocol
@@ -145,5 +145,5 @@ Previously, syncing `lan:server_enabled = "true"` from server to clients caused 
 - **Pro**: Incremental — only changed entries transferred
 - **Pro**: Works alongside portable backup (complementary, not competing)
 - **Con**: Requires both machines on same LAN
-- **Con**: No TLS by default (acceptable for trusted home/office network)
+- **Con**: Self-signed ephemeral TLS certificates require clients to trust/accept the local server certificate.
 - **Con**: Static salt in key derivation (acceptable for LAN-only threat model)

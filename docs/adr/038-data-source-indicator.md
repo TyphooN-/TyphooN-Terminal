@@ -3,7 +3,7 @@
 **Status:** Implemented (Phase 1 + Phase 2)
 **Date:** 2026-03-21
 
-> **Note:** Extends [ADR-037](037-data-source-hierarchy.md) (Data Source Hierarchy) and [ADR-010](010-multi-account.md) (Multi-Account).
+> **Note:** Extends [ADR-037](037-data-source-hierarchy.md) (Data Source Hierarchy) and [ADR-010](010-multi-broker.md) (Multi-Broker).
 
 ## Context
 

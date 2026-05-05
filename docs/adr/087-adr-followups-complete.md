@@ -82,7 +82,7 @@ Output is compatible with Google Calendar, Apple Calendar, Outlook, Thunderbird.
 
 - **Calendar ICS live URL feed** (so calendars auto-refresh). Would need a small always-on HTTP server — out of scope for a local terminal.
 - **Persistent help window expansion state.** Users can always re-collapse; minor.
-- **`Arc<str>` symbol caching.** Already deferred in ADR-085 with justification — stands.
+- **Full `Fundamentals` string-to-`Arc<str>` migration.** ADR-098 added a sector interner and O(1) cache infrastructure, but the full cross-crate field-type migration remains out of scope because the memory savings are small relative to the churn.
 
 ## Tests
 

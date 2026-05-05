@@ -3,7 +3,7 @@
 **Status:** Implemented
 **Date:** 2026-03-21
 
-> **Note:** Builds on [ADR-036](036-mt5-sqlite-direct-sync.md) (MT5 SQLite Direct Sync) and [ADR-020](020-cache-optimization.md) (Cache Optimization).
+> **Note:** Builds on the MT5 BarCacheWriter and SQLite cache work that predated the retained ADR set. Later updates are tracked by [ADR-040](040-crypto-data-source.md), [ADR-071](071-bardata-full-history.md), and [ADR-203](203-alpaca-sync-autotuning.md).
 
 ## Context
 

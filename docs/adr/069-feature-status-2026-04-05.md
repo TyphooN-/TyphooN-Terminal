@@ -1,6 +1,6 @@
 # ADR-069: Feature Status & Roadmap (2026-04-05)
 
-**Status:** Current | **Date:** 2026-04-05
+**Status:** Historical snapshot (superseded by ADR-088/089/090/092/093/201) | **Date:** 2026-04-05 | **Accuracy pass:** 2026-05-05
 
 ## Implemented (Production Ready)
 
@@ -12,14 +12,14 @@
 - Pre-placement color picker, per-drawing right-click property editor
 - Multi-symbol overlay (COMPARE command, % change line)
 - 54 floating analytical windows, all with charts/gauges/heatmaps
-- 205 command palette entries, TradingView keyboard shortcuts (Alt+H/V/T/F/R/E/L/C)
+- 205 command palette entries at the time of the snapshot; current registry is larger after later parity rounds
 - Session persistence, chart templates (SAVE_TEMPLATE/LOAD_TEMPLATE)
 - Screenshot export (PNG)
 
 ### Broker Integration
 - **Alpaca Markets**: Full REST API — connect, account, positions, orders (market/limit/stop/bracket), close position, cancel order, portfolio history, quotes, streaming (WebSocket), watchlists, options chain, corporate actions, most active, top movers
 - **tastytrade**: REST API — login, accounts, positions, balances, option chains, equity order placement + DXLink WebSocket streaming (historical bars + real-time quotes)
-- **MT5 (Darwinex)**: LAN sync from BarCacheWriter databases, bid/ask live quotes, 34 KV-synced analytics fields, 14 remote commands, TLS encryption
+- **MT5 (Darwinex)**: LAN sync from BarCacheWriter databases, bid/ask live quotes, 34 KV-synced analytics fields, 15 remote commands, TLS encryption
 
 ### Data Sources (21 integrated, 2 deferred)
 - **Integrated:** Alpaca Markets, tastytrade, Kraken, SEC EDGAR, FRED (10 series), Finnhub, FMP, Alpha Vantage, CryptoCompare, CoinGecko, House Stock Watcher, Yahoo Finance, Treasury.gov, alternative.me, FINRA RegSHO, Pushover, ntfy.sh, Anthropic (AI chat), OpenAI (AI chat), Matrix (chat), Discord (webhooks)
@@ -51,7 +51,7 @@
 | Dark Pool Volume | NOT IMPLEMENTED | SqueezMetrics DIX/GEX researched but not wired |
 | OCO Orders | IMPLEMENTED | `AlpacaBroker::oco_order()` — order_class "oco" with TP/SL legs. `OCO` console command. |
 | Draggable SL/TP | IMPLEMENTED | Draggable lines + Set SL/TP places stop/limit orders on broker (full MT5 EA parity) |
-| 7 Order Types | 6/7 | market/limit/stop/stop-limit/bracket/trailing + Set SL/TP orders. Missing: OCO (Alpaca limitation) |
+| 7 Order Types | IMPLEMENTED | market/limit/stop/stop-limit/bracket/trailing/OCO + Set SL/TP orders. OCO is implemented through Alpaca order_class "oco" and the `OCO` console command. |
 
 ## Remaining Gaps (Prioritized)
 
@@ -61,23 +61,23 @@
 - ~~Fear & Greed Index~~ DONE
 - ~~World indices dashboard~~ DONE
 - ~~Crypto top 50~~ DONE
-- tastytrade position close (no mechanism exists)
-- Periodic MT5 sync loop (currently manual command only)
-- EasyLanguage compiler (third frontend for MQL5 IR pipeline)
-- thinkScript compiler (fourth frontend)
-- Options Greeks display in option chain windows
+- ~~tastytrade position close (no mechanism exists)~~ DONE in ADR-088/201
+- ~~Periodic MT5 sync loop (currently manual command only)~~ DONE in ADR-088
+- ~~EasyLanguage compiler (third frontend for MQL5 IR pipeline)~~ DONE in ADR-089/090
+- ~~thinkScript compiler (fourth frontend)~~ DONE in ADR-089/090
+- ~~Options Greeks display in option chain windows~~ DONE in ADR-083/088
 
 ### LOW (Nice-to-have)
-- Forex cross-rate matrix
-- Dark pool volume (SqueezMetrics)
-- OCO order type
-- Stop-limit order type
-- Watchlist update/delete (only create/read exist)
-- Drawing control point drag-to-resize (handles render but aren't interactive)
-- Account-history-based compound interest projection
+- ~~Forex cross-rate matrix~~ DONE
+- Dark pool/block trade volume — still provider/data-feed gated
+- ~~OCO order type~~ DONE
+- ~~Stop-limit order type~~ DONE
+- ~~Watchlist update/delete (only create/read exist)~~ DONE in ADR-088
+- ~~Drawing control point drag-to-resize (handles render but aren't interactive)~~ DONE in ADR-088
+- ~~Account-history-based compound interest projection~~ DONE in ADR-088
 
 ## Consequences
 - Terminal exceeds TradingView/MT5 in drawing tools, indicators, and analytical windows
 - Order placement now functional for Alpaca + tastytrade (was regression from Tauri migration)
-- Blog post claims 5 features that are researched but not implemented — documented here for transparency
+- Most originally listed gaps were closed by ADR-088 through ADR-093; dark-pool/block-trade parity remains data-provider gated.
 - All security vulnerabilities addressed (constant-time HMAC, webhook hardening, log bounds, zero unwrap)

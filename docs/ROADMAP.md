@@ -136,7 +136,7 @@
 ### Phase 14: LAN Sync v2
 - [x] TLS-encrypted (wss://) WebSocket sync, ephemeral self-signed certs (ADR-065)
 - [x] PBKDF2 passphrase auth, constant-time HMAC-SHA256
-- [x] 14 remote commands (SEC_SCRAPE, DARWIN_IMPORT, FETCH_BARS, etc.) — ADR-066
+- [x] 15 remote commands (SEC_SCRAPE, DARWIN_IMPORT, FETCH_BARS, INGEST_RESEARCH, etc.) — ADR-066
 - [x] Bandwidth-tuned sync, full data + KV cache (ADR-079)
 
 ### Phase 15: Web LAN Client

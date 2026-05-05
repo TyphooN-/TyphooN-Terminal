@@ -29,7 +29,10 @@
 
 ## Lessons Learned
 
-See [INDICATOR_PORTING.md](../INDICATOR_PORTING.md) for technical details on each porting challenge.
+Implementation details now live in the current indicator docs and ADRs:
+[INDICATORS.md](../INDICATORS.md), [ADR-011](011-indicator-system.md),
+[ADR-032](032-ehlers-dsp-indicators.md), [ADR-061](061-gpu-cpu-indicator-audit.md),
+and [ADR-200](200-chart-parity-r97.md).
 
 ## Key Decisions
 
@@ -55,4 +58,4 @@ A full audit of all indicator calculations was performed, fixing bootstrap/seed/
 - **minBars off-by-one**: Correct minimum bar count for indicator warm-up
 - **ForceIndex EMA bootstrap**: Proper EMA seed for Force Index
 
-All fixes ensure pixel-level parity with MT5 across every indicator in the registry. See also [ADR-042](042-mtf-grid-unified-indicator-pipeline.md) for the unified indicator pipeline that ensures these fixes apply to MTF grid cells as well.
+All fixes ensure pixel-level parity with MT5 across every indicator in the registry. Multi-timeframe display coverage is tracked by [ADR-004](004-mtf-indicators.md) and [ADR-019](019-mtf-grid.md).

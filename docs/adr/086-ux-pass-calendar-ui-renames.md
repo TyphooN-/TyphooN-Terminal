@@ -88,12 +88,12 @@ Names deliberately NOT renamed:
 - **Help window embeds command descriptions as a hand-maintained array.** Drifts from the actual `COMMANDS` registry over time. Acceptable since the top 31 commands are stable; the full registry is still discoverable via the command palette.
 - **Staleness badges poll `chrono::Utc::now()` every frame.** Single syscall, cheap. Not worth throttling.
 
-## Follow-ups
+## Follow-up Status (updated 2026-05-05)
 
-- Thread `broker_scope` through the remaining fundamental features (EV viewer, HV Cone, FUNDAMENTALS scraper).
-- Persist `econ_filter_*` across sessions via `save_session()`.
-- Alert badge should optionally play a system sound (requires a new audio crate dep).
-- Help window command list should auto-generate from `COMMANDS` registry to avoid drift.
+- `broker_scope` in EV viewer and EVSCRAPE: closed by ADR-087. HV Cone was rejected there as chart-scoped, not fundamentals-scoped.
+- `econ_filter_*` persistence: closed by ADR-087.
+- Alert attention: closed by ADR-087 with `ViewportCommand::RequestUserAttention(Critical)` instead of adding an audio dependency.
+- Help command list auto-generation: closed by ADR-087; the help window now iterates the `COMMANDS` registry directly.
 
 ## Tests
 

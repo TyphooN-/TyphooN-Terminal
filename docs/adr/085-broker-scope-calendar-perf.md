@@ -118,12 +118,15 @@ Critical production unwraps fixed:
 - **Shared GPU buffers make `dispatch_indicator` not thread-safe.** Fine today — wgpu dispatch is inherently single-queue, and the terminal only calls compute from the render thread.
 - **Unwrap replacements don't cover 100% of the codebase.** The audit flagged ~8 production unwraps; this pass hit all 8. Test code remains untouched per ADR-082 scope.
 
-## Follow-ups
+## Follow-up Status (updated 2026-05-05)
 
-- Thread `broker_scope` through `EV` viewer, HV Cone, and the fundamentals scrape commands (EVSCRAPE, FUNDAMENTALS) so the scraper can skip symbols outside scope.
-- Add a persistent scope indicator to the status bar (currently you have to run `SCOPE` with no arg to check).
-- UX audit follow-ups: symbol autocomplete on order entry, last-updated timestamps on live panels, alert breach notification on the status bar.
-- Perf audit follow-ups: `Arc<str>` symbol caching in render loop (~1700 `.clone()` calls identified), LAN `remote_queue` append-only encoding, `detailed_stats()` pagination.
+- `broker_scope` in EV viewer and EVSCRAPE: closed by ADR-087. HV Cone was rejected there as chart-scoped, not fundamentals-scoped.
+- Persistent scope indicator: closed by ADR-087.
+- Symbol autocomplete, live-panel staleness timestamps, and alert breach badge: closed by ADR-086.
+- Help-window registry drift, econ-filter persistence, ICS export, and OS attention cue: closed by ADR-087.
+- LAN `remote_queue` append-only encoding: implemented in `SqliteCache::append_to_queue` / `drain_queue`, with server polling using `drain_queue`.
+- Storage-manager pagination over `detailed_stats`: implemented in `native/src/app/storage.rs` (`storage_page`, 200-row pages) with `detailed_stats_with_size()` for the size column.
+- `Arc<str>` symbol/sector caching: partially implemented as the sector interner in ADR-098; full `Fundamentals` field migration remains intentionally rejected because the memory savings do not justify the cross-crate type churn.
 
 ## Related
 

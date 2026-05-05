@@ -19,8 +19,8 @@ When a LAN client triggers a data-fetching action (e.g. "Scrape Now" button), th
 
 ### Commands Forwarded
 - SEC_SCRAPE, FUNDAMENTALS, FUNDAMENTALS_ONE
-- KRAKEN_BACKFILL, CRYPTOCOMPARE
-- MT5_SYNC, DARWIN_IMPORT
+- KRAKEN_BACKFILL, CRYPTOCOMPARE, FETCH_BARS
+- MT5_SYNC, DARWIN_IMPORT, EVSCRAPE, INGEST_RESEARCH
 - FINNHUB_NEWS, ECON_CALENDAR, CONGRESS_TRADES, FRED_DATA
 - SEC_FILING (content fetch)
 
@@ -54,7 +54,7 @@ The server accepts multiple concurrent WebSocket connections. Each client gets:
 
 When the client receives `RemoteRequestDone`, it automatically triggers an incremental re-sync of all data:
 
-1. **Research tables**: All 8 `SYNCABLE_TABLES` re-synced with `since_ts` from `sync_state`
+1. **Research tables**: all `SYNCABLE_TABLES` re-synced with `since_ts` from `sync_state` (440 whitelisted tables as of 2026-05-05)
 2. **KV cache**: Incremental re-sync using `RequestKvData { since_ts }`
 3. **DARWIN data**: Full re-sync (always, since deal data is static XLSX import)
 

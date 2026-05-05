@@ -39,7 +39,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  - RiskEngine (VaR, TRIM, martingale)           │
 │  - BacktestEngine (bar-by-bar, optimization)    │
 │  - BarBuilder (WebSocket → OHLCV)               │
-│  - LanSync (TLS, PBKDF2, 14 remote commands)    │
+│  - LanSync (TLS, PBKDF2, 15 remote commands)    │
 │  - Notifications (Discord, Pushover, ntfy,      │
 │    Matrix)                                      │
 └─────────────────────────────────────────────────┘
@@ -167,7 +167,7 @@ TyphooN-Terminal/
 
 ### LAN Sync
 
-TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates (no pinning — PBKDF2 passphrase handles auth). 60-second periodic re-sync. Server and client auto-start on startup. Full data sync: bars + DARWIN tables + filtered KV cache + 34 pre-computed analytics fields. LAN clients are read-only viewers — zero local deal computation, all analytics from server KV. Broker positions/orders/account synced via KV for read-only display. 14 remote commands wired (SEC_SCRAPE, DARWIN_IMPORT, FETCH_BARS, etc.). Connected client IPs shown in server UI. Trading buttons disabled on LAN client. CLI/headless mode exposes Prometheus metrics for cache size, cache rows, per-series bar counts, liveness, and uptime. Implemented in `engine/src/core/lan_sync.rs` with CLI deployment in `cli/src/main.rs`.
+TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates (no pinning — PBKDF2 passphrase handles auth). 60-second periodic re-sync. Server and client auto-start on startup. Full data sync: bars + DARWIN tables + filtered KV cache + 34 pre-computed analytics fields + the whitelisted research snapshot tables. LAN clients are read-only viewers — zero local deal computation, all analytics from server KV. Broker positions/orders/account synced via KV for read-only display. 15 remote commands wired (SEC_SCRAPE, DARWIN_IMPORT, FETCH_BARS, INGEST_RESEARCH, etc.). Connected client IPs shown in server UI. Trading buttons disabled on LAN client. CLI/headless mode exposes Prometheus metrics for cache size, cache rows, per-series bar counts, liveness, and uptime. Implemented in `engine/src/core/lan_sync.rs` with CLI deployment in `cli/src/main.rs`.
 
 ### Storage Manager
 

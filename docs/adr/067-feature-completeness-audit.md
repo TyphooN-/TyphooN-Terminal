@@ -1,15 +1,14 @@
 # ADR-067: Feature Completeness Audit
 
 **Status:** Complete
-**Date:** 2026-04-02 | **Updated:** 2026-04-04
+**Date:** 2026-04-02 | **Updated:** 2026-05-05
 
 ## Audit Results
 
 ### Fully Implemented (Production Ready)
-- **57 BrokerCmd variants** — all handled
-- **29 BrokerMsg variants** — all sent/received
+- **BrokerCmd/BrokerMsg dispatch** — all variants from the original audit were handled; the enums are now much larger after the TA-Lib + Godel parity rounds and remain routed through the broker task.
 - **89 drawing tools** with live preview, OHLC snap, undo/redo, color picker, line width/style, selection hit-test (8px), Delete-to-remove-selected
-- **LAN sync** — 34 KV-synced analytics fields, 14 remote commands wired, 15s incremental resync, TLS encryption
+- **LAN sync** — 34 KV-synced analytics fields, 15 remote commands wired, periodic incremental resync, TLS encryption
 - **Multi-source bar loading** — MT5 → Alpaca → tastytrade → CryptoCompare → Kraken → Kraken Futures (6-source priority) with timezone-aware dedup
 - **Supply/demand zones** — 1:1 MT5 parity (GPU + CPU paths, BACK_LIMIT=1000)
 - **Crypto backfill** — CryptoCompare deep history + Kraken sub-hourly, skip-if-cached

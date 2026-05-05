@@ -39,12 +39,13 @@ Three new crates:
 - Login screen with passphrase authentication
 - Auto-reconnect, 5-second polling
 
-### Deferred
+### Phase 2 Status (updated 2026-05-05)
 
-- Order entry from phone
-- Indicators, drawing tools, MTF grid
-- DARWIN analytics
-- Push notifications
+- **Order entry from phone:** implemented in ADR-089 with broker selection, two-step confirmation, close/cancel actions.
+- **Indicators on phone:** implemented in ADR-092 through server-computed `GetIndicators` / `IndicatorData`.
+- **DARWIN analytics on phone:** implemented in ADR-093 through `GetDarwinWeb` / `DarwinWebUpdate`.
+- **Push-style updates:** implemented in ADR-092 via `BarUpdate`, `PositionUpdate`, and `AccountUpdate` messages.
+- **Still deferred:** drawing tools and MTF grid on phone. They remain a larger mobile interaction project, not a protocol gap.
 
 ## Consequences
 
@@ -57,6 +58,6 @@ Three new crates:
 
 **Negative:**
 - Self-signed TLS requires accepting browser cert warning on first connect
-- Read-only in Phase 1 — no trading from phone yet
+- Phase 1 shipped read-only; later ADRs added limited phone trading and push updates.
 - WASM bundle must be rebuilt separately (`trunk build --release`)
 - Closure leaks possible in WASM on reconnect (mitigated by clearing callbacks before reconnect)
