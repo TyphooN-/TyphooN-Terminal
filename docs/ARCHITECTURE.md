@@ -204,7 +204,7 @@ Right-aligned numeric columns (Last, Chg, Chg%, Vol) with painter-based renderin
 
 ### AI Sessions
 
-Four AI surfaces with persistent, resumable sessions (ADR-157): Claude Code (`claude --resume <uuid>`), Gemini CLI, Codex CLI, and a generic AI Chat (Claude / OpenAI / Gemini / Grok / Mistral / Perplexity / Local). Sessions auto-save to the SqliteCache `kv_cache` (zstd-compressed, level 3 on hot writes) on every reply. Cross-client AI response cache (ADR-162) deduplicates identical prompts across LAN clients so the same prompt issued from server + phone hits the cache once. Slash commands (`RESUMECLAUDE`, `RESUMEGEMINI`, `RESUMECODEX`, `RESUMEAI`) re-enter prior sessions; the AI Sessions browser window shows history with subject lines and last-touched timestamps.
+Four AI surfaces with persistent, resumable sessions (ADR-157): Claude Code (`claude --resume <uuid>`), Gemini CLI, Codex CLI, and a generic AI Chat (Claude / OpenAI / Gemini / Grok / Mistral / Perplexity / Local). Sessions auto-save to the SqliteCache `kv_cache` (zstd-compressed, level 3 on hot writes) on every reply. Cross-client AI response cache (ADR-162) deduplicates identical hosted-AI prompts across LAN clients so the same prompt issued from server + phone hits the cache once. Slash commands (`RESUMECLAUDE`, `RESUMEGEMINI`, `RESUMECODEX`, `RESUMEAI`) re-enter prior sessions; the AI Sessions browser window shows history with subject lines and last-touched timestamps. If a built-in AI reply includes an ADR-130 `===TYPHOON_INGEST===` Return Path block, ADR-212 queues the existing research-ingest broker path automatically.
 
 ### Research Packet (TA-Lib + Godel Parity)
 

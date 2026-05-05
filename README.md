@@ -263,6 +263,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [209](docs/adr/209-lan-observability-kafka.md) | LAN observability and Kafka deployment |
 | [210](docs/adr/210-kraken-async-bar-sync.md) | Kraken async bar sync acceleration |
 | [211](docs/adr/211-kraken-rate-limit-cooldown.md) | Kraken rate-limit pacing and cooldown |
+| [212](docs/adr/212-ai-return-path-auto-ingest.md) | AI Return Path auto-ingest |
 
 ---
 

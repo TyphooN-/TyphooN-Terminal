@@ -50,6 +50,13 @@ Ship two new features as a single bundle:
    to the research packet that instructs the agent to emit the ingest
    block.
 
+   **Accuracy update 2026-05-05:** ADR-212 completed the built-in
+   auto-ingest follow-up. Claude Code, Gemini CLI, Codex CLI, and hosted
+   ASKAI replies now queue the existing ingest broker path automatically
+   when their final response contains a `===TYPHOON_INGEST===` block.
+   `INGEST_RESEARCH` remains the manual path for external web UIs and
+   copied transcripts.
+
 2. **RESEARCH_PACKET viewer window** — A new `RESEARCH_PACKET`
    command / window that runs the existing `investigate_symbols()`
    builder and displays the packet in a split-pane layout: a
@@ -214,13 +221,10 @@ populates the whole terminal farm.
 ## Alternatives considered
 
 1. **Scrape the LLM subprocess stdout for fenced ingest blocks in
-   ASKCLAUDE / ASKGEMINI** — Rejected for this ADR, but flagged as
-   an obvious Round-2 follow-up. Would eliminate the paste step
-   entirely for subprocess paths. Not included here because it
-   requires extending the subprocess reader loop and teasing apart
-   agent-reply-vs-streaming-output for each CLI, and because the
-   paste path needs to exist anyway for HTTP/web-UI agents that
-   can't be wrapped in a subprocess.
+   ASKCLAUDE / ASKGEMINI / ASKCODEX** — Originally rejected for this ADR, but
+   completed in ADR-212 through final-reply receive hooks rather than
+   streaming stdout parsing. The paste path still exists for external
+   HTTP/web-UI agents that cannot be wrapped by the terminal.
 2. **Ingesting plain URL lists (no JSON)** — Rejected. Plain URLs
    lose the title / source / summary / published_at metadata that
    makes the cache searchable and useful. Accepting raw URL lines

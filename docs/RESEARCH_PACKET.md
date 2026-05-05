@@ -4758,17 +4758,19 @@ last_close. Source: ADR-178 VARIANCE window.
 
 Pulled from `research::get_ingested_articles`. Emitted only when a
 prior AI conversation has ingested web-search results for this
-symbol — populated by sending articles from Claude / Gemini (CLI or
-API) back into the terminal via the `INGEST_RESEARCH` command or
-the `===TYPHOON_INGEST===` Return Path footer that the packet
-builder now prints at the end of every research packet. Header
+symbol — populated by sending articles from Claude / Gemini / Codex
+(CLI or API) back into the terminal via the built-in AI auto-ingest
+path, the `INGEST_RESEARCH` command, or the
+`===TYPHOON_INGEST===` Return Path footer that the packet builder now
+prints at the end of every research packet. Header
 reports the number of articles in the bag; body emits the **top
 15** articles (newest first) with title, source, published date,
 `agent_used`, truncated summary (≤260 chars), and URL. The cache
 holds up to 50 articles per symbol — FIFO with URL-based dedup,
 timestamp-wins semantics — and LAN-syncs like every other research
 table so a LAN client's ingestion populates the bag on all peers.
-Source: ADR-130 INGEST_RESEARCH window + Return Path parser.
+Source: ADR-130 INGEST_RESEARCH window + Return Path parser; ADR-212
+auto-ingests Return Path blocks from built-in AI replies.
 
 #### 2.324 Sector peer comparison
 
@@ -4799,9 +4801,10 @@ Default rubric (when the user issues `ASKAI SYM` with no trailing question):
 Every packet now closes with a **Return Path** instruction block that
 asks the AI agent to echo any web-search articles it fetched back to
 the terminal in a structured, parseable format. The terminal's
-`INGEST_RESEARCH` command (and any future auto-ingest listener) scans
-model replies for this block, parses the JSON, and appends the
-articles to the per-symbol bag consumed by sub-block 2.263 above.
+AI reply handlers auto-ingest this block for built-in AI panes, while
+`INGEST_RESEARCH` scans copied external transcripts for the same block.
+Both paths parse the JSON and append articles to the per-symbol bag
+consumed by sub-block 2.323 above.
 
 The footer is a fixed literal string — agents are told to emit:
 
@@ -4827,8 +4830,8 @@ it accepts ` ```json ` fences around the array, accepts `published` /
 `date` as aliases for `published_at`, accepts `agent` for
 `agent_used`, skips entries missing `symbol` or `url`, and ignores
 any text surrounding the sentinels. `agent_used` is overridden
-post-parse with the ingest window's "agent tag" field when the user
-wants to label a paste from a transcript.
+post-parse with the built-in AI provider tag or with the ingest window's
+"agent tag" field when the user wants to label a paste from a transcript.
 
 The footer adds roughly **~600 bytes** per packet regardless of how
 many symbols are in scope — it is emitted once after the closing
@@ -5965,7 +5968,7 @@ Response text is extracted from `choices[0].message.content`. The local path
 sends no `Authorization` header; the other five send `Bearer <api_key>`.
 All providers use a **4096**-token response budget (up from 1024).
 
-### Subprocess path (ASKCLAUDE / ASKGEMINI)
+### Subprocess path (ASKCLAUDE / ASKGEMINI / ASKCODEX)
 
 No network hop from the terminal. The packet, conversation transcript, and
 latest user turn are rebuilt into a single prompt string via
@@ -6005,11 +6008,26 @@ gemini --model <gemini-2.5-pro|gemini-2.5-flash|gemini-2.0-flash> \
        --prompt "<full prompt string>"
 ```
 
-Both handlers first run `which claude` / `which gemini`; if the binary is
-missing, the command logs an error and the packet is never built. Each
-subprocess runs on a dedicated `std::thread` so the UI stays responsive, and
-the reply is piped back via a `std::sync::mpsc::channel` drained on the next
-UI frame into the respective chat window.
+**Codex CLI** (`ASKCODEX` / Codex CLI chat window):
+
+```sh
+codex exec \
+      --model <gpt-5-codex|gpt-5|o4-mini> \
+      --skip-git-repo-check \
+      [-c model_reasoning_effort="<minimal|low|medium|high|xhigh>"] \
+      "<full prompt string>"
+```
+
+The handlers first run `which claude` / `which gemini` / `which codex`;
+if the binary is missing, the command logs an error and the packet is
+never built. Each subprocess runs on a dedicated `std::thread` so the UI
+stays responsive, and the reply is piped back via a `std::sync::mpsc::channel`
+drained on the next UI frame into the respective chat window.
+
+ADR-212 adds Return Path auto-ingest at those response-drain sites: if
+the final reply contains `===TYPHOON_INGEST===`, the app queues the
+existing `BrokerCmd::IngestResearchArticles` path with the appropriate
+agent tag.
 
 ### Prompt builder
 
@@ -6034,7 +6052,7 @@ transcript so the model doesn't see duplicated meta-labels.
 
 ### Session continuity
 
-Each chat window (Claude Code, Gemini CLI, AI Assistant) stores the packet
+Each chat window (Claude Code, Gemini CLI, Codex CLI, AI Assistant) stores the packet
 in its own `*_packet: Option<String>` field. Every Send rebuilds the prompt
 from the stored packet + the transcript + the new message, so the model
 never "forgets" what TyphooN handed it — even if the CLI itself would
@@ -6235,7 +6253,7 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_cordim` | SQLite `research_cordim` | ADR-147 CORDIM window (Grassberger-Procaccia 1983 correlation dimension D2 at m=3 embedding — first nonlinear-dynamics dimension surface, distinct from monofractal Hurst/DFA/Higuchi) |
 | `research::get_skspec` | SQLite `research_skspec` | ADR-147 SKSPEC window (30-bar rolling skewness spectrum: mean/std/min/max/range — first skewness-stability diagnostic, complements RETQUANT full-window skew) |
 | `research::get_automi` | SQLite `research_automi` | ADR-147 AUTOMI window (auto-mutual-information at lags 1/5/10 via k=8 equiprobable histogram binning — first information-theoretic ACF, catches nonlinear dependence invisible to classical ACF) |
-| `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
+| `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-130 INGEST_RESEARCH window + packet Return Path footer; ADR-212 built-in AI auto-ingest (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
 | `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
@@ -6252,8 +6270,9 @@ If a given source is empty, the corresponding sub-block is silently omitted
   first.`; the `BrokerCmd::AiChat` is never dispatched. The `local` provider
   has no key requirement.
 - **CLI binary missing (subprocess path)** — the log shows
-  `Claude Code CLI not found in PATH.` / `Gemini CLI not found in PATH.`.
-- **Concurrent CLI invocations** — while a previous ASKCLAUDE / ASKGEMINI is
+  `Claude Code CLI not found in PATH.` / `Gemini CLI not found in PATH.` /
+  `Codex CLI not found in PATH.`.
+- **Concurrent CLI invocations** — while a previous ASKCLAUDE / ASKGEMINI / ASKCODEX is
   still running, a new trigger is a no-op. The first reply must land before
   a second CLI call will fire.
 - **Missing `--session-id` UUID** — if for any reason `claude_code_session_id`
@@ -6268,9 +6287,11 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `native/src/app.rs::investigate_symbols()` — the builder
 - `native/src/app.rs::parse_ask_args()` — argument parser
 - `native/src/app.rs::build_claude_prompt()` — prompt assembler for subprocess paths
+- `native/src/app.rs::maybe_queue_ingest_from_ai_response()` — ADR-212 Return Path auto-ingest hook
 - `native/src/app.rs::new_uuid()` — UUID v4 generator for session ids
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-096 — SEC filing expansion
 - ADR-107 — Multi-source news ingest
 - ADR-108 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 / 142 / 143 / 144 / 145 / 146 / 147 — Godel parity research surfaces
 - ADR-130 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)
+- ADR-212 — AI Return Path auto-ingest for built-in AI replies

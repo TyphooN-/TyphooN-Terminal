@@ -46,8 +46,8 @@ system, history, message) is sufficient for deduplication:
 ## Decision
 
 Ship a new regular table `ai_response_cache` with the standard LAN-sync
-shape, and intercept every AI call in the native layer to check the
-cache before spending tokens.
+shape, and intercept hosted AI Chat calls in the native layer to check
+the cache before spending tokens.
 
 ### Schema
 
@@ -199,9 +199,10 @@ tokenizer dependency.
   Claude, etc.). Not shipped because the cost/value is inverted: the
   stats window is advisory, and the cache lookup itself does not depend
   on the estimate.
-- CLI providers (claude_cli, gemini_cli, codex_cli) are also cached.
-  These cost no API tokens but may cost compute — caching is still net-
-  positive because subsequent replays are instant.
+- Accuracy update 2026-05-05: the implemented cache-aside path is the
+  hosted `BrokerCmd::AiChat` path. CLI transcripts are persisted by
+  ADR-157, but `claude --print`, `gemini --prompt`, and `codex exec`
+  replies are not currently served from `ai_response_cache`.
 
 ### Paid-API gap
 

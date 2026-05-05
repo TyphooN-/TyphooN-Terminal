@@ -223,6 +223,7 @@ impl TyphooNApp {
         // Drain responses from background thread
         if let Some(ref rx) = self.claude_code_rx {
             if let Ok(response) = rx.try_recv() {
+                self.maybe_queue_ingest_from_ai_response("claude", &response);
                 self.claude_code_history.push((false, response));
                 self.claude_code_rx = None;
                 // Persist the turn. Claude's CLI UUID doubles as our kv key so
@@ -458,6 +459,7 @@ impl TyphooNApp {
     pub(super) fn render_gemini_cli_window(&mut self, ctx: &egui::Context) {
         if let Some(ref rx) = self.gemini_cli_rx {
             if let Ok(response) = rx.try_recv() {
+                self.maybe_queue_ingest_from_ai_response("gemini", &response);
                 self.gemini_cli_history.push((false, response));
                 self.gemini_cli_rx = None;
                 let sid = Self::ensure_session_id(&mut self.gemini_cli_session_id);
@@ -653,6 +655,7 @@ impl TyphooNApp {
     pub(super) fn render_codex_cli_window(&mut self, ctx: &egui::Context) {
         if let Some(ref rx) = self.codex_cli_rx {
             if let Ok(response) = rx.try_recv() {
+                self.maybe_queue_ingest_from_ai_response("codex", &response);
                 self.codex_cli_history.push((false, response));
                 self.codex_cli_rx = None;
                 let sid = Self::ensure_session_id(&mut self.codex_cli_session_id);

@@ -195,7 +195,7 @@ mod selectors {
 
 ```toml
 # engine/Cargo.toml
-thirtyfour = "0.35"  # Async WebDriver client (Selenium protocol)
+thirtyfour = "0.36"  # Async WebDriver client (Selenium protocol; lockfile resolves 0.36.1)
 ```
 
 System requirement: ChromeDriver binary (`sudo pacman -S chromedriver` or

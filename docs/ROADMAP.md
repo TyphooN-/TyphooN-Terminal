@@ -148,6 +148,7 @@
 ### Phase 16: Fundamentals & Research
 - [x] Fundamentals engine across 21 sources (Alpaca, Finnhub, FMP, Alpha Vantage, FRED, SEC EDGAR, Yahoo, etc.) — ADR-054
 - [x] Fundamentals research packet (markdown bundle for AI agents)
+- [x] AI Return Path web-research auto-ingest from built-in AI replies (ADR-212)
 - [x] News earnings dividends pipeline (ADR-012, ADR-107)
 - [x] Notification system: Discord webhook, Pushover, ntfy.sh, Matrix (ADR-074)
 
