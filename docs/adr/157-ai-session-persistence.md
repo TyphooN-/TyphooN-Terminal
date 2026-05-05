@@ -27,7 +27,8 @@ Add an `ai_sessions` module plus four slash commands and a history-browser windo
 
 ### 1. Storage — kv_cache, zstd-compressed
 
-Reuse `SqliteCache::put_kv` / `get_kv` (already zstd-9 compressed). Two key
+Reuse `SqliteCache::put_kv` / `get_kv` (zstd-compressed; hot writes currently
+use level 3). Two key
 shapes:
 
 - `ai:session:<provider>:<session_id>` → JSON of one `AiSessionRecord`

@@ -10098,6 +10098,126 @@ pub fn get_transcript(
     }
 }
 
+fn truncate_text(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max_chars).collect();
+    out.push('…');
+    out
+}
+
+fn transcript_paragraphs(text: &str) -> Vec<String> {
+    text.split("\n\n")
+        .map(|p| {
+            p.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .map(|p| p.trim().to_string())
+        .filter(|p| p.len() > 60)
+        .filter(|p| {
+            let lower = p.to_ascii_lowercase();
+            !(lower.starts_with("operator")
+                || lower.starts_with("conference call participants")
+                || lower.starts_with("company participants")
+                || lower.starts_with("analysts"))
+        })
+        .collect()
+}
+
+fn split_prepared_and_qa(content: &str) -> (&str, Option<&str>) {
+    let lower = content.to_ascii_lowercase();
+    let markers = [
+        "question-and-answer session",
+        "question and answer session",
+        "questions and answers",
+        "\nq&a",
+        "\nqa",
+    ];
+    for marker in markers {
+        if let Some(idx) = lower.find(marker) {
+            return (&content[..idx], Some(&content[idx..]));
+        }
+    }
+    (content, None)
+}
+
+/// Deterministic earnings-call transcript summarizer used by the native
+/// TRANSCRIPTS window. This intentionally stays local/offline: it extracts
+/// substantial prepared-remarks paragraphs and a small Q&A sample without
+/// invoking an LLM or adding a provider dependency.
+pub fn summarize_transcript(t: &Transcript) -> crate::core::sec_filing::FilingSummary {
+    use crate::core::sec_filing::{FilingSection, FilingSummary};
+
+    let mut summary = FilingSummary {
+        headline: format!(
+            "{} Q{} {} earnings call transcript",
+            t.symbol, t.quarter, t.year
+        ),
+        ..Default::default()
+    };
+    let content = t.content.trim();
+    if content.is_empty() {
+        summary
+            .bullets
+            .push("Transcript body is empty.".to_string());
+        return summary;
+    }
+
+    let (prepared, qa) = split_prepared_and_qa(content);
+    let prepared_paras = transcript_paragraphs(prepared);
+    let qa_paras = qa.map(transcript_paragraphs).unwrap_or_default();
+
+    if !prepared_paras.is_empty() {
+        let body = prepared_paras
+            .iter()
+            .take(3)
+            .map(|p| truncate_text(p, 700))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        summary.sections.push(FilingSection {
+            title: "Prepared remarks".to_string(),
+            body,
+        });
+    }
+    if !qa_paras.is_empty() {
+        let body = qa_paras
+            .iter()
+            .take(3)
+            .map(|p| truncate_text(p, 700))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        summary.sections.push(FilingSection {
+            title: "Q&A".to_string(),
+            body,
+        });
+    }
+
+    for p in prepared_paras.iter().chain(qa_paras.iter()).take(5) {
+        summary.bullets.push(truncate_text(p, 220));
+    }
+    if summary.bullets.is_empty() {
+        for p in transcript_paragraphs(content).into_iter().take(3) {
+            summary.bullets.push(truncate_text(&p, 220));
+        }
+    }
+    if summary.sections.is_empty() && !summary.bullets.is_empty() {
+        summary.sections.push(FilingSection {
+            title: "Transcript extract".to_string(),
+            body: summary.bullets.join("\n\n"),
+        });
+    }
+    summary.headline = format!(
+        "{} - {} extract(s)",
+        summary.headline,
+        summary.sections.len()
+    );
+    summary
+}
+
 // ── IPO calendar ───────────────────────────────────────────────────────────
 
 pub fn upsert_ipo_calendar(conn: &Connection, rows: &[IpoEvent]) -> Result<(), String> {
@@ -68236,6 +68356,28 @@ mod tests {
         let b: TranscriptMeta = serde_json::from_str(&j).unwrap();
         assert_eq!(b.symbol, "AAPL");
         assert_eq!(b.quarter, 4);
+    }
+
+    #[test]
+    fn transcript_summary_extracts_prepared_and_qa_sections() {
+        let t = Transcript {
+            symbol: "AAPL".into(),
+            quarter: 1,
+            year: 2026,
+            date: "2026-01-30".into(),
+            content: "Operator\nWelcome to the call.\n\nTim Cook\nRevenue grew across services and emerging markets with strong gross margin performance and a record installed base. Management highlighted continued investment discipline and customer demand across the portfolio.\n\nLuca Maestri\nOperating cash flow remained strong, capital returns continued, and the company ended the quarter with a balanced capital structure.\n\nQuestion-and-Answer Session\n\nAnalyst\nCan you discuss services growth?\n\nTim Cook\nServices demand remained broad based, paid subscriptions increased, and enterprise adoption continued to support recurring revenue visibility into the next quarter.".into(),
+        };
+
+        let summary = summarize_transcript(&t);
+        assert!(summary.headline.contains("AAPL Q1 2026"));
+        assert!(summary.bullets.iter().any(|b| b.contains("Revenue grew")));
+        assert!(
+            summary
+                .sections
+                .iter()
+                .any(|s| s.title == "Prepared remarks")
+        );
+        assert!(summary.sections.iter().any(|s| s.title == "Q&A"));
     }
 
     // ── ADR-109 ─────────────────────────────────────────────────────────

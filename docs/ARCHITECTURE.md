@@ -167,7 +167,7 @@ TyphooN-Terminal/
 
 ### LAN Sync
 
-TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates (no pinning — PBKDF2 passphrase handles auth). 15-second periodic re-sync. Server and client auto-start on startup. Full data sync: bars + DARWIN tables + KV cache + 34 pre-computed analytics fields. LAN clients are read-only viewers — zero local deal computation, all analytics from server KV. Broker positions/orders/account synced via KV for read-only display. 14 remote commands wired (SEC_SCRAPE, DARWIN_IMPORT, FETCH_BARS, etc.). Connected client IPs shown in server UI. Trading buttons disabled on LAN client. CLI/headless mode exposes Prometheus metrics for cache size, cache rows, per-series bar counts, liveness, and uptime. Implemented in `engine/src/core/lan_sync.rs` with CLI deployment in `cli/src/main.rs`.
+TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates (no pinning — PBKDF2 passphrase handles auth). 60-second periodic re-sync. Server and client auto-start on startup. Full data sync: bars + DARWIN tables + filtered KV cache + 34 pre-computed analytics fields. LAN clients are read-only viewers — zero local deal computation, all analytics from server KV. Broker positions/orders/account synced via KV for read-only display. 14 remote commands wired (SEC_SCRAPE, DARWIN_IMPORT, FETCH_BARS, etc.). Connected client IPs shown in server UI. Trading buttons disabled on LAN client. CLI/headless mode exposes Prometheus metrics for cache size, cache rows, per-series bar counts, liveness, and uptime. Implemented in `engine/src/core/lan_sync.rs` with CLI deployment in `cli/src/main.rs`.
 
 ### Storage Manager
 
@@ -204,7 +204,7 @@ Right-aligned numeric columns (Last, Chg, Chg%, Vol) with painter-based renderin
 
 ### AI Sessions
 
-Four AI surfaces with persistent, resumable sessions (ADR-157): Claude Code (`claude --resume <uuid>`), Gemini CLI, Codex CLI, and a generic AI Chat (Claude / OpenAI / Gemini / Grok / Mistral / Perplexity / Local). Sessions auto-save to the SqliteCache `kv_cache` (zstd-9 compressed) on every reply. Cross-client AI response cache (ADR-162) deduplicates identical prompts across LAN clients so the same prompt issued from server + phone hits the cache once. Slash commands (`RESUMECLAUDE`, `RESUMEGEMINI`, `RESUMECODEX`, `RESUMEAI`) re-enter prior sessions; the AI Sessions browser window shows history with subject lines and last-touched timestamps.
+Four AI surfaces with persistent, resumable sessions (ADR-157): Claude Code (`claude --resume <uuid>`), Gemini CLI, Codex CLI, and a generic AI Chat (Claude / OpenAI / Gemini / Grok / Mistral / Perplexity / Local). Sessions auto-save to the SqliteCache `kv_cache` (zstd-compressed, level 3 on hot writes) on every reply. Cross-client AI response cache (ADR-162) deduplicates identical prompts across LAN clients so the same prompt issued from server + phone hits the cache once. Slash commands (`RESUMECLAUDE`, `RESUMEGEMINI`, `RESUMECODEX`, `RESUMEAI`) re-enter prior sessions; the AI Sessions browser window shows history with subject lines and last-touched timestamps.
 
 ### Research Packet (TA-Lib + Godel Parity)
 

@@ -220,9 +220,10 @@ Additionally the EA now re-reads `demand.txt` every 10 cycles
 
 ## Historical Follow-up Context (not blocking)
 
-- Add a UI banner in the terminal that surfaces `received_at` staleness
-  and `init_burst_active=true`. Current wiring only stores the data;
-  rendering is a cosmetic follow-up.
+- UI staleness rendering is resolved. The Settings window now shows
+  per-source heartbeat freshness (`beat Ns ago`, lagging, stale, or no
+  heartbeat) next to each configured MT5 DB path. A distinct
+  `init_burst_active=true` banner remains optional.
 - Allow per-chart override of default `max_bars` (e.g. a zoomed-out D1
   chart wants 5000 daily bars, not 1500). Requires a chart-level
   setting.

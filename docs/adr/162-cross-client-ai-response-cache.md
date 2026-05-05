@@ -18,11 +18,13 @@ prompt is deterministic in the packet content.
 
 Two things already exist in this area:
 
-1. **AI session persistence** (ADR-157) — transcripts are stored per-
-   client in `kv_cache` as zstd blobs. Not a cross-client surface: the
-   `kv_cache` KV store is intentionally not in the `SYNCABLE_TABLES`
-   whitelist (see ADR-150) because it carries per-client ephemeral state
-   that must not replicate.
+1. **AI session persistence** (ADR-157) — transcripts are stored in
+   `kv_cache` as zstd blobs. Accuracy update 2026-05-05: although
+   `kv_cache` is not part of `SYNCABLE_TABLES`, LAN sync has a separate
+   `RequestKvData` path that replicates KV rows while filtering
+   credentials, LAN-local config, quote churn, and other machine-local
+   keys. AI session keys (`ai:session:*`, `ai:sessions:index`) therefore
+   replicate today through the KV path, not through the table whitelist.
 2. **Web article cache** (`research_web_articles`) — already LAN-synced,
    demonstrating the pattern of dedicating a regular table to
    cross-client deduplication rather than trying to re-key the KV store.
@@ -222,13 +224,8 @@ None introduced. Standing godel-parity directive preserved.
 - `cargo build -p typhoon-native`: clean build.
 - Full engine test suite: 1244 tests pass (1233 prior + 11 new).
 
-## Follow-ups (not in this round)
+## Follow-ups
 
-- **AI session kv_cache → table migration.** ADR-157's transcripts still
-  live in `kv_cache` and therefore do not LAN-sync. A follow-up round
-  can migrate them to a `ai_sessions` regular table once we decide the
-  privacy model (session transcripts are more sensitive than one-shot
-  Q&A and may warrant explicit per-session opt-in to sync).
 - **Per-symbol cache invalidation hook.** When the user runs `REFRESH`
   on a symbol, any cache entries whose `prompt_preview` or `response`
   mentions that symbol could be proactively pruned. Today they simply
@@ -237,3 +234,9 @@ None introduced. Standing godel-parity directive preserved.
   becomes important (e.g. for billing reconciliation), swap in real
   tokenizers per provider. Currently the rough estimate is sufficient
   for the stats-window advisory role.
+
+Closed 2026-05-05: the old "AI session kv_cache -> table migration"
+follow-up was based on the mistaken assumption that KV rows did not
+LAN-sync. A regular `ai_sessions` table may still be useful later for
+querying, pagination, or a stricter privacy toggle, but it is not needed
+for cross-client availability.

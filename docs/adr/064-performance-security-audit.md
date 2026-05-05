@@ -123,7 +123,7 @@ No per-frame throttling by window state — expensive operations eliminated inst
 
 **LAN Sync:**
 - TLS encrypted (wss://), PBKDF2-HMAC-SHA256 auth. No TOFU cert pinning (ephemeral certs).
-- 15-second periodic re-sync (bars, KV, DARWIN, research tables) — near-real-time.
+- 60-second periodic re-sync (bars, KV, DARWIN, research tables), updated by ADR-079 to reduce LAN bandwidth.
 - Server auto-start on startup (`lan_server_enabled` persisted). Client auto-connect (`lan_client_enabled`).
 - Connected client IPs tracked and displayed in server UI (stored in KV `lan:server:clients`).
 - Broker positions/account/orders stored to KV cache → LAN clients read-only view.

@@ -182,9 +182,11 @@ research endpoints don't share a rate-limit queue.
   otherwise they go to the dedicated windows. This is a dual-write by
   design, not an accident.
 - Transcript AI-summary fields (`transcripts_summary`,
-  `transcripts_summary_for`) exist on `TyphooNApp` but are not yet wired
-  to a summarizer path. Left in place so a future pass can reuse the
-  SEC-filing summarizer (ADR-096) without schema churn.
+  `transcripts_summary_for`) are now wired in the TRANSCRIPTS window
+  (resolved 2026-05-05). The path is deterministic/offline: it reuses the
+  SEC-filing summary display shape and calls
+  `research::summarize_transcript()` to extract prepared-remarks and Q&A
+  paragraphs without adding an LLM dependency.
 
 ## Related
 

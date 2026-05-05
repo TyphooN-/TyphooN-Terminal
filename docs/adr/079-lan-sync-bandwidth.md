@@ -12,10 +12,10 @@ LAN sync was consuming 5-9 GB/day due to: full bar metadata (460KB) sent every 1
 New `RequestMetaSince { since_ts }` protocol message — server queries `WHERE timestamp > ?1` instead of returning all 7,700 bar entries. Client tracks `bar_cache` sync timestamp.
 
 ### KV Skip List
-Server skips syncing: `quote:*` (851 bid/ask entries), `darwin:daily_returns`, `darwin:correlations`, `darwin:exposure`, `darwin:insider_trades`, `client:demand`, all `lan:*` config. These are computed locally on each machine.
+Server skips syncing: `cred:*`, `quote:*` (851 bid/ask entries), `darwin:daily_returns`, `darwin:correlations`, `darwin:exposure`, `darwin:insider_trades`, `client:demand`, and all `lan:*` config. These are secret, machine-local, high-churn, or computed locally on each machine.
 
 ### Compressed KV Transport
-Server sends zstd-9 compressed blobs directly instead of decompressing first. Client uses `put_kv_compressed()` to store pre-compressed blobs. Eliminates double compress/decompress cycle.
+Server sends the already-compressed KV blobs directly instead of decompressing first. Client uses `put_kv_compressed()` to store pre-compressed blobs at the writer's stored zstd level. Eliminates double compress/decompress cycle.
 
 ### Write Throttling
 `put_kv_dedup()` hashes JSON content AND throttles to max once per 30s per key. `broker:account` (equity changes every tick) now writes at most 2/min instead of 60/min.
