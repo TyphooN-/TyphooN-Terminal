@@ -9,7 +9,7 @@
 
 TyphooN-Terminal stores all bar data, DARWIN analytics, and key-value cache in a local SQLite database. Two complementary systems are needed:
 
-1. **Portable Backup**: Export/import the entire cache for machine migration (USB, cloud transfer)
+1. **Portable Backup**: Export a consistent SQLite cache snapshot for machine migration; import currently merges the portable bar/KV cache rows.
 2. **LAN Sync**: Real-time cache synchronization between terminal instances on the same network (desktop ↔ laptop, multiple workstations)
 
 ## Decision
@@ -19,8 +19,10 @@ TyphooN-Terminal stores all bar data, DARWIN analytics, and key-value cache in a
 Summary:
 
 - `export_backup`: `VACUUM INTO` → zstd level 9 → `.typhoon-backup` file
-- `import_backup`: zstd decompress → `ATTACH DATABASE` → newer-wins merge
-- Frontend: `CACHE-BACKUP` / `CACHE-RESTORE` in command palette
+- `import_backup`: zstd decompress → `ATTACH DATABASE` → newer-wins `bar_cache`/`kv_cache` merge
+- CLI: `typhoon-cli --export-cache PATH` / `typhoon-cli --import-cache PATH`
+- Optional password protection: `--cache-backup-passphrase` uses the ADR-207
+  AES-256-GCM backup envelope for export/import
 
 ### 2. LAN Sync (Implemented)
 

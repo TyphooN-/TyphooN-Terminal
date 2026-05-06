@@ -21,6 +21,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zstd = "0.13"
 zeroize = { version = "1", features = ["derive"] }
+aes-gcm = "0.10"
 tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
 rcgen = "0.14"            # Self-signed TLS cert generation for LAN sync (updated 2026-03-31)
 native-tls = "0.2"       # TLS connector/acceptor for wss://

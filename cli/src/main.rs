@@ -711,6 +711,23 @@ struct Args {
     #[arg(long, env = "TYPHOON_CACHE_DIR", value_name = "PATH")]
     cache_dir: Option<PathBuf>,
 
+    /// Export the SQLite cache to a .typhoon-backup file and exit.
+    #[arg(long, value_name = "PATH", conflicts_with = "import_cache")]
+    export_cache: Option<PathBuf>,
+
+    /// Import a .typhoon-backup file into the SQLite cache and exit.
+    #[arg(long, value_name = "PATH", conflicts_with = "export_cache")]
+    import_cache: Option<PathBuf>,
+
+    /// Password for encrypted cache backup export/import.
+    #[arg(
+        long,
+        env = "TYPHOON_CACHE_BACKUP_PASSPHRASE",
+        value_name = "PASSPHRASE",
+        hide_env_values = true
+    )]
+    cache_backup_passphrase: Option<String>,
+
     /// Run the shared LAN sync server in CLI/headless mode.
     #[arg(long, conflicts_with = "lan_client")]
     lan_server: bool,
@@ -2721,6 +2738,61 @@ fn draw(f: &mut Frame, app: &App) {
     draw_log(f, app, main_layout[3]);
 }
 
+fn run_cache_backup_mode(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    let cache_dir = resolve_cache_dir(args.cache_dir.as_ref())?;
+    let db_path = cache_dir.join("typhoon_cache.db");
+    let cache = SqliteCache::open(&db_path).map_err(std::io::Error::other)?;
+
+    if let Some(path) = args.export_cache.as_ref() {
+        let path_str = path.to_string_lossy();
+        let result = if let Some(passphrase) = args.cache_backup_passphrase.as_deref() {
+            cache.export_backup_encrypted(path_str.as_ref(), passphrase)
+        } else {
+            cache.export_backup(path_str.as_ref())
+        }
+        .map_err(std::io::Error::other)?;
+        println!(
+            "Exported cache {} to {}: {}",
+            db_path.display(),
+            path.display(),
+            result
+        );
+        return Ok(());
+    }
+
+    if let Some(path) = args.import_cache.as_ref() {
+        let path_str = path.to_string_lossy();
+        let is_encrypted = SqliteCache::backup_file_is_encrypted(path_str.as_ref())
+            .map_err(std::io::Error::other)?;
+        let result = if is_encrypted {
+            let Some(passphrase) = args.cache_backup_passphrase.as_deref() else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Encrypted cache import requires --cache-backup-passphrase or TYPHOON_CACHE_BACKUP_PASSPHRASE.",
+                )
+                .into());
+            };
+            cache.import_backup_encrypted(path_str.as_ref(), passphrase)
+        } else {
+            cache.import_backup(path_str.as_ref())
+        }
+        .map_err(std::io::Error::other)?;
+        println!(
+            "Imported cache backup {} into {}: {}",
+            path.display(),
+            db_path.display(),
+            result
+        );
+        return Ok(());
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "Cache backup mode requires --export-cache PATH or --import-cache PATH.",
+    )
+    .into())
+}
+
 async fn run_lan_mode(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -2800,6 +2872,10 @@ async fn run_lan_mode(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+
+    if args.export_cache.is_some() || args.import_cache.is_some() {
+        return run_cache_backup_mode(&args);
+    }
 
     if args.lan_server || args.lan_client.is_some() {
         return run_lan_mode(&args).await;

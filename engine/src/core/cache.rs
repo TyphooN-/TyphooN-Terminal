@@ -5,9 +5,12 @@
 //! KV data uses JSON + zstd compression.
 //! Binary format: [u32 bar_count][per bar: i64 timestamp_ms, f64 OHLCV]
 
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Nonce};
 use rusqlite::{Connection, OpenFlags, params};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use zeroize::Zeroize;
 
 /// Re-export rusqlite::Connection so callers can use BG connections without depending on rusqlite directly.
 pub type BgConnection = Connection;
@@ -16,6 +19,128 @@ pub type BgConnection = Connection;
 const BAR_BINARY_MAGIC: &[u8; 4] = b"TTBR"; // TyphooN Terminal Bar Record
 /// Bytes per bar in binary format: i64 timestamp + 5×f64 (OHLCV) = 48 bytes
 const BYTES_PER_BAR: usize = 8 + 5 * 8; // 48
+const ENCRYPTED_BACKUP_MAGIC: &[u8] = b"TYPHOON-BACKUP-AESGCM-V1\0";
+const ENCRYPTED_BACKUP_ITERATIONS: u32 = 210_000;
+const ENCRYPTED_BACKUP_SALT_LEN: usize = 16;
+const ENCRYPTED_BACKUP_NONCE_LEN: usize = 12;
+
+fn derive_backup_key(passphrase: &str, salt: &[u8], iterations: u32) -> [u8; 32] {
+    let mut key = [0u8; 32];
+    pbkdf2::pbkdf2_hmac::<sha2::Sha256>(passphrase.as_bytes(), salt, iterations, &mut key);
+    key
+}
+
+fn encrypted_backup_header(iterations: u32, salt: &[u8], nonce: &[u8]) -> Result<Vec<u8>, String> {
+    if salt.len() > u8::MAX as usize || nonce.len() > u8::MAX as usize {
+        return Err("Encrypted backup salt/nonce too large".to_string());
+    }
+    let mut header =
+        Vec::with_capacity(ENCRYPTED_BACKUP_MAGIC.len() + 6 + salt.len() + nonce.len());
+    header.extend_from_slice(ENCRYPTED_BACKUP_MAGIC);
+    header.extend_from_slice(&iterations.to_be_bytes());
+    header.push(salt.len() as u8);
+    header.push(nonce.len() as u8);
+    header.extend_from_slice(salt);
+    header.extend_from_slice(nonce);
+    Ok(header)
+}
+
+fn parse_encrypted_backup_header(data: &[u8]) -> Result<(u32, &[u8], &[u8], usize), String> {
+    if !data.starts_with(ENCRYPTED_BACKUP_MAGIC) {
+        return Err("Not a TyphooN encrypted backup".to_string());
+    }
+    let fixed_len = ENCRYPTED_BACKUP_MAGIC.len() + 6;
+    if data.len() < fixed_len {
+        return Err("Encrypted backup header is truncated".to_string());
+    }
+    let iterations_offset = ENCRYPTED_BACKUP_MAGIC.len();
+    let iterations = u32::from_be_bytes(
+        data[iterations_offset..iterations_offset + 4]
+            .try_into()
+            .map_err(|_| "Encrypted backup iterations are malformed".to_string())?,
+    );
+    let salt_len = data[iterations_offset + 4] as usize;
+    let nonce_len = data[iterations_offset + 5] as usize;
+    if salt_len != ENCRYPTED_BACKUP_SALT_LEN || nonce_len != ENCRYPTED_BACKUP_NONCE_LEN {
+        return Err("Unsupported encrypted backup salt/nonce length".to_string());
+    }
+    let header_len = fixed_len + salt_len + nonce_len;
+    if data.len() <= header_len {
+        return Err("Encrypted backup payload is missing".to_string());
+    }
+    let salt_start = fixed_len;
+    let nonce_start = salt_start + salt_len;
+    Ok((
+        iterations,
+        &data[salt_start..nonce_start],
+        &data[nonce_start..header_len],
+        header_len,
+    ))
+}
+
+fn encrypt_backup_payload(compressed: &[u8], passphrase: &str) -> Result<Vec<u8>, String> {
+    if passphrase.is_empty() {
+        return Err("Encrypted backup passphrase cannot be empty".to_string());
+    }
+    let salt: [u8; ENCRYPTED_BACKUP_SALT_LEN] = rand::random();
+    let nonce_bytes: [u8; ENCRYPTED_BACKUP_NONCE_LEN] = rand::random();
+    let header = encrypted_backup_header(ENCRYPTED_BACKUP_ITERATIONS, &salt, &nonce_bytes)?;
+    let mut key = derive_backup_key(passphrase, &salt, ENCRYPTED_BACKUP_ITERATIONS);
+    let cipher = match Aes256Gcm::new_from_slice(&key) {
+        Ok(cipher) => cipher,
+        Err(_) => {
+            key.zeroize();
+            return Err("Create encrypted backup cipher failed".to_string());
+        }
+    };
+    let encrypted = cipher
+        .encrypt(
+            Nonce::from_slice(&nonce_bytes),
+            Payload {
+                msg: compressed,
+                aad: &header,
+            },
+        )
+        .map_err(|_| "Encrypt backup failed".to_string());
+    key.zeroize();
+    let ciphertext = encrypted?;
+
+    let mut out = Vec::with_capacity(header.len() + ciphertext.len());
+    out.extend_from_slice(&header);
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+fn decrypt_backup_payload(encrypted: &[u8], passphrase: &str) -> Result<Vec<u8>, String> {
+    if passphrase.is_empty() {
+        return Err("Encrypted backup passphrase cannot be empty".to_string());
+    }
+    let (iterations, salt, nonce_bytes, header_len) = parse_encrypted_backup_header(encrypted)?;
+    let header = &encrypted[..header_len];
+    let ciphertext = &encrypted[header_len..];
+    let mut key = derive_backup_key(passphrase, salt, iterations);
+    let cipher = match Aes256Gcm::new_from_slice(&key) {
+        Ok(cipher) => cipher,
+        Err(_) => {
+            key.zeroize();
+            return Err("Create encrypted backup cipher failed".to_string());
+        }
+    };
+    let decrypted = cipher
+        .decrypt(
+            Nonce::from_slice(nonce_bytes),
+            Payload {
+                msg: ciphertext,
+                aad: header,
+            },
+        )
+        .map_err(|_| {
+            "Decrypt backup failed; passphrase may be wrong or file is corrupt".to_string()
+        });
+    key.zeroize();
+    let compressed = decrypted?;
+    Ok(compressed)
+}
 
 /// Decompress bar data if needed. BarCacheWriter stores raw TTBR (magic "TTBR" at byte 0).
 /// Rust put_bars() stores zstd-compressed (magic 0x28B52FFD). This function handles both.
@@ -1356,9 +1481,7 @@ impl SqliteCache {
         Ok(map)
     }
 
-    /// Export entire cache to a compressed backup file.
-    /// Format: zstd-compressed copy of the SQLite database file (via VACUUM INTO).
-    pub fn export_backup(&self, path: &str) -> Result<String, String> {
+    fn compressed_backup_bytes(&self, path: &str) -> Result<Vec<u8>, String> {
         // Use SQLite's VACUUM INTO to create a consistent snapshot.
         // Use a unique temp file name to avoid TOCTOU races with concurrent exports.
         let backup_path = format!("{}.tmp.{}", path, std::process::id());
@@ -1368,16 +1491,26 @@ impl SqliteCache {
         // Hold write lock ONLY for VACUUM INTO — release before file I/O + compression
         {
             let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-            conn.execute("VACUUM INTO ?1", [&backup_path])
-                .map_err(|e| format!("VACUUM INTO failed: {e}"))?;
+            conn.execute("VACUUM INTO ?1", [&backup_path]).map_err(|e| {
+                let _ = std::fs::remove_file(&backup_path);
+                format!("VACUUM INTO failed: {e}")
+            })?;
         } // lock released here
 
         // File I/O + level-9 compression without holding any lock
-        let data = std::fs::read(&backup_path).map_err(|e| format!("Read backup failed: {e}"))?;
-        let compressed =
-            zstd::encode_all(data.as_slice(), 9).map_err(|e| format!("Compress failed: {e}"))?;
-        std::fs::write(path, &compressed).map_err(|e| format!("Write backup failed: {e}"))?;
+        let data = std::fs::read(&backup_path).map_err(|e| {
+            let _ = std::fs::remove_file(&backup_path);
+            format!("Read backup failed: {e}")
+        })?;
         let _ = std::fs::remove_file(&backup_path);
+        zstd::encode_all(data.as_slice(), 9).map_err(|e| format!("Compress failed: {e}"))
+    }
+
+    /// Export entire cache to a compressed backup file.
+    /// Format: zstd-compressed copy of the SQLite database file (via VACUUM INTO).
+    pub fn export_backup(&self, path: &str) -> Result<String, String> {
+        let compressed = self.compressed_backup_bytes(path)?;
+        std::fs::write(path, &compressed).map_err(|e| format!("Write backup failed: {e}"))?;
 
         let size_mb = compressed.len() as f64 / 1_048_576.0;
         Ok(format!(
@@ -1387,11 +1520,28 @@ impl SqliteCache {
         ))
     }
 
-    /// Import cache from a compressed backup file. Merges with existing data (newer wins).
-    pub fn import_backup(&self, path: &str) -> Result<String, String> {
-        let compressed = std::fs::read(path).map_err(|e| format!("Read backup failed: {e}"))?;
-        let data = zstd::decode_all(compressed.as_slice())
-            .map_err(|e| format!("Decompress failed: {e}"))?;
+    /// Export entire cache to a password-encrypted backup file.
+    /// Format: TyphooN AES-256-GCM envelope containing the zstd-compressed SQLite snapshot.
+    pub fn export_backup_encrypted(&self, path: &str, passphrase: &str) -> Result<String, String> {
+        let compressed = self.compressed_backup_bytes(path)?;
+        let encrypted = encrypt_backup_payload(&compressed, passphrase)?;
+        std::fs::write(path, &encrypted).map_err(|e| format!("Write backup failed: {e}"))?;
+
+        let size_mb = encrypted.len() as f64 / 1_048_576.0;
+        Ok(format!(
+            "{{\"size_bytes\":{},\"size_mb\":{:.1},\"encrypted\":true}}",
+            encrypted.len(),
+            size_mb
+        ))
+    }
+
+    fn import_compressed_backup_bytes(
+        &self,
+        path: &str,
+        compressed: &[u8],
+    ) -> Result<String, String> {
+        let data =
+            zstd::decode_all(compressed).map_err(|e| format!("Decompress failed: {e}"))?;
 
         // Write to temp file with exclusive creation to avoid TOCTOU races
         let tmp_path = format!("{}.import.tmp.{}", path, std::process::id());
@@ -1458,6 +1608,25 @@ impl SqliteCache {
             "{{\"bars_imported\":{},\"kv_imported\":{}}}",
             bar_count, kv_count
         ))
+    }
+
+    /// Import cache from a compressed backup file. Merges with existing data (newer wins).
+    pub fn import_backup(&self, path: &str) -> Result<String, String> {
+        let compressed = std::fs::read(path).map_err(|e| format!("Read backup failed: {e}"))?;
+        self.import_compressed_backup_bytes(path, &compressed)
+    }
+
+    /// Import cache from a password-encrypted backup file. Merges with existing data (newer wins).
+    pub fn import_backup_encrypted(&self, path: &str, passphrase: &str) -> Result<String, String> {
+        let encrypted = std::fs::read(path).map_err(|e| format!("Read backup failed: {e}"))?;
+        let compressed = decrypt_backup_payload(&encrypted, passphrase)?;
+        self.import_compressed_backup_bytes(path, &compressed)
+    }
+
+    /// Detect whether a backup file uses TyphooN's encrypted backup envelope.
+    pub fn backup_file_is_encrypted(path: &str) -> Result<bool, String> {
+        let data = std::fs::read(path).map_err(|e| format!("Read backup failed: {e}"))?;
+        Ok(data.starts_with(ENCRYPTED_BACKUP_MAGIC))
     }
 
     /// Get the database file path.
@@ -3229,5 +3398,61 @@ mod tests {
 
         let missing = cache.get_kv_raw("missing:key").unwrap();
         assert!(missing.is_none());
+    }
+
+    #[test]
+    fn encrypted_backup_roundtrips_bar_and_kv_rows() {
+        let src_db_path = temp_db_path();
+        let dst_db_path = temp_db_path();
+        let backup_path = temp_db_path().with_extension("typhoon-backup");
+        let backup_path_str = backup_path.to_string_lossy().to_string();
+        let src = SqliteCache::open(&src_db_path).unwrap();
+        let dst = SqliteCache::open(&dst_db_path).unwrap();
+
+        let json = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
+        src.put_bars("alpaca:AAPL:1Day", json).unwrap();
+        src.put_kv("research:test", r#"{"ok":true}"#).unwrap();
+
+        let export_meta = src
+            .export_backup_encrypted(&backup_path_str, "correct horse battery staple")
+            .unwrap();
+        assert!(export_meta.contains(r#""encrypted":true"#));
+        assert!(SqliteCache::backup_file_is_encrypted(&backup_path_str).unwrap());
+
+        dst.import_backup_encrypted(&backup_path_str, "correct horse battery staple")
+            .unwrap();
+        assert!(dst.get_bars("alpaca:AAPL:1Day").unwrap().is_some());
+        assert_eq!(
+            dst.get_kv("research:test").unwrap(),
+            Some(r#"{"ok":true}"#.to_string())
+        );
+
+        let _ = std::fs::remove_file(src_db_path);
+        let _ = std::fs::remove_file(dst_db_path);
+        let _ = std::fs::remove_file(backup_path);
+    }
+
+    #[test]
+    fn encrypted_backup_rejects_wrong_passphrase() {
+        let src_db_path = temp_db_path();
+        let dst_db_path = temp_db_path();
+        let backup_path = temp_db_path().with_extension("typhoon-backup");
+        let backup_path_str = backup_path.to_string_lossy().to_string();
+        let src = SqliteCache::open(&src_db_path).unwrap();
+        let dst = SqliteCache::open(&dst_db_path).unwrap();
+
+        src.put_kv("test:key", "secret").unwrap();
+        src.export_backup_encrypted(&backup_path_str, "right-pass")
+            .unwrap();
+
+        let err = dst
+            .import_backup_encrypted(&backup_path_str, "wrong-pass")
+            .unwrap_err();
+        assert!(err.contains("Decrypt backup failed"));
+        assert_eq!(dst.get_kv("test:key").unwrap(), None);
+
+        let _ = std::fs::remove_file(src_db_path);
+        let _ = std::fs::remove_file(dst_db_path);
+        let _ = std::fs::remove_file(backup_path);
     }
 }

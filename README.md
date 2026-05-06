@@ -311,6 +311,8 @@ cd cli && ./typhoon.sh              # Interactive TUI
 ./typhoon.sh --accounts             # All accounts (Alpaca + MT5 imports)
 ./typhoon.sh -s BTC/USD             # Start with specific symbol
 ./typhoon.sh --import-mt5 DARWIN_EUR:/path/to/statement.csv
+./typhoon.sh --export-cache backup.typhoon-backup --cache-backup-passphrase "$PASS"
+./typhoon.sh --import-cache backup.typhoon-backup --cache-backup-passphrase "$PASS"
 ./typhoon.sh --lan-server --cache-dir /mnt/nas/typhoon-cache
 ./typhoon.sh --lan-client 192.168.1.20
 ```
@@ -332,6 +334,7 @@ CLI LAN server/client mode uses the same encrypted LAN sync protocol, saved LAN 
 | Order history | `:history 20` |
 | Chart symbol | `:chart BTC/USD H4` |
 | Import MT5 | `:import DARWIN_EUR /path.csv` |
+| Cache backup | `--export-cache PATH` / `--import-cache PATH` |
 
 ---
 
