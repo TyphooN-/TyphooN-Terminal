@@ -6011,6 +6011,7 @@ dependencies = [
  "typhoon-web-protocol",
  "typhoon-web-server",
  "wgpu",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -12,14 +12,14 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **CLI Binary** | 6.5MB standalone TUI (SSH/VPS ready) |
 | **Memory Usage** | ~50-100MB (vs thinkorswim ~2GB+) |
 | **Startup Time** | < 2 seconds |
-| **Lines of Code** | 150K+ native GUI + 90K+ engine/research (pure Rust) |
+| **Lines of Code** | 170K+ native GUI + 135K+ engine/research (pure Rust) |
 | **Indicators** | 46+ chart indicators plus ~375 TA-Lib/Godel research surfaces |
-| **Commands** | 205+ Quake-console style (~) |
+| **Commands** | 260+ Quake-console style (~) |
 | **Drawing Tools** | 89 drawing and annotation types |
 | **Harmonic Patterns** | 10 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives) |
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
 | **Data Sources** | MT5 (Darwinex), Alpaca, tastytrade, Kraken Spot/xStocks, Kraken Futures, CryptoCompare |
-| **DARWIN Analytics** | 80 functions wired (VaR, correlation, equity, streaks, Monte Carlo, stress tests, rebalance, floating equity, D-Score, tax lots, CAGR, recovery factor, divergence index, risk budget, replication quality, performance attribution) |
+| **DARWIN Analytics** | 88 functions wired (VaR, correlation, equity, streaks, Monte Carlo, stress tests, rebalance, floating equity, D-Score, tax lots, CAGR, recovery factor, divergence index, risk budget, replication quality, performance attribution) |
 | **Cost** | Free for personal use ([commercial licensing](LICENSE-COMMERCIAL) available) |
 
 ---
@@ -115,7 +115,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Multi-Signal Anomaly Scanner** | 4-dimensional scan: VaR + EV + ATR + SEC with tradability indicators (~ →ANOMALY) |
 | **MTF Grid Visibility** | Per-tab checkboxes to show/hide individual timeframes in multi-timeframe grid |
 | **Storage Pagination** | Paginated storage manager for large cache databases |
-| **205+ Commands** | Quake-console command palette with fuzzy search |
+| **260+ Commands** | Quake-console command palette with fuzzy search |
 
 ---
 
@@ -167,7 +167,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | **position.rs** | Hedge/bias tracking, break-even detection, SL/TP P/L, risk/reward ratio |
 | **martingale.rs** | State machine (OFF/LONG/SHORT/UNWIND), TRIM/PROTECT decisions, Open MG sizing, equity TP |
 
-12 unit tests covering margin math, lot sizing, and VaR calculations.
+28 unit tests covering margin math, lot sizing, and VaR calculations.
 
 ---
 
@@ -273,7 +273,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 |---------|-----------------|--------|-------|---------------|-------------|
 | **Native GPU Rendering** | Yes (wgpu) | No (Python) | No (Web) | No (Web) | No (Web) |
 | **Trading Execution** | 3 brokers | No | No | No | 1 broker |
-| **DARWIN Analytics** | 80 functions | No | No | No | No |
+| **DARWIN Analytics** | 88 functions | No | No | No | No |
 | **MQL5 Compiler** | Yes | No | No | No | PineScript |
 | **FRED Economic Data** | Yes | Yes | No | No | No |
 | **SEC Filings** | Yes | Yes | Yes | No | No |

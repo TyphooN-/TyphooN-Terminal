@@ -27,7 +27,7 @@ All ported from MQL5 with exact computational parity.
 
 ### 5. Quake Console Interface
 
-The `~` key opens a Quake-style dropdown command palette with fuzzy search across 205+ commands. Every panel, feature, and chart type is accessible via typed command.
+The `~` key opens a Quake-style dropdown command palette with fuzzy search across 260+ commands. Every panel, feature, and chart type is accessible via typed command.
 
 ### 6. Immediate Mode Rendering
 

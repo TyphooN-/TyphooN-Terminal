@@ -60,3 +60,7 @@ mimalloc = { version = "0.1", default-features = false }
 
 # Selenium WebDriver for Darwinex Zero scraping (ADR-093)
 thirtyfour = "0.36"
+
+# Windows AC-power probe for ADR-205 idle auto-compact gate
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Power"] }

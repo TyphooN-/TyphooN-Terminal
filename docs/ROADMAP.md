@@ -23,7 +23,7 @@
 - [x] NNFX default preset (SMA200 + KAMA + Fisher + ATR Proj + BetterVol + PrevLevels + S/D Zones)
 
 ### Phase 4: UI Panels
-- [x] Console (`~`) with 205+ commands
+- [x] Console (`~`) with 260+ commands
 - [x] Tab bar with drag-and-drop reordering (Ctrl+N/W/Tab)
 - [x] MTF grid (2×2 to 4×4, up to 16 charts)
 - [x] Right panel: tabbed (Trade/Pos/Ord/WL/Risk), TradingView-style watchlist

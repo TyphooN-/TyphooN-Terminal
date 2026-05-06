@@ -1,7 +1,7 @@
 # ADR-205: ZSTD Compression Level Policy and Auto-Compaction
 
 **Status:** Implemented
-**Date:** 2026-04-28 (decision), 2026-04-29 (auto-compact wired), 2026-05-03 (Storage Manager schedule controls)
+**Date:** 2026-04-28 (decision), 2026-04-29 (auto-compact wired), 2026-05-03 (Storage Manager schedule controls), 2026-05-06 (Windows AC probe)
 **Related:** ADR-003 (SQLite + zstd cache), ADR-052 (performance architecture), ADR-079 (LAN sync bandwidth), `engine/src/core/cache.rs`, `native/src/app/auto_compact.rs`, `native/src/app.rs::BrokerCmd::CompactStorage`
 
 ## Context
@@ -113,4 +113,5 @@ This makes the "spare cycles" model work without ever surprising the user mid-tr
 - ~~Expose the on/off toggle and last-run readout in the Storage Manager UI.~~ (Shipped 2026-04-29.)
 - ~~Make the cadence, weekday, hour window, and uncompacted-row threshold user-configurable from the Storage Manager.~~ (Shipped 2026-05-03.)
 - ~~Expose `next_auto_compact_at` (next time the gate will be re-evaluated against the schedule) so users can see what is scheduled rather than only when it last ran.~~ (Shipped 2026-05-03 as `next: <local time>`.)
-- AC-power detection on Windows / macOS — currently those platforms always pass the AC gate. Low priority since the trading rigs in scope are Linux desktops.
+- ~~AC-power detection on Windows.~~ (Shipped 2026-05-06: `on_ac_power_windows` calls `GetSystemPowerStatus` from `windows-sys` and reads `ACLineStatus`; unknown status (255) defaults to AC because most Windows trading rigs are wall-powered.)
+- macOS AC-power detection — still returns true. Reaching IOKit's `IOPSCopyPowerSourcesInfo` cleanly needs CFType FFI bindings; deferred because no macOS deployment is currently in scope.

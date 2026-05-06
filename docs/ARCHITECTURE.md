@@ -16,7 +16,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  │ - Sub-panes (Fisher, RSI, MACD, ADX, etc.)  ││
 │  ├─────────────────────────────────────────────┤│
 │  │ egui Panels                                 ││
-│  │ - Console (~) with 205+ commands             ││
+│  │ - Console (~) with 260+ commands             ││
 │  │ - Positions / Orders / TradingView Watchlist││
 │  │ - Risk calculator, VaR, Margin monitor      ││
 │  │ - DARWIN analytics (80+ engine functions)   ││
@@ -80,7 +80,7 @@ MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter 
 | Plots | egui_plot | Analytics charts (equity curves, histograms) |
 | Async | tokio | Shared with engine for broker WebSocket |
 | Cache | SQLite + zstd | TTBR binary format, ~3-5x compression |
-| Analytics | darwin.rs (7,000+ lines) | 80 functions, 59 unit tests |
+| Analytics | darwin.rs (~9,600 lines) | 88 pub fns, 51 unit tests |
 | Risk | risk.rs + margin.rs + var.rs | Full port of TyphooN EA v1.420 |
 
 ## Project Structure

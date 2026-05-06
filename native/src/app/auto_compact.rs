@@ -240,16 +240,26 @@ fn skip(reason: &str) -> GateDecision {
     }
 }
 
-/// Best-effort AC-power probe. On Linux, walks `/sys/class/power_supply/` and
-/// returns true if any `Mains` entry is online, OR if no battery is present
-/// (desktop). On other platforms returns true — most trading rigs are wall-powered
-/// and the gating is conservative enough that a false-positive here is fine.
+/// Best-effort AC-power probe.
+///
+/// - **Linux:** walks `/sys/class/power_supply/`, returns true if any `Mains` entry
+///   is online OR if no battery is present (desktop).
+/// - **Windows:** calls `GetSystemPowerStatus` and reads `ACLineStatus`. `1`
+///   = AC online, `0` = on battery, `255` = unknown (treated as AC since most
+///   Windows trading rigs are wall-powered).
+/// - **macOS / other:** returns true (assume AC). Implementing macOS power-source
+///   detection would require IOKit FFI; ADR-205 records this platform as low
+///   priority because the trading rigs in scope are Linux desktops and Windows.
 pub fn on_ac_power() -> bool {
     #[cfg(target_os = "linux")]
     {
         on_ac_power_linux()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        on_ac_power_windows()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         true
     }
@@ -280,6 +290,21 @@ fn on_ac_power_linux() -> bool {
         }
     }
     !found_battery
+}
+
+#[cfg(target_os = "windows")]
+fn on_ac_power_windows() -> bool {
+    use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+    let mut status: SYSTEM_POWER_STATUS = unsafe { std::mem::zeroed() };
+    let ok = unsafe { GetSystemPowerStatus(&mut status as *mut _) };
+    if ok == 0 {
+        return true;
+    }
+    match status.ACLineStatus {
+        0 => false,       // running on battery
+        1 => true,        // running on AC
+        _ => true,        // unknown (255) — assume AC for desktop trading boxes
+    }
 }
 
 /// Compute (local_weekday, local_hour) for the current moment using chrono::Local.
