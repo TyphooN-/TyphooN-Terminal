@@ -48,8 +48,8 @@ bytemuck = { version = "1", features = ["derive"] }
 prometheus = "0.14"
 axum = "0.8"
 
-# Image encoding (screenshot export)
-image = "0.25"
+# Image encoding (lossless WebP screenshot export only; avoid AVIF/rav1e deps)
+image = { version = "0.25", default-features = false, features = ["webp"] }
 
 # Logging
 tracing = "0.1"

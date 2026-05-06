@@ -140,8 +140,8 @@ symbols — so a Kraken `XBTUSD` and an MT5 `BTCUSD` reconcile to the same row.
 ## Validation
 
 - `cargo build --workspace` clean across all crates.
-- `cargo test --workspace --lib` — 1905 tests pass (216 mql5-compiler,
-  1632 engine, 57 web-protocol).
+- `cargo test --workspace --lib` — 1932 tests pass, 3 ignored
+  (216 mql5-compiler, 1658 engine, 58 web-protocol).
 - Manual: close-from-chart on a tastytrade equity position with a live SL
   attached — exit order cancels, position flattens in one click.
 - Manual: close-from-chart on Kraken `BTCUSD` net of two opposing fills —

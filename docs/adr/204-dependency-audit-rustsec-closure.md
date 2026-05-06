@@ -1,8 +1,9 @@
 # ADR-204: Dependency Audit and RustSec Advisory Closure
 
 **Date:** 2026-04-25
-**Status:** Accepted
-**Related:** `Cargo.toml`, `engine/Cargo.toml`, `cli/Cargo.toml`, `mql5-compiler/Cargo.toml`, `Cargo.lock`, ADR-051 (dependency alignment), ADR-064 (performance security audit)
+**Updated:** 2026-05-06
+**Status:** Implemented
+**Related:** `Cargo.toml`, `engine/Cargo.toml`, `cli/Cargo.toml`, `mql5-compiler/Cargo.toml`, `native/Cargo.toml`, `vendor/thirtyfour/Cargo.toml`, `Cargo.lock`, ADR-051 (dependency alignment), ADR-064 (performance security audit)
 
 ## Context
 
@@ -63,9 +64,9 @@ No source edits required. `cargo build --workspace` and
 
 ### Phase 2 — semver-major bumps
 
-Phase 1 leaves `paste` as the sole irreducible RustSec warning
-(transitive via `thirtyfour` and `image → ravif → rav1e`; no
-upstream alternative). Take the rest of the available majors:
+Phase 1 left `paste` as the sole irreducible RustSec warning at the
+time, transitively via `thirtyfour` and `image → ravif → rav1e`.
+Take the rest of the available majors:
 
 - **`rand 0.9 → 0.10`**: one call site (`rand::random()` in
   `engine/src/core/lan_sync.rs`); API survived the bump.
@@ -84,39 +85,49 @@ upstream alternative). Take the rest of the available majors:
   (`ZipArchive::new`, `ZipWriter::new`, `SimpleFileOptions`)
   survived.
 
+### Phase 3 — residual warning closure
+
+The 2026-05-06 follow-up closed the remaining dependency warning that
+was previously documented as out of scope:
+
+- `native` now depends on `image` with `default-features = false` and
+  `features = ["webp"]`, matching the actual screenshot-export need
+  and dropping the unused AVIF/ravif/rav1e dependency chain.
+- The vendored `thirtyfour 0.36.1` manifest keeps the upstream crate
+  name but resolves its `paste` dependency to maintained `pastey`
+  (`package = "pastey"`), so no source call sites need to change.
+- The local `thirtyfour` patch already resolves to `reqwest 0.13.2`;
+  the former `reqwest 0.12.x` duplicate is no longer present.
+
 ### Out of scope (intentionally)
 
-- **`paste 1.0.15`** stays because `thirtyfour` and `image`'s
-  AVIF chain depend on it; we do not own those crates.
-- **`reqwest 0.12.x` duplicate** present alongside `0.13.2`
-  through `thirtyfour 0.36`; deferred until thirtyfour ships
-  a release on `reqwest 0.13`.
+No dependency-audit items are intentionally deferred after Phase 3.
 
 ## Consequences
 
-- **All RustSec vulnerabilities closed.** `cargo audit` returns 0
-  vulnerabilities, 1 unfixable warning (`paste`).
-- **Workspace test suite passes 1905 / 1905** lib tests across the
-  five crates — no behavioral regression from any of the major
-  bumps.
-- **Source touch is minimal** — the only edits are two
-  `use hmac::KeyInit` additions. Everything else moved through
-  Cargo.toml or Cargo.lock, which is what a healthy upgrade pass
-  should look like.
+- **All RustSec vulnerabilities and known warnings closed.** The
+  resolved tree no longer contains `paste`, `rav1e`, or a duplicate
+  `reqwest 0.12.x`.
+- **Workspace lib suite passes 1932 / 1932 non-ignored tests**
+  with 3 ignored tests — no behavioral regression from any of the
+  major bumps.
+- **Source touch is minimal** — the original pass only needed two
+  `use hmac::KeyInit` additions. Phase 3 is manifest-only.
 - **Audit cadence is now established.** Future passes can use the
   same two-phase shape: `cargo audit` for advisories,
   `cargo update` for compatible bumps, hand-picked majors for the
   rest. Recommended cadence is monthly, or whenever
   `cargo audit` flags a new vulnerability, whichever comes first.
-- **Residual `paste` warning is logged here** so future audits don't
-  re-discover it as new — closure is gated on upstream
-  `thirtyfour` and `image` migrating away from `paste`.
+- **Screenshot export scope is explicit.** Native screenshot export
+  remains lossless WebP, but the crate no longer enables unrelated
+  image formats just to get WebP encoding.
 
 ## Validation
 
-- `cargo audit` — 0 vulnerabilities, 1 warning (`paste 1.0.15`,
-  unfixable transitive).
+- `cargo tree -i paste` — no matching packages.
+- `cargo tree -i rav1e` — no matching packages.
+- `cargo tree -i reqwest` — single `reqwest 0.13.2` instance.
 - `cargo build --workspace` — clean.
-- `cargo test --workspace --lib` — 1905 passed, 0 failed.
-- `Cargo.lock` re-locked with 783 crate dependencies (was 769
-  pre-update).
+- `cargo test --workspace --lib` — 1932 passed, 0 failed, 3 ignored.
+- `Cargo.lock` re-locked with 740 crate dependencies after Phase 3
+  (was 783 after the original audit pass).

@@ -119,7 +119,7 @@ from a soft `insufficient qty` race (which the retry handles).
 ## Validation
 
 - `cargo build --workspace` clean.
-- `cargo test --workspace --lib` — 1905 tests pass.
+- `cargo test --workspace --lib` — 1932 tests pass, 3 ignored.
 - Unit test: `observe_rate_limit_headers_updates_bar_rpm` confirms
   the bar-endpoint RPM tracks the observed header independently of
   the general-endpoint RPM.
