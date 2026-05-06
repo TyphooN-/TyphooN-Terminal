@@ -10,11 +10,11 @@ The cache uses zstd at three different levels depending on the access pattern:
 
 | Class | Level | Examples |
 |---|---|---|
-| Hot synchronous puts | 3 | `put_bars` (`cache.rs:603, :1224`), `put_kv` (`cache.rs:743`), `store_filing_content` (`sec_filing.rs:1247`), `darwin` symbol-specs (`darwin.rs:2880`), LAN-sync server responses (`lan_sync.rs:5015, :5198`) |
-| Snapshot / export | 9 | `export_backup` (`cache.rs:1378`), pre-compressed bulk blobs per ADR-079 |
-| User-invoked compact | 22 | `compact_storage` (`cache.rs:2168`), `BrokerCmd::CompactStorage` (`app.rs:35280`) |
+| Hot synchronous puts | 3 | `put_bars` (`cache.rs:720`), `put_bars_fast` (`cache.rs:1341`), `put_kv` (`cache.rs:863`), `store_filing_content` (`sec_filing.rs:1223`), `darwin` symbol-specs (`darwin.rs:2880`), LAN-sync server responses (`lan_sync.rs:5015, :5198`) |
+| Snapshot / export | 9 | `export_backup` (`cache.rs:1511`), pre-compressed bulk blobs per ADR-079 |
+| User-invoked compact | 22 | `compact_storage` (`cache.rs:2354`), `BrokerCmd::CompactStorage` (`app.rs:35788`) |
 
-A schema column `bar_cache.zstd_level` (default 3) tracks the level each entry is currently stored at, so compact passes skip already-compacted rows (`cache.rs:381, :2181`).
+A schema column `bar_cache.zstd_level` (default 3) tracks the level each entry is currently stored at, so compact passes skip already-compacted rows (`cache.rs:484, :2367`).
 
 A recurring temptation — including in conversation on 2026-04-28 — is to make zstd-22 the default everywhere, on the reasoning that modern CPUs have spare cores, that compression can run async, and that data lives in memory while compressing so there is no real latency penalty.
 
@@ -72,7 +72,7 @@ Periodic auto-compact is allowed and recommended, but conservative:
   - Local time inside the configured weekday + hour window.
   - Cadence: at least the configured number of days since the last run.
 - **Dispatch:** the gate sends `BrokerCmd::CompactStorage { level: 22 }` — the same command the manual button uses. The existing handler (`app.rs::BrokerCmd::CompactStorage`) already sets `importing_flag` so the background stats worker yields, runs `compact_storage` on a worker thread, and calls `incremental_vacuum(10000)` on success. No duplicated logic.
-- **Incrementality:** `compact_storage` already skips entries with `zstd_level >= target` (`cache.rs:2181`). Steady-state work is bounded by the fresh-data delta since the last run, not the full cache.
+- **Incrementality:** `compact_storage` already skips entries with `zstd_level >= target` (`cache.rs:2367`). Steady-state work is bounded by the fresh-data delta since the last run, not the full cache.
 - **User opt-out/config:** "Auto-compact" checkbox plus cadence, weekday, start/end hour, and min-row controls in Storage Manager. The manual `Compact (zstd-22)` button always works regardless.
 - **Stale-flag recovery:** the dispatch timestamp is tracked separately; if the in-progress flag has been set for > 8 hours and no completion log arrived, the next tick resets it so the gate can recover from a lost completion message.
 

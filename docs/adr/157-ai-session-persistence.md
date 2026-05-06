@@ -54,8 +54,9 @@ history window.
 
 ### 2. Auto-save at reply receipt
 
-Every time a reply is appended to any of the four histories (sites at
-`app.rs:37489`, `:37681`, `:37778`, `:65974`), we call
+Every time a reply is appended to any of the four histories (Claude / Gemini /
+Codex live in `native/src/app/ai.rs:235`, `:468`, `:664` after the ADR-202
+split; AI Chat lives in `native/src/app.rs:147576`), we call
 `Self::persist_ai_turn(provider, session_id, cli_session_id, &history, model)`.
 The first save for a non-Claude session generates a UUID via the existing
 `new_uuid()` helper. Claude reuses its `--session-id` UUID as both the CLI
@@ -65,7 +66,8 @@ resume key and our kv key.
 
 - `/RESUMECLAUDE` — `latest_for_provider(cache, "claude")`, restore the transcript
   *and* the `claude_code_session_id`, open the Claude Code window. The next
-  `Send` already uses `--resume <id>` via the existing logic at `app.rs:37663`.
+  `Send` already uses `--resume <id>` via the existing logic at
+  `native/src/app/ai.rs:426`.
 - `/RESUMEGEMINI` — restore transcript into `gemini_cli_history`; no native
   resume, so the replayed transcript is injected via the existing
   `build_claude_prompt` call that already includes full history on every turn.
