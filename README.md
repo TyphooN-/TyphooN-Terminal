@@ -315,11 +315,14 @@ cd cli && ./typhoon.sh              # Interactive TUI
 ./typhoon.sh --import-cache backup.typhoon-backup --cache-backup-passphrase "$PASS"
 ./typhoon.sh --lan-server --cache-dir /mnt/nas/typhoon-cache
 ./typhoon.sh --lan-client 192.168.1.20
+cargo run -q -p typhoon-cli -- --mcp-server  # MCP stdio server for research packets
 ```
 
 The CLI shares encrypted credentials with the GUI — no need to re-enter API keys. 6.5MB standalone binary, works over SSH on any VPS.
 
 CLI LAN server/client mode uses the same encrypted LAN sync protocol, saved LAN passphrase, and `typhoon_cache.db` cache as the GUI. Headless mode also exposes Prometheus metrics with `--metrics-port`. For Docker, Kubernetes, Terraform, Ansible, Grafana, Prometheus, and Kafka examples with a user-provided local or NAS cache path, see [LAN server deployment](docs/deployment/lan-server.md).
+
+MCP clients can run `typhoon-cli --mcp-server` (or `cargo run -q -p typhoon-cli -- --mcp-server` from the workspace) to expose read-only TyphooN tools. The main tool is `research_packet`, which builds the same AI-facing markdown packet from the shared SQLite cache for requested symbols.
 
 | CLI Feature | Command |
 |---|---|
@@ -335,6 +338,7 @@ CLI LAN server/client mode uses the same encrypted LAN sync protocol, saved LAN 
 | Chart symbol | `:chart BTC/USD H4` |
 | Import MT5 | `:import DARWIN_EUR /path.csv` |
 | Cache backup | `--export-cache PATH` / `--import-cache PATH` |
+| MCP research packets | `--mcp-server` |
 
 ---
 

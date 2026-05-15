@@ -34,6 +34,7 @@ use typhoon_engine::core::lan_sync::{LanSyncClient, LanSyncServer};
 
 mod broker;
 mod creds;
+mod mcp;
 
 fn dirs_home() -> PathBuf {
     let mut p = if let Ok(home) = std::env::var("HOME") {
@@ -752,6 +753,10 @@ struct Args {
         hide_env_values = true
     )]
     lan_passphrase: Option<String>,
+
+    /// Run the TyphooN Terminal MCP stdio server.
+    #[arg(long)]
+    mcp_server: bool,
 }
 
 /// App state
@@ -2875,6 +2880,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.export_cache.is_some() || args.import_cache.is_some() {
         return run_cache_backup_mode(&args);
+    }
+
+    if args.mcp_server {
+        return mcp::run_mcp_server(args.cache_dir.clone());
     }
 
     if args.lan_server || args.lan_client.is_some() {
