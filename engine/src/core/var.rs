@@ -51,7 +51,7 @@ pub fn compute_var_from_closes_with_tick(
     }
     let nominal = tick_value_per_tick_size.max(1.0) * last_price;
     let var_1_lot = z * sd * nominal;
-    let ratio = var_1_lot / last_price; // VaR/Ask ratio (as used by MarketWizardry.org)
+    let ratio = var_1_lot / last_price; // VaR/Ask ratio
     Some((var_1_lot, ratio * 100.0))
 }
 

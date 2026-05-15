@@ -36,7 +36,7 @@ async fn get_sec_ticker_map() -> Result<&'static serde_json::Value, String> {
                 .get("https://www.sec.gov/files/company_tickers.json")
                 .header(
                     "User-Agent",
-                    "TyphooN-Terminal/0.1 (support@marketwizardry.org)",
+                    "TyphooN-Terminal/0.1 (contact: TyphooN)",
                 )
                 .send()
                 .await
@@ -1577,7 +1577,7 @@ impl AlpacaBroker {
             return Err("Invalid filing type".to_string());
         }
         let client = sec_client();
-        let ua = "TyphooN-Terminal/0.1 (support@marketwizardry.org)";
+        let ua = "TyphooN-Terminal/0.1 (contact: TyphooN)";
 
         // Step 1: Resolve ticker → CIK via SEC company tickers JSON
         let tickers_resp = client
@@ -1713,7 +1713,7 @@ impl AlpacaBroker {
             ))
             .header(
                 "User-Agent",
-                "TyphooN-Terminal/0.1 (support@marketwizardry.org)",
+                "TyphooN-Terminal/0.1 (contact: TyphooN)",
             )
             .send()
             .await
@@ -2569,7 +2569,7 @@ impl AlpacaBroker {
             ))
             .header(
                 "User-Agent",
-                "TyphooN-Terminal/0.1 (support@marketwizardry.org)",
+                "TyphooN-Terminal/0.1 (contact: TyphooN)",
             )
             .send()
             .await
@@ -2664,7 +2664,7 @@ impl AlpacaBroker {
             ))
             .header(
                 "User-Agent",
-                "TyphooN-Terminal/0.1 (support@marketwizardry.org)",
+                "TyphooN-Terminal/0.1 (contact: TyphooN)",
             )
             .send()
             .await
@@ -3144,7 +3144,7 @@ impl AlpacaBroker {
             ))
             .header(
                 "User-Agent",
-                "TyphooN-Terminal/0.1 (support@marketwizardry.org)",
+                "TyphooN-Terminal/0.1 (contact: TyphooN)",
             )
             .send()
             .await

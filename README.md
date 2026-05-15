@@ -2,7 +2,7 @@
 
 A native desktop trading terminal + TUI CLI with full risk management, multi-timeframe charting, and hedged martingale support — built in pure Rust with native GPU rendering (egui + wgpu) for MT5/Darwinex, Alpaca, tastytrade, Kraken, and CryptoCompare-backed market data.
 
-**Website:** [MarketWizardry.org](https://www.marketwizardry.org/) | **License:** [BSL 1.1](LICENSE) ([Commercial](LICENSE-COMMERCIAL))
+**License:** [BSL 1.1](LICENSE) ([Commercial](LICENSE-COMMERCIAL))
 
 ## At a Glance
 

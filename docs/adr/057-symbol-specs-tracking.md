@@ -5,7 +5,7 @@
 
 ## Context
 
-The Darwinex radar system (MarketWizardry.org) tracks symbol specification changes over time — TradeMode transitions, swap rate adjustments, spread changes, delistings, and close-only status. Currently the BarCacheWriter only exports OHLCV bar data but not the symbol metadata needed for this tracking.
+The Darwinex radar system tracks symbol specification changes over time — TradeMode transitions, swap rate adjustments, spread changes, delistings, and close-only status. Currently the BarCacheWriter only exports OHLCV bar data but not the symbol metadata needed for this tracking.
 
 The radar currently processes CSV exports from MT5 (`SymbolsExport-Darwinex-Live-*.csv`) with columns: Symbol, TradeMode, SwapLong, SwapShort, Spread. This runs externally via Python scripts.
 

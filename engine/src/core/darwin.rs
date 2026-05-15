@@ -2545,7 +2545,7 @@ pub fn scan_darwin_ftp(
     Ok(results)
 }
 
-/// Export symbol radar data in MarketWizardry format.
+/// Export symbol radar data in web-compatible radar format.
 /// Reads MT5 specs from SQLite and generates the .txt report.
 pub fn export_radar_txt(
     _conn: &Connection,
@@ -2673,9 +2673,9 @@ pub fn export_radar_txt(
     let raw_path = dir.join(format!("SymbolsExport-Darwinex-Live-All-{}.csv", timestamp));
     std::fs::write(&raw_path, &specs).map_err(|e| format!("Write raw failed: {e}"))?;
 
-    // Export to MarketWizardry.org darwinex-radar directory (web-compatible snapshots)
+    // Export to optional darwinex-radar directory (web-compatible snapshots)
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let mw_dir_path = std::path::PathBuf::from(home).join("git/MarketWizardry.org/darwinex-radar");
+    let mw_dir_path = std::path::PathBuf::from(home).join("git/typhoon-darwinex-radar");
     let mw_dir = mw_dir_path.as_path();
     if mw_dir.exists() {
         let mw_timestamp = chrono::Utc::now().format("%Y.%m.%d").to_string();
@@ -2715,7 +2715,7 @@ pub fn export_radar_txt(
                 to_semicolon(&futures),
             );
         }
-        exported.push(format!("MarketWizardry.org:{}", mw_timestamp));
+        exported.push(format!("darwinex-radar:{}", mw_timestamp));
     }
 
     Ok(format!(

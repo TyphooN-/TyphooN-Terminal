@@ -11,7 +11,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-const USER_AGENT: &str = "TyphooN-Terminal/0.1 (support@marketwizardry.org)";
+const USER_AGENT: &str = "TyphooN-Terminal/0.1 (contact: TyphooN)";
 
 /// Rate limit sleep between SEC requests (200ms = 5 req/sec, well under 10/sec limit).
 const RATE_LIMIT_MS: u64 = 250; // SEC EDGAR fair use: max 10 req/sec, use 4/sec for safety
