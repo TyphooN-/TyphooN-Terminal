@@ -771,6 +771,40 @@ impl KrakenBroker {
         }
     }
 
+    fn display_asset(asset: &str) -> String {
+        let raw = asset.trim().to_ascii_uppercase();
+        match raw.as_str() {
+            "XXBT" | "XBT" => "BTC".to_string(),
+            "XXDG" | "XDG" => "DOGE".to_string(),
+            "ZUSD" => "USD".to_string(),
+            "ZEUR" => "EUR".to_string(),
+            "ZGBP" => "GBP".to_string(),
+            "ZJPY" => "JPY".to_string(),
+            other if other.len() == 4 && (other.starts_with('X') || other.starts_with('Z')) => {
+                other[1..].to_string()
+            }
+            other => other.to_string(),
+        }
+    }
+
+    fn is_cash_asset(asset: &str) -> bool {
+        matches!(
+            Self::display_asset(asset).as_str(),
+            "USD"
+                | "EUR"
+                | "GBP"
+                | "JPY"
+                | "CAD"
+                | "AUD"
+                | "CHF"
+                | "USDT"
+                | "USDC"
+                | "USDG"
+                | "DAI"
+                | "PYUSD"
+        )
+    }
+
     fn pair_matches(candidate: &str, target: &str) -> bool {
         let candidate = Self::normalized_pair_key(candidate);
         Self::canonical_pair_forms(target).into_iter().any(|form| {
@@ -844,11 +878,51 @@ impl KrakenBroker {
             .collect()
     }
 
+    pub fn spot_position_summaries_from_balances(
+        balances: &[(String, f64)],
+    ) -> Vec<crate::broker::alpaca::PositionInfo> {
+        balances
+            .iter()
+            .filter_map(|(asset, qty)| {
+                if !qty.is_finite() || *qty <= 0.0 || Self::is_cash_asset(asset) {
+                    return None;
+                }
+                let display_asset = Self::display_asset(asset);
+                if display_asset.is_empty() {
+                    return None;
+                }
+                Some(crate::broker::alpaca::PositionInfo {
+                    symbol: format!("{}USD", display_asset),
+                    qty: *qty,
+                    side: "long".to_string(),
+                    avg_entry_price: 0.0,
+                    market_value: 0.0,
+                    unrealized_pl: 0.0,
+                    asset_class: "crypto_spot".to_string(),
+                    asset_id: format!("spot:{asset}"),
+                })
+            })
+            .collect()
+    }
+
     pub async fn get_position_summaries(
         &self,
     ) -> Result<Vec<crate::broker::alpaca::PositionInfo>, String> {
         let positions = self.get_open_positions().await?;
         Ok(Self::position_summaries_from_raw(&positions))
+    }
+
+    pub async fn get_all_position_summaries(
+        &self,
+    ) -> Result<Vec<crate::broker::alpaca::PositionInfo>, String> {
+        let mut out = self.get_position_summaries().await.unwrap_or_default();
+        if let Ok(balance_map) = self.get_balance().await {
+            let mut balances: Vec<(String, f64)> = balance_map.into_iter().collect();
+            balances.sort_by(|a, b| a.0.cmp(&b.0));
+            out.extend(Self::spot_position_summaries_from_balances(&balances));
+        }
+        out.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+        Ok(out)
     }
 
     async fn cancel_live_exit_orders_for_pair(
@@ -1174,6 +1248,93 @@ impl KrakenBroker {
             .await
     }
 
+    pub async fn get_websockets_token_string(&self) -> Result<String, String> {
+        let value = self.get_websockets_token().await?;
+        value
+            .get("token")
+            .and_then(|token| token.as_str())
+            .filter(|token| !token.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| "Kraken WebSocket token response missing token".to_string())
+    }
+
+    /// Fetch a public Kraken order-book snapshot and normalize it to TyphooN's
+    /// common DOM shape.
+    pub async fn get_orderbook_snapshot(
+        &self,
+        symbol: &str,
+        count: usize,
+    ) -> Result<serde_json::Value, String> {
+        let pair = crate::core::kraken::to_kraken_pair_lossy(symbol)
+            .ok_or_else(|| format!("Kraken orderbook: unsupported pair {symbol}"))?;
+        let url = format!("{}/0/public/Depth", KRAKEN_BASE_URL);
+        let count = count.min(500).to_string();
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("pair", pair.as_str()), ("count", count.as_str())])
+            .send()
+            .await
+            .map_err(|e| format!("Kraken orderbook request failed: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Kraken orderbook request failed: HTTP {status}: {body}"));
+        }
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Kraken orderbook parse failed: {e}"))?;
+        if let Some(errors) = body.get("error").and_then(|v| v.as_array())
+            && !errors.is_empty()
+        {
+            let msg = errors
+                .iter()
+                .filter_map(|e| e.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!("Kraken orderbook error: {msg}"));
+        }
+        let result = body
+            .get("result")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| "Kraken orderbook response missing result".to_string())?;
+        let book = result
+            .values()
+            .next()
+            .ok_or_else(|| "Kraken orderbook response missing book".to_string())?;
+        let parse_side = |side: &str| -> Vec<serde_json::Value> {
+            book.get(side)
+                .and_then(|v| v.as_array())
+                .map(|levels| {
+                    levels
+                        .iter()
+                        .filter_map(|entry| {
+                            let arr = entry.as_array()?;
+                            let price = Self::parse_f64_field(arr.first()?);
+                            let size = Self::parse_f64_field(arr.get(1)?);
+                            if price > 0.0 && size > 0.0 {
+                                Some(serde_json::json!({
+                                    "price": price,
+                                    "size": size,
+                                }))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        Ok(serde_json::json!({
+            "source": "kraken",
+            "symbol": crate::core::kraken::normalize_pair_symbol(symbol),
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "bids": parse_side("bids"),
+            "asks": parse_side("asks"),
+        }))
+    }
+
     /// Get all tradeable asset pairs (public endpoint, no auth required).
     /// Returns list of (pair_name, wsname/altname) tuples.
     pub async fn get_tradeable_pairs(&self) -> Result<Vec<(String, String)>, String> {
@@ -1310,6 +1471,21 @@ mod tests {
             kraken_private_rest_counter_cost("/0/private/CancelOrder"),
             0.0
         );
+    }
+
+    #[test]
+    fn spot_position_summaries_convert_non_cash_balances() {
+        let balances = vec![
+            ("XXBT".to_string(), 0.25),
+            ("ZUSD".to_string(), 1000.0),
+            ("USDT".to_string(), 50.0),
+        ];
+        let positions = KrakenBroker::spot_position_summaries_from_balances(&balances);
+
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].symbol, "BTCUSD");
+        assert_eq!(positions[0].qty, 0.25);
+        assert_eq!(positions[0].asset_class, "crypto_spot");
     }
 
     #[test]

@@ -293,11 +293,12 @@ impl GpuCompute {
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
-        let multi_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("multi_indicator_pipeline_layout"),
-            bind_group_layouts: &[Some(&multi_bind_group_layout)],
-            immediate_size: 0,
-        });
+        let multi_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("multi_indicator_pipeline_layout"),
+                bind_group_layouts: &[Some(&multi_bind_group_layout)],
+                immediate_size: 0,
+            });
 
         // SMA compute shader
         let sma_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -731,57 +732,53 @@ impl GpuCompute {
             }
             _ => None,
         };
-        self.multi_bind_group = if let (
-            Some(close_buf),
-            Some(out_buf),
-            Some(aux_buf),
-            Some(params_buf),
-        ) = (
-            self.bar_buffer.as_ref(),
-            self.custom_out_buffer.as_ref(),
-            self.custom_in_buffer.as_ref(),
-            self.multi_params_buffer.as_ref(),
-        ) {
-            let open_buf = self.open_buffer.as_ref().unwrap_or(close_buf);
-            let ohlc_buf = self.ohlc_buffer.as_ref().unwrap_or(close_buf);
-            let vol_buf = self.vol_buffer.as_ref().unwrap_or(close_buf);
-            Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("multi_ind_bg_cached"),
-                layout: &self.multi_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: open_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: ohlc_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: close_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: vol_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: aux_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: out_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 6,
-                        resource: params_buf.as_entire_binding(),
-                    },
-                ],
-            }))
-        } else {
-            None
-        };
+        self.multi_bind_group =
+            if let (Some(close_buf), Some(out_buf), Some(aux_buf), Some(params_buf)) = (
+                self.bar_buffer.as_ref(),
+                self.custom_out_buffer.as_ref(),
+                self.custom_in_buffer.as_ref(),
+                self.multi_params_buffer.as_ref(),
+            ) {
+                let open_buf = self.open_buffer.as_ref().unwrap_or(close_buf);
+                let ohlc_buf = self.ohlc_buffer.as_ref().unwrap_or(close_buf);
+                let vol_buf = self.vol_buffer.as_ref().unwrap_or(close_buf);
+                Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("multi_ind_bg_cached"),
+                    layout: &self.multi_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: open_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: ohlc_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: close_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: vol_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: aux_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: out_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 6,
+                            resource: params_buf.as_entire_binding(),
+                        },
+                    ],
+                }))
+            } else {
+                None
+            };
     }
 
     /// Generic dispatch: run a compute pipeline with close prices as input, return f32 per bar.
@@ -1345,7 +1342,8 @@ impl GpuCompute {
             return None;
         }
         let aux_buf = self.custom_in_buffer.as_ref()?;
-        self.queue.write_buffer(aux_buf, 0, bytemuck_cast_slice(atrs));
+        self.queue
+            .write_buffer(aux_buf, 0, bytemuck_cast_slice(atrs));
         self.dispatch_multi_indicator(
             &self.atr_proj_pipeline,
             [0, self.bar_count, 0, 0],

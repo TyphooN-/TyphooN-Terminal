@@ -18,7 +18,7 @@ impl TyphooNApp {
                 ui.label(egui::RichText::new("healthy = last bar within 24× TF period · stale beyond · empty = cached blob has no bars").color(AXIS_TEXT).small());
                 ui.horizontal(|ui| {
                     if ui.checkbox(&mut self.crypto_backfill_enabled, egui::RichText::new("Crypto backfill").small())
-                        .on_hover_text("Enable Alpaca crypto + CryptoCompare + Kraken rotation. Uncheck to isolate MT5/equity sync for debugging.")
+                        .on_hover_text("Enable Alpaca crypto + CryptoCompare rotation. Kraken public scraping is controlled in Settings.")
                         .changed()
                     {
                         sync_save_after = true;

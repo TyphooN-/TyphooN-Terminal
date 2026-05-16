@@ -149,7 +149,9 @@ pub(super) fn compute_bar_sync_stats(
 /// Aggregate per-broker totals from a Vec<SyncStatsRow> for the compact
 /// banner / one-liner display. Returns `(broker, total, healthy, pct)`
 /// tuples in display order (MT5, Alpaca, Tastytrade, then any others).
-pub(super) fn compute_bar_sync_broker_totals(rows: &[SyncStatsRow]) -> Vec<(String, u64, u64, f32)> {
+pub(super) fn compute_bar_sync_broker_totals(
+    rows: &[SyncStatsRow],
+) -> Vec<(String, u64, u64, f32)> {
     use std::collections::BTreeMap;
 
     let mut totals: BTreeMap<String, (u64, u64)> = BTreeMap::new();
@@ -238,9 +240,10 @@ mod tests {
                 ("alpaca:__META__:1Day".into(), 42, 1_700_000_000),
                 ("alpaca:QQQ:W1".into(), 10, 1_700_000_000),
             ],
-            &std::collections::HashMap::from([
-                ("alpaca:AAPL:1Day".into(), (1, chrono::Utc::now().timestamp_millis(), 1)),
-            ]),
+            &std::collections::HashMap::from([(
+                "alpaca:AAPL:1Day".into(),
+                (1, chrono::Utc::now().timestamp_millis(), 1),
+            )]),
         );
 
         let day = rows

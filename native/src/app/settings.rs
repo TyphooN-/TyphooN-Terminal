@@ -51,11 +51,17 @@ impl TyphooNApp {
                         ui.radio_value(&mut self.tt_sandbox, false, "Production");
                     });
                     ui.end_row();
-                    ui.label("Kraken API Key:");
+                    ui.label("Kraken REST API Key:");
                     ui.add(egui::TextEdit::singleline(&mut self.kraken_api_key).desired_width(250.0).password(true));
                     ui.end_row();
-                    ui.label("Kraken API Secret:");
+                    ui.label("Kraken REST API Secret:");
                     ui.add(egui::TextEdit::singleline(&mut self.kraken_api_secret).desired_width(250.0).password(true));
+                    ui.end_row();
+                    ui.label("Kraken WS API Key:");
+                    ui.add(egui::TextEdit::singleline(&mut self.kraken_ws_api_key).desired_width(250.0).password(true));
+                    ui.end_row();
+                    ui.label("Kraken WS API Secret:");
+                    ui.add(egui::TextEdit::singleline(&mut self.kraken_ws_api_secret).desired_width(250.0).password(true));
                     ui.end_row();
                     ui.label("Gemini API Key:");
                     ui.add(egui::TextEdit::singleline(&mut self.gemini_key).desired_width(250.0).password(true));
@@ -147,7 +153,10 @@ impl TyphooNApp {
                         }
                     }
                     // Kraken connect button
-                    if !self.kraken_api_key.is_empty() && !self.kraken_api_secret.is_empty() {
+                    if (!self.kraken_api_key.is_empty() && !self.kraken_api_secret.is_empty())
+                        || (!self.kraken_ws_api_key.is_empty()
+                            && !self.kraken_ws_api_secret.is_empty())
+                    {
                         let kraken_label = if self.kraken_connected {
                             egui::RichText::new("Kraken Connected").color(UP)
                         } else {
@@ -160,9 +169,17 @@ impl TyphooNApp {
                             if let Err(e) = keyring::store(keyring::keys::KRAKEN_API_SECRET, &self.kraken_api_secret) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store kraken_api_secret failed: {}", e)));
                             }
+                            if let Err(e) = keyring::store(keyring::keys::KRAKEN_WS_API_KEY, &self.kraken_ws_api_key) {
+                                self.log.push_back(LogEntry::warn(format!("Keyring store kraken_ws_api_key failed: {}", e)));
+                            }
+                            if let Err(e) = keyring::store(keyring::keys::KRAKEN_WS_API_SECRET, &self.kraken_ws_api_secret) {
+                                self.log.push_back(LogEntry::warn(format!("Keyring store kraken_ws_api_secret failed: {}", e)));
+                            }
                             let _ = self.broker_tx.send(BrokerCmd::KrakenConnect {
                                 api_key: self.kraken_api_key.clone(),
                                 api_secret: self.kraken_api_secret.clone(),
+                                ws_api_key: self.kraken_ws_api_key.clone(),
+                                ws_api_secret: self.kraken_ws_api_secret.clone(),
                             });
                             self.log.push_back(LogEntry::info("Kraken — connecting..."));
                         }
@@ -212,14 +229,20 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.fund_source_mt5, "MT5 / Darwinex");
                     ui.checkbox(&mut self.fund_source_alpaca, "Alpaca");
                     ui.checkbox(&mut self.fund_source_tastytrade, "TastyTrade");
+                    ui.checkbox(&mut self.fund_source_kraken, "Kraken");
                 });
                 // Sync broker_scope from checkbox state
-                self.broker_scope = match (self.fund_source_mt5, self.fund_source_alpaca, self.fund_source_tastytrade) {
-                    (true, true, true) | (true, true, false) | (true, false, true)
-                    | (false, true, true) | (false, false, false) => EventSource::All,
-                    (false, true, false) => EventSource::Alpaca,
-                    (true, false, false) => EventSource::Darwinex,
-                    (false, false, true) => EventSource::Tasty,
+                self.broker_scope = match (
+                    self.fund_source_mt5,
+                    self.fund_source_alpaca,
+                    self.fund_source_tastytrade,
+                    self.fund_source_kraken,
+                ) {
+                    (false, true, false, false) => EventSource::Alpaca,
+                    (true, false, false, false) => EventSource::Darwinex,
+                    (false, false, true, false) => EventSource::Tasty,
+                    (false, false, false, true) => EventSource::Kraken,
+                    _ => EventSource::All,
                 };
 
                 ui.add_space(10.0);
@@ -234,7 +257,51 @@ impl TyphooNApp {
                 let kraken_status = if self.kraken_connected { "Connected" } else { "Disconnected" };
                 ui.label(format!("Alpaca: REST API + WebSocket — {}", alpaca_status));
                 ui.label(format!("tastytrade: REST API — {}", tt_status));
-                ui.label(format!("Kraken: REST API — {}", kraken_status));
+                ui.label(format!("Kraken: REST API + WebSocket — {}", kraken_status));
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Kraken automated scrape universes")
+                        .color(AXIS_TEXT)
+                        .small()
+                        .strong(),
+                );
+                let mut kraken_scrape_changed = false;
+                ui.horizontal_wrapped(|ui| {
+                    kraken_scrape_changed |= ui
+                        .checkbox(&mut self.kraken_scrape_xstocks, "xStocks / ETFs")
+                        .on_hover_text("Tokenized stocks and ETFs from Kraken Spot/xStocks.")
+                        .changed();
+                    kraken_scrape_changed |= ui
+                        .checkbox(&mut self.kraken_scrape_usd_crypto, "USD/stable crypto")
+                        .on_hover_text("Crypto pairs quoted in USD, USDG, USDC, or USDT.")
+                        .changed();
+                    kraken_scrape_changed |= ui
+                        .checkbox(&mut self.kraken_scrape_fiat_crypto, "Fiat crypto")
+                        .on_hover_text("Crypto pairs quoted in EUR, GBP, CAD, AUD, JPY, or CHF.")
+                        .changed();
+                    kraken_scrape_changed |= ui
+                        .checkbox(&mut self.kraken_scrape_crypto_crosses, "Crypto crosses")
+                        .on_hover_text("Non-fiat crypto crosses such as ETH/BTC.")
+                        .changed();
+                    kraken_scrape_changed |= ui
+                        .checkbox(&mut self.kraken_scrape_futures, "Futures")
+                        .on_hover_text("Kraken Futures public instruments and candles.")
+                        .changed();
+                });
+                if kraken_scrape_changed {
+                    settings_save_after = true;
+                    self.pending_kraken_fetches.clear();
+                    if !self.kraken_scrape_futures {
+                        self.pending_kraken_futures_fetches.clear();
+                    }
+                }
+                ui.label(
+                    egui::RichText::new(
+                        "These checkboxes control automated Kraken public scraping only; they do not grant trading permissions.",
+                    )
+                    .color(AXIS_TEXT)
+                    .small(),
+                );
                 ui.label("Finnhub: News, Analyst, Insider Sentiment, Short Interest");
                 ui.label("SEC EDGAR: Filing scraper + Form 4 insider trades");
                 ui.add_space(6.0);

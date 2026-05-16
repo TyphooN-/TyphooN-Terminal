@@ -222,9 +222,7 @@ pub(super) fn alpaca_sync_target_bars(tf: &str) -> Option<u32> {
 
 pub(super) fn kraken_sync_target_bars(tf: &str) -> Option<u32> {
     match tf {
-        "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week" => {
-            Some(720)
-        }
+        "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week" => Some(720),
         "1Month" => Some(24),
         _ => None,
     }
@@ -337,17 +335,17 @@ pub(super) fn select_alpaca_sync_candidates(
             if pending_fetches.contains(&fetch_key) {
                 continue;
             }
-            let state = state_map.get(&(symbol_key.clone(), tf.to_string())).copied();
-            let Some(candidate) =
-                classify_alpaca_sync_candidate(
-                    now_s,
-                    &symbol_key,
-                    tf,
-                    state,
-                    focus,
-                    target_bars_for_tf,
-                )
-            else {
+            let state = state_map
+                .get(&(symbol_key.clone(), tf.to_string()))
+                .copied();
+            let Some(candidate) = classify_alpaca_sync_candidate(
+                now_s,
+                &symbol_key,
+                tf,
+                state,
+                focus,
+                target_bars_for_tf,
+            ) else {
                 continue;
             };
             if candidate.bucket == AlpacaSyncBucket::Backfill
@@ -455,6 +453,93 @@ pub(super) fn select_alpaca_sync_workset(
 
     let background = select_alpaca_sync_candidates(
         symbols,
+        timeframes,
+        state_map,
+        focus_symbols,
+        no_data_pairs,
+        backfill_complete_pairs,
+        &staged_pending,
+        batch_size - selected.len(),
+        now_s,
+        target_bars_for_tf,
+    );
+    for candidate in background {
+        if selected.len() >= batch_size {
+            break;
+        }
+        if staged_pending.insert(alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)) {
+            selected.push(candidate);
+        }
+    }
+
+    selected
+}
+
+pub(super) fn select_alpaca_sync_workset_rotating(
+    symbols: &[String],
+    timeframes: &[String],
+    state_map: &HashMap<(String, String), SyncCacheState>,
+    focus_symbols: &HashSet<String>,
+    no_data_pairs: &HashMap<String, AlpacaNoDataPair>,
+    backfill_complete_pairs: &HashSet<String>,
+    pending_fetches: &HashSet<String>,
+    batch_size: usize,
+    foreground_slots: usize,
+    background_scan_limit: usize,
+    cursor: &mut usize,
+    now_s: i64,
+    target_bars_for_tf: fn(&str) -> Option<u32>,
+) -> Vec<AlpacaSyncCandidate> {
+    if batch_size == 0 || timeframes.is_empty() {
+        return Vec::new();
+    }
+
+    let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
+    let mut staged_pending = pending_fetches.clone();
+
+    let mut foreground_symbols: Vec<String> = focus_symbols.iter().cloned().collect();
+    foreground_symbols.sort();
+    let foreground_budget = foreground_slots.min(batch_size);
+    if foreground_budget > 0 && !foreground_symbols.is_empty() {
+        let foreground = select_alpaca_sync_candidates(
+            &foreground_symbols,
+            timeframes,
+            state_map,
+            focus_symbols,
+            no_data_pairs,
+            backfill_complete_pairs,
+            &staged_pending,
+            foreground_budget,
+            now_s,
+            target_bars_for_tf,
+        );
+        for candidate in foreground {
+            if staged_pending.insert(alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)) {
+                selected.push(candidate);
+            }
+        }
+    }
+
+    if selected.len() >= batch_size || symbols.is_empty() {
+        return selected;
+    }
+
+    let scan_limit = background_scan_limit
+        .max(batch_size.saturating_sub(selected.len()))
+        .min(symbols.len());
+    if scan_limit == 0 {
+        return selected;
+    }
+
+    let start = *cursor % symbols.len();
+    let mut scanned_symbols = Vec::with_capacity(scan_limit);
+    for offset in 0..scan_limit {
+        scanned_symbols.push(symbols[(start + offset) % symbols.len()].clone());
+    }
+    *cursor = (start + scan_limit) % symbols.len();
+
+    let background = select_alpaca_sync_candidates(
+        &scanned_symbols,
         timeframes,
         state_map,
         focus_symbols,
@@ -595,11 +680,7 @@ mod tests {
         ]);
         assert_eq!(
             ordered,
-            vec![
-                "1Month".to_string(),
-                "1Day".to_string(),
-                "1Min".to_string(),
-            ]
+            vec!["1Month".to_string(), "1Day".to_string(), "1Min".to_string(),]
         );
     }
 
@@ -667,7 +748,11 @@ mod tests {
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0].symbol, "MSFT");
         assert_eq!(selected[1].symbol, "AAPL");
-        assert!(selected.iter().all(|c| c.bucket == AlpacaSyncBucket::Missing));
+        assert!(
+            selected
+                .iter()
+                .all(|c| c.bucket == AlpacaSyncBucket::Missing)
+        );
     }
 
     #[test]
@@ -723,7 +808,11 @@ mod tests {
         );
 
         assert_eq!(selected.len(), 4);
-        assert!(selected.iter().all(|c| c.bucket == AlpacaSyncBucket::Missing));
+        assert!(
+            selected
+                .iter()
+                .all(|c| c.bucket == AlpacaSyncBucket::Missing)
+        );
         assert_eq!(selected[0].timeframe, "1Month");
         assert_eq!(selected[1].timeframe, "1Month");
         assert_eq!(selected[2].timeframe, "1Day");
@@ -791,6 +880,88 @@ mod tests {
         assert_eq!(selected[0].symbol, "MSFT");
         assert_eq!(selected[1].symbol, "MSFT");
         assert_ne!(selected[0].timeframe, selected[1].timeframe);
+    }
+
+    #[test]
+    fn select_alpaca_sync_workset_rotating_bounds_background_scan() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec![
+            "AAPL".to_string(),
+            "MSFT".to_string(),
+            "QQQ".to_string(),
+            "TSLA".to_string(),
+        ];
+        let timeframes = vec!["1Day".to_string()];
+        let mut cursor = 0usize;
+
+        let first = select_alpaca_sync_workset_rotating(
+            &symbols,
+            &timeframes,
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            1,
+            0,
+            2,
+            &mut cursor,
+            now_s,
+            alpaca_sync_target_bars,
+        );
+
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].symbol, "AAPL");
+        assert_eq!(cursor, 2);
+
+        let second = select_alpaca_sync_workset_rotating(
+            &symbols,
+            &timeframes,
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            1,
+            0,
+            2,
+            &mut cursor,
+            now_s,
+            alpaca_sync_target_bars,
+        );
+
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].symbol, "QQQ");
+        assert_eq!(cursor, 0);
+    }
+
+    #[test]
+    fn select_alpaca_sync_workset_rotating_always_serves_focus_first() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec!["AAPL".to_string(), "MSFT".to_string(), "QQQ".to_string()];
+        let timeframes = vec!["1Day".to_string()];
+        let focus = HashSet::from(["QQQ".to_string()]);
+        let mut cursor = 0usize;
+
+        let selected = select_alpaca_sync_workset_rotating(
+            &symbols,
+            &timeframes,
+            &HashMap::new(),
+            &focus,
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            1,
+            1,
+            1,
+            &mut cursor,
+            now_s,
+            alpaca_sync_target_bars,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].symbol, "QQQ");
+        assert_eq!(cursor, 0);
     }
 
     #[test]

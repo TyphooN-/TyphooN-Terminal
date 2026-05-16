@@ -301,9 +301,9 @@ fn on_ac_power_windows() -> bool {
         return true;
     }
     match status.ACLineStatus {
-        0 => false,       // running on battery
-        1 => true,        // running on AC
-        _ => true,        // unknown (255) — assume AC for desktop trading boxes
+        0 => false, // running on battery
+        1 => true,  // running on AC
+        _ => true,  // unknown (255) — assume AC for desktop trading boxes
     }
 }
 
