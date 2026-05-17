@@ -1768,3 +1768,61 @@ impl KrakenPrivateWs {
         }).to_string()
     }
 }
+
+// ============================================================================
+// Private WebSocket Client (Basic Implementation)
+// ============================================================================
+
+use futures_util::{SinkExt, StreamExt};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+
+impl KrakenBroker {
+    /// Connect to Kraken private WebSocket and subscribe to ownTrades + openOrders.
+    /// Returns a channel receiver for incoming messages.
+    pub async fn start_private_ws(
+        &self,
+    ) -> Result<tokio::sync::mpsc::Receiver<String>, String> {
+        let token = self.get_websockets_token_string().await?;
+
+        let (ws_stream, _) = connect_async("wss://ws.kraken.com")
+            .await
+            .map_err(|e| format!("Kraken WS connect failed: {}", e))?;
+
+        let (mut write, mut read) = ws_stream.split();
+
+        // Subscribe to ownTrades
+        let own_trades_sub = serde_json::json!({
+            "event": "subscribe",
+            "subscription": {
+                "name": "ownTrades",
+                "token": token
+            }
+        });
+        write.send(Message::Text(own_trades_sub.to_string().into())).await
+            .map_err(|e| format!("Failed to subscribe to ownTrades: {}", e))?;
+
+        // Subscribe to openOrders
+        let open_orders_sub = serde_json::json!({
+            "event": "subscribe",
+            "subscription": {
+                "name": "openOrders",
+                "token": token
+            }
+        });
+        write.send(Message::Text(open_orders_sub.to_string().into())).await
+            .map_err(|e| format!("Failed to subscribe to openOrders: {}", e))?;
+
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+
+        // Spawn reader task
+        tokio::spawn(async move {
+            while let Some(msg) = read.next().await {
+                if let Ok(Message::Text(text)) = msg {
+                    let _ = tx.send(text.to_string()).await;
+                }
+            }
+        });
+
+        Ok(rx)
+    }
+}
