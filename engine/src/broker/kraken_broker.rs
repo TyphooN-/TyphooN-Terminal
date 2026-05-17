@@ -1745,7 +1745,7 @@ impl KrakenBroker {
 }
 
 // ============================================================================
-// Private WebSocket Support (Skeleton)
+// Private WebSocket Support (Basic)
 // ============================================================================
 
 pub struct KrakenPrivateWs {
@@ -1757,8 +1757,8 @@ impl KrakenPrivateWs {
         Self { token }
     }
 
-    /// Returns the subscription message for ownTrades and openOrders.
-    pub fn subscription_message(&self) -> String {
+    /// Basic subscription message for ownTrades.
+    pub fn own_trades_subscription(&self) -> String {
         serde_json::json!({
             "event": "subscribe",
             "subscription": {
