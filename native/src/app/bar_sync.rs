@@ -8,7 +8,7 @@ use super::alpaca_sync::normalize_sync_timeframe_key;
 /// unused scaffolding in the tree.
 #[derive(Clone, Debug, Default)]
 pub(super) struct SyncStatsRow {
-    pub(super) broker: String, // "MT5" | "Alpaca" | "Tastytrade" | "CryptoCompare" | "Kraken"
+    pub(super) broker: String, // "MT5" | "Alpaca" | "Tastytrade" | "Kraken"
     pub(super) tf: String,     // "1Min" | "1Hour" | "1Day" | …
     pub(super) total: u64,     // (sym,tf) pairs seen for this (broker,tf) bucket
     pub(super) healthy: u64,   // last bar lag < TF_period × 24
@@ -49,7 +49,6 @@ pub(super) fn compute_bar_sync_stats(
             "mt5" => Some("MT5"),
             "alpaca" => Some("Alpaca"),
             "tastytrade" => Some("Tastytrade"),
-            "cryptocompare" => Some("CryptoCompare"),
             "kraken" => Some("Kraken"),
             _ => None,
         }
@@ -161,7 +160,7 @@ pub(super) fn compute_bar_sync_broker_totals(
         entry.1 += row.healthy;
     }
 
-    let order = ["MT5", "Alpaca", "Tastytrade", "CryptoCompare", "Kraken"];
+    let order = ["MT5", "Alpaca", "Tastytrade", "Kraken"];
     let mut out = Vec::new();
     for name in order {
         if let Some((total, healthy)) = totals.remove(name) {

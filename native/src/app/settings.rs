@@ -391,7 +391,6 @@ impl TyphooNApp {
                 ui.add_space(10.0);
                 ui.heading("Darwinex");
                 ui.separator();
-                ui.label("VaR corridor: 3.25% – 6.5%");
                 ui.label("Correlation limit: 0.95 / 45d");
                 ui.label("Margin accounts: 100%");
                 ui.add_space(5.0);

@@ -33,7 +33,7 @@ fn main() -> eframe::Result {
         )
         .init();
 
-    tracing::info!("TyphooN Terminal v0.1.0 — Pure Rust GPU (egui + wgpu)");
+    tracing::info!("TyphooN Terminal v0.1.0 (egui + wgpu)");
     tracing::info!(
         "Platform: {} {}",
         std::env::consts::OS,

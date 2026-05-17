@@ -16,14 +16,6 @@ impl TyphooNApp {
             .show(ctx, |ui| {
                 ui.label(egui::RichText::new("Bar sync % per broker / timeframe").color(AXIS_TEXT).small());
                 ui.label(egui::RichText::new("healthy = last bar within 24× TF period · stale beyond · empty = cached blob has no bars").color(AXIS_TEXT).small());
-                ui.horizontal(|ui| {
-                    if ui.checkbox(&mut self.crypto_backfill_enabled, egui::RichText::new("Crypto backfill").small())
-                        .on_hover_text("Enable Alpaca crypto + CryptoCompare rotation. Kraken public scraping is controlled in Settings.")
-                        .changed()
-                    {
-                        sync_save_after = true;
-                    }
-                });
                 self.render_alpaca_sync_profile_controls(ui, &mut sync_save_after, "sync_status");
                 self.render_sync_timeframe_controls(ui, &mut sync_save_after);
                 ui.separator();
@@ -63,7 +55,6 @@ impl TyphooNApp {
                                 "MT5"           => egui::Color32::from_rgb(26, 188, 156),
                                 "Alpaca"        => egui::Color32::from_rgb(52, 152, 219),
                                 "Tastytrade"    => egui::Color32::from_rgb(170, 100, 220),
-                                "CryptoCompare" => egui::Color32::from_rgb(200, 170, 80),
                                 "Kraken"        => egui::Color32::from_rgb(255, 130, 60),
                                 _ => AXIS_TEXT,
                             };
