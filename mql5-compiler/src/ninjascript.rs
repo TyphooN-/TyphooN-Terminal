@@ -24,6 +24,7 @@
 
 use crate::ir::*;
 use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, InputParam, PlotDef};
+use std::collections::HashSet;
 
 pub fn parse_ninjascript(source: &str) -> CompileResult {
     let (ir_module, meta) = build_ir(source);
@@ -73,6 +74,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
     let mut ir_body: Vec<IrStmt> = Vec::new();
     let mut inputs: Vec<IrInput> = Vec::new();
     let mut locals: Vec<(String, IrType)> = Vec::new();
+    let mut local_names: HashSet<String> = HashSet::new();
     let mut plot_count = 0usize;
 
     let cleaned = strip_comments(source);
@@ -126,7 +128,10 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
                         param_type: ty,
                         default_value: default,
                     });
-                    locals.push((name.to_ascii_lowercase(), IrType::F64));
+                    let local_name = name.to_ascii_lowercase();
+                    if local_names.insert(local_name.clone()) {
+                        locals.push((local_name, IrType::F64));
+                    }
                 }
             }
             i = j + 1;
@@ -186,7 +191,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         if let Some((name, rhs)) = try_parse_local_assignment(line) {
             if let Some(e) = parse_ns_expr(&rhs) {
                 let lname = name.to_ascii_lowercase();
-                if !locals.iter().any(|(n, _)| n == &lname) {
+                if local_names.insert(lname.clone()) {
                     locals.push((lname.clone(), IrType::F64));
                 }
                 ir_body.push(IrStmt::SetLocal(lname, e));
@@ -646,5 +651,20 @@ public class X : Indicator {}
         } else {
             panic!("SMA should map to ta_sma");
         }
+    }
+    #[test]
+    fn test_ns_duplicate_local_declared_once() {
+        let src = r#"
+public class Dup : Indicator {
+    protected override void OnBarUpdate() {
+        double value = Close[0];
+        value = Open[0];
+        Value[0] = value;
+    }
+}
+"#;
+        let (module, _) = build_ir(src);
+        let locals = &module.on_calculate.as_ref().unwrap().locals;
+        assert_eq!(locals.iter().filter(|(name, _)| name == "value").count(), 1);
     }
 }

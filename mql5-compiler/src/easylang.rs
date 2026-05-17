@@ -23,6 +23,7 @@
 
 use crate::ir::*;
 use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, InputParam, PlotDef};
+use std::collections::HashSet;
 
 /// Parse EasyLanguage source and produce an IR-based CompileResult.
 pub fn parse_easylang(source: &str) -> CompileResult {
@@ -75,6 +76,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
     let mut ir_body: Vec<IrStmt> = Vec::new();
     let mut inputs: Vec<IrInput> = Vec::new();
     let mut locals: Vec<(String, IrType)> = Vec::new();
+    let mut local_names: HashSet<String> = HashSet::new();
 
     // Strip {} comments, then line-by-line scan with // comment removal.
     let cleaned = strip_brace_comments(source);
@@ -106,7 +108,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             in_inputs = false;
             in_vars = true;
             let after_colon = &trimmed[trimmed.find(':').unwrap_or(0) + 1..];
-            parse_el_var_list(after_colon, &mut locals);
+            parse_el_var_list(after_colon, &mut locals, &mut local_names);
             continue;
         }
 
@@ -124,7 +126,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             continue;
         }
         if in_vars {
-            parse_el_var_list(trimmed, &mut locals);
+            parse_el_var_list(trimmed, &mut locals, &mut local_names);
             continue;
         }
 
@@ -178,10 +180,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             let lhs_lower = lhs.to_ascii_lowercase();
             if let Some(expr) = parse_el_expr(rhs) {
                 // Auto-declare if not already a local
-                if !locals
-                    .iter()
-                    .any(|(n, _)| n.eq_ignore_ascii_case(&lhs_lower))
-                {
+                if local_names.insert(lhs_lower.clone()) {
                     locals.push((lhs_lower.clone(), IrType::F64));
                 }
                 ir_body.push(IrStmt::SetLocal(lhs_lower, expr));
@@ -277,7 +276,11 @@ fn parse_el_input_list(list: &str, inputs: &mut Vec<IrInput>, meta_inputs: &mut 
 }
 
 /// Parse a comma-separated list of `Name(initial)` pairs as local variables.
-fn parse_el_var_list(list: &str, locals: &mut Vec<(String, IrType)>) {
+fn parse_el_var_list(
+    list: &str,
+    locals: &mut Vec<(String, IrType)>,
+    local_names: &mut HashSet<String>,
+) {
     let list = list.trim().trim_end_matches(';').trim_end_matches(',');
     if list.is_empty() {
         return;
@@ -292,8 +295,9 @@ fn parse_el_var_list(list: &str, locals: &mut Vec<(String, IrType)>) {
         } else {
             item.to_string()
         };
-        if !name.is_empty() && !locals.iter().any(|(n, _)| n.eq_ignore_ascii_case(&name)) {
-            locals.push((name.to_ascii_lowercase(), IrType::F64));
+        let name = name.to_ascii_lowercase();
+        if !name.is_empty() && local_names.insert(name.clone()) {
+            locals.push((name, IrType::F64));
         }
     }
 }
@@ -575,5 +579,17 @@ plot1(MA);
         // Nested parens stay grouped
         let nested = split_top_level_commas("Average(Close, 14), 2");
         assert_eq!(nested.len(), 2);
+    }
+    #[test]
+    fn test_el_duplicate_local_declared_once() {
+        let src = r#"
+variables: Value(0), value(1);
+Value = Close;
+value = Open;
+Plot1(Value, "Value");
+"#;
+        let (module, _) = build_ir(src);
+        let locals = &module.on_calculate.as_ref().unwrap().locals;
+        assert_eq!(locals.iter().filter(|(name, _)| name == "value").count(), 1);
     }
 }

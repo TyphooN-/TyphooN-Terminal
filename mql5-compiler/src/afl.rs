@@ -28,6 +28,7 @@
 
 use crate::ir::*;
 use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, InputParam, PlotDef};
+use std::collections::HashSet;
 
 pub fn parse_afl(source: &str) -> CompileResult {
     let (ir_module, meta) = build_ir(source);
@@ -77,6 +78,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
     let mut ir_body: Vec<IrStmt> = Vec::new();
     let mut inputs: Vec<IrInput> = Vec::new();
     let mut locals: Vec<(String, IrType)> = Vec::new();
+    let mut local_names: HashSet<String> = HashSet::new();
     let mut plot_count = 0usize;
 
     let cleaned = strip_block_comments(source);
@@ -178,13 +180,16 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
                     param_type: param_type.into(),
                     default_value: default_str,
                 });
-                locals.push((lhs.to_ascii_lowercase(), IrType::F64));
+                let param_name = lhs.to_ascii_lowercase();
+                if local_names.insert(param_name.clone()) {
+                    locals.push((param_name, IrType::F64));
+                }
                 continue;
             }
 
             if let Some(expr) = parse_afl_expr(rhs) {
                 let name = lhs.to_ascii_lowercase();
-                if !locals.iter().any(|(n, _)| n == &name) {
+                if local_names.insert(name.clone()) {
                     locals.push((name.clone(), IrType::F64));
                 }
                 ir_body.push(IrStmt::SetLocal(name, expr));
@@ -478,5 +483,18 @@ _SECTION_END();
 "#;
         let result = compile_afl(src);
         assert_eq!(result.metadata.unwrap().short_name, "My Indicator");
+    }
+    #[test]
+    fn test_afl_duplicate_local_declared_once() {
+        let src = r#"
+_SECTION_BEGIN("Dup")
+value = Close;
+value = Open;
+Plot(value, "Value", colorBlue);
+_SECTION_END();
+"#;
+        let (module, _) = build_ir(src);
+        let locals = &module.on_calculate.as_ref().unwrap().locals;
+        assert_eq!(locals.iter().filter(|(name, _)| name == "value").count(), 1);
     }
 }

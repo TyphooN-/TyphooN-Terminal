@@ -48,6 +48,7 @@
 
 use crate::ir::*;
 use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, InputParam, PlotDef};
+use std::collections::HashSet;
 
 pub fn parse_acsil(source: &str) -> CompileResult {
     let (ir_module, meta) = build_ir(source);
@@ -97,6 +98,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
     let mut ir_body: Vec<IrStmt> = Vec::new();
     let mut inputs: Vec<IrInput> = Vec::new();
     let mut locals: Vec<(String, IrType)> = Vec::new();
+    let mut local_names: HashSet<String> = HashSet::new();
 
     // Track SCSubgraphRef aliases: "Sub" → index 0, etc.
     let mut subgraph_aliases: Vec<(String, usize)> = Vec::new();
@@ -297,7 +299,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         if let Some((name, rhs)) = try_parse_local(t) {
             if let Some(e) = parse_acsil_expr(&rhs, &input_aliases) {
                 let lname = name.to_ascii_lowercase();
-                if !locals.iter().any(|(n, _)| n == &lname) {
+                if local_names.insert(lname.clone()) {
                     locals.push((lname.clone(), IrType::F64));
                 }
                 ir_body.push(IrStmt::SetLocal(lname, e));
@@ -858,5 +860,19 @@ SCSFExport scsf_X(SCStudyInterfaceRef sc) {}
     fn test_acsil_arithmetic() {
         let expr = parse_acsil_expr("sc.BaseDataIn[SC_HIGH] + sc.BaseDataIn[SC_LOW]", &[]);
         assert!(expr.is_some());
+    }
+    #[test]
+    fn test_acsil_duplicate_local_declared_once() {
+        let src = r#"
+SCDLLName("Dup")
+SCSFExport scsf_Dup(SCStudyInterfaceRef sc) {
+    float value = sc.BaseDataIn[SC_LAST];
+    value = sc.BaseDataIn[SC_OPEN];
+    sc.Subgraph[0][sc.Index] = value;
+}
+"#;
+        let (module, _) = build_ir(src);
+        let locals = &module.on_calculate.as_ref().unwrap().locals;
+        assert_eq!(locals.iter().filter(|(name, _)| name == "value").count(), 1);
     }
 }

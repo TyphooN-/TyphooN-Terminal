@@ -240,21 +240,26 @@ transpile between the five line-scanner languages freely.
 - **11 new MQL4 tests** (rewrite correctness, string/comment safety, word
   boundaries, warning emission, end-to-end compile sanity)
 - **10 new AFL tests** (simple plot, Param inputs, multi-plot, HHV/LLV
-  mapping, block comments, case insensitivity, section name extraction)
-- **9 new ProBuilder tests** (single / multi RETURN, REM + `//` comments,
-  bracketed-length functions, CROSSES OVER/UNDER, ATR no-source form)
+  mapping, block comments, case insensitivity, section name extraction; follow-up
+  coverage adds `IIf` select lowering and O(1) duplicate-local suppression)
+- **12 ProBuilder tests** (single / multi RETURN, REM + `//` comments,
+  bracketed-length functions, CROSSES OVER/UNDER, ATR no-source form, line-block
+  `IF ... THEN ... ELSE ... ENDIF`, duplicate-local suppression)
 - **10 new NinjaScript tests** (property parsing, multi-plot, IsOverlay
-  flag, comment stripping, `Math.Abs` mapping, `SMA` mapping)
+  flag, comment stripping, `Math.Abs` mapping, `SMA` mapping; follow-up adds
+  duplicate-local suppression)
 - **11 new cAlgo tests** (Parameter extraction, Output binding, IsOverlay,
   multi-output, long+short series forms, `[Indicator(Name=…)]` extraction,
-  comment + `#region` stripping)
+  comment + `#region` stripping; follow-up adds duplicate-local suppression)
 - **2 new Pine v4 tests** (v4 header + bareword `sma/rsi/study` rewrite,
   `replace_unprefixed` regression guard)
 - **10 new transpile tests** (EL→MQL5, EL→Pine, TS→EL, Pine→TS, AFL→MQL5,
   ProBuilder→EL, Pine→EL, unsupported-source error path, `camel_case`
   helper, EL→MQL5 `math_abs` mapping)
 
-**Total workspace test count: 793** (up from 728 in ADR-089).
+**Historical baseline at ADR creation: 793 workspace tests** (up from 728 in
+ADR-089). Follow-up compiler frontend comb-overs have since raised
+`mql5-compiler` coverage to 226 unit tests.
 
 - 196 mql5-compiler (+65)
 - 497 engine

@@ -169,3 +169,13 @@ reusable for future optimizations.
   while avoiding O(n) duplicate scans.
 - Added regression coverage for ProBuilder line-block `IF` lowering and duplicate
   local declaration suppression.
+
+## 2026-05-17 Fourth Comb-over
+
+- Extended the same O(1) local-declaration tracking pattern across all remaining
+  mql5-compiler line/attribute-scanner frontends: EasyLanguage, thinkScript,
+  AFL, ACSIL, NinjaScript, and cAlgo. Each frontend now keeps an ordered locals
+  vector for IR emission plus a `HashSet<String>` for duplicate suppression,
+  eliminating repeated `locals.iter().any(...)` scans as imported scripts grow.
+- Added duplicate-local regression tests for each converted frontend so the
+  ordered-Vec + HashSet invariant is locked down across the full frontend set.

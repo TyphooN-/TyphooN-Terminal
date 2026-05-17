@@ -23,6 +23,7 @@
 
 use crate::ir::*;
 use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, InputParam, PlotDef};
+use std::collections::HashSet;
 
 /// Parse thinkScript source and produce an IR-based CompileResult.
 pub fn parse_thinkscript(source: &str) -> CompileResult {
@@ -75,6 +76,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
     let mut ir_body: Vec<IrStmt> = Vec::new();
     let mut inputs: Vec<IrInput> = Vec::new();
     let mut locals: Vec<(String, IrType)> = Vec::new();
+    let mut local_names: HashSet<String> = HashSet::new();
     let mut plot_index: usize = 0;
 
     for raw_line in source.lines() {
@@ -128,7 +130,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         if let Some(rest) = trimmed.strip_prefix("def ") {
             if let Some((name, expr_str)) = split_assign(rest) {
                 if let Some(expr) = parse_ts_expr(expr_str) {
-                    if !locals.iter().any(|(n, _)| n == &name) {
+                    if local_names.insert(name.clone()) {
                         locals.push((name.clone(), IrType::F64));
                     }
                     ir_body.push(IrStmt::SetLocal(name, expr));
@@ -164,7 +166,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
                 continue;
             }
             if let Some(expr) = parse_ts_expr(expr_str) {
-                if !locals.iter().any(|(n, _)| n == &name) {
+                if local_names.insert(name.clone()) {
                     locals.push((name.clone(), IrType::F64));
                 }
                 ir_body.push(IrStmt::SetLocal(name, expr));
@@ -560,5 +562,16 @@ mod color_tests {
         assert!(meta.separate_window);
         assert_eq!(meta.plots[0].color, "clrCyan");
         assert_eq!(meta.plots[1].color, "clrDarkRed");
+    }
+    #[test]
+    fn test_ts_duplicate_local_declared_once() {
+        let src = r#"
+def value = close;
+value = open;
+plot Value = value;
+"#;
+        let (module, _) = build_ir(src);
+        let locals = &module.on_calculate.as_ref().unwrap().locals;
+        assert_eq!(locals.iter().filter(|(name, _)| name == "value").count(), 1);
     }
 }
