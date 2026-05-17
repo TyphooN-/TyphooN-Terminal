@@ -874,6 +874,221 @@ impl TyphooNApp {
         }
     }
 
+    pub(super) fn render_hermes_cli_window(&mut self, ctx: &egui::Context) {
+        if let Some(ref rx) = self.hermes_cli_rx {
+            if let Ok(response) = rx.try_recv() {
+                self.maybe_queue_ingest_from_ai_response("hermes", &response);
+                self.hermes_cli_history.push((false, response));
+                self.hermes_cli_rx = None;
+                let sid = Self::ensure_session_id(&mut self.hermes_cli_session_id);
+                let model = if self.hermes_model.trim().is_empty() {
+                    "configured-default".to_string()
+                } else {
+                    self.hermes_model.clone()
+                };
+                let history = self.hermes_cli_history.clone();
+                self.persist_ai_turn("hermes", &sid, None, &history, &model);
+            }
+        }
+        if self.show_hermes_cli {
+            let mut save_hermes_transcript: Option<String> = None;
+            let mut matrix_hermes_transcript: Option<String> = None;
+            let mut hermes_save_after = false;
+            egui::Window::new("Hermes Agent CLI")
+                .open(&mut self.show_hermes_cli)
+                .resizable(true)
+                .default_size([620.0, 520.0])
+                .min_width(420.0)
+                .min_height(280.0)
+                .constrain(true)
+                .show(ctx, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new("Hermes Agent CLI — local hermes binary")
+                                .small()
+                                .color(AXIS_TEXT),
+                        );
+                        ui.separator();
+                        let prev_model = self.hermes_model.clone();
+                        ui.label("Model:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.hermes_model)
+                                .desired_width(170.0)
+                                .hint_text("configured default"),
+                        );
+                        let prev_provider = self.hermes_provider.clone();
+                        ui.label("Provider:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.hermes_provider)
+                                .desired_width(120.0)
+                                .hint_text("default"),
+                        );
+                        if self.hermes_model != prev_model || self.hermes_provider != prev_provider {
+                            hermes_save_after = true;
+                        }
+                        if self.hermes_cli_packet.is_some() {
+                            ui.label(egui::RichText::new("[packet loaded]").small().color(UP));
+                        }
+                        let has_turns = !self.hermes_cli_history.is_empty();
+                        ui.add_enabled_ui(has_turns, |ui| {
+                            if ui
+                                .button("\u{1F4BE} Save")
+                                .on_hover_text("Export this Hermes session to a markdown file")
+                                .clicked()
+                            {
+                                save_hermes_transcript = Some(Self::format_ai_transcript(
+                                    &self.hermes_cli_history,
+                                    "Hermes Agent CLI",
+                                    "Hermes",
+                                    Some(self.hermes_cli_session_id.as_str()),
+                                ));
+                            }
+                            if ui
+                                .button("\u{1F4E8} Matrix")
+                                .on_hover_text("Post this Hermes session to the Community Chat room")
+                                .clicked()
+                            {
+                                matrix_hermes_transcript = Some(Self::format_ai_transcript(
+                                    &self.hermes_cli_history,
+                                    "Hermes Agent CLI",
+                                    "Hermes",
+                                    Some(self.hermes_cli_session_id.as_str()),
+                                ));
+                            }
+                        });
+                    });
+                    ui.separator();
+                    let scroll_h = (ui.available_height() - 60.0).max(120.0);
+                    egui::ScrollArea::vertical()
+                        .auto_shrink(false)
+                        .max_height(scroll_h)
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            if self.hermes_cli_history.is_empty() {
+                                ui.vertical_centered(|ui| {
+                                    ui.add_space(40.0);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Ask Hermes anything — uses your local hermes CLI",
+                                        )
+                                        .color(AXIS_TEXT),
+                                    );
+                                });
+                            }
+                            for (is_user, msg) in &self.hermes_cli_history {
+                                let (align, color, prefix) = if *is_user {
+                                    (
+                                        egui::Align::RIGHT,
+                                        egui::Color32::from_rgb(80, 140, 255),
+                                        "You",
+                                    )
+                                } else {
+                                    (
+                                        egui::Align::LEFT,
+                                        egui::Color32::from_rgb(220, 180, 100),
+                                        "Hermes",
+                                    )
+                                };
+                                ui.with_layout(egui::Layout::top_down(align), |ui| {
+                                    ui.label(
+                                        egui::RichText::new(prefix).strong().small().color(color),
+                                    );
+                                    ui.label(egui::RichText::new(msg).small());
+                                });
+                                ui.add_space(4.0);
+                            }
+                            if self.hermes_cli_rx.is_some() {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label(
+                                        egui::RichText::new("Thinking...").small().color(AXIS_TEXT),
+                                    );
+                                });
+                            }
+                        });
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.hermes_cli_input)
+                                .desired_width(ui.available_width() - 60.0)
+                                .hint_text("Ask Hermes..."),
+                        );
+                        let send = ui.button("Send").clicked()
+                            || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                        if send
+                            && !self.hermes_cli_input.trim().is_empty()
+                            && self.hermes_cli_rx.is_none()
+                        {
+                            let msg = self.hermes_cli_input.trim().to_string();
+                            self.hermes_cli_input.clear();
+                            self.hermes_cli_history.push((true, msg.clone()));
+
+                            let lower = msg.to_lowercase();
+                            if lower == "/clear" {
+                                self.hermes_cli_history.clear();
+                                self.hermes_cli_history
+                                    .push((false, "(chat history cleared)".to_string()));
+                                self.hermes_cli_session_id.clear();
+                                return;
+                            }
+                            if lower == "/help" {
+                                self.hermes_cli_history.push((
+                                    false,
+                                    "Hermes chat help:\n\
+                                     • Type any prompt and press Enter to ask Hermes Agent.\n\
+                                     • ASKHERMES SYM[,SYM2] question — preload a TyphooN research packet.\n\
+                                     • Optional Model/Provider fields map to hermes --model / --provider.\n\
+                                     • /clear — clear this window's transcript\n\
+                                     • /status — show local Hermes status"
+                                        .to_string(),
+                                ));
+                                return;
+                            }
+                            if lower == "/status" {
+                                let count = self.hermes_cli_history.iter().filter(|(u, _)| *u).count();
+                                let has_pkt = if self.hermes_cli_packet.is_some() { "yes" } else { "no" };
+                                self.hermes_cli_history.push((
+                                    false,
+                                    format!(
+                                        "Hermes status:\n\
+                                         • Backend: `hermes --oneshot` subprocess\n\
+                                         • Model override: {}\n\
+                                         • Provider override: {}\n\
+                                         • Research packet loaded: {has_pkt}\n\
+                                         • Messages this session: {count}",
+                                        if self.hermes_model.trim().is_empty() { "(default)" } else { self.hermes_model.as_str() },
+                                        if self.hermes_provider.trim().is_empty() { "(default)" } else { self.hermes_provider.as_str() },
+                                    ),
+                                ));
+                                return;
+                            }
+
+                            let full_prompt = Self::build_claude_prompt(
+                                self.hermes_cli_packet.as_deref(),
+                                &self.hermes_cli_history,
+                                &msg,
+                                "",
+                            );
+                            let model = self.hermes_model.clone();
+                            let provider = self.hermes_provider.clone();
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            self.hermes_cli_rx = Some(rx);
+                            Self::spawn_hermes_exec(model, provider, full_prompt, tx);
+                        }
+                    });
+                });
+            if let Some(t) = save_hermes_transcript {
+                self.save_ai_session_to_file("hermes_cli", &t);
+            }
+            if let Some(t) = matrix_hermes_transcript {
+                self.send_ai_session_to_matrix("hermes_cli", &t);
+            }
+            if hermes_save_after {
+                self.save_session();
+            }
+        }
+    }
+
     pub(super) fn render_ai_sessions_window(&mut self, ctx: &egui::Context) {
         if self.show_ai_sessions {
             // Auto-refresh index every 10s while the window is open.
