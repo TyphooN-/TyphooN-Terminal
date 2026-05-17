@@ -1826,3 +1826,34 @@ impl KrakenBroker {
         Ok(rx)
     }
 }
+
+/// Attempt to parse a Kraken WebSocket ownTrades message into a KrakenTrade.
+pub fn parse_own_trades_message(msg: &serde_json::Value) -> Option<KrakenTrade> {
+    // Kraken sometimes sends [ {trade_data}, "ownTrades", channelID ]
+    if let Some(arr) = msg.as_array() {
+        if arr.len() >= 1 {
+            if let Some(obj) = arr[0].as_object() {
+                // The first key usually contains the trade
+                if let Some((_, trade_val)) = obj.iter().next() {
+                    if let Some(trade) = trade_val.as_object() {
+                        return Some(KrakenTrade {
+                            trade_id: trade.get("trade_id").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                            ordertxid: trade.get("ordertxid").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                            pair: trade.get("pair").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                            time: trade.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                            side: trade.get("side").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                            ordertype: trade.get("ordertype").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                            price: trade.get("price").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                            cost: trade.get("cost").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                            fee: trade.get("fee").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                            vol: trade.get("vol").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                            margin: trade.get("margin").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                            misc: trade.get("misc").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    None
+}
