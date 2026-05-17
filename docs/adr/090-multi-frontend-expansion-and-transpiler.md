@@ -97,8 +97,8 @@ RETURN c1 AS "Cross"
 Supports `RETURN expr AS "label"` (including multi-return), bracketed-
 length function syntax (`Average[14]`, `ExponentialAverage[14]`,
 `RSI[14]`, `ATR[14]`, `Highest[14]`, `Lowest[14]`, `StdDev[14]`), the
-`CROSSES OVER` / `CROSSES UNDER` binary operators, and both `REM` and
-`//` comments.
+`CROSSES OVER` / `CROSSES UNDER` binary operators, line-block
+`IF ... THEN ... ELSE ... ENDIF`, and both `REM` and `//` comments.
 
 #### NinjaScript — NinjaTrader (indicator subset)
 NinjaScript is full C#; a real C# parser is a major undertaking. This
@@ -293,15 +293,16 @@ transpile between the five line-scanner languages freely.
   targets and emit sources but cannot be transpile *sources*. The five
   line-scanner languages (EL, TS, AFL, ProBuilder, Pine) fully
   participate in both directions today.
-- **The transpiler's quality is bounded by the IR coverage.** IR only
-  encodes the subset of constructs shared across indicators — locals,
-  plot assignments, built-in TA calls, arithmetic, comparisons. It does
-  NOT currently encode `if`/`for`/`while` blocks, arrays, user-defined
-  functions, time-shifted series access (`close[5]`), or
-  ternary-as-expression. Indicators using those constructs will compile
-  (the frontends skip unsupported statements with a warning) but the
-  transpiler output will silently omit them. This matches the platform's
-  explicit "80% common indicator case" design from ADR-069.
+- **IR coverage beyond the initial ADR:** the shared IR now represents
+  statement-level `if` blocks and the WASM codegen handles ternary/select
+  lowering through `__select_f64`. AFL `IIf(cond, a, b)` and ProBuilder
+  `IF ... THEN ... ELSE ... ENDIF` line-blocks are implemented follow-ups.
+- **Remaining IR gaps:** loops (`for`/`while` in line-scanner frontends),
+  arrays, user-defined functions, time-shifted series access (`close[5]`,
+  `Close[5]`, `Close.Last(5)`), and trade-signal operations are still outside
+  the common indicator IR subset. Indicators using those constructs may compile
+  through a source-specific path, but transpiler output only preserves the
+  shared subset.
 - **C# frontend brittleness.** NinjaScript and cAlgo attribute scanning
   will fall over on exotic patterns like `[DataSeries(Output =
   ResultType.Line)]` attributes split across multiple lines, or
@@ -339,14 +340,15 @@ transpile between the five line-scanner languages freely.
 - **IR → cAlgo**: similar C# class skeleton with `[Indicator]` /
   `[Parameter]` / `[Output]` attributes.
 
-### Phase 2 — IR coverage
-- **Control flow**: `if`/`for`/`while` blocks. Frontends already parse
-  these for MQL5; line scanners currently skip them.
+### Phase 2 — Remaining IR coverage
+- **Loop control in line-scanner frontends**: `for`/`while` blocks remain
+  source-specific or skipped outside the full MQL parser.
 - **Time-shifted series access**: `close[5]`, `Close[5]`, `Close.Last(5)`
   — need an IR `PrevBar(n, expr)` node.
 - **Arrays + user-defined functions**: requires a proper symbol table.
-- **Ternary expressions**: `IIf(cond, a, b)`, `iff(...)` — IR
-  `Select(cond, then, else)` node.
+- **Additional source-language select syntax**: AFL `IIf(cond, a, b)` and
+  MQL-style ternary/select lowering are implemented; any remaining language
+  aliases such as `iff(...)` can map onto the same select primitive.
 - **Trade-signal IR**: `Buy` / `Sell` / `EnterLong` — new IR ops that
   lower to broker-specific calls per target language.
 

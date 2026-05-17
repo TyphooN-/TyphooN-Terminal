@@ -158,3 +158,14 @@ reusable for future optimizations.
   emits that synthetic select in WebAssembly stack order (`then`, `else`,
   `cond`) instead of generic call-argument order, fixing the shared ternary path
   used by MQL-style ternary lowering as well.
+
+## 2026-05-17 Third Comb-over
+
+- ProBuilder's deferred `IF ... THEN ... ELSE ... ENDIF` line-block support is
+  implemented. Assignments and `RETURN` buffer writes inside the block now lower
+  to `IrStmt::If` branches instead of being skipped by the line scanner.
+- ProBuilder local declaration tracking now uses a `HashSet<String>` alongside
+  the ordered locals vector, so repeated assignments preserve declaration order
+  while avoiding O(n) duplicate scans.
+- Added regression coverage for ProBuilder line-block `IF` lowering and duplicate
+  local declaration suppression.

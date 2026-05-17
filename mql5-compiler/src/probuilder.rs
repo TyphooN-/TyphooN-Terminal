@@ -13,15 +13,16 @@
 //!   `Lowest[length](source)` / `StdDev[length](source)`
 //! - `RETURN expr` / `RETURN expr AS "label"` (multi-return supported)
 //! - `CROSSES OVER` / `CROSSES UNDER` operators
+//! - `IF ... THEN ... ELSE ... ENDIF` line-blocks
 //! - Arithmetic + comparison
 //!
 //! Deferred:
-//! - `IF ... THEN ... ELSE ... ENDIF` multi-line blocks
 //! - `FOR ... NEXT` loops
 //! - User-defined functions
 
 use crate::ir::*;
 use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, PlotDef};
+use std::collections::HashSet;
 
 pub fn parse_probuilder(source: &str) -> CompileResult {
     let (ir_module, meta) = build_ir(source);
@@ -56,6 +57,25 @@ pub fn parse_probuilder(source: &str) -> CompileResult {
     }
 }
 
+struct PendingIf {
+    cond: IrExpr,
+    then_body: Vec<IrStmt>,
+    else_body: Vec<IrStmt>,
+    in_else: bool,
+}
+
+fn push_pb_stmt(target: &mut Vec<IrStmt>, if_stack: &mut [PendingIf], stmt: IrStmt) {
+    if let Some(frame) = if_stack.last_mut() {
+        if frame.in_else {
+            frame.else_body.push(stmt);
+        } else {
+            frame.then_body.push(stmt);
+        }
+    } else {
+        target.push(stmt);
+    }
+}
+
 pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
     let mut meta = IndicatorMeta {
         short_name: String::from("ProBuilder"),
@@ -67,6 +87,8 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
     let mut ir_body: Vec<IrStmt> = Vec::new();
     let inputs: Vec<IrInput> = Vec::new();
     let mut locals: Vec<(String, IrType)> = Vec::new();
+    let mut local_names: HashSet<String> = HashSet::new();
+    let mut if_stack: Vec<PendingIf> = Vec::new();
     let mut return_count = 0usize;
 
     for raw_line in source.lines() {
@@ -92,6 +114,41 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         }
         let upper = trimmed.to_ascii_uppercase();
 
+        if upper == "ELSE" {
+            if let Some(frame) = if_stack.last_mut() {
+                frame.in_else = true;
+            }
+            continue;
+        }
+
+        if upper == "ENDIF" {
+            if let Some(frame) = if_stack.pop() {
+                push_pb_stmt(
+                    &mut ir_body,
+                    &mut if_stack,
+                    IrStmt::If {
+                        cond: frame.cond,
+                        then: frame.then_body,
+                        else_: frame.else_body,
+                    },
+                );
+            }
+            continue;
+        }
+
+        if upper.starts_with("IF ") && upper.ends_with(" THEN") {
+            let cond_src = trimmed[3..trimmed.len() - 5].trim();
+            if let Some(cond) = parse_pb_expr(cond_src) {
+                if_stack.push(PendingIf {
+                    cond,
+                    then_body: Vec::new(),
+                    else_body: Vec::new(),
+                    in_else: false,
+                });
+            }
+            continue;
+        }
+
         // RETURN statement(s): `RETURN expr1 [AS "label1"], expr2 [AS "label2"]`
         if upper.starts_with("RETURN ") {
             let rest = &trimmed[7..];
@@ -109,7 +166,11 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
                     (seg, format!("Plot{}", return_count + 1))
                 };
                 if let Some(expr) = parse_pb_expr(expr_part) {
-                    ir_body.push(IrStmt::SetBuffer(return_count, IrExpr::IBars, expr));
+                    push_pb_stmt(
+                        &mut ir_body,
+                        &mut if_stack,
+                        IrStmt::SetBuffer(return_count, IrExpr::IBars, expr),
+                    );
                     meta.plots.push(PlotDef {
                         index: return_count,
                         label,
@@ -137,13 +198,25 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             }
             if let Some(expr) = parse_pb_expr(rhs) {
                 let name = lhs.to_ascii_lowercase();
-                if !locals.iter().any(|(n, _)| n == &name) {
+                if local_names.insert(name.clone()) {
                     locals.push((name.clone(), IrType::F64));
                 }
-                ir_body.push(IrStmt::SetLocal(name, expr));
+                push_pb_stmt(&mut ir_body, &mut if_stack, IrStmt::SetLocal(name, expr));
             }
             continue;
         }
+    }
+
+    while let Some(frame) = if_stack.pop() {
+        push_pb_stmt(
+            &mut ir_body,
+            &mut if_stack,
+            IrStmt::If {
+                cond: frame.cond,
+                then: frame.then_body,
+                else_: frame.else_body,
+            },
+        );
     }
 
     meta.buffers = meta.plots.len();
@@ -439,5 +512,39 @@ RETURN a AS "ATR"
     fn test_pb_empty_source() {
         let result = compile_probuilder("");
         assert!(result.metadata.is_some());
+    }
+    #[test]
+    fn test_pb_if_then_else_block() {
+        let src = r#"
+fast = ExponentialAverage[10](Close)
+slow = ExponentialAverage[20](Close)
+IF fast > slow THEN
+trend = fast
+ELSE
+trend = slow
+ENDIF
+RETURN trend AS "Trend"
+"#;
+        let result = crate::compile_probuilder(src);
+        assert!(result.wasm.is_some());
+        let meta = result.metadata.unwrap();
+        assert_eq!(meta.plots.len(), 1);
+        assert_eq!(meta.plots[0].label, "Trend");
+
+        let (module, _) = build_ir(src);
+        let body = &module.on_calculate.as_ref().unwrap().body;
+        assert!(body.iter().any(|stmt| matches!(stmt, IrStmt::If { then, else_, .. } if then.len() == 1 && else_.len() == 1)));
+    }
+
+    #[test]
+    fn test_pb_duplicate_local_declared_once() {
+        let src = r#"
+value = Close
+value = Open
+RETURN value
+"#;
+        let (module, _) = build_ir(src);
+        let locals = &module.on_calculate.as_ref().unwrap().locals;
+        assert_eq!(locals.iter().filter(|(name, _)| name == "value").count(), 1);
     }
 }
