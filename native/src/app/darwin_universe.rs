@@ -1,4 +1,5 @@
 //! Darwinex Zero USA Equity Universe (Stocks + ETFs)
+#![allow(dead_code)]
 //!
 //! Full list of tradable USA Stocks and ETFs from Darwinex Zero
 //! Source: Market Watch export (2026-05-15) from https://www.darwinexzero.com/assets
