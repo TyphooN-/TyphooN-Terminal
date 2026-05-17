@@ -8,14 +8,15 @@
 //! - Built-in series: `close`, `open`, `high`, `low`, `volume`
 //! - Built-in functions: `Average` / `MovingAverage` (SMA), `ExpAverage` (EMA),
 //!   `RSI`, `ATR`, `Highest`, `Lowest`, `StDev`, `AbsValue`, `Sqrt`, `Log`, `Max`, `Min`
+//! - Static plot color hints via `Plot.SetDefaultColor(Color.X)` and
+//!   `AssignValueColor(Color.X)` / `Plot.AssignValueColor(Color.X)`
 //! - Assignment syntax ends with `;`
 //! - `#` line comments (thinkScript convention)
 //! - Case-sensitive (thinkScript convention)
 //!
 //! Not supported (deferred):
-//! - `plot.Color`, `AssignValueColor()` — colors hardcoded to default blue
+//! - Dynamic conditional plot coloring (metadata records only static color hints)
 //! - Multi-line `if then else` (single-line ternary works)
-//! - Study properties like `declare lower;`
 //! - Arrays / reference arrays
 //!
 //! thinkScript is case-sensitive. Keywords are reserved but follow identifier rules.
@@ -94,6 +95,14 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         }
         if trimmed.starts_with("declare upper") || trimmed.starts_with("declare overlay") {
             meta.separate_window = false;
+            continue;
+        }
+
+        // Static plot color annotations: `Plot.SetDefaultColor(Color.CYAN)`,
+        // `Plot.AssignValueColor(Color.GREEN)`, or `AssignValueColor(Color.RED)`.
+        // Dynamic conditional colors are intentionally reduced to the first static
+        // Color.* token because PlotDef metadata has one color slot per series.
+        if apply_thinkscript_plot_color(trimmed, &mut meta.plots) {
             continue;
         }
 
@@ -186,6 +195,60 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         globals: Vec::new(),
     };
     (ir_module, meta)
+}
+
+fn apply_thinkscript_plot_color(line: &str, plots: &mut [PlotDef]) -> bool {
+    let lower = line.to_ascii_lowercase();
+    let is_color_call = lower.contains("assignvaluecolor(") || lower.contains(".setdefaultcolor(");
+    if !is_color_call {
+        return false;
+    }
+    let Some(color) = extract_thinkscript_color(line) else {
+        return true;
+    };
+    let target_name = line
+        .split_once('.')
+        .map(|(name, _)| name.trim())
+        .filter(|name| !name.is_empty());
+    if let Some(name) = target_name {
+        if let Some(plot) = plots.iter_mut().find(|p| p.label == name) {
+            plot.color = color;
+        } else if let Some(plot) = plots.last_mut() {
+            plot.color = color;
+        }
+    } else if let Some(plot) = plots.last_mut() {
+        plot.color = color;
+    }
+    true
+}
+
+fn extract_thinkscript_color(line: &str) -> Option<String> {
+    let lower = line.to_ascii_lowercase();
+    let color_pos = lower.find("color.")? + "color.".len();
+    let raw = line[color_pos..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect::<String>();
+    if raw.is_empty() {
+        return None;
+    }
+    Some(format!("clr{}", to_pascal_color(&raw)))
+}
+
+fn to_pascal_color(raw: &str) -> String {
+    raw.split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => {
+                    first.to_ascii_uppercase().to_string() + &chars.as_str().to_ascii_lowercase()
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 /// Split a `name = expression` into `(name, expr_str)` at the FIRST `=`.
@@ -477,5 +540,25 @@ plot Range = spread;
         let (name, rhs) = r.unwrap();
         assert_eq!(name, "x");
         assert_eq!(rhs, "close == high");
+    }
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::build_ir;
+
+    #[test]
+    fn thinkscript_static_plot_color_metadata() {
+        let src = r#"
+            declare lower;
+            plot Fast = Average(close, 10);
+            Fast.SetDefaultColor(Color.CYAN);
+            plot Slow = Average(close, 30);
+            Slow.AssignValueColor(Color.DARK_RED);
+        "#;
+        let (_ir, meta) = build_ir(src);
+        assert!(meta.separate_window);
+        assert_eq!(meta.plots[0].color, "clrCyan");
+        assert_eq!(meta.plots[1].color, "clrDarkRed");
     }
 }

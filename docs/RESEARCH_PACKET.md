@@ -6020,8 +6020,9 @@ codex exec \
 
 The handlers first run `which claude` / `which gemini` / `which codex`;
 if the binary is missing, the command logs an error and the packet is
-never built. Each subprocess runs on a dedicated `std::thread` so the UI
-stays responsive, and the reply is piped back via a `std::sync::mpsc::channel`
+never built. Each subprocess runs off the egui render path (dedicated OS thread
+or Tokio `spawn_blocking`, depending on the chat surface) so the UI stays
+responsive, and the reply is piped back via a `std::sync::mpsc::channel`
 drained on the next UI frame into the respective chat window.
 
 ADR-212 adds Return Path auto-ingest at those response-drain sites: if

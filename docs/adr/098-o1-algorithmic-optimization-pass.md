@@ -131,3 +131,19 @@ reusable for future optimizations.
   private runtime.
 - ADR-205's macOS AC-power item is no longer deferred: the auto-compaction gate
   now probes `pmset -g batt` on macOS and only assumes AC on unknown output.
+
+## 2026-05-17 Async / Deferred Work Comb-over
+
+- Long-running Yahoo fundamentals, research, news scrape, SEC filing-content
+  backfill, and Darwinex web-driver login/sync/logout jobs no longer occupy
+  Tokio's blocking pool while running their own current-thread runtime for
+  `!Send` SQLite/browser-backed async flows. They now use named dedicated OS
+  threads (`typhoon-fundamentals-scrape`, `typhoon-fundamentals-scrape-one`,
+  `typhoon-research-scrape`, `typhoon-news-scrape-all`,
+  `typhoon-sec-filing-backfill`, `typhoon-dwx-login`, `typhoon-dwx-sync`,
+  `typhoon-dwx-logout`) so the Tokio blocking pool remains available for short
+  DB/filesystem offloads.
+- The thinkScript frontend's deferred static color metadata work is implemented:
+  `Plot.SetDefaultColor(Color.X)` and `AssignValueColor(Color.X)` update
+  `PlotDef.color`; docs now correctly list `declare lower/upper` as supported
+  and only dynamic conditional coloring remains deferred.
