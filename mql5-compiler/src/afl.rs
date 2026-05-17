@@ -19,11 +19,11 @@
 //!   `Max`/`Min` → `math_max`/`math_min`
 //! - `Plot(value, "title", color, style);`
 //! - `Param("label", default, min, max, step)` — default becomes input
+//! - `IIf(cond, a, b)` ternary/select expressions
 //!
 //! Deferred:
 //! - `Buy`/`Sell`/`Short`/`Cover` signals (no trade sim yet)
 //! - User-defined functions (`function name() { ... }`)
-//! - `IIf(cond, a, b)` — no ternary in IR yet
 //! - Matrix/array slicing
 
 use crate::ir::*;
@@ -270,6 +270,9 @@ fn parse_afl_expr(expr: &str) -> Option<IrExpr> {
                 if let Some(name) = mapped {
                     return Some(IrExpr::Call(name.into(), ir_args));
                 }
+                if func == "iif" && ir_args.len() == 3 {
+                    return Some(IrExpr::Call("__select_f64".into(), ir_args));
+                }
             }
         }
     }
@@ -444,6 +447,27 @@ Plot(mid, "Mid", colorBlue);
 "#;
         let result = compile_afl(src);
         assert_eq!(result.metadata.unwrap().plots.len(), 1);
+    }
+
+    #[test]
+    fn test_afl_iif_select_expression() {
+        let src = r#"
+fast = EMA(Close, 10);
+slow = EMA(Close, 20);
+trend = IIf(fast > slow, fast, slow);
+Plot(trend, "Trend", colorGreen);
+"#;
+        let result = compile_afl(src);
+        assert!(result.wasm.is_some());
+        let meta = result.metadata.unwrap();
+        assert_eq!(meta.plots.len(), 1);
+
+        if let Some(IrExpr::Call(name, args)) = parse_afl_expr("IIf(Close > Open, High, Low)") {
+            assert_eq!(name, "__select_f64");
+            assert_eq!(args.len(), 3);
+        } else {
+            panic!("IIf should map to __select_f64");
+        }
     }
 
     #[test]

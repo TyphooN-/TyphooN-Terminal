@@ -23,6 +23,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, Tabs, Wrap},
 };
+use std::collections::VecDeque;
 use std::future::pending;
 use std::io::stdout;
 use std::path::{Path, PathBuf};
@@ -789,7 +790,7 @@ struct App {
     command_input: String,
     command_mode: bool,
     // Log
-    log_messages: Vec<(String, Color)>,
+    log_messages: VecDeque<(String, Color)>,
     // Refresh
     last_refresh: Instant,
     refresh_interval: Duration,
@@ -828,13 +829,13 @@ impl App {
             market_next_event: String::new(),
             command_input: String::new(),
             command_mode: false,
-            log_messages: vec![
+            log_messages: VecDeque::from([
                 ("TyphooN Terminal CLI v0.2.0".to_string(), Color::Cyan),
                 (
                     "Press Tab to switch views, : for command mode, q to quit".to_string(),
                     Color::DarkGray,
                 ),
-            ],
+            ]),
             last_refresh: Instant::now() - Duration::from_secs(60), // force initial refresh
             refresh_interval: Duration::from_secs(5),
             watchlist_prev_close: std::collections::HashMap::new(),
@@ -843,9 +844,10 @@ impl App {
 
     fn log(&mut self, msg: &str, color: Color) {
         let ts = chrono::Local::now().format("%H:%M:%S").to_string();
-        self.log_messages.push((format!("[{ts}] {msg}"), color));
+        self.log_messages
+            .push_back((format!("[{ts}] {msg}"), color));
         if self.log_messages.len() > 100 {
-            self.log_messages.remove(0);
+            self.log_messages.pop_front();
         }
     }
 
@@ -2375,8 +2377,10 @@ fn draw_accounts(f: &mut Frame, app: &App, area: Rect) {
 fn draw_log(f: &mut Frame, app: &App, area: Rect) {
     let visible = app.log_messages.len().min(area.height as usize);
     let start = app.log_messages.len().saturating_sub(visible);
-    let lines: Vec<Line> = app.log_messages[start..]
+    let lines: Vec<Line> = app
+        .log_messages
         .iter()
+        .skip(start)
         .map(|(msg, color)| Line::from(Span::styled(msg.clone(), Style::default().fg(*color))))
         .collect();
 

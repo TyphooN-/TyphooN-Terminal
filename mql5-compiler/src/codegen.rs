@@ -370,6 +370,18 @@ fn emit_expr_with_locals(
             }
         }
         IrExpr::Call(name, args) => {
+            if name == "__select_f64" && args.len() == 3 {
+                // WebAssembly `select` consumes operands as `then`, `else`, `cond`.
+                // The IR stores ternary-like expressions as `cond`, `then`, `else`,
+                // so emit this synthetic call in stack order instead of using the
+                // normal left-to-right function-call argument order.
+                emit_expr_with_locals(func, &args[1], num_imports, locals)?;
+                emit_expr_with_locals(func, &args[2], num_imports, locals)?;
+                emit_expr_with_locals(func, &args[0], num_imports, locals)?;
+                func.instruction(&Instruction::Select);
+                return Ok(());
+            }
+
             for arg in args {
                 emit_expr_with_locals(func, arg, num_imports, locals)?;
             }

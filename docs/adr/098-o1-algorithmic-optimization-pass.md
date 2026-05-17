@@ -147,3 +147,14 @@ reusable for future optimizations.
   `Plot.SetDefaultColor(Color.X)` and `AssignValueColor(Color.X)` update
   `PlotDef.color`; docs now correctly list `declare lower/upper` as supported
   and only dynamic conditional coloring remains deferred.
+
+## 2026-05-17 Second Comb-over
+
+- The CLI/TUI rolling log now stores entries in `VecDeque` and trims with
+  `pop_front()` instead of `Vec::remove(0)`, preserving O(1) eviction for the
+  bounded 100-line log.
+- The AFL frontend's deferred `IIf(cond, a, b)` support is implemented by
+  mapping it to the existing IR select primitive (`__select_f64`). Codegen now
+  emits that synthetic select in WebAssembly stack order (`then`, `else`,
+  `cond`) instead of generic call-argument order, fixing the shared ternary path
+  used by MQL-style ternary lowering as well.
