@@ -8,12 +8,12 @@ use super::alpaca_sync::normalize_sync_timeframe_key;
 /// unused scaffolding in the tree.
 #[derive(Clone, Debug, Default)]
 pub(super) struct SyncStatsRow {
-    pub(super) broker: String, // "MT5" | "Alpaca" | "Tastytrade" | "Kraken"
-    pub(super) tf: String,     // "1Min" | "1Hour" | "1Day" | …
-    pub(super) total: u64,     // (sym,tf) pairs seen for this (broker,tf) bucket
-    pub(super) healthy: u64,   // last bar lag < TF_period × 24
-    pub(super) stale: u64,     // last bar lag ≥ threshold
-    pub(super) empty: u64,     // cached blob has no bars (last_ms <= 0)
+    pub(super) broker: String,   // "MT5" | "Alpaca" | "Tastytrade" | "Kraken"
+    pub(super) tf: String,       // "1Min" | "1Hour" | "1Day" | …
+    pub(super) total: u64,       // (sym,tf) pairs seen for this (broker,tf) bucket
+    pub(super) healthy: u64,     // last bar lag < TF_period × 24
+    pub(super) stale: u64,       // last bar lag ≥ threshold
+    pub(super) empty: u64,       // cached blob has no bars (last_ms <= 0)
     pub(super) pct_healthy: f32, // 0..100
 }
 

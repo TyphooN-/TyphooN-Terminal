@@ -1491,10 +1491,11 @@ impl SqliteCache {
         // Hold write lock ONLY for VACUUM INTO — release before file I/O + compression
         {
             let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-            conn.execute("VACUUM INTO ?1", [&backup_path]).map_err(|e| {
-                let _ = std::fs::remove_file(&backup_path);
-                format!("VACUUM INTO failed: {e}")
-            })?;
+            conn.execute("VACUUM INTO ?1", [&backup_path])
+                .map_err(|e| {
+                    let _ = std::fs::remove_file(&backup_path);
+                    format!("VACUUM INTO failed: {e}")
+                })?;
         } // lock released here
 
         // File I/O + level-9 compression without holding any lock
@@ -1540,8 +1541,7 @@ impl SqliteCache {
         path: &str,
         compressed: &[u8],
     ) -> Result<String, String> {
-        let data =
-            zstd::decode_all(compressed).map_err(|e| format!("Decompress failed: {e}"))?;
+        let data = zstd::decode_all(compressed).map_err(|e| format!("Decompress failed: {e}"))?;
 
         // Write to temp file with exclusive creation to avoid TOCTOU races
         let tmp_path = format!("{}.import.tmp.{}", path, std::process::id());

@@ -85,10 +85,18 @@ implementation of every deferred item, plus the supporting infrastructure.
 - Wired into the **EV Scanner** table — visible symbols pre-fetch sparklines
   before the closure to avoid borrow conflicts.
 
-## Tests
+## Verification
 
-904 tests pass (216 mql5-compiler + 553 engine + 78 cli + 57 web-protocol).
-Zero warnings. Zero production unwrap/expect violations (ADR-082 compliant).
+Historical test-count snapshots are intentionally not treated as fixed because
+the engine/native suites continue to grow. Current verification for this ADR is:
+
+- `cargo check --package typhoon-native`
+- Targeted engine tests for changed O(1)/async code paths.
+- Release check after render/scheduler changes when practical.
+
+The production codebase still contains a few deliberate `unwrap_or_else` /
+process-fatal runtime bootstrap sites and test-only unwraps; new hot-path work
+should avoid introducing additional panic paths.
 
 ## O(1) Principle Reinforcement
 
@@ -110,3 +118,16 @@ reusable for future optimizations.
 - `indicators_dirty`, scope-cache rebuilds, outlier auto-scroll, and sparkline
   cache misses are guarded so heavy sync work is less likely to contend with
   chart rendering.
+- Kraken live trade history now uses `VecDeque` and caps with `pop_back()`
+  instead of `Vec::remove(0)`, preserving O(1) rolling-buffer eviction.
+
+## 2026-05-17 Follow-up Comb-over
+
+- AI response cache hashing now hex-encodes without per-byte `format!`
+  allocation.
+- AI-session persistence makes same-session timestamps monotonic, eliminating
+  second-long sleeps from ordering tests while preserving resume semantics.
+- Alpaca rate-limit header test uses `#[tokio::test]` instead of constructing a
+  private runtime.
+- ADR-205's macOS AC-power item is no longer deferred: the auto-compaction gate
+  now probes `pmset -g batt` on macOS and only assumes AC on unknown output.

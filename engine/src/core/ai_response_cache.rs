@@ -76,9 +76,11 @@ pub fn hash_ai_prompt(
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{:02x}", b));
+    for &b in bytes {
+        s.push(HEX[(b >> 4) as usize] as char);
+        s.push(HEX[(b & 0x0f) as usize] as char);
     }
     s
 }
@@ -362,6 +364,15 @@ mod tests {
             % 10_000
     }
 
+    fn set_updated_at_for_test(cache: &SqliteCache, prompt_hash: &str, updated_at: i64) {
+        let conn = cache.connection().unwrap();
+        conn.execute(
+            "UPDATE ai_response_cache SET updated_at = ?1 WHERE prompt_hash = ?2",
+            params![updated_at, prompt_hash],
+        )
+        .unwrap();
+    }
+
     #[test]
     fn hash_is_deterministic() {
         let h1 = hash_ai_prompt("claude_http", "claude-opus-4-5", "sys", &[], "hi");
@@ -528,11 +539,13 @@ mod tests {
                 },
             )
             .unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(1050));
         }
-        // Re-hit `a` so it becomes most recent by updated_at
-        std::thread::sleep(std::time::Duration::from_millis(1050));
+        set_updated_at_for_test(&cache, "a", 10);
+        set_updated_at_for_test(&cache, "b", 20);
+        set_updated_at_for_test(&cache, "c", 30);
+        // Re-hit `a` so it becomes most recent by updated_at without wall-clock sleeps.
         let _ = lookup_response(&cache, "a").unwrap();
+        set_updated_at_for_test(&cache, "a", 40);
 
         let recent = recent_entries(&cache, 10).unwrap();
         assert_eq!(recent.len(), 3);

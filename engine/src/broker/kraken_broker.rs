@@ -1279,7 +1279,9 @@ impl KrakenBroker {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Kraken orderbook request failed: HTTP {status}: {body}"));
+            return Err(format!(
+                "Kraken orderbook request failed: HTTP {status}: {body}"
+            ));
         }
         let body: serde_json::Value = resp
             .json()
@@ -1654,8 +1656,8 @@ pub struct KrakenTrade {
     pub ordertxid: String,
     pub pair: String,
     pub time: f64,
-    pub side: String,        // "buy" or "sell"
-    pub ordertype: String,   // "market", "limit", etc.
+    pub side: String,      // "buy" or "sell"
+    pub ordertype: String, // "market", "limit", etc.
     pub price: f64,
     pub cost: f64,
     pub fee: f64,
@@ -1674,7 +1676,7 @@ pub struct KrakenOrder {
     pub starttm: Option<f64>,
     pub expiretm: Option<f64>,
     pub pair: String,
-    pub r#type: String,      // "buy" or "sell"
+    pub r#type: String, // "buy" or "sell"
     pub ordertype: String,
     pub price: f64,
     pub price2: Option<f64>,
@@ -1724,17 +1726,56 @@ impl KrakenBroker {
             if let Some(trade) = trade_value.as_object() {
                 let kraken_trade = KrakenTrade {
                     trade_id: trade_id.clone(),
-                    ordertxid: trade.get("ordertxid").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    pair: trade.get("pair").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    ordertxid: trade
+                        .get("ordertxid")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    pair: trade
+                        .get("pair")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
                     time: trade.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                    side: trade.get("side").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    ordertype: trade.get("ordertype").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    price: trade.get("price").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
-                    cost: trade.get("cost").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
-                    fee: trade.get("fee").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
-                    vol: trade.get("vol").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
-                    margin: trade.get("margin").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
-                    misc: trade.get("misc").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    side: trade
+                        .get("side")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    ordertype: trade
+                        .get("ordertype")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    price: trade
+                        .get("price")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0),
+                    cost: trade
+                        .get("cost")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0),
+                    fee: trade
+                        .get("fee")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0),
+                    vol: trade
+                        .get("vol")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0),
+                    margin: trade
+                        .get("margin")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0),
+                    misc: trade
+                        .get("misc")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                 };
                 trades.push(kraken_trade);
             }
@@ -1753,9 +1794,17 @@ impl KrakenBroker {
 
         let mut orders: Vec<KrakenOrder> = open
             .iter()
-            .filter_map(|(txid, order)| order.as_object().map(|obj| kraken_order_from_object(txid, obj)))
+            .filter_map(|(txid, order)| {
+                order
+                    .as_object()
+                    .map(|obj| kraken_order_from_object(txid, obj))
+            })
             .collect();
-        orders.sort_by(|a, b| b.opentm.partial_cmp(&a.opentm).unwrap_or(std::cmp::Ordering::Equal));
+        orders.sort_by(|a, b| {
+            b.opentm
+                .partial_cmp(&a.opentm)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         Ok(orders)
     }
 }
@@ -1781,7 +1830,8 @@ impl KrakenPrivateWs {
                 "name": "ownTrades",
                 "token": self.token
             }
-        }).to_string()
+        })
+        .to_string()
     }
 }
 
@@ -1795,9 +1845,7 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 impl KrakenBroker {
     /// Connect to Kraken private WebSocket and subscribe to ownTrades + openOrders.
     /// Returns a channel receiver for incoming messages.
-    pub async fn start_private_ws(
-        &self,
-    ) -> Result<tokio::sync::mpsc::Receiver<String>, String> {
+    pub async fn start_private_ws(&self) -> Result<tokio::sync::mpsc::Receiver<String>, String> {
         let token = self.get_websockets_token_string().await?;
 
         let (ws_stream, _) = connect_async("wss://ws.kraken.com")
@@ -1814,7 +1862,9 @@ impl KrakenBroker {
                 "token": token
             }
         });
-        write.send(Message::Text(own_trades_sub.to_string().into())).await
+        write
+            .send(Message::Text(own_trades_sub.to_string().into()))
+            .await
             .map_err(|e| format!("Failed to subscribe to ownTrades: {}", e))?;
 
         // Subscribe to openOrders
@@ -1825,7 +1875,9 @@ impl KrakenBroker {
                 "token": token
             }
         });
-        write.send(Message::Text(open_orders_sub.to_string().into())).await
+        write
+            .send(Message::Text(open_orders_sub.to_string().into()))
+            .await
             .map_err(|e| format!("Failed to subscribe to openOrders: {}", e))?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(100);
@@ -1843,20 +1895,78 @@ impl KrakenBroker {
     }
 }
 
-fn kraken_trade_from_object(trade_id: String, trade: &serde_json::Map<String, serde_json::Value>) -> KrakenTrade {
+fn kraken_trade_from_object(
+    trade_id: String,
+    trade: &serde_json::Map<String, serde_json::Value>,
+) -> KrakenTrade {
     KrakenTrade {
         trade_id,
-        ordertxid: trade.get("ordertxid").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        pair: trade.get("pair").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        time: trade.get("time").and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).unwrap_or(0.0),
-        side: trade.get("side").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        ordertype: trade.get("ordertype").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        price: trade.get("price").and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).unwrap_or(0.0),
-        cost: trade.get("cost").and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).unwrap_or(0.0),
-        fee: trade.get("fee").and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).unwrap_or(0.0),
-        vol: trade.get("vol").and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).unwrap_or(0.0),
-        margin: trade.get("margin").and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).unwrap_or(0.0),
-        misc: trade.get("misc").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        ordertxid: trade
+            .get("ordertxid")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        pair: trade
+            .get("pair")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        time: trade
+            .get("time")
+            .and_then(|v| {
+                v.as_f64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            })
+            .unwrap_or(0.0),
+        side: trade
+            .get("side")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        ordertype: trade
+            .get("ordertype")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        price: trade
+            .get("price")
+            .and_then(|v| {
+                v.as_f64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            })
+            .unwrap_or(0.0),
+        cost: trade
+            .get("cost")
+            .and_then(|v| {
+                v.as_f64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            })
+            .unwrap_or(0.0),
+        fee: trade
+            .get("fee")
+            .and_then(|v| {
+                v.as_f64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            })
+            .unwrap_or(0.0),
+        vol: trade
+            .get("vol")
+            .and_then(|v| {
+                v.as_f64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            })
+            .unwrap_or(0.0),
+        margin: trade
+            .get("margin")
+            .and_then(|v| {
+                v.as_f64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            })
+            .unwrap_or(0.0),
+        misc: trade
+            .get("misc")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
     }
 }
 
@@ -1888,13 +1998,18 @@ pub fn parse_own_trades_message(msg: &serde_json::Value) -> Option<KrakenTrade> 
 
 fn kraken_ws_f64(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> f64 {
     obj.get(key)
-        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .and_then(|v| {
+            v.as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
         .unwrap_or(0.0)
 }
 
 fn kraken_ws_opt_f64(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<f64> {
-    obj.get(key)
-        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+    obj.get(key).and_then(|v| {
+        v.as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    })
 }
 
 fn kraken_ws_string(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> String {
@@ -1904,31 +2019,48 @@ fn kraken_ws_string(obj: &serde_json::Map<String, serde_json::Value>, key: &str)
         .to_string()
 }
 
-
-fn kraken_order_from_object(txid: &str, order: &serde_json::Map<String, serde_json::Value>) -> KrakenOrder {
+fn kraken_order_from_object(
+    txid: &str,
+    order: &serde_json::Map<String, serde_json::Value>,
+) -> KrakenOrder {
     let descr = order.get("descr").and_then(|v| v.as_object());
     let descr_string = |key: &str| -> String {
-        descr.and_then(|d| d.get(key)).and_then(|v| v.as_str()).unwrap_or_default().to_string()
+        descr
+            .and_then(|d| d.get(key))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
     };
     let descr_f64 = |key: &str| -> f64 {
         descr
             .and_then(|d| d.get(key))
-            .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+            .and_then(|v| {
+                v.as_f64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            })
             .unwrap_or(0.0)
     };
     let descr_opt_f64 = |key: &str| -> Option<f64> {
-        descr
-            .and_then(|d| d.get(key))
-            .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        descr.and_then(|d| d.get(key)).and_then(|v| {
+            v.as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
     };
     let trades = order
         .get("trades")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
     KrakenOrder {
         txid: txid.to_string(),
-        refid: order.get("refid").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        refid: order
+            .get("refid")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         userref: order.get("userref").and_then(|v| v.as_i64()),
         status: kraken_ws_string(order, "status"),
         opentm: kraken_ws_f64(order, "opentm"),
@@ -1945,7 +2077,10 @@ fn kraken_order_from_object(txid: &str, order: &serde_json::Map<String, serde_js
         fee: kraken_ws_f64(order, "fee"),
         stopprice: kraken_ws_opt_f64(order, "stopprice"),
         limitprice: kraken_ws_opt_f64(order, "limitprice"),
-        misc: order.get("misc").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        misc: order
+            .get("misc")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         trades,
     }
 }
@@ -1983,13 +2118,17 @@ pub fn parse_open_orders_message(msg: &serde_json::Value) -> Vec<KrakenOrder> {
             let descr_f64 = |key: &str| -> f64 {
                 descr
                     .and_then(|d| d.get(key))
-                    .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .and_then(|v| {
+                        v.as_f64()
+                            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                    })
                     .unwrap_or(0.0)
             };
             let descr_opt_f64 = |key: &str| -> Option<f64> {
-                descr
-                    .and_then(|d| d.get(key))
-                    .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                descr.and_then(|d| d.get(key)).and_then(|v| {
+                    v.as_f64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                })
             };
 
             let trades = order
@@ -2004,7 +2143,10 @@ pub fn parse_open_orders_message(msg: &serde_json::Value) -> Vec<KrakenOrder> {
 
             Some(KrakenOrder {
                 txid: txid.clone(),
-                refid: order.get("refid").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                refid: order
+                    .get("refid")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
                 userref: order.get("userref").and_then(|v| v.as_i64()),
                 status: kraken_ws_string(order, "status"),
                 opentm: kraken_ws_f64(order, "opentm"),
@@ -2021,13 +2163,15 @@ pub fn parse_open_orders_message(msg: &serde_json::Value) -> Vec<KrakenOrder> {
                 fee: kraken_ws_f64(order, "fee"),
                 stopprice: kraken_ws_opt_f64(order, "stopprice"),
                 limitprice: kraken_ws_opt_f64(order, "limitprice"),
-                misc: order.get("misc").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                misc: order
+                    .get("misc")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
                 trades,
             })
         })
         .collect()
 }
-
 
 #[cfg(test)]
 mod kraken_private_ws_parse_tests {
@@ -2067,8 +2211,16 @@ mod kraken_private_ws_parse_tests {
         ]);
         let trades = parse_own_trades_messages(&msg);
         assert_eq!(trades.len(), 2);
-        assert!(trades.iter().any(|t| t.trade_id == "T1" && t.ordertxid == "O1"));
-        assert!(trades.iter().any(|t| t.trade_id == "T2" && t.ordertxid == "O2"));
+        assert!(
+            trades
+                .iter()
+                .any(|t| t.trade_id == "T1" && t.ordertxid == "O1")
+        );
+        assert!(
+            trades
+                .iter()
+                .any(|t| t.trade_id == "T2" && t.ordertxid == "O2")
+        );
     }
 
     #[test]

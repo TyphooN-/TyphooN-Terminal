@@ -34,10 +34,7 @@ async fn get_sec_ticker_map() -> Result<&'static serde_json::Value, String> {
             let client = sec_client();
             let resp = client
                 .get("https://www.sec.gov/files/company_tickers.json")
-                .header(
-                    "User-Agent",
-                    "TyphooN-Terminal/0.1 (contact: TyphooN)",
-                )
+                .header("User-Agent", "TyphooN-Terminal/0.1 (contact: TyphooN)")
                 .send()
                 .await
                 .map_err(|_| "SEC ticker map request failed".to_string())?;
@@ -1711,10 +1708,7 @@ impl AlpacaBroker {
                 "https://data.sec.gov/api/xbrl/companyfacts/{}.json",
                 cik_padded
             ))
-            .header(
-                "User-Agent",
-                "TyphooN-Terminal/0.1 (contact: TyphooN)",
-            )
+            .header("User-Agent", "TyphooN-Terminal/0.1 (contact: TyphooN)")
             .send()
             .await
             .map_err(|e| format!("SEC company facts failed: {e}"))?;
@@ -2567,10 +2561,7 @@ impl AlpacaBroker {
                 "https://data.sec.gov/api/xbrl/companyfacts/{}.json",
                 cik_padded
             ))
-            .header(
-                "User-Agent",
-                "TyphooN-Terminal/0.1 (contact: TyphooN)",
-            )
+            .header("User-Agent", "TyphooN-Terminal/0.1 (contact: TyphooN)")
             .send()
             .await
             .map_err(|e| format!("SEC company facts failed: {e}"))?;
@@ -2662,10 +2653,7 @@ impl AlpacaBroker {
                 "https://data.sec.gov/submissions/CIK{}.json",
                 cik_padded
             ))
-            .header(
-                "User-Agent",
-                "TyphooN-Terminal/0.1 (contact: TyphooN)",
-            )
+            .header("User-Agent", "TyphooN-Terminal/0.1 (contact: TyphooN)")
             .send()
             .await
             .map_err(|e| format!("SEC submissions request failed: {e}"))?;
@@ -3142,10 +3130,7 @@ impl AlpacaBroker {
                 "https://data.sec.gov/submissions/CIK{}.json",
                 cik_padded
             ))
-            .header(
-                "User-Agent",
-                "TyphooN-Terminal/0.1 (contact: TyphooN)",
-            )
+            .header("User-Agent", "TyphooN-Terminal/0.1 (contact: TyphooN)")
             .send()
             .await
             .map_err(|e| format!("SEC submissions fetch failed: {e}"))?;
@@ -3736,20 +3721,17 @@ mod tests {
         assert_eq!(format_order_price(0.009), "0.00900000");
     }
 
-    #[test]
-    fn observe_rate_limit_headers_updates_bar_rpm() {
-        let rt = tokio::runtime::Runtime::new().expect("runtime");
-        rt.block_on(async {
-            let limiter = RateLimiter::new();
-            let mut headers = HeaderMap::new();
-            headers.insert("x-ratelimit-limit", HeaderValue::from_static("10000"));
+    #[tokio::test]
+    async fn observe_rate_limit_headers_updates_bar_rpm() {
+        let limiter = RateLimiter::new();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-limit", HeaderValue::from_static("10000"));
 
-            assert_eq!(
-                limiter.observe_rate_limit_headers(&headers).await,
-                Some(10000)
-            );
-            assert_eq!(limiter.requests_per_minute(), 10000);
-        });
+        assert_eq!(
+            limiter.observe_rate_limit_headers(&headers).await,
+            Some(10000)
+        );
+        assert_eq!(limiter.requests_per_minute(), 10000);
     }
 
     // ── is_crypto detection (symbol.contains('/')) ──────────────────

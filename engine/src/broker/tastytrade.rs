@@ -635,11 +635,7 @@ impl TastytradeBroker {
             .await
             .map_err(|e| format!("tastytrade public watchlists parse: {e}"))?;
         let mut symbols = std::collections::BTreeSet::new();
-        for watchlist in json["data"]["items"]
-            .as_array()
-            .into_iter()
-            .flatten()
-        {
+        for watchlist in json["data"]["items"].as_array().into_iter().flatten() {
             for entry in watchlist["watchlist-entries"]
                 .as_array()
                 .into_iter()
@@ -1063,11 +1059,9 @@ mod tests {
 
     #[test]
     fn merge_market_data_universe_sources_reports_total_failure() {
-        let err = merge_market_data_universe_sources(
-            Err("HTTP 502".into()),
-            Err("HTTP 503".into()),
-        )
-        .unwrap_err();
+        let err =
+            merge_market_data_universe_sources(Err("HTTP 502".into()), Err("HTTP 503".into()))
+                .unwrap_err();
         assert!(err.contains("public watchlists"));
         assert!(err.contains("active futures"));
     }

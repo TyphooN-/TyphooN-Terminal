@@ -93,14 +93,34 @@ pub fn persist_turn(
     }
 
     let key = session_key(provider, session_id);
-    let now = now_ts();
+    let wall_now = now_ts();
 
     let existing = match cache.get_kv(&key) {
         Ok(Some(s)) => serde_json::from_str::<AiSessionRecord>(&s).ok(),
         _ => None,
     };
 
-    let started_at = existing.as_ref().map(|r| r.started_at).unwrap_or(now);
+    // Read the resume index before choosing timestamps. Unix-second wall-clock
+    // stamps can collide across freshly-created sessions, so use the index's
+    // current max as a cheap monotonic floor for provider-local ordering.
+    let mut idx = read_index(cache).unwrap_or_default();
+    let provider_max_touched = idx
+        .iter()
+        .filter(|e| e.provider == provider)
+        .map(|e| e.last_touched_at)
+        .max();
+
+    let started_at = existing.as_ref().map(|r| r.started_at).unwrap_or(wall_now);
+    // Unix-second timestamps can collide during fast consecutive writes. Keep
+    // session/provider updates monotonic so resume ordering and tests never
+    // need sleeps.
+    let base_now = existing
+        .as_ref()
+        .map(|r| wall_now.max(r.last_touched_at + 1))
+        .unwrap_or(wall_now);
+    let now = provider_max_touched
+        .map(|max_seen| base_now.max(max_seen + 1))
+        .unwrap_or(base_now);
     let subject = existing
         .as_ref()
         .map(|r| r.subject.clone())
@@ -123,7 +143,6 @@ pub fn persist_turn(
 
     // Update the index — replace any existing entry for the same (provider, session_id),
     // then push the fresh entry and resort by most-recent-first.
-    let mut idx = read_index(cache).unwrap_or_default();
     idx.retain(|e| !(e.session_id == rec.session_id && e.provider == rec.provider));
     idx.push(SessionIndexEntry {
         session_id: rec.session_id.clone(),
@@ -199,6 +218,19 @@ mod tests {
         Cache::open(&p).expect("open cache")
     }
 
+    fn force_index_time(cache: &Cache, provider: &str, session_id: &str, last_touched_at: i64) {
+        let mut idx = read_index(cache).unwrap();
+        for entry in &mut idx {
+            if entry.provider == provider && entry.session_id == session_id {
+                entry.last_touched_at = last_touched_at;
+            }
+        }
+        idx.sort_by(|a, b| b.last_touched_at.cmp(&a.last_touched_at));
+        cache
+            .put_kv(INDEX_KEY, &serde_json::to_string(&idx).unwrap())
+            .unwrap();
+    }
+
     #[test]
     fn roundtrip_and_index() {
         let cache = tmp_cache();
@@ -237,7 +269,6 @@ mod tests {
             .unwrap()
             .started_at;
 
-        std::thread::sleep(std::time::Duration::from_secs(1));
         let t2 = vec![(true, "first".into()), (false, "reply".into())];
         persist_turn(&cache, "sess-2", "gemini", None, &t2, "gemini-2.5-pro").unwrap();
         let second = load_session(&cache, "gemini", "sess-2").unwrap().unwrap();
@@ -259,7 +290,7 @@ mod tests {
             "opus",
         )
         .unwrap();
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        force_index_time(&cache, "claude", "s-a", 1);
         persist_turn(
             &cache,
             "s-b",
@@ -269,6 +300,7 @@ mod tests {
             "sonnet",
         )
         .unwrap();
+        force_index_time(&cache, "claude", "s-b", 2);
         persist_turn(
             &cache,
             "other",

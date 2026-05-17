@@ -1,7 +1,7 @@
 # ADR-205: ZSTD Compression Level Policy and Auto-Compaction
 
 **Status:** Implemented
-**Date:** 2026-04-28 (decision), 2026-04-29 (auto-compact wired), 2026-05-03 (Storage Manager schedule controls), 2026-05-06 (Windows AC probe)
+**Date:** 2026-04-28 (decision), 2026-04-29 (auto-compact wired), 2026-05-03 (Storage Manager schedule controls), 2026-05-06 (Windows AC probe), 2026-05-17 (macOS AC probe)
 **Related:** ADR-003 (SQLite + zstd cache), ADR-052 (performance architecture), ADR-079 (LAN sync bandwidth), `engine/src/core/cache.rs`, `native/src/app/auto_compact.rs`, `native/src/app.rs::BrokerCmd::CompactStorage`
 
 ## Context
@@ -66,7 +66,7 @@ Periodic auto-compact is allowed and recommended, but conservative:
 
 - **Cadence:** configurable from Storage Manager; defaults to weekly, Sunday 04:00-05:00 local.
 - **Gating, all required** (`auto_compact::evaluate_gate`):
-  - AC power detected (skips on battery, Linux only — non-Linux assumes AC).
+  - AC power detected (skips on battery on Linux, Windows, and macOS; unknown/unsupported platforms assume AC).
   - User idle ≥ 5 minutes (no input events seen).
   - `COUNT(*) FROM bar_cache WHERE zstd_level < 22` exceeds the configured threshold (default 100). Small deltas are not worth waking up for.
   - Local time inside the configured weekday + hour window.
@@ -114,4 +114,4 @@ This makes the "spare cycles" model work without ever surprising the user mid-tr
 - ~~Make the cadence, weekday, hour window, and uncompacted-row threshold user-configurable from the Storage Manager.~~ (Shipped 2026-05-03.)
 - ~~Expose `next_auto_compact_at` (next time the gate will be re-evaluated against the schedule) so users can see what is scheduled rather than only when it last ran.~~ (Shipped 2026-05-03 as `next: <local time>`.)
 - ~~AC-power detection on Windows.~~ (Shipped 2026-05-06: `on_ac_power_windows` calls `GetSystemPowerStatus` from `windows-sys` and reads `ACLineStatus`; unknown status (255) defaults to AC because most Windows trading rigs are wall-powered.)
-- macOS AC-power detection — still returns true. Reaching IOKit's `IOPSCopyPowerSourcesInfo` cleanly needs CFType FFI bindings; deferred because no macOS deployment is currently in scope.
+- ~~AC-power detection on macOS.~~ (Shipped 2026-05-17: `on_ac_power_macos` uses `pmset -g batt` and parses `AC Power` / `Battery Power`; unknown command/output defaults to AC.)

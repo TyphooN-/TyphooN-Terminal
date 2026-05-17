@@ -247,9 +247,9 @@ fn skip(reason: &str) -> GateDecision {
 /// - **Windows:** calls `GetSystemPowerStatus` and reads `ACLineStatus`. `1`
 ///   = AC online, `0` = on battery, `255` = unknown (treated as AC since most
 ///   Windows trading rigs are wall-powered).
-/// - **macOS / other:** returns true (assume AC). Implementing macOS power-source
-///   detection would require IOKit FFI; ADR-205 records this platform as low
-///   priority because the trading rigs in scope are Linux desktops and Windows.
+/// - **macOS:** shells out to `pmset -g batt` and treats `AC Power` as online.
+/// - **Other:** returns true (assume AC) because unknown desktops should not be
+///   blocked from scheduled compaction.
 pub fn on_ac_power() -> bool {
     #[cfg(target_os = "linux")]
     {
@@ -259,7 +259,11 @@ pub fn on_ac_power() -> bool {
     {
         on_ac_power_windows()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(target_os = "macos")]
+    {
+        on_ac_power_macos()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         true
     }
@@ -290,6 +294,28 @@ fn on_ac_power_linux() -> bool {
         }
     }
     !found_battery
+}
+
+#[cfg(target_os = "macos")]
+fn on_ac_power_macos() -> bool {
+    let output = match std::process::Command::new("pmset")
+        .args(["-g", "batt"])
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return true,
+    };
+    if !output.status.success() {
+        return true;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    if text.contains("AC Power") {
+        true
+    } else if text.contains("Battery Power") {
+        false
+    } else {
+        true
+    }
 }
 
 #[cfg(target_os = "windows")]

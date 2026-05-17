@@ -28,7 +28,7 @@ const RELEVANT_FORMS: &[&str] = &[
     "SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A", "13F-HR", // Offerings/dilution
     "S-1", "S-3", "S-4", "424B5", "424B2", "424B4", // M&A
     "SC TO-T", "SC TO-I", "SC 14D9", // Deregistration (delisting risk)
-    "15-12B", "15-12G", // SEC scrutiny
+    "15-12B", "15-12G",  // SEC scrutiny
     "CORRESP", // Employee plans
     "11-K",
 ];
