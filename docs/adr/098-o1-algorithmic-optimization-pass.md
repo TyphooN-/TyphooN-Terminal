@@ -12,10 +12,11 @@ implementation of every deferred item, plus the supporting infrastructure.
 
 ## Implemented (All 7 Previously Deferred Items)
 
-### PERF2: Per-Frame Scope HashSet Cache
-- New fields: `cached_scope_syms: Option<HashSet<String>>`, `cached_scope_frame: u64`
-- Recomputed once per `update()` call (line ~27870), invalidates each frame to
-  pick up live position changes.
+### PERF2: Scope HashSet Cache
+- New fields: `cached_scope_syms: Option<HashSet<String>>`,
+  `cached_scope_key: Option<(u64, EventSource)>`.
+- Recomputed only when the background-data revision or selected broker scope
+  changes; steady-state frames do zero scope-set rebuild work.
 - `scoped_fundamentals()` and `scoped_fundamentals_owned()` now read from
   `self.cached_scope_syms` instead of recomputing the HashSet.
 - SEC window and EV scanner read from `self.cached_scope_syms.clone()` instead
@@ -68,6 +69,8 @@ implementation of every deferred item, plus the supporting infrastructure.
   DARWINVAR, VAROUTLIER, ATROUTLIER).
 - Render loop scrolls to first EXTREME tier outlier via
   `sym_resp.scroll_to_me(Some(Align::Center))` then clears the flag.
+- The scroll trigger is interaction-aware and does not steal focus while the
+  user is dragging/zooming charts.
 
 ### UX7: Inline Sparklines in Tables
 - New field: `sparkline_cache: HashMap<String, Vec<f64>>` — lazy 30-day
@@ -75,6 +78,8 @@ implementation of every deferred item, plus the supporting infrastructure.
 - New helper: `get_sparkline(&mut self, symbol)` — fetches from bar cache
   on first access (mt5/alpaca keys), caches result, returns empty Vec for
   subsequent calls if no data found.
+- Cached sparklines still render during chart interaction; cache misses avoid
+  SQLite reads until interaction ends.
 - New free function: `draw_inline_sparkline(ui, closes, w, h)` — renders a
   60×14 px line plot with green/red color based on first→last delta.
 - Wired into the **EV Scanner** table — visible symbols pre-fetch sparklines
@@ -92,3 +97,16 @@ guiding all future work: **never accept O(n) where O(1) is achievable**.
 Hot paths run 60 times per second; even small per-frame overheads compound
 quickly. The infrastructure added here (caching, pooling, interning) is
 reusable for future optimizations.
+
+## 2026-05 Async / Interaction-Aware Follow-up
+
+- Added `TyphooNApp::user_interacting`, wired to chart drag/zoom state.
+- Historical-sync schedulers now lower queue pressure while the user is
+  interacting:
+  - Alpaca: clamps fetch permits / queue window / batch size.
+  - Kraken spot/futures: clamps queue window, batch size, foreground reserve,
+    and scan budget.
+  - tastytrade: clamps queue window and batch size.
+- `indicators_dirty`, scope-cache rebuilds, outlier auto-scroll, and sparkline
+  cache misses are guarded so heavy sync work is less likely to contend with
+  chart rendering.

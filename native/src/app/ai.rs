@@ -406,10 +406,10 @@ impl TyphooNApp {
                             );
                             let model = self.claude_model.clone();
                             // Reuse per-window session UUID so Claude CLI resumes the same thread.
-                            if self.claude_code_session_id.is_none() {
-                                self.claude_code_session_id = Some(Self::new_uuid());
-                            }
-                            let session_id = self.claude_code_session_id.clone().unwrap();
+                            let session_id = self
+                                .claude_code_session_id
+                                .get_or_insert_with(Self::new_uuid)
+                                .clone();
                             let is_first = self.claude_code_history.iter().filter(|(u, _)| *u).count() <= 1;
 
                             let (tx, rx) = std::sync::mpsc::channel();
