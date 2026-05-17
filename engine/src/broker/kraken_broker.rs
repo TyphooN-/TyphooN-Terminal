@@ -1857,3 +1857,148 @@ pub fn parse_own_trades_message(msg: &serde_json::Value) -> Option<KrakenTrade> 
     }
     None
 }
+
+
+fn kraken_ws_f64(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> f64 {
+    obj.get(key)
+        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(0.0)
+}
+
+fn kraken_ws_opt_f64(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<f64> {
+    obj.get(key)
+        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+}
+
+fn kraken_ws_string(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> String {
+    obj.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Parse Kraken private WebSocket `openOrders` messages into typed orders.
+///
+/// Kraken v1 private messages are array-wrapped and commonly arrive as:
+/// `[ { "ORDER_TXID": { "status": "open", "descr": { ... }, ... } }, "openOrders", <channel_id> ]`.
+/// Snapshot and incremental updates use the same shape; callers should upsert
+/// open/pending orders and remove terminal statuses (`closed`, `canceled`, `expired`).
+pub fn parse_open_orders_message(msg: &serde_json::Value) -> Vec<KrakenOrder> {
+    let Some(arr) = msg.as_array() else {
+        return Vec::new();
+    };
+    if !arr.iter().any(|v| v.as_str() == Some("openOrders")) {
+        return Vec::new();
+    }
+    let Some(orders_obj) = arr.first().and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+
+    orders_obj
+        .iter()
+        .filter_map(|(txid, order_val)| {
+            let order = order_val.as_object()?;
+            let descr = order.get("descr").and_then(|v| v.as_object());
+
+            let descr_string = |key: &str| -> String {
+                descr
+                    .and_then(|d| d.get(key))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let descr_f64 = |key: &str| -> f64 {
+                descr
+                    .and_then(|d| d.get(key))
+                    .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .unwrap_or(0.0)
+            };
+            let descr_opt_f64 = |key: &str| -> Option<f64> {
+                descr
+                    .and_then(|d| d.get(key))
+                    .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+            };
+
+            let trades = order
+                .get("trades")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            Some(KrakenOrder {
+                txid: txid.clone(),
+                refid: order.get("refid").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                userref: order.get("userref").and_then(|v| v.as_i64()),
+                status: kraken_ws_string(order, "status"),
+                opentm: kraken_ws_f64(order, "opentm"),
+                starttm: kraken_ws_opt_f64(order, "starttm"),
+                expiretm: kraken_ws_opt_f64(order, "expiretm"),
+                pair: descr_string("pair"),
+                r#type: descr_string("type"),
+                ordertype: descr_string("ordertype"),
+                price: descr_f64("price"),
+                price2: descr_opt_f64("price2"),
+                vol: kraken_ws_f64(order, "vol"),
+                vol_exec: kraken_ws_f64(order, "vol_exec"),
+                cost: kraken_ws_f64(order, "cost"),
+                fee: kraken_ws_f64(order, "fee"),
+                stopprice: kraken_ws_opt_f64(order, "stopprice"),
+                limitprice: kraken_ws_opt_f64(order, "limitprice"),
+                misc: order.get("misc").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                trades,
+            })
+        })
+        .collect()
+}
+
+
+#[cfg(test)]
+mod kraken_private_ws_parse_tests {
+    use super::*;
+
+    #[test]
+    fn parse_open_orders_ws_message() {
+        let msg = serde_json::json!([
+            {
+                "OABCDEF-GHIJK-LMNOPQ": {
+                    "refid": null,
+                    "userref": 42,
+                    "status": "open",
+                    "opentm": 1700000000.123,
+                    "starttm": 0,
+                    "expiretm": 0,
+                    "descr": {
+                        "pair": "XXBTZUSD",
+                        "type": "buy",
+                        "ordertype": "limit",
+                        "price": "35000.0",
+                        "price2": "0"
+                    },
+                    "vol": "0.25",
+                    "vol_exec": "0.10",
+                    "cost": "3500.0",
+                    "fee": "1.2",
+                    "misc": ""
+                }
+            },
+            "openOrders",
+            7
+        ]);
+        let orders = parse_open_orders_message(&msg);
+        assert_eq!(orders.len(), 1);
+        let order = &orders[0];
+        assert_eq!(order.txid, "OABCDEF-GHIJK-LMNOPQ");
+        assert_eq!(order.userref, Some(42));
+        assert_eq!(order.status, "open");
+        assert_eq!(order.pair, "XXBTZUSD");
+        assert_eq!(order.r#type, "buy");
+        assert_eq!(order.ordertype, "limit");
+        assert!((order.price - 35000.0).abs() < 1e-9);
+        assert!((order.vol - 0.25).abs() < 1e-9);
+        assert!((order.vol_exec - 0.10).abs() < 1e-9);
+    }
+}
