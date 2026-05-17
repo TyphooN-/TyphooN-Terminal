@@ -1643,3 +1643,128 @@ mod tests {
         );
     }
 }
+
+// ============================================================================
+// Typed Models for Kraken Trading
+// ============================================================================
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KrakenTrade {
+    pub trade_id: String,
+    pub ordertxid: String,
+    pub pair: String,
+    pub time: f64,
+    pub side: String,        // "buy" or "sell"
+    pub ordertype: String,   // "market", "limit", etc.
+    pub price: f64,
+    pub cost: f64,
+    pub fee: f64,
+    pub vol: f64,
+    pub margin: f64,
+    pub misc: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KrakenOrder {
+    pub txid: String,
+    pub refid: Option<String>,
+    pub userref: Option<i64>,
+    pub status: String,
+    pub opentm: f64,
+    pub starttm: Option<f64>,
+    pub expiretm: Option<f64>,
+    pub pair: String,
+    pub r#type: String,      // "buy" or "sell"
+    pub ordertype: String,
+    pub price: f64,
+    pub price2: Option<f64>,
+    pub vol: f64,
+    pub vol_exec: f64,
+    pub cost: f64,
+    pub fee: f64,
+    pub stopprice: Option<f64>,
+    pub limitprice: Option<f64>,
+    pub misc: Option<String>,
+    pub trades: Vec<String>,
+}
+
+impl KrakenBroker {
+    /// Fetch trade history with parsed results.
+    pub async fn get_trades_history_parsed(
+        &self,
+        start: Option<i64>,
+        end: Option<i64>,
+        ofs: Option<u64>,
+    ) -> Result<Vec<KrakenTrade>, String> {
+        let mut params = Vec::new();
+        if let Some(s) = start {
+            params.push(("start".to_string(), s.to_string()));
+        }
+        if let Some(e) = end {
+            params.push(("end".to_string(), e.to_string()));
+        }
+        if let Some(o) = ofs {
+            params.push(("ofs".to_string(), o.to_string()));
+        }
+
+        let resp = self.get_trades_history(&params).await?;
+
+        let result = resp
+            .get("result")
+            .ok_or_else(|| "Kraken TradesHistory missing result".to_string())?;
+
+        let trades_obj = result
+            .get("trades")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| "Kraken TradesHistory missing trades object".to_string())?;
+
+        let mut trades = Vec::new();
+
+        for (trade_id, trade_value) in trades_obj {
+            if let Some(trade) = trade_value.as_object() {
+                let kraken_trade = KrakenTrade {
+                    trade_id: trade_id.clone(),
+                    ordertxid: trade.get("ordertxid").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    pair: trade.get("pair").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    time: trade.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    side: trade.get("side").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    ordertype: trade.get("ordertype").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    price: trade.get("price").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                    cost: trade.get("cost").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                    fee: trade.get("fee").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                    vol: trade.get("vol").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                    margin: trade.get("margin").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                    misc: trade.get("misc").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                };
+                trades.push(kraken_trade);
+            }
+        }
+
+        Ok(trades)
+    }
+}
+
+// ============================================================================
+// Private WebSocket Support (Skeleton)
+// ============================================================================
+
+pub struct KrakenPrivateWs {
+    pub token: String,
+}
+
+impl KrakenPrivateWs {
+    pub fn new(token: String) -> Self {
+        Self { token }
+    }
+
+    /// Returns the subscription message for ownTrades and openOrders.
+    pub fn subscription_message(&self) -> String {
+        serde_json::json!({
+            "event": "subscribe",
+            "subscription": {
+                "name": "ownTrades",
+                "token": self.token
+            }
+        }).to_string()
+    }
+}
