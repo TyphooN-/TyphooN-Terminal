@@ -139,7 +139,7 @@ TyphooN-Terminal/
 │   ├── kubernetes/         # lan-server + observability-kafka manifests
 │   ├── prometheus/         # Prometheus scrape config for /metrics
 │   └── terraform/          # Kubernetes module incl. observability + Kafka resources
-├── mql5-compiler/          # MQL5 + PineScript + 8 transpiler backends
+├── mql5-compiler/          # MQL5 compiler plus full 10-language transpiler matrix
 ├── web/                    # WASM LAN client (ADR-073)
 ├── web-protocol/           # Shared web ↔ server message types
 ├── web-server/             # axum HTTPS + WebSocket relay

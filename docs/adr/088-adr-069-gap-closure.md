@@ -57,7 +57,7 @@ The button is disabled when there's insufficient data (tooltip still visible). U
 
 ## Items from ADR-069 explicitly NOT addressed (deferred with reason)
 
-- ~~**EasyLanguage compiler**~~ **Implemented in ADR-089/090.** Full transpiler backend with 216 tests.
+- ~~**EasyLanguage compiler**~~ **Implemented in ADR-089/090.** Full transpiler backend; follow-ups now provide the full 10-language matrix with 227 mql5-compiler tests.
 - ~~**thinkScript compiler**~~ **Implemented in ADR-089/090.** Full transpiler backend.
 - **Forex cross-rate matrix** — already implemented as `FOREX` command per the ADR-069 status table.
 - **Dark pool volume (SqueezMetrics)** — requires paid data feed access; researched but no free source.

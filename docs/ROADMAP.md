@@ -116,11 +116,11 @@
 - [x] FRED economic data (Fed Funds, CPI, GDP, Treasury yields, VIX, M2 Supply)
 
 ### Phase 12: MQL5/PineScript Compiler
-- [x] MQL5 parser (pest grammar → AST, core MQL5 syntax, 216 tests)
+- [x] MQL5 parser (pest grammar → AST, core MQL5 syntax, 227 mql5-compiler tests)
 - [x] WASM backend (CPU execution via wasmtime)
 - [x] WGSL backend (GPU execution via wgpu compute shaders)
 - [x] PineScript v5 parser (indicator, input.*, ta.*, plot, math.*)
-- [x] 8 transpiler frontends/backends: MQL4, PineScript, ThinkScript, EasyLanguage, AFL, ACSIL, cAlgo, NinjaScript, ProBuilder
+- [x] Full 10-language transpiler matrix: MQL5, MQL4, PineScript, ThinkScript, EasyLanguage, AFL, ProBuilder, NinjaScript, cAlgo, ACSIL
 - Deferred: hot-reload custom indicators from file and an indicator marketplace/import UI remain outside the current native parity target.
 
 ### Phase 13: Kraken Broker

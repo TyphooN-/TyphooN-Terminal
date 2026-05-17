@@ -179,3 +179,16 @@ reusable for future optimizations.
   eliminating repeated `locals.iter().any(...)` scans as imported scripts grow.
 - Added duplicate-local regression tests for each converted frontend so the
   ordered-Vec + HashSet invariant is locked down across the full frontend set.
+
+## 2026-05-17 Fifth Comb-over
+
+- Extended the O(1) lookup pass into `mql5-compiler/src/transpile.rs`: target
+  backends that repeatedly test whether a symbol is an input now build
+  `HashSet<String>` side indexes, and ACSIL input-reference emission now uses a
+  `HashMap<String, String>` instead of recursively scanning a vector for every
+  `GetLocal` expression.
+- Reworked the C# identifier helper to avoid `String::insert(0, '_')` for
+  leading-digit names, eliminating the front-shift pass in backend emission.
+- Added regression coverage confirming NinjaScript, cAlgo, and ACSIL targets do
+  not emit local shadow declarations for input symbols and still lower input
+  references correctly. `mql5-compiler` coverage is now 227 unit tests.

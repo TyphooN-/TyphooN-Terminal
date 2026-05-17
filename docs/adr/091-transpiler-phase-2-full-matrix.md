@@ -1,4 +1,4 @@
-# ADR-091 — Transpiler Phase 2: Full 9×9 Cross-Language Matrix
+# ADR-091 — Transpiler Phase 2: Full Cross-Language Matrix
 
 **Status:** Implemented
 **Date:** 2026-04-10
@@ -11,8 +11,9 @@ with 5 source languages (EL / TS / AFL / ProBuilder / Pine) × 4 targets
 not transpile sources (MQL5, MQL4, NinjaScript, cAlgo), and five targets
 were missing (MQL4, AFL, ProBuilder, NinjaScript, cAlgo).
 
-This ADR closes the matrix completely: **every language is now both a
-source and a target**. The result is a 9×9 = 81 directional capability.
+This ADR closed the initial matrix, and follow-up ACSIL work expanded it:
+**every supported language is now both a source and a target**. The current
+result is a 10×10 = 100 directional capability.
 
 ## Decisions
 
@@ -57,14 +58,14 @@ identifier safety).
 ### 4. UI expansion
 
 The "Transpile to:" dropdown in the Indicator Compiler window now lists
-all 9 targets. The "Use as Source" button sets the source language to
+all 10 targets. The "Use as Source" button sets the source language to
 match the transpile target (1:1 index mapping after this commit).
 
 ### 5. TargetLanguage enum expanded
 
-`TargetLanguage` now has the same 9 variants as `SourceLanguage`:
+`TargetLanguage` now has the same 10 variants as `SourceLanguage`:
 `Mql5`, `Mql4`, `PineScript`, `EasyLanguage`, `ThinkScript`, `Afl`,
-`ProBuilder`, `NinjaScript`, `Calgo`.
+`ProBuilder`, `NinjaScript`, `Calgo`, `Acsil`.
 
 ## Tests
 
@@ -78,12 +79,15 @@ match the transpile target (1:1 index mapping after this commit).
 - `el_to_probuilder_backend_emits_return` — IR → ProBuilder RETURN form
 - `el_to_ninjascript_backend_emits_csharp_class` — IR → NinjaScript C#
 - `el_to_calgo_backend_emits_indicator_attribute` — IR → cAlgo C#
-- `full_matrix_smoke_test` — EL source → all 9 targets, non-empty output
+- `full_matrix_smoke_test` — EL source → all 10 targets, non-empty output
 - `pascal_case_helper` — helper correctness incl. leading-digit safety
 
-**Total workspace test count: 813** (up from 793 in ADR-090).
+**Historical workspace test count at ADR creation: 813** (up from 793 in
+ADR-090). Subsequent frontend/backend follow-ups have raised
+`mql5-compiler` to 227 unit tests.
 
-- 216 mql5-compiler (+20: +10 Phase 2 transpile, +10 ACSIL follow-up)
+- 227 mql5-compiler (+20 Phase 2 transpile/ACSIL follow-up, plus later O(1)
+  and deferred-work regression tests)
 - 497 engine
 - 78 native
 - 22 web-protocol
@@ -95,16 +99,17 @@ the matrix to 10×10 = 100 directional conversions and adding 10 tests.*
 
 ```
                 ↓ Target
-Source →    MQL5  MQL4  Pine  EL  TS  AFL  PB  Ninja  cAlgo
-MQL5        ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅
-MQL4        ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅
-PineScript  ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅
-EasyLanguage✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅
-thinkScript ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅
-AFL         ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅
-ProBuilder  ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅
-NinjaScript ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅
-cAlgo       ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅
+Source →    MQL5  MQL4  Pine  EL  TS  AFL  PB  Ninja  cAlgo  ACSIL
+MQL5        ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅     ✅
+MQL4        ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅     ✅
+PineScript  ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅     ✅
+EasyLanguage✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅     ✅
+thinkScript ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅     ✅
+AFL         ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅     ✅
+ProBuilder  ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅     ✅
+NinjaScript ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅     ✅
+cAlgo       ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅     ✅
+ACSIL       ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅     ✅
 ```
 
 ## Consequences
@@ -114,7 +119,7 @@ cAlgo       ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅
 - The **full N×N cross-language transpiler is complete**. A trader can
   paste an indicator from any of the 10 supported platforms (MQL5, MQL4,
   PineScript, EasyLanguage, thinkScript, AFL, ProBuilder, NinjaScript,
-  cAlgo, ACSIL) and get working source for any of the other 9 in a
+  cAlgo, ACSIL) and get working source for any supported target in a
   single click. No other charting platform ships this.
 - MQL5 source-to-IR round-trip now works, meaning MQL5 indicators can
   be converted to PineScript / EasyLanguage / thinkScript / etc. with no
@@ -125,11 +130,11 @@ cAlgo       ✅    ✅    ✅    ✅   ✅   ✅   ✅   ✅     ✅
 ### Trade-offs
 
 - **IR coverage remains the "80% indicator case"**: assignments, plot
-  buffers, built-in TA calls, arithmetic, comparisons. No `if`/`for`
-  blocks, arrays, UDFs, or time-shifted series. Indicators using those
-  constructs compile to WASM fine (the frontends skip unsupported stmts)
-  but the transpiled output will omit them. This is the same documented
-  boundary from ADR-090.
+  buffers, built-in TA calls, arithmetic, comparisons, statement-level `if`,
+  and select/ternary lowering. Loop blocks, arrays, UDFs, and time-shifted
+  series remain outside the shared transpiler subset. Indicators using those
+  constructs may compile through source-specific paths, but cross-language
+  output only preserves the shared subset.
 - MQL5 source-to-IR depends on the pest grammar parsing the full source
   successfully. MQL5 source that hits unsupported grammar rules
   (templates, operator overloads, etc.) will fail gracefully with a

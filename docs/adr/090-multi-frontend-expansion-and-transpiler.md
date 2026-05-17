@@ -259,7 +259,7 @@ transpile between the five line-scanner languages freely.
 
 **Historical baseline at ADR creation: 793 workspace tests** (up from 728 in
 ADR-089). Follow-up compiler frontend comb-overs have since raised
-`mql5-compiler` coverage to 226 unit tests.
+`mql5-compiler` coverage to 227 unit tests.
 
 - 196 mql5-compiler (+65)
 - 497 engine
@@ -270,10 +270,10 @@ ADR-089). Follow-up compiler frontend comb-overs have since raised
 
 ### Positive
 
-- **Compatibility coverage is now nine of the ten major commercial
-  indicator languages.** Sierra Chart ACSIL (C++) is the only notable
-  holdout — it's the platform where users are already programmers, so
-  the compatibility argument is weakest anyway.
+- **Compatibility coverage now includes the ten-language matrix.** MQL5,
+  MQL4, PineScript, EasyLanguage, thinkScript, AFL, ProBuilder, NinjaScript,
+  cAlgo, and Sierra Chart ACSIL all have source-to-IR and target emission
+  paths for the shared indicator subset.
 - **MQL4 unlocks the largest single pool of retail algorithmic code
   ever published.** Two decades of forum-posted EAs and indicators are
   now one load-file click away from running on the TyphooN Terminal.
@@ -291,13 +291,10 @@ ADR-089). Follow-up compiler frontend comb-overs have since raised
 
 ### Trade-offs
 
-- **Source-to-IR round-trip for MQL5 / MQL4 / NinjaScript / cAlgo is
-  Phase 2.** These are full-parser (MQL5) or attribute-scanner (C#)
-  frontends that need additional lowering work to expose a clean
-  `build_ir()` helper. Until then, those four languages are compile
-  targets and emit sources but cannot be transpile *sources*. The five
-  line-scanner languages (EL, TS, AFL, ProBuilder, Pine) fully
-  participate in both directions today.
+- **Source-to-IR round-trip is implemented for all ten listed languages.**
+  MQL4 rewrites through MQL5, C#-style platforms use pragmatic attribute
+  scanners, and line-scanner languages feed the same shared IR. The trade-off
+  is still subset coverage, not direction-matrix coverage.
 - **IR coverage beyond the initial ADR:** the shared IR now represents
   statement-level `if` blocks and the WASM codegen handles ternary/select
   lowering through `__select_f64`. AFL `IIf(cond, a, b)` and ProBuilder
@@ -323,27 +320,12 @@ ADR-089). Follow-up compiler frontend comb-overs have since raised
 
 ## Deferred Follow-up Context
 
-### Phase 2 — transpile sources
-- **MQL5 → IR**: refactor the pest-grammar-backed lowering to expose a
-  `mql5::build_ir(source) -> Result<(IrModule, IndicatorMeta), _>` helper
-  alongside the existing `compile_mql5`. The lowering already exists
-  (see `ir::lower`); this is mostly plumbing.
-- **MQL4 → IR**: falls out of MQL5 support because MQL4 already rewrites
-  to MQL5 before hitting the parser.
-- **NinjaScript → IR**: wrap the existing `parse_ninjascript` to return
-  the IR module instead of directly calling `emit_wasm`.
-- **cAlgo → IR**: same wrap pattern.
-
-### Phase 2 — additional targets
-- **IR → MQL4**: almost-free since MQL4 is largely a subset of MQL5.
-  Emitter can share most of the MQL5 backend.
-- **IR → AFL**: same line-scanner template in reverse — emit `Plot(...)`,
-  `Param(...)`, EMA/SMA built-ins.
-- **IR → ProBuilder**: emit bracketed-length form, RETURN statements.
-- **IR → NinjaScript**: emit a C# class skeleton with
-  `[NinjaScriptProperty]` inputs and `AddPlot` + `OnBarUpdate` bodies.
-- **IR → cAlgo**: similar C# class skeleton with `[Indicator]` /
-  `[Parameter]` / `[Output]` attributes.
+### Phase 2 — transpile sources / additional targets
+- **Resolved:** MQL5/MQL4 source-to-IR, NinjaScript/cAlgo source wrappers,
+  ACSIL source support, and IR emitters for MQL4/AFL/ProBuilder/NinjaScript/
+  cAlgo/ACSIL are implemented. The active follow-up area is no longer matrix
+  plumbing; it is deeper shared-IR coverage for constructs that do not fit the
+  common indicator subset.
 
 ### Phase 2 — Remaining IR coverage
 - **Loop control in line-scanner frontends**: `for`/`while` blocks remain

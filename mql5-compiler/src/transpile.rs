@@ -10,23 +10,25 @@
 //!
 //! ## Supported directions (Phase 2 — this commit)
 //!
-//! The **full 9×9 matrix** is now live: every language is both a source and
+//! The **full 10×10 matrix** is now live: every language is both a source and
 //! a target. The underlying IR coverage still matches the "80% common
-//! indicator case" design from ADR-069 (no if/for blocks, arrays, UDFs, or
-//! time-shifted series access yet — see the IR coverage section in ADR-091),
-//! but the direction matrix itself is complete.
+//! indicator case" design from ADR-069: statement-level `if` and select/
+//! ternary lowering are available, while loop blocks, arrays, UDFs, and
+//! time-shifted series access remain outside the shared subset — see the IR
+//! coverage sections in ADR-090/091. The direction matrix itself is complete.
 //!
 //! ```text
-//!           MQL5  MQL4  Pine  EL  TS  AFL  PB  Ninja  cAlgo
-//! MQL5       ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓
-//! MQL4       ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓
-//! PineScript ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓
-//! EL         ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓
-//! TS         ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓
-//! AFL        ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓
-//! ProBuilder ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓
-//! NinjaScript✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓
-//! cAlgo      ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓
+//!           MQL5  MQL4  Pine  EL  TS  AFL  PB  Ninja  cAlgo  ACSIL
+//! MQL5       ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓      ✓
+//! MQL4       ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓      ✓
+//! PineScript ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓      ✓
+//! EL         ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓      ✓
+//! TS         ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓      ✓
+//! AFL        ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓      ✓
+//! ProBuilder ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓      ✓
+//! NinjaScript✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓      ✓
+//! cAlgo      ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓      ✓
+//! ACSIL      ✓     ✓    ✓    ✓   ✓   ✓   ✓    ✓      ✓      ✓
 //! ```
 //!
 //! ## Approach
@@ -40,6 +42,7 @@
 
 use crate::IndicatorMeta;
 use crate::ir::*;
+use std::collections::{HashMap, HashSet};
 
 /// Set of languages the transpiler understands as a source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -975,10 +978,10 @@ fn emit_ninjascript(ir: &IrModule, meta: &IndicatorMeta) -> String {
     out.push_str("            if (CurrentBar < 1) return;\n");
     // Input names are lowercased in the IR; pascal-case them in the body
     // to match the `public int Period {...}` property declarations below.
-    let input_names: Vec<String> = ir.inputs.iter().map(|i| i.name.clone()).collect();
+    let input_names: HashSet<String> = ir.inputs.iter().map(|i| i.name.clone()).collect();
     if let Some(ref f) = ir.on_calculate {
         for (local_name, _) in &f.locals {
-            if input_names.iter().any(|n| n == local_name) {
+            if input_names.contains(local_name) {
                 continue;
             }
             out.push_str(&format!("            double {} = 0.0;\n", local_name));
@@ -986,7 +989,7 @@ fn emit_ninjascript(ir: &IrModule, meta: &IndicatorMeta) -> String {
         for stmt in &f.body {
             match stmt {
                 IrStmt::SetLocal(local_name, e) => {
-                    let lhs = if input_names.iter().any(|n| n == local_name) {
+                    let lhs = if input_names.contains(local_name) {
                         pascal_case(local_name)
                     } else {
                         local_name.clone()
@@ -1033,12 +1036,12 @@ fn emit_ninjascript(ir: &IrModule, meta: &IndicatorMeta) -> String {
     out
 }
 
-fn emit_expr_ns(e: &IrExpr, inputs: &[String]) -> String {
+fn emit_expr_ns(e: &IrExpr, inputs: &HashSet<String>) -> String {
     match e {
         IrExpr::I32Const(n) => format!("{}", n),
         IrExpr::F64Const(f) => format!("{}", f),
         IrExpr::GetLocal(n) => {
-            if inputs.iter().any(|i| i == n) {
+            if inputs.contains(n) {
                 pascal_case(n)
             } else {
                 n.clone()
@@ -1137,10 +1140,10 @@ fn emit_calgo(ir: &IrModule, meta: &IndicatorMeta) -> String {
         ));
     }
     out.push_str("        public override void Calculate(int index)\n        {\n");
-    let input_names: Vec<String> = ir.inputs.iter().map(|i| i.name.clone()).collect();
+    let input_names: HashSet<String> = ir.inputs.iter().map(|i| i.name.clone()).collect();
     if let Some(ref f) = ir.on_calculate {
         for (local_name, _) in &f.locals {
-            if input_names.iter().any(|n| n == local_name) {
+            if input_names.contains(local_name) {
                 continue;
             }
             out.push_str(&format!("            double {} = 0.0;\n", local_name));
@@ -1148,7 +1151,7 @@ fn emit_calgo(ir: &IrModule, meta: &IndicatorMeta) -> String {
         for stmt in &f.body {
             match stmt {
                 IrStmt::SetLocal(local_name, e) => {
-                    let lhs = if input_names.iter().any(|n| n == local_name) {
+                    let lhs = if input_names.contains(local_name) {
                         pascal_case(local_name)
                     } else {
                         local_name.clone()
@@ -1179,12 +1182,12 @@ fn emit_calgo(ir: &IrModule, meta: &IndicatorMeta) -> String {
     out
 }
 
-fn emit_expr_calgo(e: &IrExpr, inputs: &[String]) -> String {
+fn emit_expr_calgo(e: &IrExpr, inputs: &HashSet<String>) -> String {
     match e {
         IrExpr::I32Const(n) => format!("{}", n),
         IrExpr::F64Const(f) => format!("{}", f),
         IrExpr::GetLocal(n) => {
-            if inputs.iter().any(|i| i == n) {
+            if inputs.contains(n) {
                 pascal_case(n)
             } else {
                 n.clone()
@@ -1315,8 +1318,8 @@ fn emit_acsil(ir: &IrModule, meta: &IndicatorMeta) -> String {
     }
     out.push_str("        return;\n    }\n\n");
     // Body
-    let input_names: Vec<String> = ir.inputs.iter().map(|i| i.name.clone()).collect();
-    let input_ref_names: Vec<(String, String)> = ir
+    let input_names: HashSet<String> = ir.inputs.iter().map(|i| i.name.clone()).collect();
+    let input_ref_names: HashMap<String, String> = ir
         .inputs
         .iter()
         .enumerate()
@@ -1324,7 +1327,7 @@ fn emit_acsil(ir: &IrModule, meta: &IndicatorMeta) -> String {
         .collect();
     if let Some(ref f) = ir.on_calculate {
         for (local_name, _) in &f.locals {
-            if input_names.iter().any(|n| n == local_name) {
+            if input_names.contains(local_name) {
                 continue;
             }
             out.push_str(&format!("    float {} = 0.0;\n", local_name));
@@ -1358,13 +1361,13 @@ fn emit_acsil(ir: &IrModule, meta: &IndicatorMeta) -> String {
     out
 }
 
-fn emit_expr_acsil(e: &IrExpr, input_refs: &[(String, String)]) -> String {
+fn emit_expr_acsil(e: &IrExpr, input_refs: &HashMap<String, String>) -> String {
     match e {
         IrExpr::I32Const(n) => format!("{}", n),
         IrExpr::F64Const(f) => format!("{}f", f),
         IrExpr::GetLocal(n) => {
             // If this is an input, emit RefName.GetInt()/GetFloat()
-            if let Some((_, ref_name)) = input_refs.iter().find(|(ir_name, _)| ir_name == n) {
+            if let Some(ref_name) = input_refs.get(n) {
                 format!("{}.GetInt()", ref_name)
             } else {
                 n.clone()
@@ -1522,19 +1525,25 @@ fn pascal_case(s: &str) -> String {
             out.push(c);
         }
     }
-    // Leading digit is invalid in C# — prefix with `_`
+    if out.is_empty() {
+        out.push_str("Indicator");
+    }
+    // Leading digit is invalid in C# — prefix without String::insert(0),
+    // which shifts the whole buffer. This helper is used by backend emission
+    // loops, so keep it linear without an extra front-shift pass.
     if out
         .chars()
         .next()
         .map(|c| c.is_ascii_digit())
         .unwrap_or(false)
     {
-        out.insert(0, '_');
+        let mut prefixed = String::with_capacity(out.len() + 1);
+        prefixed.push('_');
+        prefixed.push_str(&out);
+        prefixed
+    } else {
+        out
     }
-    if out.is_empty() {
-        out.push_str("Indicator");
-    }
-    out
 }
 
 #[cfg(test)]
@@ -1834,6 +1843,37 @@ Plot1(SmaVal, "SMA");
         assert!(out.contains("Indicators.SimpleMovingAverage"));
         assert!(out.contains("Bars.ClosePrices[index]"));
         assert!(out.contains("Calculate(int index)"));
+    }
+
+    #[test]
+    fn target_backends_use_input_symbols_without_local_shadow_declarations() {
+        let src = r#"
+inputs: Period(14);
+variables: EmaVal(0);
+EmaVal = XAverage(Close, Period);
+Plot1(EmaVal, "EMA");
+"#;
+
+        let ninja = roundtrip(
+            src,
+            SourceLanguage::EasyLanguage,
+            TargetLanguage::NinjaScript,
+        );
+        assert!(ninja.contains("public int Period"));
+        assert!(!ninja.contains("double Period = 0.0;"));
+        assert!(ninja.contains("EMA(Close[0], (int)(Period))"));
+
+        let calgo = roundtrip(src, SourceLanguage::EasyLanguage, TargetLanguage::Calgo);
+        assert!(calgo.contains("public int Period"));
+        assert!(!calgo.contains("double Period = 0.0;"));
+        assert!(calgo.contains(
+            "Indicators.ExponentialMovingAverage(Bars.ClosePrices[index], (int)(Period))"
+        ));
+
+        let acsil = roundtrip(src, SourceLanguage::EasyLanguage, TargetLanguage::Acsil);
+        assert!(acsil.contains("SCInputRef period = sc.Input[0];"));
+        assert!(!acsil.contains("float period = 0.0;"));
+        assert!(acsil.contains("period.GetInt()"));
     }
 
     #[test]

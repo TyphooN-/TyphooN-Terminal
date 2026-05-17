@@ -260,7 +260,7 @@ fn eval_strategy(@builtin(global_invocation_id) id: vec3<u32>) {
 - Visual strategy builder in egui — deferred (text-based MQL5/PineScript input works)
 
 **Phase 4: MQL5 Export** *(Implemented)*
-- [x] Generate .mqh/.mq5/.mq4 indicator source — mql5_export module + 8 transpiler backends
+- [x] Generate .mqh/.mq5/.mq4 indicator source — mql5_export module + full 10-language transpiler matrix
 - Generate EA source with optimal parameters
 - Export .set files for MT5 tester
 - Validation report generation
