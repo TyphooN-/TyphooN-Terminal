@@ -191,4 +191,19 @@ reusable for future optimizations.
   leading-digit names, eliminating the front-shift pass in backend emission.
 - Added regression coverage confirming NinjaScript, cAlgo, and ACSIL targets do
   not emit local shadow declarations for input symbols and still lower input
-  references correctly. `mql5-compiler` coverage is now 227 unit tests.
+  references correctly. `mql5-compiler` coverage is now 229 unit tests.
+
+## 2026-05-17 Sixth Comb-over
+
+- Deferred single-line ternary support is now wired for both EasyLanguage and
+  thinkScript frontends. `if condition then a else b` lowers to the shared
+  `__select_f64` IR primitive, reusing the verified WebAssembly select stack
+  ordering while preserving each frontend's existing identifier casing rules.
+- The native deferred-chart-load queue now keeps a `HashSet<usize>` side index
+  next to the `VecDeque`, so duplicate suppression is O(1) instead of scanning
+  the queue before every deferred reload request.
+- Broker symbol-search suggestion merging now uses a `HashSet<String>` side
+  index for O(1) duplicate suppression across Alpaca, tastytrade, and Kraken
+  suggestions instead of repeatedly rescanning accumulated results.
+- Added regression coverage for EasyLanguage and thinkScript ternary lowering;
+  `mql5-compiler` coverage is now 229 unit tests.

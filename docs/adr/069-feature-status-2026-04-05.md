@@ -28,7 +28,7 @@
 ### Analytics
 - DARWIN analytics: 80+ functions, performance attribution, D-Score components, investment velocity, tax lots, rolling correlation, diversification candidates
 - Risk engine: VaR, Monte Carlo, stress test, risk-of-ruin, margin monitor
-- MQL5 compiler plus full 10-language transpiler matrix (227 tests, WASM + WGSL + MQL5 + MQL4 + PineScript + ThinkScript + EasyLanguage + AFL + ProBuilder + NinjaScript + cAlgo + ACSIL)
+- MQL5 compiler plus full 10-language transpiler matrix (229 tests, WASM + WGSL + MQL5 + MQL4 + PineScript + ThinkScript + EasyLanguage + AFL + ProBuilder + NinjaScript + cAlgo + ACSIL)
 - GPU backtester + optimizer (SMA cross + NNFX strategies)
 - Compound interest calculator with growth chart
 

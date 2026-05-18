@@ -116,7 +116,7 @@
 - [x] FRED economic data (Fed Funds, CPI, GDP, Treasury yields, VIX, M2 Supply)
 
 ### Phase 12: MQL5/PineScript Compiler
-- [x] MQL5 parser (pest grammar → AST, core MQL5 syntax, 227 mql5-compiler tests)
+- [x] MQL5 parser (pest grammar → AST, core MQL5 syntax, 229 mql5-compiler tests)
 - [x] WASM backend (CPU execution via wasmtime)
 - [x] WGSL backend (GPU execution via wgpu compute shaders)
 - [x] PineScript v5 parser (indicator, input.*, ta.*, plot, math.*)

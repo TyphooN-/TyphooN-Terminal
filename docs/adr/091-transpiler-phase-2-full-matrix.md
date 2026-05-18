@@ -84,9 +84,9 @@ match the transpile target (1:1 index mapping after this commit).
 
 **Historical workspace test count at ADR creation: 813** (up from 793 in
 ADR-090). Subsequent frontend/backend follow-ups have raised
-`mql5-compiler` to 227 unit tests.
+`mql5-compiler` to 229 unit tests.
 
-- 227 mql5-compiler (+20 Phase 2 transpile/ACSIL follow-up, plus later O(1)
+- 229 mql5-compiler (+20 Phase 2 transpile/ACSIL follow-up, plus later O(1)
   and deferred-work regression tests)
 - 497 engine
 - 78 native

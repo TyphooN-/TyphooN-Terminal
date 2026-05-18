@@ -10,13 +10,14 @@
 //!   `RSI`, `ATR`, `Highest`, `Lowest`, `StDev`, `AbsValue`, `Sqrt`, `Log`, `Max`, `Min`
 //! - Static plot color hints via `Plot.SetDefaultColor(Color.X)` and
 //!   `AssignValueColor(Color.X)` / `Plot.AssignValueColor(Color.X)`
+//! - Single-line ternary expressions: `if condition then a else b`
 //! - Assignment syntax ends with `;`
 //! - `#` line comments (thinkScript convention)
 //! - Case-sensitive (thinkScript convention)
 //!
 //! Not supported (deferred):
 //! - Dynamic conditional plot coloring (metadata records only static color hints)
-//! - Multi-line `if then else` (single-line ternary works)
+//! - Multi-line statement-block `if then else`
 //! - Arrays / reference arrays
 //!
 //! thinkScript is case-sensitive. Keywords are reserved but follow identifier rules.
@@ -313,6 +314,18 @@ pub(crate) fn parse_ts_expr(expr: &str) -> Option<IrExpr> {
         return Some(IrExpr::F64Const(f));
     }
 
+    // Single-line thinkScript ternary: `if condition then true_expr else false_expr`.
+    if let Some((cond, then_expr, else_expr)) = split_ts_if_then_else(expr) {
+        return Some(IrExpr::Call(
+            "__select_f64".to_string(),
+            vec![
+                parse_ts_expr(cond)?,
+                parse_ts_expr(then_expr)?,
+                parse_ts_expr(else_expr)?,
+            ],
+        ));
+    }
+
     // Built-in series (thinkScript is case-sensitive for identifiers;
     // series tokens are lowercase)
     match expr {
@@ -388,6 +401,23 @@ pub(crate) fn parse_ts_expr(expr: &str) -> Option<IrExpr> {
     }
 
     None
+}
+
+/// Split a single-line thinkScript `if condition then a else b` expression.
+fn split_ts_if_then_else(expr: &str) -> Option<(&str, &str, &str)> {
+    let body = expr.strip_prefix("if ")?;
+    let then_rel = body.find(" then ")?;
+    let cond_start = 3;
+    let then_pos = cond_start + then_rel;
+    let then_expr_start = then_pos + " then ".len();
+    let else_rel = expr[then_expr_start..].find(" else ")?;
+    let else_pos = then_expr_start + else_rel;
+    let else_expr_start = else_pos + " else ".len();
+    Some((
+        expr[cond_start..then_pos].trim(),
+        expr[then_expr_start..else_pos].trim(),
+        expr[else_expr_start..].trim(),
+    ))
 }
 
 /// Split a string on top-level commas (ignoring commas inside nested parens).
@@ -532,6 +562,18 @@ plot Range = spread;
         let result = compile_thinkscript("");
         assert!(result.metadata.is_some());
         assert_eq!(result.metadata.unwrap().plots.len(), 0);
+    }
+
+    #[test]
+    fn test_ts_if_then_else_lowers_to_select() {
+        let expr = parse_ts_expr("if close > Average(close, 14) then 1 else 0");
+        match expr {
+            Some(IrExpr::Call(name, args)) => {
+                assert_eq!(name, "__select_f64");
+                assert_eq!(args.len(), 3);
+            }
+            other => panic!("expected select call for thinkScript ternary, got {other:?}"),
+        }
     }
 
     #[test]

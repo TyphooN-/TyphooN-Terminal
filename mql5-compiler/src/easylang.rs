@@ -8,13 +8,14 @@
 //! - Built-in series: `Close`, `Open`, `High`, `Low`, `Volume`
 //! - Built-in functions: `Average`, `XAverage` (EMA), `RSI`, `ATR`,
 //!   `Highest`, `Lowest`, `StdDev`, `AbsValue`, `SquareRoot`, `Log`
+//! - Single-line ternary expressions: `if condition then a else b`
 //! - Assignment statements: `Name = expression;`
 //! - `Plot1..PlotN(value, "label")`
 //! - Case-insensitive keywords (EL convention)
 //! - `//` and `{ }` comments
 //!
 //! Not supported (deferred):
-//! - `if/then/else` with multi-line blocks
+//! - `if/then/else` with multi-line statement blocks
 //! - `Buy`/`Sell`/`SellShort`/`BuyToCover` signals (no trade sim path)
 //! - User-defined functions
 //! - Arrays
@@ -324,6 +325,19 @@ pub(crate) fn parse_el_expr(expr: &str) -> Option<IrExpr> {
 
     let lower = expr.to_ascii_lowercase();
 
+    // Single-line EasyLanguage ternary: `if condition then true_expr else false_expr`.
+    // Lower to the shared synthetic select primitive used by AFL/other frontends.
+    if let Some((cond, then_expr, else_expr)) = split_el_if_then_else(expr, &lower) {
+        return Some(IrExpr::Call(
+            "__select_f64".to_string(),
+            vec![
+                parse_el_expr(cond)?,
+                parse_el_expr(then_expr)?,
+                parse_el_expr(else_expr)?,
+            ],
+        ));
+    }
+
     // Built-in series (case-insensitive)
     match lower.as_str() {
         "close" | "c" => return Some(IrExpr::IClose(Box::new(IrExpr::I32Const(0)))),
@@ -398,6 +412,23 @@ pub(crate) fn parse_el_expr(expr: &str) -> Option<IrExpr> {
     }
 
     None
+}
+
+/// Split a single-line EasyLanguage `if condition then a else b` expression.
+fn split_el_if_then_else<'a>(expr: &'a str, lower: &str) -> Option<(&'a str, &'a str, &'a str)> {
+    let body = lower.strip_prefix("if ")?;
+    let then_rel = body.find(" then ")?;
+    let cond_start = 3;
+    let then_pos = cond_start + then_rel;
+    let then_expr_start = then_pos + " then ".len();
+    let else_rel = lower[then_expr_start..].find(" else ")?;
+    let else_pos = then_expr_start + else_rel;
+    let else_expr_start = else_pos + " else ".len();
+    Some((
+        expr[cond_start..then_pos].trim(),
+        expr[then_expr_start..else_pos].trim(),
+        expr[else_expr_start..].trim(),
+    ))
 }
 
 /// Strip `{ ... }` block comments. EL treats braces as multi-line comments.
@@ -569,6 +600,18 @@ plot1(MA);
             assert_eq!(name, "ta_ema");
         } else {
             panic!("XAverage should map to ta_ema");
+        }
+    }
+
+    #[test]
+    fn test_el_if_then_else_lowers_to_select() {
+        let expr = parse_el_expr("if Close > Average(Close, 14) then 1 else 0");
+        match expr {
+            Some(IrExpr::Call(name, args)) => {
+                assert_eq!(name, "__select_f64");
+                assert_eq!(args.len(), 3);
+            }
+            other => panic!("expected select call for EasyLanguage ternary, got {other:?}"),
         }
     }
 

@@ -878,13 +878,21 @@ impl KrakenBroker {
             .collect()
     }
 
-    pub fn spot_position_summaries_from_balances(
+    fn is_equity_balance_asset(asset: &str) -> bool {
+        Self::display_asset(asset).contains(".EQ")
+    }
+
+    pub fn equity_position_summaries_from_balances(
         balances: &[(String, f64)],
     ) -> Vec<crate::broker::alpaca::PositionInfo> {
         balances
             .iter()
             .filter_map(|(asset, qty)| {
-                if !qty.is_finite() || *qty <= 0.0 || Self::is_cash_asset(asset) {
+                if !qty.is_finite()
+                    || *qty <= 0.0
+                    || Self::is_cash_asset(asset)
+                    || !Self::is_equity_balance_asset(asset)
+                {
                     return None;
                 }
                 let display_asset = Self::display_asset(asset);
@@ -898,8 +906,8 @@ impl KrakenBroker {
                     avg_entry_price: 0.0,
                     market_value: 0.0,
                     unrealized_pl: 0.0,
-                    asset_class: "crypto_spot".to_string(),
-                    asset_id: format!("spot:{asset}"),
+                    asset_class: "stock".to_string(),
+                    asset_id: format!("equity_balance:{asset}"),
                 })
             })
             .collect()
@@ -919,7 +927,7 @@ impl KrakenBroker {
         if let Ok(balance_map) = self.get_balance().await {
             let mut balances: Vec<(String, f64)> = balance_map.into_iter().collect();
             balances.sort_by(|a, b| a.0.cmp(&b.0));
-            out.extend(Self::spot_position_summaries_from_balances(&balances));
+            out.extend(Self::equity_position_summaries_from_balances(&balances));
         }
         out.sort_by(|a, b| a.symbol.cmp(&b.symbol));
         Ok(out)
@@ -1476,18 +1484,22 @@ mod tests {
     }
 
     #[test]
-    fn spot_position_summaries_convert_non_cash_balances() {
+    fn equity_position_summaries_convert_only_equity_balances() {
         let balances = vec![
             ("XXBT".to_string(), 0.25),
+            ("BABY".to_string(), 123.0),
+            ("XXMR".to_string(), 1.5),
+            ("HRTX.EQ".to_string(), 7.0),
             ("ZUSD".to_string(), 1000.0),
             ("USDT".to_string(), 50.0),
         ];
-        let positions = KrakenBroker::spot_position_summaries_from_balances(&balances);
+        let positions = KrakenBroker::equity_position_summaries_from_balances(&balances);
 
         assert_eq!(positions.len(), 1);
-        assert_eq!(positions[0].symbol, "BTCUSD");
-        assert_eq!(positions[0].qty, 0.25);
-        assert_eq!(positions[0].asset_class, "crypto_spot");
+        assert_eq!(positions[0].symbol, "HRTX.EQUSD");
+        assert_eq!(positions[0].qty, 7.0);
+        assert_eq!(positions[0].asset_class, "stock");
+        assert_eq!(positions[0].side, "long");
     }
 
     #[test]

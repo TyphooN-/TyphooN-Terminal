@@ -259,7 +259,7 @@ transpile between the five line-scanner languages freely.
 
 **Historical baseline at ADR creation: 793 workspace tests** (up from 728 in
 ADR-089). Follow-up compiler frontend comb-overs have since raised
-`mql5-compiler` coverage to 227 unit tests.
+`mql5-compiler` coverage to 229 unit tests.
 
 - 196 mql5-compiler (+65)
 - 497 engine
