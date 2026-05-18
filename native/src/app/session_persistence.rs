@@ -1,0 +1,3479 @@
+use super::*;
+
+impl TyphooNApp {
+    pub(super) fn refill_market_data_sync_slots(&mut self) {
+        if self.total_pending_market_data_fetches()
+            > KRAKEN_SPOT_QUEUE_WINDOW + KRAKEN_FUTURES_QUEUE_WINDOW + 64
+        {
+            return;
+        }
+        if self.lan_sync_mode == "client" || !self.cache_loaded {
+            return;
+        }
+        if !self.kraken_pairs.is_empty() {
+            let _ = self.schedule_kraken_universe_sectors();
+        }
+        let _ = self.schedule_kraken_futures_universe_sectors();
+        if self.tt_connected {
+            let symbols = self.tastytrade_sync_symbols();
+            let _ = self.schedule_tastytrade_symbols(&symbols);
+        }
+        if self.broker_connected {
+            self.maybe_request_alpaca_asset_universe();
+            let equity_syms = self.alpaca_equity_rotation_symbols();
+            let _ = self.schedule_alpaca_pairs(&equity_syms);
+        }
+    }
+
+    pub(super) fn normalized_right_panel_order(&mut self) -> Vec<RightPanelSectionId> {
+        let mut out = Vec::with_capacity(RightPanelSectionId::DEFAULT_ORDER.len());
+        for section in self.right_panel_order.iter().copied() {
+            if RightPanelSectionId::DEFAULT_ORDER.contains(&section) && !out.contains(&section) {
+                out.push(section);
+            }
+        }
+        for section in RightPanelSectionId::DEFAULT_ORDER {
+            if !out.contains(&section) {
+                out.push(section);
+            }
+        }
+        if out != self.right_panel_order {
+            self.right_panel_order = out.clone();
+        }
+        out
+    }
+
+    pub(super) fn move_right_panel_section(
+        &mut self,
+        dragged: RightPanelSectionId,
+        target: RightPanelSectionId,
+        after_target: bool,
+    ) {
+        if dragged == target {
+            return;
+        }
+        let mut order = self.normalized_right_panel_order();
+        let Some(from) = order.iter().position(|s| *s == dragged) else {
+            return;
+        };
+        let item = order.remove(from);
+        let Some(mut to) = order.iter().position(|s| *s == target) else {
+            return;
+        };
+        if after_target {
+            to += 1;
+        }
+        order.insert(to.min(order.len()), item);
+        if order != self.right_panel_order {
+            self.right_panel_order = order;
+            self.session_dirty_since
+                .get_or_insert(std::time::Instant::now());
+        }
+    }
+
+    pub(super) fn handle_right_panel_section_drag(
+        &mut self,
+        ui: &mut egui::Ui,
+        section: RightPanelSectionId,
+        response: &egui::Response,
+    ) {
+        let drag_response = response.clone().interact(egui::Sense::click_and_drag());
+        if drag_response.hovered() {
+            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
+        }
+        if drag_response.drag_started() {
+            self.dragging_right_panel_section = Some(section);
+        }
+
+        let Some(dragged) = self.dragging_right_panel_section else {
+            return;
+        };
+        let pointer_down = ui.input(|i| i.pointer.primary_down());
+        if !pointer_down {
+            self.dragging_right_panel_section = None;
+            return;
+        }
+
+        if dragged == section {
+            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+            if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                egui::Area::new(egui::Id::new("right_panel_section_drag_preview"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(pos + egui::vec2(14.0, 10.0))
+                    .interactable(false)
+                    .show(ui.ctx(), |ui| {
+                        egui::Frame::NONE
+                            .fill(egui::Color32::from_rgba_premultiplied(18, 22, 28, 230))
+                            .stroke(egui::Stroke::new(1.0, ACCENT))
+                            .corner_radius(egui::CornerRadius::same(4))
+                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("☰ {}", dragged.label()))
+                                        .color(ACCENT)
+                                        .strong()
+                                        .small(),
+                                );
+                            });
+                    });
+            }
+            ui.painter().rect_stroke(
+                response.rect.expand(1.0),
+                egui::CornerRadius::same(0),
+                egui::Stroke::new(1.0, egui::Color32::from_gray(80)),
+                egui::StrokeKind::Outside,
+            );
+            return;
+        }
+
+        if response.hovered() {
+            let after_target = ui
+                .input(|i| i.pointer.hover_pos())
+                .map(|pos| pos.y > response.rect.center().y)
+                .unwrap_or(false);
+            let drop_y = if after_target {
+                response.rect.bottom()
+            } else {
+                response.rect.top()
+            };
+            ui.painter().line_segment(
+                [
+                    egui::pos2(response.rect.left(), drop_y),
+                    egui::pos2(response.rect.right(), drop_y),
+                ],
+                egui::Stroke::new(2.0, ACCENT),
+            );
+            self.move_right_panel_section(dragged, section, after_target);
+        }
+    }
+
+    pub(super) fn render_sync_timeframe_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        save_after: &mut bool,
+    ) {
+        ui.label(
+            egui::RichText::new("Enabled Sync TFs")
+                .color(AXIS_TEXT)
+                .small()
+                .strong(),
+        );
+        ui.horizontal_wrapped(|ui| {
+            let mut changed = false;
+            for (short, cache) in STANDARD_SYNC_TIMEFRAMES {
+                let mut enabled = self.enabled_sync_timeframes.contains(cache);
+                if ui
+                    .checkbox(&mut enabled, egui::RichText::new(short).small())
+                    .on_hover_text(format!("{} automated scrape/sync", cache))
+                    .changed()
+                {
+                    if enabled {
+                        self.enabled_sync_timeframes.insert(cache.to_string());
+                    } else {
+                        self.enabled_sync_timeframes.remove(cache);
+                    }
+                    changed = true;
+                }
+            }
+            if changed {
+                self.detect_mt5_gaps();
+                self.flush_mt5_demand_txt(true);
+                *save_after = true;
+            }
+        });
+        ui.label(
+            egui::RichText::new(
+                "Unchecked TFs are skipped by automated bar sync/backfill across brokers.",
+            )
+            .color(AXIS_TEXT)
+            .small(),
+        );
+    }
+
+    pub(super) fn render_alpaca_sync_profile_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        save_after: &mut bool,
+        id_salt: &str,
+    ) {
+        let mut selected_hint = self.alpaca_historical_rpm_hint;
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Alpaca Sync Tier")
+                    .color(AXIS_TEXT)
+                    .small()
+                    .strong(),
+            );
+            egui::ComboBox::from_id_salt(format!("alpaca_sync_tier_{id_salt}"))
+                .selected_text(alpaca_historical_rpm_hint_label(selected_hint))
+                .show_ui(ui, |ui| {
+                    for (label, rpm) in ALPACA_HISTORICAL_RPM_PRESETS {
+                        ui.selectable_value(&mut selected_hint, rpm, label);
+                    }
+                });
+        });
+        if selected_hint != self.alpaca_historical_rpm_hint {
+            self.alpaca_historical_rpm_hint = selected_hint;
+            self.alpaca_historical_rpm_observed = 0;
+            self.push_alpaca_sync_runtime_config();
+            *save_after = true;
+        }
+
+        let capacity = self.alpaca_sync_capacity();
+        ui.label(
+            egui::RichText::new(format!(
+                "Alpaca sync budget: {} req/min · {} workers · queue {} · batch {}",
+                self.alpaca_effective_historical_rpm(),
+                capacity.fetch_permits,
+                capacity.queue_window,
+                capacity.batch_size
+            ))
+            .color(AXIS_TEXT)
+            .small(),
+        );
+        let observed = self.alpaca_historical_rpm_observed;
+        let hint = self.alpaca_historical_rpm_hint;
+        if observed > 0 {
+            let note = if hint == 0 {
+                format!("Live headers detected {} req/min from Alpaca.", observed)
+            } else if hint != observed {
+                format!(
+                    "Live headers overrode the startup hint: {} req/min observed.",
+                    observed
+                )
+            } else {
+                format!("Live headers confirmed {} req/min from Alpaca.", observed)
+            };
+            ui.label(egui::RichText::new(note).color(AXIS_TEXT).small());
+        } else if hint == 0 {
+            ui.label(
+                egui::RichText::new(
+                    "Auto starts at Basic cadence and upgrades after the first Alpaca response reveals the real tier.",
+                )
+                .color(AXIS_TEXT)
+                .small(),
+            );
+        }
+    }
+
+    /// Build session JSON string (pure data, no I/O — safe to call from UI thread).
+    pub(super) fn build_session_json(&self) -> String {
+        let session = self.build_session_value();
+        serde_json::to_string_pretty(&session).unwrap_or_default()
+    }
+
+    pub(super) fn build_sync_preferences_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "kraken_scrape_xstocks": self.kraken_scrape_xstocks,
+            "kraken_scrape_usd_crypto": self.kraken_scrape_usd_crypto,
+            "kraken_scrape_fiat_crypto": self.kraken_scrape_fiat_crypto,
+            "kraken_scrape_crypto_crosses": self.kraken_scrape_crypto_crosses,
+            "kraken_scrape_futures": self.kraken_scrape_futures,
+            "fund_source_mt5": self.fund_source_mt5,
+            "fund_source_alpaca": self.fund_source_alpaca,
+            "fund_source_tastytrade": self.fund_source_tastytrade,
+            "fund_source_kraken": self.fund_source_kraken,
+            "enabled_sync_timeframes": STANDARD_SYNC_TIMEFRAMES.iter()
+                .filter_map(|(_, tf)| self.enabled_sync_timeframes.contains(*tf).then(|| serde_json::json!(tf)))
+                .collect::<Vec<_>>(),
+            "alpaca_historical_rpm_hint": self.alpaca_historical_rpm_hint,
+            "auto_compact_enabled": self.auto_compact_enabled,
+            "auto_compact_last_run_ms": self.auto_compact_last_run_ms,
+            "auto_compact_cadence_days": self.auto_compact_schedule.cadence_days,
+            "auto_compact_window_weekday": self.auto_compact_schedule.window_weekday,
+            "auto_compact_window_hour_start": self.auto_compact_schedule.window_hour_start,
+            "auto_compact_window_hour_end": self.auto_compact_schedule.window_hour_end,
+            "auto_compact_uncompacted_threshold": self.auto_compact_schedule.uncompacted_threshold,
+        })
+    }
+
+    pub(super) fn apply_sync_preferences_value(&mut self, value: &serde_json::Value) {
+        if let Some(enabled) = value["kraken_scrape_xstocks"].as_bool() {
+            self.kraken_scrape_xstocks = enabled;
+        }
+        if let Some(enabled) = value["kraken_scrape_usd_crypto"].as_bool() {
+            self.kraken_scrape_usd_crypto = enabled;
+        }
+        if let Some(enabled) = value["kraken_scrape_fiat_crypto"].as_bool() {
+            self.kraken_scrape_fiat_crypto = enabled;
+        }
+        if let Some(enabled) = value["kraken_scrape_crypto_crosses"].as_bool() {
+            self.kraken_scrape_crypto_crosses = enabled;
+        }
+        if let Some(enabled) = value["kraken_scrape_futures"].as_bool() {
+            self.kraken_scrape_futures = enabled;
+        }
+        if let Some(arr) = value["enabled_sync_timeframes"].as_array() {
+            self.enabled_sync_timeframes = arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .filter_map(normalize_sync_timeframe_key)
+                .map(str::to_string)
+                .collect();
+        }
+        if let Some(rpm_hint) = value["alpaca_historical_rpm_hint"].as_u64() {
+            self.alpaca_historical_rpm_hint = (rpm_hint as u32).min(100_000);
+        }
+        if let Some(b) = value["auto_compact_enabled"].as_bool() {
+            self.auto_compact_enabled = b;
+        }
+        if let Some(ms) = value["auto_compact_last_run_ms"].as_i64() {
+            self.auto_compact_last_run_ms = ms;
+        }
+        let mut schedule = self.auto_compact_schedule;
+        if let Some(days) = value["auto_compact_cadence_days"].as_i64() {
+            schedule.cadence_days = days;
+        }
+        if let Some(weekday) = value["auto_compact_window_weekday"].as_u64() {
+            schedule.window_weekday = weekday as u32;
+        }
+        if let Some(hour) = value["auto_compact_window_hour_start"].as_u64() {
+            schedule.window_hour_start = hour as u32;
+        }
+        if let Some(hour) = value["auto_compact_window_hour_end"].as_u64() {
+            schedule.window_hour_end = hour as u32;
+        }
+        if let Some(threshold) = value["auto_compact_uncompacted_threshold"].as_i64() {
+            schedule.uncompacted_threshold = threshold;
+        }
+        self.auto_compact_schedule = schedule.sanitized();
+    }
+
+    pub(super) fn sync_preferences_save(&self) {
+        if let Some(ref cache) = self.cache {
+            let json =
+                serde_json::to_string(&self.build_sync_preferences_value()).unwrap_or_default();
+            let _ = cache.put_kv("app:sync_preferences", &json);
+        }
+    }
+
+    pub(super) fn sync_preferences_load(&mut self) {
+        if let Some(ref cache) = self.cache {
+            if let Ok(Some(json)) = cache.get_kv("app:sync_preferences") {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) {
+                    self.apply_sync_preferences_value(&value);
+                }
+            }
+        }
+    }
+
+    /// Auto-compact scheduler tick. Cheap on the steady-state path: returns
+    /// immediately if the next-check throttle hasn't elapsed. ADR-205.
+    pub(super) fn tick_auto_compact(&mut self) {
+        let now = std::time::Instant::now();
+        if now < self.auto_compact_next_check_at {
+            return;
+        }
+        // Re-evaluate at most once per minute regardless of outcome.
+        self.auto_compact_next_check_at = now + std::time::Duration::from_secs(60);
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        // Stale-flag guard: if a compact has been "in progress" for longer than
+        // any sane run (8h), assume the completion log was lost and reset so the
+        // gate can recover on its own.
+        if self.auto_compact_in_progress {
+            let stale_after_ms: i64 = 8 * 60 * 60 * 1000;
+            if self.auto_compact_started_ms <= 0
+                || (now_ms - self.auto_compact_started_ms) > stale_after_ms
+            {
+                self.auto_compact_in_progress = false;
+                self.auto_compact_started_ms = 0;
+                self.auto_compact_last_skip =
+                    Some("previous compact run timed out after 8h".to_string());
+            }
+        }
+
+        let cache = match self.cache.clone() {
+            Some(c) => c,
+            None => return,
+        };
+        let uncompacted = cache
+            .count_uncompacted_bars(auto_compact::TARGET_LEVEL)
+            .unwrap_or(0);
+
+        let (weekday, hour) = auto_compact::local_weekday_hour_now();
+        let idle_for = now
+            .saturating_duration_since(self.auto_compact_last_input_at)
+            .as_secs();
+        let inputs = auto_compact::GateInputs {
+            enabled: self.auto_compact_enabled,
+            schedule: self.auto_compact_schedule,
+            last_run_ms: self.auto_compact_last_run_ms,
+            now_ms,
+            local_weekday: weekday,
+            local_hour: hour,
+            idle_for_secs: idle_for,
+            on_ac: auto_compact::on_ac_power(),
+            uncompacted_count: uncompacted,
+            in_progress: self.auto_compact_in_progress,
+        };
+        let decision = auto_compact::evaluate_gate(&inputs);
+        if !decision.run {
+            self.auto_compact_last_skip = Some(decision.reason);
+            return;
+        }
+
+        // Gate passed — dispatch the same BrokerCmd the manual button uses, so
+        // the existing importing_flag coordination and progress logging apply.
+        let db_path = cache_db_path();
+        let _ = self.broker_tx.send(BrokerCmd::CompactStorage {
+            db_path,
+            level: auto_compact::TARGET_LEVEL,
+        });
+        self.auto_compact_in_progress = true;
+        self.auto_compact_started_ms = now_ms;
+        self.auto_compact_last_skip = None;
+        self.log.push_back(LogEntry::info(format!(
+            "Auto-compact (zstd-{}): {} entries pending — running in background",
+            auto_compact::TARGET_LEVEL,
+            uncompacted
+        )));
+    }
+
+    pub(super) fn build_session_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "symbol": self.symbol_input,
+            "active_tab": self.active_tab,
+            "tabs": self.charts.iter().map(|c| serde_json::json!({
+                "symbol": c.symbol,
+                "timeframe": c.timeframe.label(),
+                "chart_type": c.chart_type.label(),
+                "log_scale": c.log_scale,
+                "visible_bars": c.visible_bars,
+                "view_offset": c.view_offset,
+                "source": c.source_override.clone(),
+            })).collect::<Vec<_>>(),
+            "indicators": {
+                "sma200": self.show_sma200, "sma100": self.show_sma100,
+                "kama": self.show_kama, "ema21": self.show_ema21,
+                "bollinger": self.show_bollinger, "ichimoku": self.show_ichimoku,
+                "wma": self.show_wma, "hma": self.show_hma,
+                "psar": self.show_psar, "atr_proj": self.show_atr_proj,
+                "prev_levels": self.show_prev_levels, "pivots": self.show_pivots,
+                "fractals": self.show_fractals, "harmonics": self.show_harmonics, "supply_demand": self.show_supply_demand,
+                "ehlers_ss": self.show_ehlers_ss, "ehlers_decycler": self.show_ehlers_decycler,
+                "ehlers_itl": self.show_ehlers_itl, "ehlers_mama": self.show_ehlers_mama,
+                "ehlers_ebsw": self.show_ehlers_ebsw, "ehlers_cyber": self.show_ehlers_cyber,
+                "ehlers_cg": self.show_ehlers_cg, "ehlers_roof": self.show_ehlers_roof,
+                "rsi": self.show_rsi, "fisher": self.show_fisher,
+                "macd": self.show_macd, "stochastic": self.show_stochastic,
+                "adx": self.show_adx, "cci": self.show_cci,
+                "williams_r": self.show_williams_r, "obv": self.show_obv,
+                "momentum": self.show_momentum, "cmo": self.show_cmo,
+                "qstick": self.show_qstick, "disparity": self.show_disparity,
+                "bop": self.show_bop, "stddev": self.show_stddev,
+                "mfi": self.show_mfi, "trix": self.show_trix,
+                "ppo": self.show_ppo, "ultosc": self.show_ultosc,
+                "stochrsi": self.show_stochrsi,
+                "var_oscillator": self.show_var_oscillator,
+                "better_volume": self.show_better_volume,
+                "volume_pane": self.show_volume_pane, "sessions": self.show_sessions,
+                "vol_heatmap": self.show_vol_heatmap, "vwap": self.show_vwap,
+                "price_histogram": self.show_price_histogram,
+                "supertrend": self.show_supertrend, "donchian": self.show_donchian, "keltner": self.show_keltner,
+                "regression": self.show_regression, "squeeze": self.show_squeeze,
+                "fvg": self.show_fvg, "order_blocks": self.show_order_blocks,
+            },
+            "mtf_enabled": self.mtf_enabled,
+            "mtf_cols": self.mtf_cols,
+            "mtf_visible": self.mtf_visible,
+            "kraken_scrape_xstocks": self.kraken_scrape_xstocks,
+            "kraken_scrape_usd_crypto": self.kraken_scrape_usd_crypto,
+            "kraken_scrape_fiat_crypto": self.kraken_scrape_fiat_crypto,
+            "kraken_scrape_crypto_crosses": self.kraken_scrape_crypto_crosses,
+            "kraken_scrape_futures": self.kraken_scrape_futures,
+            "enabled_sync_timeframes": STANDARD_SYNC_TIMEFRAMES.iter()
+                .filter_map(|(_, tf)| self.enabled_sync_timeframes.contains(*tf).then(|| serde_json::json!(tf)))
+                .collect::<Vec<_>>(),
+            "alpaca_historical_rpm_hint": self.alpaca_historical_rpm_hint,
+            "command_open": self.command_open,
+            "compact_mode": self.compact_mode,
+            "broker_scope": match self.broker_scope {
+                EventSource::All => "all",
+                EventSource::Alpaca => "alpaca",
+                EventSource::Darwinex => "darwinex",
+                EventSource::Tasty => "tasty",
+                EventSource::Kraken => "kraken",
+                EventSource::Positions => "positions",
+            },
+            "econ_filter_high": self.econ_filter_high,
+            "econ_filter_medium": self.econ_filter_medium,
+            "econ_filter_low": self.econ_filter_low,
+            "econ_filter_holiday": self.econ_filter_holiday,
+            "econ_filter_currencies": self.econ_filter_currencies,
+            "mt5_auto_sync": self.mt5_auto_sync,
+            "mt5_backtest_expand_symbols": serde_json::Value::Object(
+                self.mt5_backtest_expand_symbols.iter()
+                    .map(|(k, v)| (k.clone(), serde_json::json!(v)))
+                    .collect()
+            ),
+            "right_tab": match self.right_tab {
+                RightTab::Trading => "trading",
+                RightTab::Positions => "positions",
+                RightTab::Orders => "orders",
+                RightTab::Watchlist => "watchlist",
+                RightTab::Risk => "risk",
+            },
+            "right_trading_open": self.right_trading_open,
+            "right_positions_open": self.right_positions_open,
+            "right_orders_open": self.right_orders_open,
+            "right_watchlist_open": self.right_watchlist_open,
+            "right_risk_open": self.right_risk_open,
+            "right_recent_fills_open": self.right_recent_fills_open,
+            "right_news_open": self.right_news_open,
+            "right_mtf_grid_open": self.right_mtf_grid_open,
+            "right_panel_order": self.right_panel_order.iter()
+                .map(|section| serde_json::json!(section.as_str()))
+                .collect::<Vec<_>>(),
+            "user_watchlist": self.user_watchlist,
+            "workspaces": serde_json::Value::Object(
+                self.workspaces.iter()
+                    .map(|(k, v)| (k.clone(), serde_json::json!(v)))
+                    .collect()
+            ),
+            "lan_client_enabled": self.lan_client_enabled,
+            "lan_server_enabled": self.lan_server_enabled,
+            "show_darwin_positions": self.show_darwin_positions,
+            "show_alpaca_positions": self.show_alpaca_positions,
+            "show_tt_positions": self.show_tt_positions,
+            "show_kr_positions": self.show_kr_positions,
+            "snap_enabled": self.snap_enabled,
+            "cross_tf_drawings": self.cross_tf_drawings,
+            "follow_latest": self.follow_latest,
+            "draw_width": self.draw_width,
+            "draw_color": [self.draw_color.r(), self.draw_color.g(), self.draw_color.b()],
+            "draw_line_style": match self.draw_line_style { LineStyle::Solid => "solid", LineStyle::Dashed => "dashed", LineStyle::Dotted => "dotted" },
+            "lan_server_ip": self.lan_server_ip,
+            "lan_sync_host": self.lan_sync_host,
+            "lan_sync_port": self.lan_sync_port,
+            "darwin_view": self.darwin_view,
+            "darwin_xlsx_dir": self.darwin_xlsx_dir,
+            "mt5_db_paths": self.mt5_db_paths,
+            "darwin_ftp_dir": self.darwin_ftp_dir,
+            "codex_model": self.codex_model,
+            "codex_reasoning_effort": self.codex_reasoning_effort,
+            "hermes_model": self.hermes_model,
+            "hermes_provider": self.hermes_provider,
+            // Credentials: keyring-only (secure OS storage). Session stores non-secret config.
+            "broker_paper": self.broker_paper,
+            "tt_sandbox": self.tt_sandbox,
+            "sl_enabled": self.sl_enabled,
+            "tp_enabled": self.tp_enabled,
+            "windows": {
+                "settings": self.show_settings,
+                "darwin_accounts": self.show_darwin_accounts,
+                "darwin_portfolio": self.show_darwin_portfolio,
+                "risk_calc": self.show_risk_calc,
+                "compound_calc": self.show_compound_calc,
+                "calendar": self.show_calendar,
+                "backtest": self.show_backtest,
+                "news": self.show_news,
+                "indicators_panel": self.show_indicators_panel,
+                "screener": self.show_screener,
+                "symbols": self.show_symbols,
+                "optimizer": self.show_optimizer,
+                "ai_chat": self.show_ai_chat,
+                "claude_code": self.show_claude_code,
+                "gemini_cli": self.show_gemini_cli,
+                "codex_cli": self.show_codex_cli,
+                "hermes_cli": self.show_hermes_cli,
+                "matrix_chat": self.show_matrix_chat,
+                "sec": self.show_sec,
+                "insider": self.show_insider,
+                "fundamentals": self.show_fundamentals,
+                "order_flow": self.show_order_flow,
+                "bookmap": self.show_bookmap,
+                "journal": self.show_journal,
+                "var_mult": self.show_var_mult,
+                "montecarlo": self.show_montecarlo,
+                "earnings_calendar": self.show_earnings_calendar,
+                "dividend_calendar": self.show_dividend_calendar,
+                "event_calendar": self.show_event_calendar,
+                "ev_scanner": self.show_ev_scanner,
+                "darwin_browser": self.show_darwin_browser,
+                "stress_test": self.show_stress_test,
+                "volume_profile": self.show_volume_profile,
+                "hv_cone": self.show_hv_cone,
+                "sector_heatmap": self.show_sector_heatmap,
+                "dividends_screen": self.show_dividends,
+                "alert_builder": self.show_alert_builder,
+                "storage": self.show_storage,
+                "sync_status": self.show_sync_status,
+                "lan_sync": self.show_lan_sync,
+                "unusual_volume": self.show_unusual_volume,
+                "sector_rotation": self.show_sector_rotation,
+                "fred": self.show_fred,
+                "econ_calendar": self.show_econ_calendar,
+                "congress": self.show_congress,
+                "world_indices": self.show_world_indices,
+                "crypto_top50": self.show_crypto_top50,
+                "forex_matrix": self.show_forex_matrix,
+                "help": self.show_help,
+                "connect": self.show_connect,
+                "data_window": self.show_data_window,
+                "alerts": self.show_alerts,
+                "swap_harvest": self.show_swap_harvest,
+                "darwinex_radar": self.show_darwinex_radar,
+                "scope_window": self.show_scope_window,
+                "scrape_status": self.show_scrape_status,
+                "fear_greed": self.show_fear_greed,
+            },
+            "journal": self.journal_entries.iter().map(|e| serde_json::json!({
+                "timestamp": e.timestamp, "symbol": e.symbol, "side": e.side,
+                "qty": e.qty, "entry_price": e.entry_price,
+                "exit_price": e.exit_price, "pnl": e.pnl,
+                "strategy": e.strategy, "notes": e.notes,
+            })).collect::<Vec<_>>(),
+            "drawings": self.charts.get(0).map(|c| {
+                c.drawings.iter().filter_map(|d| match d {
+                    Drawing::HLine { price, color } => Some(serde_json::json!({"type":"hline","price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::VLine { bar_idx, color } => Some(serde_json::json!({"type":"vline","bar_idx":bar_idx,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::TrendLine { p1, p2, color } => Some(serde_json::json!({"type":"trendline","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::FiboRetrace { high, low, bar_start, bar_end } => Some(serde_json::json!({"type":"fibo","high":high,"low":low,"bar_start":bar_start,"bar_end":bar_end})),
+                    Drawing::Rectangle { p1, p2, color } => Some(serde_json::json!({"type":"rect","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Ray { origin, slope, color } => Some(serde_json::json!({"type":"ray","origin":[origin.0,origin.1],"slope":slope,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Channel { p1, p2, width, color } => Some(serde_json::json!({"type":"channel","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"width":width,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ExtendedLine { p1, p2, color } => Some(serde_json::json!({"type":"extline","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::HRay { bar_idx, price, color } => Some(serde_json::json!({"type":"hray","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::CrossLine { bar_idx, price, color } => Some(serde_json::json!({"type":"crossline","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ArrowLine { p1, p2, color } => Some(serde_json::json!({"type":"arrowline","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::InfoLine { p1, p2, color } => Some(serde_json::json!({"type":"infoline","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Pitchfork { pivot, p2, p3, color } => Some(serde_json::json!({"type":"pitchfork","pivot":[pivot.0,pivot.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::FiboExtension { p1, p2, p3, color } => Some(serde_json::json!({"type":"fiboext","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::GannFan { origin, scale, color } => Some(serde_json::json!({"type":"gannfan","origin":[origin.0,origin.1],"scale":scale,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::LongPosition { entry, stop, target } => Some(serde_json::json!({"type":"longpos","entry":[entry.0,entry.1],"stop":stop,"target":target})),
+                    Drawing::ShortPosition { entry, stop, target } => Some(serde_json::json!({"type":"shortpos","entry":[entry.0,entry.1],"stop":stop,"target":target})),
+                    Drawing::PriceRange { p1, p2 } => Some(serde_json::json!({"type":"pricerange","p1":[p1.0,p1.1],"p2":[p2.0,p2.1]})),
+                    Drawing::TextLabel { bar_idx, price, text, color } => Some(serde_json::json!({"type":"text","bar_idx":bar_idx,"price":price,"text":text,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ArrowMarker { bar_idx, price, is_up, color } => Some(serde_json::json!({"type":"arrowmarker","bar_idx":bar_idx,"price":price,"is_up":is_up,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Ellipse { p1, p2, color } => Some(serde_json::json!({"type":"ellipse","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Triangle { p1, p2, p3, color } => Some(serde_json::json!({"type":"triangle","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::TrendAngle { p1, p2, color } => Some(serde_json::json!({"type":"trendangle","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ParallelChannel { p1, p2, offset, color } => Some(serde_json::json!({"type":"parallelch","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"offset":offset,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::FibChannel { p1, p2, p3, color } => Some(serde_json::json!({"type":"fibchannel","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::FibTimeZones { bar_idx, color } => Some(serde_json::json!({"type":"fibtimezones","bar_idx":bar_idx,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::PriceLabel { bar_idx, price, color } => Some(serde_json::json!({"type":"pricelabel","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Callout { anchor, label_pos, text, color } => Some(serde_json::json!({"type":"callout","anchor":[anchor.0,anchor.1],"label_pos":[label_pos.0,label_pos.1],"text":text,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Highlighter { p1, p2, color } => Some(serde_json::json!({"type":"highlighter","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::CrossMarker { bar_idx, price, color } => Some(serde_json::json!({"type":"crossmarker","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Polyline { points, color } => Some(serde_json::json!({"type":"polyline","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::AnchorNote { bar_idx, price, text, color } => Some(serde_json::json!({"type":"anchornote","bar_idx":bar_idx,"price":price,"text":text,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::RegressionChannel { p1, p2, color } => Some(serde_json::json!({"type":"regressionch","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::GannBox { p1, p2, color } => Some(serde_json::json!({"type":"gannbox","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ElliottWave { points, color } => Some(serde_json::json!({"type":"elliott","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::AbcCorrection { points, color } => Some(serde_json::json!({"type":"abc","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::DateRange { p1, p2 } => Some(serde_json::json!({"type":"daterange","p1":[p1.0,p1.1],"p2":[p2.0,p2.1]})),
+                    Drawing::DatePriceRange { p1, p2 } => Some(serde_json::json!({"type":"datepricerange","p1":[p1.0,p1.1],"p2":[p2.0,p2.1]})),
+                    Drawing::HeadShoulders { points, color } => Some(serde_json::json!({"type":"headshoulders","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::XabcdPattern { points, color } => Some(serde_json::json!({"type":"xabcd","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Brush { points, color } => Some(serde_json::json!({"type":"brush","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::SchiffPitchfork { pivot, p2, p3, color } => Some(serde_json::json!({"type":"schiffpitchfork","pivot":[pivot.0,pivot.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ModSchiffPitchfork { pivot, p2, p3, color } => Some(serde_json::json!({"type":"modschiffpitchfork","pivot":[pivot.0,pivot.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::CyclicLines { bar_start, bar_end, color } => Some(serde_json::json!({"type":"cycliclines","bar_start":bar_start,"bar_end":bar_end,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::SineWave { p1, p2, color } => Some(serde_json::json!({"type":"sinewave","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Emoji { bar_idx, price, emoji } => Some(serde_json::json!({"type":"emoji","bar_idx":bar_idx,"price":price,"emoji":emoji})),
+                    Drawing::Flag { bar_idx, price, color } => Some(serde_json::json!({"type":"flag","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Balloon { anchor, label_pos, text, color } => Some(serde_json::json!({"type":"balloon","anchor":[anchor.0,anchor.1],"label_pos":[label_pos.0,label_pos.1],"text":text,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::SessionBreak { bar_idx, color } => Some(serde_json::json!({"type":"sessionbreak","bar_idx":bar_idx,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::MagnetLevel { price, color } => Some(serde_json::json!({"type":"magnetlevel","price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::RiskRewardBox { entry, stop, target } => Some(serde_json::json!({"type":"riskreward","entry":[entry.0,entry.1],"stop":stop,"target":target})),
+                    Drawing::FibCircle { center, radius_pt, color } => Some(serde_json::json!({"type":"fibcircle","center":[center.0,center.1],"radius_pt":[radius_pt.0,radius_pt.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ArcDraw { p1, p2, p3, color } => Some(serde_json::json!({"type":"arcdraw","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::CurveDraw { p1, ctrl1, ctrl2, p2, color } => Some(serde_json::json!({"type":"curvedraw","p1":[p1.0,p1.1],"ctrl1":[ctrl1.0,ctrl1.1],"ctrl2":[ctrl2.0,ctrl2.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::PathDraw { points, color } => Some(serde_json::json!({"type":"pathdraw","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Forecast { p1, p2, color } => Some(serde_json::json!({"type":"forecast","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::GhostFeed { p1, p2, color } => Some(serde_json::json!({"type":"ghostfeed","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Signpost { bar_idx, price, color } => Some(serde_json::json!({"type":"signpost","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Ruler { p1, p2, color } => Some(serde_json::json!({"type":"ruler","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::TimeCycle { bar_start, bar_end, color } => Some(serde_json::json!({"type":"timecycle","bar_start":bar_start,"bar_end":bar_end,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::SpeedResistanceFan { p1, p2, p3, color } => Some(serde_json::json!({"type":"speedfan","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::SpeedResistanceArc { p1, p2, p3, color } => Some(serde_json::json!({"type":"speedarc","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::FibSpiral { center, radius_pt, color } => Some(serde_json::json!({"type":"fibspiral","center":[center.0,center.1],"radius_pt":[radius_pt.0,radius_pt.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::RotatedRectangle { p1, p2, p3, color } => Some(serde_json::json!({"type":"rotatedrect","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::AnchoredVwapLine { bar_idx, color } => Some(serde_json::json!({"type":"anchoredvwap","bar_idx":bar_idx,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::TrendChannel { p1, p2, p3, color } => Some(serde_json::json!({"type":"trendchannel","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::InsidePitchfork { pivot, p2, p3, color } => Some(serde_json::json!({"type":"insidepitchfork","pivot":[pivot.0,pivot.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::FibWedge { p1, p2, p3, color } => Some(serde_json::json!({"type":"fibwedge","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::PriceNote { price, text, color } => Some(serde_json::json!({"type":"pricenote","price":price,"text":text,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::MeasureTool { p1, p2, color } => Some(serde_json::json!({"type":"measuretool","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::AnchoredText { bar_idx, price, text, color } => Some(serde_json::json!({"type":"anchoredtext","bar_idx":bar_idx,"price":price,"text":text,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Comment { bar_idx, price, text, color } => Some(serde_json::json!({"type":"comment","bar_idx":bar_idx,"price":price,"text":text,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ArrowMarkerLeft { bar_idx, price, color } => Some(serde_json::json!({"type":"arrowleft","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ArrowMarkerRight { bar_idx, price, color } => Some(serde_json::json!({"type":"arrowright","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Circle { p1, p2, color } => Some(serde_json::json!({"type":"circle","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::PitchFan { p1, p2, color } => Some(serde_json::json!({"type":"pitchfan","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::TrendFibTime { p1, p2, color } => Some(serde_json::json!({"type":"trendfibtime","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::GannSquare { p1, p2, color } => Some(serde_json::json!({"type":"gannsquare","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::GannSquareFixed { p1, p2, color } => Some(serde_json::json!({"type":"gannsquarefixed","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::BarsPattern { p1, p2, color } => Some(serde_json::json!({"type":"barspattern","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Projection { p1, p2, color } => Some(serde_json::json!({"type":"projection","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::DoubleCurve { p1, p2, color } => Some(serde_json::json!({"type":"doublecurve","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::TrianglePattern { points, color } => Some(serde_json::json!({"type":"trianglepattern","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ThreeDrives { points, color } => Some(serde_json::json!({"type":"threedrives","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ElliottDouble { points, color } => Some(serde_json::json!({"type":"elliottdouble","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::AbcdPattern { points, color } => Some(serde_json::json!({"type":"abcd","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::CypherPattern { points, color } => Some(serde_json::json!({"type":"cypher","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ElliottTriangle { points, color } => Some(serde_json::json!({"type":"elliotttriangle","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ElliottTripleCombo { points, color } => Some(serde_json::json!({"type":"elliotttriple","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                }).collect::<Vec<_>>()
+            }).unwrap_or_default(),
+            "alerts": self.alerts.iter().map(|(p, l)| serde_json::json!({"price": p, "label": l})).collect::<Vec<_>>(),
+            "chart_templates": self.chart_templates.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<serde_json::Map<String, serde_json::Value>>(),
+        })
+    }
+
+    /// Build a reverse lookup from (SYM_UPPER, TF) → (latest_ts_seconds, bar_count)
+    /// for every `mt5:SYM:TF` row in `detailed_stats`. BarCacheWriter is the
+    /// single producer of these rows and has always emitted 3-part keys, so
+    /// we do a fixed-shape parse — no fallbacks, no legacy 4-part arm, no
+    /// intermediate `Vec<&str>`. Metadata rows (`mt5:__SYMBOLS__`,
+    /// `mt5:__SPECS__:…`, `mt5:__SERVER__:…`, `mt5:__HEARTBEAT__:…`) are
+    /// filtered out via the `__` prefix test so they don't land as bogus
+    /// (sym, tf) pairs.
+    pub(super) fn build_mt5_last_ts_map(
+        &self,
+    ) -> std::collections::HashMap<(String, String), (i64, i64)> {
+        let mut map: std::collections::HashMap<(String, String), (i64, i64)> =
+            std::collections::HashMap::with_capacity(self.bg.detailed_stats.len());
+        for (key, bars, ts) in &self.bg.detailed_stats {
+            let rest = match key.strip_prefix("mt5:") {
+                Some(r) => r,
+                None => continue,
+            };
+            if rest.starts_with("__") {
+                continue;
+            }
+            let mut it = rest.split(':');
+            let sym = match it.next() {
+                Some(s) if !s.is_empty() => s,
+                _ => continue,
+            };
+            let tf = match it.next() {
+                Some(s) if !s.is_empty() => s,
+                _ => continue,
+            };
+            if it.next().is_some() {
+                continue;
+            }
+            let k = (sym.to_ascii_uppercase(), tf.to_string());
+            let entry = map.entry(k).or_insert((0, 0));
+            if *ts > entry.0 {
+                entry.0 = *ts;
+                entry.1 = *bars;
+            }
+        }
+        map
+    }
+
+    /// Populate `mt5_gap_requests` in two passes:
+    ///
+    /// **Pass 1 (watched):** the (sym, tf) pairs coming from chart tabs
+    /// and DARWIN positions get aggressive gap-fill — threshold 2×TF and
+    /// an empty-cache entry triggers a full backfill. These are the pairs
+    /// the user is actively looking at, so responsiveness matters most.
+    ///
+    /// **Pass 2 (self-heal):** every MT5 (sym, tf) in the local cache with
+    /// bars>0 that's fallen behind by more than 5×TF gets a gap-fill too.
+    /// This auto-repairs any symbol whose sync was interrupted (broker
+    /// logout, BarCacheWriter crash, /dev/shm wipe partial restore,
+    /// Wine hibernate) without needing the user to open a chart tab for
+    /// it. Empty pairs are skipped — we don't speculatively backfill
+    /// history for symbols that were never successfully cached.
+    ///
+    /// The union of pass-1 + pass-2 pairs flows into demand.txt via
+    /// `flush_mt5_demand_txt` so the EA rotation prioritises all of them
+    /// (passive pairs eventually get picked up by plain rotation, but
+    /// stale pairs need the demand-list boost to get ahead of the queue).
+    pub(super) fn detect_mt5_gaps(&mut self) {
+        let now_ms: i64 = chrono::Utc::now().timestamp_millis();
+        let pairs = self.collect_mt5_demand_local();
+        let last_ts_map = self.build_mt5_last_ts_map();
+        self.mt5_gap_requests.clear();
+
+        // Pass 1: watched pairs.
+        let mut seen: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        for (sym, tf) in &pairs {
+            if !self.sync_timeframe_enabled(tf) {
+                continue;
+            }
+            let Some((period_s, default_max)) = Self::mt5_tf_spec(tf) else {
+                continue;
+            };
+            let max_bars =
+                Self::expand_for_backtest(&self.mt5_backtest_expand_symbols, sym, default_max);
+            let (last_s, bars) = last_ts_map
+                .get(&(sym.to_uppercase(), tf.clone()))
+                .copied()
+                .unwrap_or((0, 0));
+            let last_ms = last_s * 1000;
+            let period_ms = period_s * 1000;
+            let stale = last_ms > 0 && (now_ms - last_ms) > (period_ms * 2);
+            let empty = bars == 0;
+            if !(stale || empty) {
+                continue;
+            }
+            let want_bars: u32 = if empty {
+                max_bars
+            } else {
+                let gap_bars = ((now_ms - last_ms) / period_ms).max(1) as u32;
+                gap_bars
+                    .saturating_add(gap_bars / 10)
+                    .max(100)
+                    .min(max_bars)
+            };
+            seen.insert((sym.to_uppercase(), tf.clone()));
+            self.mt5_gap_requests
+                .push((sym.clone(), tf.clone(), last_ms.max(0), want_bars));
+        }
+        let pass1_count = self.mt5_gap_requests.len();
+
+        // Pass 2: self-healing for all cached pairs with bars>0. Crypto + ETF
+        // pairs come from non-MT5 sources and shouldn't be routed through the
+        // MT5 gap-fill path. Flag on EITHER of two conditions:
+        //
+        //   a) Staleness — newest cache bar is >5×TF behind now. Handled the
+        //      same way Round 1 did it: a lagging cache needs its tail topped
+        //      up.
+        //   b) Coverage gap — cache has <95% of the integrity target for
+        //      this TF (see `mt5_tf_spec`). Catches the shallow-but-fresh
+        //      case where the newest bar is current but the cache only
+        //      holds a few thousand bars vs the 100K target. The incremental
+        //      merge path in BCW only appends NEWER bars, so a shallow
+        //      cache never grows on its own — coverage gaps must be
+        //      signalled via demand.txt gap-fills.
+        //
+        // Cap the queue at SELF_HEAL_CAP most-deficient entries so demand.txt
+        // stays bounded and the EA's linear gap-fill scan stays cheap.
+        // Ranking combines lag and coverage so a severely-shallow 1Day cache
+        // outranks a modestly-lagging 1Min cache.
+        const SELF_HEAL_CAP: usize = 1024;
+        let mut candidates: Vec<(String, String, i64, u32, i64)> = Vec::new();
+        for ((sym_u, tf), (last_s, bars)) in &last_ts_map {
+            if *bars == 0 {
+                continue;
+            }
+            if seen.contains(&(sym_u.clone(), tf.clone())) {
+                continue;
+            }
+            if !self.sync_timeframe_enabled(tf) {
+                continue;
+            }
+            if Self::demand_is_crypto(sym_u) || Self::demand_is_index_etf(sym_u) {
+                continue;
+            }
+            let Some((period_s, default_target)) = Self::mt5_tf_spec(tf) else {
+                continue;
+            };
+            let target_bars =
+                Self::expand_for_backtest(&self.mt5_backtest_expand_symbols, sym_u, default_target);
+            let last_ms = *last_s * 1000;
+            let period_ms = period_s * 1000;
+            let lag_ms = now_ms - last_ms;
+            let is_stale = lag_ms > (period_ms * 5);
+
+            // Coverage — < 95% of target. The 5% margin avoids flapping on
+            // brokers whose history happens to clip slightly below 100K.
+            let target_i64 = target_bars as i64;
+            let is_shallow_raw = *bars * 100 < target_i64 * 95;
+
+            // Saturation memory: suppress shallow flag when the broker's
+            // available history for this (sym, tf) is less than 100K and
+            // the cache has already reached that natural ceiling. Detected
+            // by "bar count didn't grow between flag-and-recheck cycles".
+            // Without this the self-heal loop churns forever on short-
+            // history symbols (new listings, low-activity pairs).
+            let key = (sym_u.clone(), tf.clone());
+            let is_shallow = if is_shallow_raw {
+                let (prev_count, noops) = self
+                    .mt5_shallow_saturation
+                    .get(&key)
+                    .copied()
+                    .unwrap_or((0i64, 0u8));
+                if *bars > prev_count {
+                    // Progress — reset noops, remember new count.
+                    self.mt5_shallow_saturation.insert(key.clone(), (*bars, 0));
+                    true
+                } else {
+                    let next_noops = noops.saturating_add(1);
+                    self.mt5_shallow_saturation
+                        .insert(key.clone(), (*bars, next_noops));
+                    // Broker saturated at this count — stop re-flagging
+                    // coverage after 2 consecutive no-op cycles.
+                    next_noops < 2
+                }
+            } else {
+                // Above-target / at-target — forget memory so any later
+                // regression restarts the cycle cleanly.
+                self.mt5_shallow_saturation.remove(&key);
+                false
+            };
+
+            if !(is_stale || is_shallow) {
+                continue;
+            }
+
+            // want_bars: if the cache is shallow, always request the full
+            // target so BCW's shallow-cache-redirect (v1.462) triggers a
+            // full re-export. Otherwise the existing "gap + 10% headroom"
+            // heuristic for pure-staleness.
+            let want_bars: u32 = if is_shallow {
+                target_bars
+            } else {
+                let gap_bars = (lag_ms / period_ms).max(1) as u32;
+                gap_bars
+                    .saturating_add(gap_bars / 10)
+                    .max(100)
+                    .min(target_bars)
+            };
+
+            // Score: max of lag-in-periods and coverage-deficit-permille,
+            // so both metrics compete on a common scale. A 1Day symbol 50
+            // periods behind scores 50; one missing 95% of its target bars
+            // scores 950.
+            //
+            // Stale-pair floor at 500 so a recently-stale low-TF pair
+            // (1Min 1h behind = lag_score 60) isn't drowned out by a
+            // shallow high-TF pair (coverage_score ~500) when SELF_HEAL_CAP
+            // is crowded. Without this floor, cold-start runs with many
+            // shallow high-TF caches pushed low-TF-stale entries out of
+            // the top-N queue — they never got a gap-fill request → the
+            // EA's TF gate blocked passive exports → pairs stayed stale
+            // for hours.
+            let lag_score_raw = (lag_ms / period_ms).max(0);
+            let lag_score = if is_stale {
+                lag_score_raw.max(500)
+            } else {
+                lag_score_raw
+            };
+            let coverage_score = if target_i64 > 0 {
+                ((target_i64 - *bars).max(0) * 1000) / target_i64
+            } else {
+                0
+            };
+            let score = lag_score.max(coverage_score);
+
+            candidates.push((sym_u.clone(), tf.clone(), last_ms.max(0), want_bars, score));
+        }
+        let pass2_raw_count = candidates.len();
+        candidates.sort_by(|a, b| b.4.cmp(&a.4));
+        candidates.truncate(SELF_HEAL_CAP);
+        for (sym, tf, last_ms, want, _) in candidates {
+            self.mt5_gap_requests.push((sym, tf, last_ms, want));
+        }
+
+        let pass2_count = self.mt5_gap_requests.len() - pass1_count;
+
+        // Track repair vs steady-state. When pass-2 reports zero stale
+        // entries for MT5_REPAIR_CLEAN_THRESHOLD runs in a row, the cache
+        // is considered repaired and we switch to steady-state (watched
+        // pairs + EA rotation alone). Any staleness resets the counter
+        // and forces us back into repair mode. The threshold is
+        // intentionally small — one clean pass could be a racy
+        // coincidence, three in a row (~90 s at 30 s cadence) is much
+        // harder to fake.
+        const MT5_REPAIR_CLEAN_THRESHOLD: u32 = 3;
+        if pass2_raw_count == 0 {
+            self.mt5_repair_clean_passes = self.mt5_repair_clean_passes.saturating_add(1);
+            if self.mt5_repair_mode && self.mt5_repair_clean_passes >= MT5_REPAIR_CLEAN_THRESHOLD {
+                self.mt5_repair_mode = false;
+                tracing::info!(
+                    "MT5 cache repair complete ({} cached keys, {} watched pairs) — \
+                     switching to steady-state predictive sync",
+                    last_ts_map.len(),
+                    pairs.len(),
+                );
+            }
+        } else {
+            if !self.mt5_repair_mode {
+                tracing::info!(
+                    "MT5 staleness detected — re-entering repair mode \
+                     ({} stale pairs flagged, {} queued after cap)",
+                    pass2_raw_count,
+                    pass2_count,
+                );
+            }
+            self.mt5_repair_mode = true;
+            self.mt5_repair_clean_passes = 0;
+        }
+
+        if !self.mt5_gap_requests.is_empty() {
+            // Per-TF breakdown to surface low-TF starvation. Without this
+            // the aggregate count hides whether e.g. 1Min / 5Min pairs are
+            // reaching demand.txt at all, or whether they're being crowded
+            // out of the SELF_HEAL_CAP-truncated queue by shallow high-TF
+            // pairs.
+            let mut by_tf: std::collections::BTreeMap<&str, usize> =
+                std::collections::BTreeMap::new();
+            for (_, tf, _, _) in &self.mt5_gap_requests {
+                *by_tf.entry(tf.as_str()).or_insert(0) += 1;
+            }
+            let by_tf_str = by_tf
+                .iter()
+                .map(|(tf, n)| format!("{}={}", tf, n))
+                .collect::<Vec<_>>()
+                .join(" ");
+            tracing::info!(
+                "MT5 gap detection [{}]: {} gap-fill requests ({} watched + {} self-heal) across {} demand pairs / {} cached keys | by TF: {}",
+                if self.mt5_repair_mode {
+                    "repair"
+                } else {
+                    "steady"
+                },
+                self.mt5_gap_requests.len(),
+                pass1_count,
+                pass2_count,
+                pairs.len(),
+                last_ts_map.len(),
+                by_tf_str,
+            );
+        }
+    }
+
+    /// Look up `(period_seconds, integrity_target_bars)` for a canonical
+    /// TF string. Returns `None` for unknown TFs so the caller can skip.
+    ///
+    /// Tiered targets (must stay in lockstep with BarCacheWriter.mq5's
+    /// `MaxBarsForTF` — gap-detect's coverage threshold and BCW's fetch
+    /// ceiling have to agree or pass-2 thrashes):
+    ///   1Min   50K ≈ 35 days    — intraday backtests
+    ///   5Min   50K ≈ 6 months   — swing backtests
+    ///   15Min  30K ≈ 10 months
+    ///   30Min  30K ≈ 20 months
+    ///   1Hour  30K ≈ 3.4 years  — positional backtests
+    ///   4Hour  20K ≈ 9 years    — long-horizon models
+    ///   1Day+  10K              — broker-served history ceiling
+    ///
+    /// Low-TF targets were lifted above 10K (the previous flat floor) so
+    /// algo backtesting has useful depth — a 1Min cache of 10K covers
+    /// only one trading week, which is thin for any stats pass. 1Day+ stays
+    /// at 10K because the universal "achievable floor": every MT5 broker
+    /// serves at least that many daily bars, so pass-2 converges rather
+    /// than thrashing on brokers with shallow history.
+    ///
+    /// Used by `detect_mt5_gaps` for two things:
+    ///   1. Seed size on empty-cache / full-gap requests (pass-1 watched).
+    ///   2. Coverage-gap detection in pass-2 — a cache with <95% of the
+    ///      target flags even when the newest bar is fresh, because the
+    ///      incremental merge path only appends newest bars and never
+    ///      grows a shallow cache on its own.
+    pub(super) fn mt5_tf_spec(tf: &str) -> Option<(i64, u32)> {
+        match tf {
+            "1Min" => Some((60, 50_000)),
+            "5Min" => Some((300, 50_000)),
+            "15Min" => Some((900, 30_000)),
+            "30Min" => Some((1800, 30_000)),
+            "1Hour" => Some((3600, 30_000)),
+            "4Hour" => Some((14400, 20_000)),
+            "1Day" => Some((86400, 10_000)),
+            "1Week" => Some((604800, 10_000)),
+            "1Month" => Some((2592000, 10_000)),
+            _ => None,
+        }
+    }
+
+    /// `expand_for_backtest` profile — when a symbol is in the expand map,
+    /// return its requested target (overriding the tiered default) so algo
+    /// backtests get deeper history for the specific symbols under study
+    /// without inflating every demand-list symbol's cache footprint. BCW
+    /// already honours any MAX_BARS the gap-fill line carries (shallow-
+    /// cache redirect, v1.462), so this is a terminal-side selector only.
+    ///
+    /// Compares case-insensitively so typing `BACKTEST_EXPAND eurusd` and
+    /// `BACKTEST_EXPAND EURUSD` both match MT5's upper-case canonical.
+    /// Returns max(requested, default) so a user specifying a lower count
+    /// never shrinks below the tiered floor.
+    pub(super) fn expand_for_backtest(
+        expand_map: &std::collections::HashMap<String, u32>,
+        sym: &str,
+        default_target: u32,
+    ) -> u32 {
+        if expand_map.is_empty() {
+            return default_target;
+        }
+        let su = sym.to_uppercase();
+        match expand_map.get(&su) {
+            Some(&requested) => requested.max(default_target),
+            None => default_target,
+        }
+    }
+
+    /// Build and flush the MT5 BarCacheWriter demand.txt file(s).
+    /// Same logic the save_session path uses, exposed so the heartbeat receive
+    /// handler can re-push the demand list mid-session (e.g., when the EA
+    /// reports init_burst_active=true after a /dev/shm clear and we want its
+    /// rotation to latch onto the freshest chart symbols immediately).
+    /// Returns true for crypto symbols (sourced from Kraken, not MT5).
+    pub(super) fn demand_is_crypto(sym: &str) -> bool {
+        let crypto_bases = [
+            "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LTC", "LINK", "AVAX", "DOT", "XMR", "ZEC",
+            "DASH", "UNI", "AAVE", "MATIC", "SHIB", "ATOM", "ALGO", "FTM", "NEAR", "APE", "ARB",
+            "OP", "MKR", "COMP", "SNX", "CRV", "SUSHI", "YFI", "BAT", "MANA", "SAND", "AXS", "BCH",
+            "ETC", "XLM", "FIL", "HBAR", "ICP", "VET", "THETA",
+        ];
+        let su = sym.to_uppercase();
+        crypto_bases.iter().any(|b| {
+            su.starts_with(b)
+                && (su.ends_with("USD") || su.ends_with("USDT") || su.ends_with("BTC"))
+        })
+    }
+
+    /// Returns true for US-listed ETFs/indices sourced from Alpaca, not MT5.
+    pub(super) fn demand_is_index_etf(sym: &str) -> bool {
+        matches!(
+            sym,
+            "SPY"
+                | "QQQ"
+                | "DIA"
+                | "IWM"
+                | "EFA"
+                | "EEM"
+                | "VGK"
+                | "EWJ"
+                | "FXI"
+                | "EWZ"
+                | "GLD"
+                | "SLV"
+                | "USO"
+                | "TLT"
+                | "UUP"
+        )
+    }
+
+    /// Collect the set of (SYMBOL, TF) pairs the terminal actually wants
+    /// bars for — driven by currently open chart tabs plus DARWIN open
+    /// positions (which fall back to a minimal TF set because they may not
+    /// have a chart tab open but still need regular bar updates).
+    ///
+    /// Returns (pairs, bare_symbols). Crypto + ETF symbols are filtered
+    /// out (those come from non-MT5 data sources). Emitting only the TFs
+    /// actually in use (instead of the all-9-TFs fan-out the old code
+    /// used) dramatically cuts the demand.txt size and the EA work load:
+    /// the prior scheme asked the EA to re-check every 1Min/5Min/…/1Month
+    /// TF for every watched symbol on every rotation, even though typical
+    /// usage only watches 1-3 TFs per symbol.
+    pub(super) fn collect_mt5_demand_local(&self) -> std::collections::HashSet<(String, String)> {
+        let mut pairs: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        let mut syms_with_chart: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for chart in &self.charts {
+            // `chart.symbol` is canonicalised to a bare symbol at every
+            // load site (see Screener/watchlist paths), but a session
+            // restored from before that canonicalisation could still hold
+            // a full cache key — parse defensively so old `mt5:SLV:1Hour`
+            // charts end up in demand.txt as `SLV` rather than `1Hour`.
+            let bare = bare_symbol_from_key(&chart.symbol);
+            if !Self::is_valid_demand_symbol(&bare) {
+                continue;
+            }
+            // Skip symbols that don't live on MT5: crypto (Kraken-sourced)
+            // and the US equity ETFs/indices we pull from Alpaca. Pushing
+            // these through the MT5 demand list would just burn broker
+            // cycles on symbols the MT5 server doesn't list.
+            if Self::demand_is_crypto(&bare) || Self::demand_is_index_etf(&bare) {
+                continue;
+            }
+            let tf = chart.timeframe.cache_suffix().to_string();
+            if !self.sync_timeframe_enabled(&tf) {
+                continue;
+            }
+            pairs.insert((bare.clone(), tf));
+            syms_with_chart.insert(bare);
+        }
+        // DARWIN positions without a chart tab default to 1Hour + 1Day so
+        // intraday + daily reviews always have fresh bars. If a chart tab
+        // exists for the symbol, honour the chart's TF exclusively.
+        if self.show_darwin_positions {
+            for pos in &self.bg.open_positions {
+                let sym = pos.symbol.replace('/', "");
+                if !Self::is_valid_demand_symbol(&sym) {
+                    continue;
+                }
+                if Self::demand_is_crypto(&sym) || Self::demand_is_index_etf(&sym) {
+                    continue;
+                }
+                if !syms_with_chart.contains(&sym) {
+                    if self.sync_timeframe_enabled("1Hour") {
+                        pairs.insert((sym.clone(), "1Hour".to_string()));
+                    }
+                    if self.sync_timeframe_enabled("1Day") {
+                        pairs.insert((sym, "1Day".to_string()));
+                    }
+                }
+            }
+        }
+        pairs
+    }
+
+    /// Reject sym strings that would corrupt demand.txt: empty, colon-
+    /// bearing (would break the SYM:TF:TS:BARS format), or a TF-in-the-
+    /// symbol-slot (e.g. "1Hour" as a "symbol" — happens if a legacy
+    /// full-key chart.symbol slipped through bare_symbol_from_key's
+    /// fallback arm). Mirrors the check in parse_mt5_demand_txt so
+    /// inbound and outbound validation stay in sync.
+    pub(super) fn is_valid_demand_symbol(sym: &str) -> bool {
+        !sym.is_empty() && !sym.contains(':') && Self::mt5_tf_spec(sym).is_none()
+    }
+
+    /// Parse demand.txt v3 content into `(pairs, gap_map)`. Only v3 lines
+    /// (`SYMBOL:TF:LAST_TS_MS:MAX_BARS`) are accepted; anything else is
+    /// silently discarded. `gap_map` holds `(sym, tf) → (last_ts, max_bars)`
+    /// for entries where `max_bars > 0`; passive demand entries (max_bars=0)
+    /// only populate `pairs`.
+    pub(super) fn parse_mt5_demand_txt(
+        text: &str,
+    ) -> (
+        std::collections::HashSet<(String, String)>,
+        Vec<(String, String, i64, u32)>,
+    ) {
+        let mut pairs: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        let mut gaps: Vec<(String, String, i64, u32)> = Vec::new();
+        for line in text.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') {
+                continue;
+            }
+            let parts: Vec<&str> = t.split(':').collect();
+            if parts.len() != 4 || parts[0].is_empty() || parts[1].is_empty() {
+                continue;
+            }
+            // Reject lines whose "symbol" slot is actually a TF string — this
+            // can happen when a pre-canonicalisation LAN client forwards
+            // demand rows built from `chart.symbol.split(':').last()` on a
+            // full cache key (e.g. `mt5:SLV:1Hour` → bare = "1Hour"). Letting
+            // a row like "1Hour:1Hour:0:1500" through would ask the EA to
+            // export a symbol named "1Hour" that no broker lists.
+            if Self::mt5_tf_spec(parts[0]).is_some() {
+                continue;
+            }
+            // Reject lines whose TF slot isn't a canonical TF string. BCW's
+            // LoadDemandFile does the same check (StrToTF == 0 → skip) so the
+            // EA doesn't silently export PERIOD_CURRENT on garbage input.
+            // Without the match here, `pairs` would hold dead entries that
+            // downstream detect_mt5_gaps / render_mt5_demand_txt still have
+            // to filter on every call.
+            if Self::mt5_tf_spec(parts[1]).is_none() {
+                continue;
+            }
+            // Parse the numeric slots strictly — previously these used
+            // `.unwrap_or(0)` which silently coerced a malformed client payload
+            // (e.g. `SYMBOL:TF:notanumber:badbars`) into a full-history
+            // gap-fill request (last_ts=0 means "from epoch"). Skip + warn
+            // instead so a bad line can't fan out a bogus export request.
+            let last_ms = match parts[2].parse::<i64>() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        "demand.txt: bad last_ms '{}' on line '{}': {} — skipping",
+                        parts[2],
+                        t,
+                        e
+                    );
+                    continue;
+                }
+            };
+            let max_bars = match parts[3].parse::<u32>() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        "demand.txt: bad max_bars '{}' on line '{}': {} — skipping",
+                        parts[3],
+                        t,
+                        e
+                    );
+                    continue;
+                }
+            };
+            pairs.insert((parts[0].to_string(), parts[1].to_string()));
+            if max_bars > 0 {
+                gaps.push((
+                    parts[0].to_string(),
+                    parts[1].to_string(),
+                    last_ms,
+                    max_bars,
+                ));
+            }
+        }
+        (pairs, gaps)
+    }
+
+    /// Render demand pairs + gap requests to a v3-format demand.txt body.
+    /// Every line is `SYMBOL:TF:LAST_TS_MS:MAX_BARS` — MAX_BARS=0 for
+    /// passive demand (normal rotation export), MAX_BARS>0 for force
+    /// gap-fill export of that many recent bars.
+    pub(super) fn render_mt5_demand_txt(
+        &self,
+        pairs: &std::collections::HashSet<(String, String)>,
+        gaps: &[(String, String, i64, u32)],
+    ) -> String {
+        let last_ts_map = self.build_mt5_last_ts_map();
+        // Dedupe gap requests: for each (sym, tf) keep smallest last_ts
+        // (furthest behind) and largest max_bars (widest window) so merged
+        // client+server gaps cover the worst-case range.
+        let mut gap_map: std::collections::HashMap<(String, String), (i64, u32)> =
+            std::collections::HashMap::new();
+        for (sym, tf, last_ms, max_bars) in gaps {
+            let k = (sym.clone(), tf.clone());
+            gap_map
+                .entry(k)
+                .and_modify(|(ts_prev, bars_prev)| {
+                    if *last_ms > 0 && (*ts_prev == 0 || *last_ms < *ts_prev) {
+                        *ts_prev = *last_ms;
+                    }
+                    if *max_bars > *bars_prev {
+                        *bars_prev = *max_bars;
+                    }
+                })
+                .or_insert((*last_ms, *max_bars));
+        }
+        let mut sorted_pairs: Vec<&(String, String)> = pairs.iter().collect();
+        sorted_pairs.sort();
+        let body: String = sorted_pairs
+            .iter()
+            .map(|(sym, tf)| {
+                let (last_ts, max_bars) = gap_map
+                    .get(&(sym.clone(), tf.clone()))
+                    .copied()
+                    .unwrap_or_else(|| {
+                        let ts = last_ts_map
+                            .get(&(sym.to_uppercase(), tf.clone()))
+                            .map(|(ts, _)| *ts)
+                            .unwrap_or(0);
+                        (ts, 0)
+                    });
+                format!("{}:{}:{}:{}", sym, tf, last_ts, max_bars)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "# demand.txt v3 — SYMBOL:TF:LAST_TS_MS:MAX_BARS (BarCacheWriter v1.447+)\n# MAX_BARS=0 → passive demand; MAX_BARS>0 → force gap-fill of that many bars\n{}",
+            body,
+        )
+    }
+
+    /// Flush demand.txt for BarCacheWriter. On LAN clients the rendered
+    /// output is stored in the shared KV under `client:demand` so the
+    /// server can merge it into its own demand. On the server / standalone
+    /// it's written to every configured MT5 database directory and the
+    /// universal cache location.
+    ///
+    /// `include_gap_requests=true` emits the current `mt5_gap_requests`
+    /// vector as v3 lines so the EA force-exports bars for stale ranges.
+    /// Callers that don't have fresh gap-detection results (e.g. the
+    /// session-save path) pass `false`; the heartbeat path passes `true`.
+    pub(super) fn write_mt5_demand_txt(&mut self) {
+        self.flush_mt5_demand_txt(true);
+    }
+
+    pub(super) fn flush_mt5_demand_txt(&mut self, include_gap_requests: bool) {
+        let mut pairs = self.collect_mt5_demand_local();
+        let mut gaps: Vec<(String, String, i64, u32)> = if include_gap_requests {
+            self.mt5_gap_requests.clone()
+        } else {
+            Vec::new()
+        };
+        pairs.retain(|(_, tf)| self.sync_timeframe_enabled(tf));
+        gaps.retain(|(_, tf, _, _)| self.sync_timeframe_enabled(tf));
+        // Self-healing: every gap-request pair also needs to appear in the
+        // demand list so the EA rotation prioritises it. Without this union,
+        // pass-2 (cache-wide) gap requests are silently dropped by the
+        // render pass since render iterates `pairs` only.
+        for (sym, tf, _, _) in &gaps {
+            pairs.insert((sym.clone(), tf.clone()));
+        }
+
+        // On the server (or standalone), union any client-forwarded demand
+        // before writing to local MT5 dirs. Clients skip this — their KV
+        // is the producer side.
+        if self.lan_sync_mode != "client" {
+            if let Some(ref cache) = self.cache {
+                if let Ok(Some(client_text)) = cache.get_kv("client:demand") {
+                    let (cli_pairs, cli_gaps) = Self::parse_mt5_demand_txt(&client_text);
+                    pairs.extend(
+                        cli_pairs
+                            .into_iter()
+                            .filter(|(_, tf)| self.sync_timeframe_enabled(tf)),
+                    );
+                    gaps.extend(
+                        cli_gaps
+                            .into_iter()
+                            .filter(|(_, tf, _, _)| self.sync_timeframe_enabled(tf)),
+                    );
+                    for (sym, tf, _, _) in &gaps {
+                        pairs.insert((sym.clone(), tf.clone()));
+                    }
+                }
+            }
+        }
+
+        if pairs.is_empty() {
+            return;
+        }
+        let text = self.render_mt5_demand_txt(&pairs, &gaps);
+
+        // Content-hash dedup. Lets callers invoke flush_mt5_demand_txt at 1Hz
+        // for fresh-tab-open latency without paying 5+ fs::writes when nothing
+        // has changed. Hash covers pairs + gap entries (both are in `text`), so
+        // any fresh-tab or fresh-gap flips the hash and forces a write.
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut h);
+        let text_hash = h.finish();
+        if text_hash == self.mt5_demand_txt_last_hash {
+            return;
+        }
+        self.mt5_demand_txt_last_hash = text_hash;
+
+        // Client mode: forward structured demand to server via KV so the
+        // server's flush unions it into its own demand.txt. Still fall
+        // through to the local-write block below so a client with its own
+        // BarCacheWriter running (typical on every user's workstation)
+        // gets demand.txt for its local EA too.
+        if self.lan_sync_mode == "client" {
+            if let Some(ref cache) = self.cache {
+                match cache.put_kv("client:demand", &text) {
+                    Ok(_) => tracing::info!(
+                        "demand.txt: {} TF pairs forwarded to server via KV",
+                        pairs.len()
+                    ),
+                    Err(e) => {
+                        tracing::warn!("demand.txt: failed to forward to server via KV: {}", e)
+                    }
+                }
+            }
+        }
+
+        let has_mt5 = !self.mt5_db_paths.iter().all(|p| p.is_empty());
+        if !has_mt5 {
+            return;
+        }
+
+        let mut demand_dir = dirs_home();
+        demand_dir.push("cache");
+        let _ = std::fs::create_dir_all(&demand_dir);
+        let universal = demand_dir.join("demand.txt");
+        match std::fs::write(&universal, &text) {
+            Ok(_) => tracing::info!(
+                "demand.txt: wrote {} TF pairs / {} gap-fills to {}",
+                pairs.len(),
+                gaps.len(),
+                universal.display(),
+            ),
+            Err(e) => tracing::warn!("demand.txt: failed to write {}: {}", universal.display(), e),
+        }
+        for (i, mt5_path) in self.mt5_db_paths.iter().enumerate() {
+            if mt5_path.is_empty() {
+                continue;
+            }
+            let path = std::path::Path::new(mt5_path);
+            // BarCacheWriter opens demand.txt with FILE_COMMON, so the only
+            // write target that actually feeds the EA is each MT5 install's
+            // Common/Files dir. Dropped the legacy parent-of-DB write to
+            // `MQL5/Files/demand.txt` — the EA never reads from there under
+            // FILE_COMMON. The indexed `demand_{i}.txt` under the terminal's
+            // own cache dir is kept for operator inspection / debugging.
+            let commons = Self::mt5_common_files_dirs(path);
+            if commons.is_empty() {
+                tracing::warn!(
+                    "demand.txt: no MT5 Common/Files dir resolvable for {} — EA won't pick up demand updates",
+                    path.display()
+                );
+            }
+            for common in commons {
+                let target = common.join("demand.txt");
+                if let Err(e) = std::fs::write(&target, &text) {
+                    tracing::warn!("demand.txt: failed to write {}: {}", target.display(), e);
+                }
+            }
+            let indexed = demand_dir.join(format!("demand_{}.txt", i));
+            if let Err(e) = std::fs::write(&indexed, &text) {
+                tracing::warn!("demand.txt: failed to write {}: {}", indexed.display(), e);
+            }
+        }
+    }
+
+    /// Derive candidate MT5 Common/Files directories for a given
+    /// BarCacheWriter DB path. Covers three install layouts the EA's
+    /// FILE_COMMON flag can resolve to:
+    /// 1. Portable (`<install>/Common/Files`) — DB at `<install>/MQL5/Files/<db>`.
+    /// 2. Standard Wine (`<prefix>/drive_c/users/*/AppData/Roaming/MetaQuotes/
+    ///    Terminal/Common/Files`) — DB under `<prefix>/drive_c/.../MQL5/Files/`.
+    /// 3. Ramdisk-symlink (deploy_ramdisk.sh): DB at `/dev/shm/
+    ///    typhoon_mt5_cache_<instance>.db` which is symlinked from
+    ///    `$HOME/<instance>/drive_c/.../MQL5/Files/typhoon_mt5_cache.db`.
+    ///    For this case walk the filename to recover `<instance>` (e.g.
+    ///    `.mt5_2`) and try `$HOME/<instance>/drive_c/users/*/AppData/...`.
+    ///
+    /// Only returns paths that already exist — MT5 creates the Common tree
+    /// on first run, so if it isn't there yet the EA isn't reading from it
+    /// either.
+    pub(super) fn mt5_common_files_dirs(mt5_db_path: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out: Vec<std::path::PathBuf> = Vec::new();
+
+        // Portable: DB at `<install>/MQL5/Files/<db>`, so the install dir
+        // is db.parent().parent().parent().
+        if let Some(install) = mt5_db_path
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+        {
+            let portable = install.join("Common").join("Files");
+            if portable.is_dir() {
+                out.push(portable);
+            }
+        }
+
+        // Standard: walk up to drive_c, then iterate users/*/AppData/...
+        // This also covers the symlinked case if the user configured the
+        // terminal with the in-prefix path (MQL5/Files/*.db) rather than
+        // the ramdisk /dev/shm target — canonicalize would collapse the
+        // symlink to /dev/shm and lose the drive_c ancestor, so we walk
+        // the *configured* path (not the resolved one) for the standard
+        // probe. The /dev/shm case is handled separately below.
+        let push_for_prefix = |out: &mut Vec<std::path::PathBuf>, prefix: &std::path::Path| {
+            if let Ok(entries) = std::fs::read_dir(prefix.join("users")) {
+                for entry in entries.flatten() {
+                    let candidate = entry
+                        .path()
+                        .join("AppData")
+                        .join("Roaming")
+                        .join("MetaQuotes")
+                        .join("Terminal")
+                        .join("Common")
+                        .join("Files");
+                    if candidate.is_dir() && !out.iter().any(|p| p == &candidate) {
+                        out.push(candidate);
+                    }
+                }
+            }
+        };
+        let drive_c = mt5_db_path
+            .ancestors()
+            .find(|a| a.file_name().and_then(|n| n.to_str()) == Some("drive_c"));
+        if let Some(drive_c) = drive_c {
+            push_for_prefix(&mut out, drive_c);
+        }
+
+        // Ramdisk-symlink (deploy_ramdisk.sh): path pattern is
+        // `<ramdisk>/typhoon_mt5_cache_<instance>.db` where <ramdisk>
+        // resolves to tmpfs (/dev/shm, /run/user/<uid>, /tmp) and
+        // <instance> is a filename component like ".mt5_2" matching a
+        // directory under $HOME. Recover <instance> from the suffix and
+        // probe $HOME/<instance>/drive_c/.../Common/Files.
+        if let Some(stem) = mt5_db_path.file_stem().and_then(|s| s.to_str()) {
+            if let Some(tail) = stem.strip_prefix("typhoon_mt5_cache_") {
+                if !tail.is_empty() {
+                    if let Ok(home) = std::env::var("HOME") {
+                        let inst_prefix = std::path::PathBuf::from(home).join(tail);
+                        let drive_c = inst_prefix.join("drive_c");
+                        if drive_c.is_dir() {
+                            push_for_prefix(&mut out, &drive_c);
+                        }
+                    }
+                }
+            }
+        }
+
+        out
+    }
+
+    pub(super) fn session_json_path() -> PathBuf {
+        let mut path = dirs_home();
+        path.push("session.json");
+        path
+    }
+
+    pub(super) fn write_session_json(json: &str) {
+        let path = Self::session_json_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, json);
+    }
+
+    pub(super) fn mark_session_snapshot_clean(&mut self) {
+        self.session_last_saved_json = self.build_session_json();
+        self.session_dirty_since = None;
+        self.session_last_scan_at = std::time::Instant::now();
+        self.session_state_ready = true;
+    }
+
+    pub(super) fn hydrate_loaded_charts(&mut self) {
+        let Some(ref cache) = self.cache else {
+            return;
+        };
+        if self.charts.is_empty() {
+            return;
+        }
+        self.active_tab = self.active_tab.min(self.charts.len().saturating_sub(1));
+        if self.mtf_enabled {
+            let mut retry_chart_indices = Vec::new();
+            for (idx, chart) in self.charts.iter_mut().enumerate() {
+                if chart.bars.is_empty() {
+                    let mut gpu = self.gpu_indicators.take();
+                    if !chart.try_load(cache, &mut self.log, gpu.as_mut()) {
+                        retry_chart_indices.push(idx);
+                    }
+                    self.gpu_indicators = gpu;
+                }
+            }
+            for idx in retry_chart_indices {
+                self.queue_chart_reload(idx);
+            }
+        } else if let Some(chart) = self.charts.get_mut(self.active_tab) {
+            let mut gpu = self.gpu_indicators.take();
+            if !chart.try_load(cache, &mut self.log, gpu.as_mut()) {
+                self.queue_chart_reload(self.active_tab);
+            }
+            self.gpu_indicators = gpu;
+        }
+    }
+
+    pub(super) fn maybe_incremental_session_save(&mut self, ctx: &egui::Context) {
+        self.flush_alpaca_backfill_complete_marks(false);
+        self.flush_kraken_backfill_complete_marks(false);
+        if !self.session_state_ready {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let scan_interval = std::time::Duration::from_millis(500);
+        let save_debounce = std::time::Duration::from_millis(1200);
+        let since_last_scan = now.saturating_duration_since(self.session_last_scan_at);
+        if since_last_scan < scan_interval {
+            return;
+        }
+        self.session_last_scan_at = now;
+        let json = self.build_session_json();
+        if json == self.session_last_saved_json {
+            self.session_dirty_since = None;
+            return;
+        }
+        let dirty_since = self.session_dirty_since.get_or_insert(now);
+        let dirty_for = now.saturating_duration_since(*dirty_since);
+        if dirty_for < save_debounce {
+            ctx.request_repaint_after(save_debounce - dirty_for);
+            return;
+        }
+        Self::write_session_json(&json);
+        self.sync_preferences_save();
+        self.session_last_saved_json = json;
+        self.session_dirty_since = None;
+    }
+
+    pub(super) fn save_session(&mut self) {
+        self.flush_alpaca_backfill_complete_marks(true);
+        self.flush_kraken_backfill_complete_marks(true);
+        // Write demand.txt for BarCacheWriter — ONLY symbols that need MT5 bar updates.
+        // Excludes: crypto (sourced from Kraken), symbols with non-MT5 primary source.
+        // BarCacheWriter reads this to avoid re-exporting 851 symbols on reboot.
+        // Session saves don't carry fresh gap-detection results; v3 gap-fill
+        // lines are refreshed separately from the heartbeat path.
+        self.flush_mt5_demand_txt(false);
+        // Persist credentials to keyring + SQLite fallback — on background thread to avoid UI freeze
+        // (each keyring::store can take 50-200ms on Linux due to DBUS roundtrip × 11 keys = 1-2s freeze)
+        let cred_pairs: Vec<(String, String)> = vec![
+            (
+                keyring::keys::ALPACA_API_KEY.into(),
+                self.broker_api_key.clone(),
+            ),
+            (
+                keyring::keys::ALPACA_SECRET.into(),
+                self.broker_secret.clone(),
+            ),
+            (keyring::keys::FINNHUB_KEY.into(), self.finnhub_key.clone()),
+            (keyring::keys::FRED_KEY.into(), self.fred_key.clone()),
+            (keyring::keys::TT_USERNAME.into(), self.tt_username.clone()),
+            (keyring::keys::TT_PASSWORD.into(), self.tt_password.clone()),
+            (
+                keyring::keys::LAN_SYNC_PASS.into(),
+                self.lan_sync_passphrase.clone(),
+            ),
+            (
+                keyring::keys::DISCORD_WEBHOOK.into(),
+                self.discord_webhook.clone(),
+            ),
+            (
+                keyring::keys::PUSHOVER_TOKEN.into(),
+                self.pushover_token.clone(),
+            ),
+            (
+                keyring::keys::PUSHOVER_USER.into(),
+                self.pushover_user.clone(),
+            ),
+            (keyring::keys::NTFY_TOPIC.into(), self.ntfy_topic.clone()),
+            (
+                keyring::keys::ANTHROPIC_KEY.into(),
+                self.anthropic_key.clone(),
+            ),
+            (keyring::keys::OPENAI_KEY.into(), self.openai_key.clone()),
+            (
+                keyring::keys::KRAKEN_API_KEY.into(),
+                self.kraken_api_key.clone(),
+            ),
+            (
+                keyring::keys::KRAKEN_API_SECRET.into(),
+                self.kraken_api_secret.clone(),
+            ),
+            (
+                keyring::keys::KRAKEN_WS_API_KEY.into(),
+                self.kraken_ws_api_key.clone(),
+            ),
+            (
+                keyring::keys::KRAKEN_WS_API_SECRET.into(),
+                self.kraken_ws_api_secret.clone(),
+            ),
+        ];
+        let cache_clone = self.cache.clone();
+        let rt_handle = self.rt_handle.clone();
+        rt_handle.spawn_blocking(move || {
+            for (key, val) in &cred_pairs {
+                let _ = keyring::store(key, val);
+                if let Some(ref cache) = cache_clone {
+                    let _ = cache.put_kv(&format!("cred:{}", key), val);
+                }
+            }
+        });
+        // Session JSON write is fast (no DBUS) — keep on UI thread for atomicity
+        let json = self.build_session_json();
+        Self::write_session_json(&json);
+        self.sync_preferences_save();
+        self.session_last_saved_json = json;
+        self.session_dirty_since = None;
+        self.session_last_scan_at = std::time::Instant::now();
+        self.session_state_ready = true;
+    }
+
+    pub(super) fn load_session(&mut self) {
+        let path = Self::session_json_path();
+        if let Ok(data) = std::fs::read_to_string(&path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
+                self.workspaces.clear();
+                self.chart_templates.clear();
+                self.journal_entries.clear();
+                self.alerts.clear();
+                if let Some(sym) = v["symbol"].as_str() {
+                    self.symbol_input = sym.to_string();
+                }
+                if let Some(mtf) = v["mtf_enabled"].as_bool() {
+                    self.mtf_enabled = mtf;
+                }
+                if let Some(b) = v["command_open"].as_bool() {
+                    self.command_open = b;
+                }
+                if let Some(b) = v["compact_mode"].as_bool() {
+                    self.compact_mode = b;
+                }
+                self.apply_sync_preferences_value(&v);
+                if let Some(tab) = v["active_tab"].as_u64() {
+                    self.active_tab = tab as usize;
+                }
+                if let Some(arr) = v["mtf_visible"].as_array() {
+                    self.mtf_visible = arr.iter().map(|v| v.as_bool().unwrap_or(true)).collect();
+                }
+                // Broker scope + econ filters (added 2026-04-09)
+                self.broker_scope = match v["broker_scope"].as_str() {
+                    Some("alpaca") => EventSource::Alpaca,
+                    Some("darwinex") => EventSource::Darwinex,
+                    Some("tasty") => EventSource::Tasty,
+                    Some("kraken") => EventSource::Kraken,
+                    Some("positions") => EventSource::Positions,
+                    _ => EventSource::All,
+                };
+                if let Some(b) = v["econ_filter_high"].as_bool() {
+                    self.econ_filter_high = b;
+                }
+                if let Some(b) = v["econ_filter_medium"].as_bool() {
+                    self.econ_filter_medium = b;
+                }
+                if let Some(b) = v["econ_filter_low"].as_bool() {
+                    self.econ_filter_low = b;
+                }
+                if let Some(b) = v["econ_filter_holiday"].as_bool() {
+                    self.econ_filter_holiday = b;
+                }
+                if let Some(s) = v["econ_filter_currencies"].as_str() {
+                    self.econ_filter_currencies = s.to_string();
+                }
+                if let Some(b) = v["mt5_auto_sync"].as_bool() {
+                    self.mt5_auto_sync = b;
+                }
+                if let Some(obj) = v["mt5_backtest_expand_symbols"].as_object() {
+                    self.mt5_backtest_expand_symbols = obj
+                        .iter()
+                        .filter_map(|(k, val)| val.as_u64().map(|n| (k.to_uppercase(), n as u32)))
+                        .collect();
+                }
+                // Restore tabs: symbol, timeframe, chart type — rebuild charts from session
+                if let Some(tabs) = v["tabs"].as_array() {
+                    if !tabs.is_empty() {
+                        // Rebuild chart set from session data
+                        self.charts.clear();
+                        for tab in tabs {
+                            // Canonicalise legacy sessions: before `bare_symbol_from_key`
+                            // was introduced, Screener/watchlist load paths saved full
+                            // cache keys (`mt5:SLV:1Hour`) into chart.symbol. Normalise
+                            // to bare here so try_load doesn't double-prefix.
+                            let raw_sym = tab["symbol"].as_str().unwrap_or("CC");
+                            let sym = bare_symbol_from_key(raw_sym);
+                            let tf = tab["timeframe"]
+                                .as_str()
+                                .and_then(Timeframe::from_label)
+                                .unwrap_or(Timeframe::H4);
+                            let ct = match tab["chart_type"].as_str() {
+                                Some("Heikin-Ashi") => ChartType::HeikinAshi,
+                                Some("Line") => ChartType::Line,
+                                Some("OHLC Bars") => ChartType::OhlcBars,
+                                Some("Renko") => ChartType::Renko,
+                                _ => ChartType::Candle,
+                            };
+                            let mut chart = ChartState::new(&sym, tf);
+                            chart.chart_type = ct;
+                            chart.log_scale = tab["log_scale"].as_bool().unwrap_or(false);
+                            chart.source_override = tab["source"]
+                                .as_str()
+                                .filter(|source| !source.trim().is_empty())
+                                .map(|source| source.to_string());
+                            if let Some(visible_bars) = tab["visible_bars"].as_u64() {
+                                chart.visible_bars = visible_bars as usize;
+                            }
+                            if let Some(view_offset) = tab["view_offset"].as_u64() {
+                                chart.view_offset = view_offset as usize;
+                            }
+                            self.charts.push(chart);
+                        }
+                        self.active_tab = self.active_tab.min(self.charts.len().saturating_sub(1));
+                        while self.mtf_visible.len() < self.charts.len() {
+                            self.mtf_visible.push(true);
+                        }
+                        self.hydrate_loaded_charts();
+                    }
+                }
+                if let Some(ind) = v.get("indicators") {
+                    for (key, field) in [
+                        ("sma200", &mut self.show_sma200),
+                        ("sma100", &mut self.show_sma100),
+                        ("kama", &mut self.show_kama),
+                        ("ema21", &mut self.show_ema21),
+                        ("bollinger", &mut self.show_bollinger),
+                        ("ichimoku", &mut self.show_ichimoku),
+                        ("wma", &mut self.show_wma),
+                        ("hma", &mut self.show_hma),
+                        ("psar", &mut self.show_psar),
+                        ("atr_proj", &mut self.show_atr_proj),
+                        ("prev_levels", &mut self.show_prev_levels),
+                        ("pivots", &mut self.show_pivots),
+                        ("fractals", &mut self.show_fractals),
+                        ("harmonics", &mut self.show_harmonics),
+                        ("supply_demand", &mut self.show_supply_demand),
+                        ("ehlers_ss", &mut self.show_ehlers_ss),
+                        ("ehlers_decycler", &mut self.show_ehlers_decycler),
+                        ("ehlers_itl", &mut self.show_ehlers_itl),
+                        ("ehlers_mama", &mut self.show_ehlers_mama),
+                        ("ehlers_ebsw", &mut self.show_ehlers_ebsw),
+                        ("ehlers_cyber", &mut self.show_ehlers_cyber),
+                        ("ehlers_cg", &mut self.show_ehlers_cg),
+                        ("ehlers_roof", &mut self.show_ehlers_roof),
+                        ("rsi", &mut self.show_rsi),
+                        ("fisher", &mut self.show_fisher),
+                        ("macd", &mut self.show_macd),
+                        ("stochastic", &mut self.show_stochastic),
+                        ("adx", &mut self.show_adx),
+                        ("cci", &mut self.show_cci),
+                        ("williams_r", &mut self.show_williams_r),
+                        ("obv", &mut self.show_obv),
+                        ("momentum", &mut self.show_momentum),
+                        ("cmo", &mut self.show_cmo),
+                        ("qstick", &mut self.show_qstick),
+                        ("disparity", &mut self.show_disparity),
+                        ("bop", &mut self.show_bop),
+                        ("stddev", &mut self.show_stddev),
+                        ("mfi", &mut self.show_mfi),
+                        ("trix", &mut self.show_trix),
+                        ("ppo", &mut self.show_ppo),
+                        ("ultosc", &mut self.show_ultosc),
+                        ("stochrsi", &mut self.show_stochrsi),
+                        ("var_oscillator", &mut self.show_var_oscillator),
+                        ("better_volume", &mut self.show_better_volume),
+                        ("volume_pane", &mut self.show_volume_pane),
+                        ("sessions", &mut self.show_sessions),
+                        ("vol_heatmap", &mut self.show_vol_heatmap),
+                        ("vwap", &mut self.show_vwap),
+                        ("price_histogram", &mut self.show_price_histogram),
+                        ("supertrend", &mut self.show_supertrend),
+                        ("donchian", &mut self.show_donchian),
+                        ("keltner", &mut self.show_keltner),
+                        ("regression", &mut self.show_regression),
+                        ("squeeze", &mut self.show_squeeze),
+                        ("fvg", &mut self.show_fvg),
+                        ("order_blocks", &mut self.show_order_blocks),
+                    ] {
+                        if let Some(b) = ind[key].as_bool() {
+                            *field = b;
+                        }
+                    }
+                }
+                // Restore drawings (all types)
+                if let Some(drawings) = v["drawings"].as_array() {
+                    if let Some(chart) = self.charts.get_mut(0) {
+                        let parse_col = |d: &serde_json::Value| -> egui::Color32 {
+                            let c = &d["color"];
+                            egui::Color32::from_rgb(
+                                c[0].as_u64().unwrap_or(200) as u8,
+                                c[1].as_u64().unwrap_or(200) as u8,
+                                c[2].as_u64().unwrap_or(200) as u8,
+                            )
+                        };
+                        let parse_pt = |d: &serde_json::Value, key: &str| -> Option<(usize, f64)> {
+                            let a = &d[key];
+                            Some((a[0].as_u64()? as usize, a[1].as_f64()?))
+                        };
+                        for d in drawings {
+                            match d["type"].as_str() {
+                                Some("hline") => {
+                                    if let Some(price) = d["price"].as_f64() {
+                                        chart.drawings.push(Drawing::HLine {
+                                            price,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("vline") => {
+                                    if let Some(idx) = d["bar_idx"].as_u64() {
+                                        chart.drawings.push(Drawing::VLine {
+                                            bar_idx: idx as usize,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("trendline") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::TrendLine {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("fibo") => {
+                                    if let (Some(h), Some(l), Some(bs), Some(be)) = (
+                                        d["high"].as_f64(),
+                                        d["low"].as_f64(),
+                                        d["bar_start"].as_u64(),
+                                        d["bar_end"].as_u64(),
+                                    ) {
+                                        chart.drawings.push(Drawing::FiboRetrace {
+                                            high: h,
+                                            low: l,
+                                            bar_start: bs as usize,
+                                            bar_end: be as usize,
+                                        });
+                                    }
+                                }
+                                Some("rect") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::Rectangle {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("ray") => {
+                                    if let (Some(o), Some(s)) =
+                                        (parse_pt(d, "origin"), d["slope"].as_f64())
+                                    {
+                                        chart.drawings.push(Drawing::Ray {
+                                            origin: o,
+                                            slope: s,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("channel") => {
+                                    if let (Some(p1), Some(p2), Some(w)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"), d["width"].as_f64())
+                                    {
+                                        chart.drawings.push(Drawing::Channel {
+                                            p1,
+                                            p2,
+                                            width: w,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("extline") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::ExtendedLine {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("hray") => {
+                                    if let (Some(idx), Some(p)) =
+                                        (d["bar_idx"].as_u64(), d["price"].as_f64())
+                                    {
+                                        chart.drawings.push(Drawing::HRay {
+                                            bar_idx: idx as usize,
+                                            price: p,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("crossline") => {
+                                    if let (Some(idx), Some(p)) =
+                                        (d["bar_idx"].as_u64(), d["price"].as_f64())
+                                    {
+                                        chart.drawings.push(Drawing::CrossLine {
+                                            bar_idx: idx as usize,
+                                            price: p,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("arrowline") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::ArrowLine {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("infoline") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::InfoLine {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("pitchfork") => {
+                                    if let (Some(pv), Some(p2), Some(p3)) =
+                                        (parse_pt(d, "pivot"), parse_pt(d, "p2"), parse_pt(d, "p3"))
+                                    {
+                                        chart.drawings.push(Drawing::Pitchfork {
+                                            pivot: pv,
+                                            p2,
+                                            p3,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("fiboext") => {
+                                    if let (Some(p1), Some(p2), Some(p3)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"), parse_pt(d, "p3"))
+                                    {
+                                        chart.drawings.push(Drawing::FiboExtension {
+                                            p1,
+                                            p2,
+                                            p3,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("gannfan") => {
+                                    if let (Some(o), Some(s)) =
+                                        (parse_pt(d, "origin"), d["scale"].as_f64())
+                                    {
+                                        chart.drawings.push(Drawing::GannFan {
+                                            origin: o,
+                                            scale: s,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("longpos") => {
+                                    if let (Some(e), Some(s), Some(t)) = (
+                                        parse_pt(d, "entry"),
+                                        d["stop"].as_f64(),
+                                        d["target"].as_f64(),
+                                    ) {
+                                        chart.drawings.push(Drawing::LongPosition {
+                                            entry: e,
+                                            stop: s,
+                                            target: t,
+                                        });
+                                    }
+                                }
+                                Some("shortpos") => {
+                                    if let (Some(e), Some(s), Some(t)) = (
+                                        parse_pt(d, "entry"),
+                                        d["stop"].as_f64(),
+                                        d["target"].as_f64(),
+                                    ) {
+                                        chart.drawings.push(Drawing::ShortPosition {
+                                            entry: e,
+                                            stop: s,
+                                            target: t,
+                                        });
+                                    }
+                                }
+                                Some("pricerange") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::PriceRange { p1, p2 });
+                                    }
+                                }
+                                Some("text") => {
+                                    if let (Some(idx), Some(p), Some(t)) = (
+                                        d["bar_idx"].as_u64(),
+                                        d["price"].as_f64(),
+                                        d["text"].as_str(),
+                                    ) {
+                                        chart.drawings.push(Drawing::TextLabel {
+                                            bar_idx: idx as usize,
+                                            price: p,
+                                            text: t.to_string(),
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("arrowmarker") => {
+                                    if let (Some(idx), Some(p), Some(up)) = (
+                                        d["bar_idx"].as_u64(),
+                                        d["price"].as_f64(),
+                                        d["is_up"].as_bool(),
+                                    ) {
+                                        chart.drawings.push(Drawing::ArrowMarker {
+                                            bar_idx: idx as usize,
+                                            price: p,
+                                            is_up: up,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("ellipse") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::Ellipse {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("triangle") => {
+                                    if let (Some(p1), Some(p2), Some(p3)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"), parse_pt(d, "p3"))
+                                    {
+                                        chart.drawings.push(Drawing::Triangle {
+                                            p1,
+                                            p2,
+                                            p3,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("trendangle") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::TrendAngle {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("parallelch") => {
+                                    if let (Some(p1), Some(p2), Some(off)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"), d["offset"].as_f64())
+                                    {
+                                        chart.drawings.push(Drawing::ParallelChannel {
+                                            p1,
+                                            p2,
+                                            offset: off,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("fibchannel") => {
+                                    if let (Some(p1), Some(p2), Some(p3)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"), parse_pt(d, "p3"))
+                                    {
+                                        chart.drawings.push(Drawing::FibChannel {
+                                            p1,
+                                            p2,
+                                            p3,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("fibtimezones") => {
+                                    if let Some(idx) = d["bar_idx"].as_u64() {
+                                        chart.drawings.push(Drawing::FibTimeZones {
+                                            bar_idx: idx as usize,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("pricelabel") => {
+                                    if let (Some(idx), Some(p)) =
+                                        (d["bar_idx"].as_u64(), d["price"].as_f64())
+                                    {
+                                        chart.drawings.push(Drawing::PriceLabel {
+                                            bar_idx: idx as usize,
+                                            price: p,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("callout") => {
+                                    if let (Some(a), Some(lp), Some(t)) = (
+                                        parse_pt(d, "anchor"),
+                                        parse_pt(d, "label_pos"),
+                                        d["text"].as_str(),
+                                    ) {
+                                        chart.drawings.push(Drawing::Callout {
+                                            anchor: a,
+                                            label_pos: lp,
+                                            text: t.to_string(),
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("highlighter") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::Highlighter {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("crossmarker") => {
+                                    if let (Some(idx), Some(p)) =
+                                        (d["bar_idx"].as_u64(), d["price"].as_f64())
+                                    {
+                                        chart.drawings.push(Drawing::CrossMarker {
+                                            bar_idx: idx as usize,
+                                            price: p,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("polyline") => {
+                                    if let Some(pts) = d["points"].as_array() {
+                                        let points: Vec<(usize, f64)> = pts
+                                            .iter()
+                                            .filter_map(|p| {
+                                                let a = p.as_array()?;
+                                                Some((
+                                                    a.first()?.as_u64()? as usize,
+                                                    a.get(1)?.as_f64()?,
+                                                ))
+                                            })
+                                            .collect();
+                                        if !points.is_empty() {
+                                            chart.drawings.push(Drawing::Polyline {
+                                                points,
+                                                color: parse_col(d),
+                                            });
+                                        }
+                                    }
+                                }
+                                Some("anchornote") => {
+                                    if let (Some(idx), Some(p), Some(t)) = (
+                                        d["bar_idx"].as_u64(),
+                                        d["price"].as_f64(),
+                                        d["text"].as_str(),
+                                    ) {
+                                        chart.drawings.push(Drawing::AnchorNote {
+                                            bar_idx: idx as usize,
+                                            price: p,
+                                            text: t.to_string(),
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("regressionch") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::RegressionChannel {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("gannbox") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::GannBox {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("elliott") => {
+                                    if let Some(pts) = d["points"].as_array() {
+                                        let points: Vec<(usize, f64)> = pts
+                                            .iter()
+                                            .filter_map(|p| {
+                                                let a = p.as_array()?;
+                                                Some((
+                                                    a.first()?.as_u64()? as usize,
+                                                    a.get(1)?.as_f64()?,
+                                                ))
+                                            })
+                                            .collect();
+                                        if !points.is_empty() {
+                                            chart.drawings.push(Drawing::ElliottWave {
+                                                points,
+                                                color: parse_col(d),
+                                            });
+                                        }
+                                    }
+                                }
+                                Some("abc") => {
+                                    if let Some(pts) = d["points"].as_array() {
+                                        let points: Vec<(usize, f64)> = pts
+                                            .iter()
+                                            .filter_map(|p| {
+                                                let a = p.as_array()?;
+                                                Some((
+                                                    a.first()?.as_u64()? as usize,
+                                                    a.get(1)?.as_f64()?,
+                                                ))
+                                            })
+                                            .collect();
+                                        if !points.is_empty() {
+                                            chart.drawings.push(Drawing::AbcCorrection {
+                                                points,
+                                                color: parse_col(d),
+                                            });
+                                        }
+                                    }
+                                }
+                                Some("daterange") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::DateRange { p1, p2 });
+                                    }
+                                }
+                                Some("datepricerange") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::DatePriceRange { p1, p2 });
+                                    }
+                                }
+                                Some("headshoulders") => {
+                                    if let Some(pts) = d["points"].as_array() {
+                                        let points: Vec<(usize, f64)> = pts
+                                            .iter()
+                                            .filter_map(|p| {
+                                                let a = p.as_array()?;
+                                                Some((
+                                                    a.first()?.as_u64()? as usize,
+                                                    a.get(1)?.as_f64()?,
+                                                ))
+                                            })
+                                            .collect();
+                                        if !points.is_empty() {
+                                            chart.drawings.push(Drawing::HeadShoulders {
+                                                points,
+                                                color: parse_col(d),
+                                            });
+                                        }
+                                    }
+                                }
+                                Some("xabcd") => {
+                                    if let Some(pts) = d["points"].as_array() {
+                                        let points: Vec<(usize, f64)> = pts
+                                            .iter()
+                                            .filter_map(|p| {
+                                                let a = p.as_array()?;
+                                                Some((
+                                                    a.first()?.as_u64()? as usize,
+                                                    a.get(1)?.as_f64()?,
+                                                ))
+                                            })
+                                            .collect();
+                                        if !points.is_empty() {
+                                            chart.drawings.push(Drawing::XabcdPattern {
+                                                points,
+                                                color: parse_col(d),
+                                            });
+                                        }
+                                    }
+                                }
+                                Some("brush") => {
+                                    if let Some(pts) = d["points"].as_array() {
+                                        let points: Vec<(usize, f64)> = pts
+                                            .iter()
+                                            .filter_map(|p| {
+                                                let a = p.as_array()?;
+                                                Some((
+                                                    a.first()?.as_u64()? as usize,
+                                                    a.get(1)?.as_f64()?,
+                                                ))
+                                            })
+                                            .collect();
+                                        if !points.is_empty() {
+                                            chart.drawings.push(Drawing::Brush {
+                                                points,
+                                                color: parse_col(d),
+                                            });
+                                        }
+                                    }
+                                }
+                                Some("schiffpitchfork") => {
+                                    if let (Some(pv), Some(p2), Some(p3)) =
+                                        (parse_pt(d, "pivot"), parse_pt(d, "p2"), parse_pt(d, "p3"))
+                                    {
+                                        chart.drawings.push(Drawing::SchiffPitchfork {
+                                            pivot: pv,
+                                            p2,
+                                            p3,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("modschiffpitchfork") => {
+                                    if let (Some(pv), Some(p2), Some(p3)) =
+                                        (parse_pt(d, "pivot"), parse_pt(d, "p2"), parse_pt(d, "p3"))
+                                    {
+                                        chart.drawings.push(Drawing::ModSchiffPitchfork {
+                                            pivot: pv,
+                                            p2,
+                                            p3,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("cycliclines") => {
+                                    if let (Some(bs), Some(be)) =
+                                        (d["bar_start"].as_u64(), d["bar_end"].as_u64())
+                                    {
+                                        chart.drawings.push(Drawing::CyclicLines {
+                                            bar_start: bs as usize,
+                                            bar_end: be as usize,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("sinewave") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::SineWave {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("emoji") => {
+                                    if let (Some(idx), Some(p)) =
+                                        (d["bar_idx"].as_u64(), d["price"].as_f64())
+                                    {
+                                        let emoji =
+                                            d["emoji"].as_str().unwrap_or("\u{1F3AF}").to_string();
+                                        chart.drawings.push(Drawing::Emoji {
+                                            bar_idx: idx as usize,
+                                            price: p,
+                                            emoji,
+                                        });
+                                    }
+                                }
+                                Some("flag") => {
+                                    if let (Some(idx), Some(p)) =
+                                        (d["bar_idx"].as_u64(), d["price"].as_f64())
+                                    {
+                                        chart.drawings.push(Drawing::Flag {
+                                            bar_idx: idx as usize,
+                                            price: p,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("balloon") => {
+                                    if let (Some(a), Some(lp), Some(t)) = (
+                                        parse_pt(d, "anchor"),
+                                        parse_pt(d, "label_pos"),
+                                        d["text"].as_str(),
+                                    ) {
+                                        chart.drawings.push(Drawing::Balloon {
+                                            anchor: a,
+                                            label_pos: lp,
+                                            text: t.to_string(),
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("sessionbreak") => {
+                                    if let Some(idx) = d["bar_idx"].as_u64() {
+                                        chart.drawings.push(Drawing::SessionBreak {
+                                            bar_idx: idx as usize,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("magnetlevel") => {
+                                    if let Some(price) = d["price"].as_f64() {
+                                        chart.drawings.push(Drawing::MagnetLevel {
+                                            price,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("riskreward") => {
+                                    if let (Some(e), Some(s), Some(t)) = (
+                                        parse_pt(d, "entry"),
+                                        d["stop"].as_f64(),
+                                        d["target"].as_f64(),
+                                    ) {
+                                        chart.drawings.push(Drawing::RiskRewardBox {
+                                            entry: e,
+                                            stop: s,
+                                            target: t,
+                                        });
+                                    }
+                                }
+                                Some("fibcircle") => {
+                                    if let (Some(c), Some(r)) =
+                                        (parse_pt(d, "center"), parse_pt(d, "radius_pt"))
+                                    {
+                                        chart.drawings.push(Drawing::FibCircle {
+                                            center: c,
+                                            radius_pt: r,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("arcdraw") => {
+                                    if let (Some(p1), Some(p2), Some(p3)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"), parse_pt(d, "p3"))
+                                    {
+                                        chart.drawings.push(Drawing::ArcDraw {
+                                            p1,
+                                            p2,
+                                            p3,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("curvedraw") => {
+                                    if let (Some(p1), Some(c1), Some(c2), Some(p2)) = (
+                                        parse_pt(d, "p1"),
+                                        parse_pt(d, "ctrl1"),
+                                        parse_pt(d, "ctrl2"),
+                                        parse_pt(d, "p2"),
+                                    ) {
+                                        chart.drawings.push(Drawing::CurveDraw {
+                                            p1,
+                                            ctrl1: c1,
+                                            ctrl2: c2,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("pathdraw") => {
+                                    if let Some(pts) = d["points"].as_array() {
+                                        let points: Vec<(usize, f64)> = pts
+                                            .iter()
+                                            .filter_map(|p| {
+                                                let a = p.as_array()?;
+                                                Some((
+                                                    a.first()?.as_u64()? as usize,
+                                                    a.get(1)?.as_f64()?,
+                                                ))
+                                            })
+                                            .collect();
+                                        if !points.is_empty() {
+                                            chart.drawings.push(Drawing::PathDraw {
+                                                points,
+                                                color: parse_col(d),
+                                            });
+                                        }
+                                    }
+                                }
+                                Some("forecast") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::Forecast {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("ghostfeed") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::GhostFeed {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("signpost") => {
+                                    if let (Some(idx), Some(p)) =
+                                        (d["bar_idx"].as_u64(), d["price"].as_f64())
+                                    {
+                                        chart.drawings.push(Drawing::Signpost {
+                                            bar_idx: idx as usize,
+                                            price: p,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("ruler") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::Ruler {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("timecycle") => {
+                                    if let (Some(bs), Some(be)) =
+                                        (d["bar_start"].as_u64(), d["bar_end"].as_u64())
+                                    {
+                                        chart.drawings.push(Drawing::TimeCycle {
+                                            bar_start: bs as usize,
+                                            bar_end: be as usize,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("speedfan") => {
+                                    if let (Some(p1), Some(p2), Some(p3)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"), parse_pt(d, "p3"))
+                                    {
+                                        chart.drawings.push(Drawing::SpeedResistanceFan {
+                                            p1,
+                                            p2,
+                                            p3,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("speedarc") => {
+                                    if let (Some(p1), Some(p2), Some(p3)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"), parse_pt(d, "p3"))
+                                    {
+                                        chart.drawings.push(Drawing::SpeedResistanceArc {
+                                            p1,
+                                            p2,
+                                            p3,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("fibspiral") => {
+                                    if let (Some(c), Some(r)) =
+                                        (parse_pt(d, "center"), parse_pt(d, "radius_pt"))
+                                    {
+                                        chart.drawings.push(Drawing::FibSpiral {
+                                            center: c,
+                                            radius_pt: r,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("rotatedrect") => {
+                                    if let (Some(p1), Some(p2), Some(p3)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"), parse_pt(d, "p3"))
+                                    {
+                                        chart.drawings.push(Drawing::RotatedRectangle {
+                                            p1,
+                                            p2,
+                                            p3,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("anchoredvwap") => {
+                                    if let Some(idx) = d["bar_idx"].as_u64() {
+                                        chart.drawings.push(Drawing::AnchoredVwapLine {
+                                            bar_idx: idx as usize,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("trendchannel") => {
+                                    if let (Some(p1), Some(p2), Some(p3)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"), parse_pt(d, "p3"))
+                                    {
+                                        chart.drawings.push(Drawing::TrendChannel {
+                                            p1,
+                                            p2,
+                                            p3,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("insidepitchfork") => {
+                                    if let (Some(pv), Some(p2), Some(p3)) =
+                                        (parse_pt(d, "pivot"), parse_pt(d, "p2"), parse_pt(d, "p3"))
+                                    {
+                                        chart.drawings.push(Drawing::InsidePitchfork {
+                                            pivot: pv,
+                                            p2,
+                                            p3,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("fibwedge") => {
+                                    if let (Some(p1), Some(p2), Some(p3)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"), parse_pt(d, "p3"))
+                                    {
+                                        chart.drawings.push(Drawing::FibWedge {
+                                            p1,
+                                            p2,
+                                            p3,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("pricenote") => {
+                                    if let (Some(p), Some(t)) =
+                                        (d["price"].as_f64(), d["text"].as_str())
+                                    {
+                                        chart.drawings.push(Drawing::PriceNote {
+                                            price: p,
+                                            text: t.to_string(),
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("measuretool") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::MeasureTool {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("anchoredtext") => {
+                                    if let (Some(idx), Some(p), Some(t)) = (
+                                        d["bar_idx"].as_u64(),
+                                        d["price"].as_f64(),
+                                        d["text"].as_str(),
+                                    ) {
+                                        chart.drawings.push(Drawing::AnchoredText {
+                                            bar_idx: idx as usize,
+                                            price: p,
+                                            text: t.to_string(),
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("comment") => {
+                                    if let (Some(idx), Some(p), Some(t)) = (
+                                        d["bar_idx"].as_u64(),
+                                        d["price"].as_f64(),
+                                        d["text"].as_str(),
+                                    ) {
+                                        chart.drawings.push(Drawing::Comment {
+                                            bar_idx: idx as usize,
+                                            price: p,
+                                            text: t.to_string(),
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("arrowleft") => {
+                                    if let (Some(idx), Some(p)) =
+                                        (d["bar_idx"].as_u64(), d["price"].as_f64())
+                                    {
+                                        chart.drawings.push(Drawing::ArrowMarkerLeft {
+                                            bar_idx: idx as usize,
+                                            price: p,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("arrowright") => {
+                                    if let (Some(idx), Some(p)) =
+                                        (d["bar_idx"].as_u64(), d["price"].as_f64())
+                                    {
+                                        chart.drawings.push(Drawing::ArrowMarkerRight {
+                                            bar_idx: idx as usize,
+                                            price: p,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("circle") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::Circle {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("pitchfan") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::PitchFan {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("trendfibtime") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::TrendFibTime {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("gannsquare") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::GannSquare {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("gannsquarefixed") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::GannSquareFixed {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("barspattern") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::BarsPattern {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("projection") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::Projection {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("doublecurve") => {
+                                    if let (Some(p1), Some(p2)) =
+                                        (parse_pt(d, "p1"), parse_pt(d, "p2"))
+                                    {
+                                        chart.drawings.push(Drawing::DoubleCurve {
+                                            p1,
+                                            p2,
+                                            color: parse_col(d),
+                                        });
+                                    }
+                                }
+                                Some("trianglepattern") => {
+                                    if let Some(pts) = d["points"].as_array() {
+                                        let points: Vec<(usize, f64)> = pts
+                                            .iter()
+                                            .filter_map(|p| {
+                                                let a = p.as_array()?;
+                                                Some((
+                                                    a.first()?.as_u64()? as usize,
+                                                    a.get(1)?.as_f64()?,
+                                                ))
+                                            })
+                                            .collect();
+                                        if !points.is_empty() {
+                                            chart.drawings.push(Drawing::TrianglePattern {
+                                                points,
+                                                color: parse_col(d),
+                                            });
+                                        }
+                                    }
+                                }
+                                Some("threedrives") => {
+                                    if let Some(pts) = d["points"].as_array() {
+                                        let points: Vec<(usize, f64)> = pts
+                                            .iter()
+                                            .filter_map(|p| {
+                                                let a = p.as_array()?;
+                                                Some((
+                                                    a.first()?.as_u64()? as usize,
+                                                    a.get(1)?.as_f64()?,
+                                                ))
+                                            })
+                                            .collect();
+                                        if !points.is_empty() {
+                                            chart.drawings.push(Drawing::ThreeDrives {
+                                                points,
+                                                color: parse_col(d),
+                                            });
+                                        }
+                                    }
+                                }
+                                Some("elliottdouble") => {
+                                    if let Some(pts) = d["points"].as_array() {
+                                        let points: Vec<(usize, f64)> = pts
+                                            .iter()
+                                            .filter_map(|p| {
+                                                let a = p.as_array()?;
+                                                Some((
+                                                    a.first()?.as_u64()? as usize,
+                                                    a.get(1)?.as_f64()?,
+                                                ))
+                                            })
+                                            .collect();
+                                        if !points.is_empty() {
+                                            chart.drawings.push(Drawing::ElliottDouble {
+                                                points,
+                                                color: parse_col(d),
+                                            });
+                                        }
+                                    }
+                                }
+                                Some("abcd") => {
+                                    if let Some(pts) = d["points"].as_array() {
+                                        let points: Vec<(usize, f64)> = pts
+                                            .iter()
+                                            .filter_map(|p| {
+                                                let a = p.as_array()?;
+                                                Some((
+                                                    a.first()?.as_u64()? as usize,
+                                                    a.get(1)?.as_f64()?,
+                                                ))
+                                            })
+                                            .collect();
+                                        if !points.is_empty() {
+                                            chart.drawings.push(Drawing::AbcdPattern {
+                                                points,
+                                                color: parse_col(d),
+                                            });
+                                        }
+                                    }
+                                }
+                                Some("cypher") => {
+                                    if let Some(pts) = d["points"].as_array() {
+                                        let points: Vec<(usize, f64)> = pts
+                                            .iter()
+                                            .filter_map(|p| {
+                                                let a = p.as_array()?;
+                                                Some((
+                                                    a.first()?.as_u64()? as usize,
+                                                    a.get(1)?.as_f64()?,
+                                                ))
+                                            })
+                                            .collect();
+                                        if !points.is_empty() {
+                                            chart.drawings.push(Drawing::CypherPattern {
+                                                points,
+                                                color: parse_col(d),
+                                            });
+                                        }
+                                    }
+                                }
+                                Some("elliotttriangle") => {
+                                    if let Some(pts) = d["points"].as_array() {
+                                        let points: Vec<(usize, f64)> = pts
+                                            .iter()
+                                            .filter_map(|p| {
+                                                let a = p.as_array()?;
+                                                Some((
+                                                    a.first()?.as_u64()? as usize,
+                                                    a.get(1)?.as_f64()?,
+                                                ))
+                                            })
+                                            .collect();
+                                        if !points.is_empty() {
+                                            chart.drawings.push(Drawing::ElliottTriangle {
+                                                points,
+                                                color: parse_col(d),
+                                            });
+                                        }
+                                    }
+                                }
+                                Some("elliotttriple") => {
+                                    if let Some(pts) = d["points"].as_array() {
+                                        let points: Vec<(usize, f64)> = pts
+                                            .iter()
+                                            .filter_map(|p| {
+                                                let a = p.as_array()?;
+                                                Some((
+                                                    a.first()?.as_u64()? as usize,
+                                                    a.get(1)?.as_f64()?,
+                                                ))
+                                            })
+                                            .collect();
+                                        if !points.is_empty() {
+                                            chart.drawings.push(Drawing::ElliottTripleCombo {
+                                                points,
+                                                color: parse_col(d),
+                                            });
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                // Restore alerts
+                if let Some(alerts) = v["alerts"].as_array() {
+                    for a in alerts {
+                        if let (Some(p), Some(l)) = (a["price"].as_f64(), a["label"].as_str()) {
+                            self.alerts.push((p, l.to_string()));
+                        }
+                    }
+                }
+                // Restore chart templates
+                if let Some(templates) = v["chart_templates"].as_object() {
+                    for (name, snap) in templates {
+                        self.chart_templates.insert(name.clone(), snap.clone());
+                    }
+                }
+                // Restore MTF cols
+                if let Some(cols) = v["mtf_cols"].as_u64() {
+                    self.mtf_cols = cols as usize;
+                }
+                if let Some(b) = v["fund_source_mt5"].as_bool() {
+                    self.fund_source_mt5 = b;
+                }
+                if let Some(b) = v["fund_source_alpaca"].as_bool() {
+                    self.fund_source_alpaca = b;
+                }
+                if let Some(b) = v["fund_source_tastytrade"].as_bool() {
+                    self.fund_source_tastytrade = b;
+                }
+                if let Some(b) = v["fund_source_kraken"].as_bool() {
+                    self.fund_source_kraken = b;
+                }
+                // Restore right panel tab
+                self.right_tab = match v["right_tab"].as_str() {
+                    Some("positions") => RightTab::Positions,
+                    Some("orders") => RightTab::Orders,
+                    Some("watchlist") => RightTab::Watchlist,
+                    Some("risk") => RightTab::Risk,
+                    _ => RightTab::Trading,
+                };
+                if let Some(b) = v["right_trading_open"].as_bool() {
+                    self.right_trading_open = b;
+                }
+                if let Some(b) = v["right_positions_open"].as_bool() {
+                    self.right_positions_open = b;
+                }
+                if let Some(b) = v["right_orders_open"].as_bool() {
+                    self.right_orders_open = b;
+                }
+                if let Some(b) = v["right_watchlist_open"].as_bool() {
+                    self.right_watchlist_open = b;
+                }
+                if let Some(b) = v["right_risk_open"].as_bool() {
+                    self.right_risk_open = b;
+                }
+                if let Some(b) = v["right_recent_fills_open"].as_bool() {
+                    self.right_recent_fills_open = b;
+                }
+                if let Some(b) = v["right_news_open"].as_bool() {
+                    self.right_news_open = b;
+                }
+                if let Some(b) = v["right_mtf_grid_open"].as_bool() {
+                    self.right_mtf_grid_open = b;
+                }
+                if let Some(order) = v["right_panel_order"].as_array() {
+                    self.right_panel_order = order
+                        .iter()
+                        .filter_map(|value| value.as_str())
+                        .filter_map(RightPanelSectionId::from_str)
+                        .collect();
+                    self.normalized_right_panel_order();
+                }
+                // Restore DARWIN view
+                if let Some(dv) = v["darwin_view"].as_u64() {
+                    self.darwin_view = dv as usize;
+                }
+                if let Some(dir) = v["darwin_xlsx_dir"].as_str() {
+                    self.darwin_xlsx_dir = dir.to_string();
+                }
+                if let Some(paths) = v["mt5_db_paths"].as_array() {
+                    for (i, p) in paths.iter().enumerate().take(4) {
+                        if let Some(s) = p.as_str() {
+                            self.mt5_db_paths[i] = s.to_string();
+                        }
+                    }
+                }
+                if let Some(ftp) = v["darwin_ftp_dir"].as_str() {
+                    self.darwin_ftp_dir = ftp.to_string();
+                    if let Ok(mut dir) = self.shared_ftp_dir.lock() {
+                        *dir = ftp.to_string();
+                    }
+                }
+                if let Some(model) = v["codex_model"].as_str() {
+                    self.codex_model = model.to_string();
+                }
+                if let Some(effort) = v["codex_reasoning_effort"].as_str() {
+                    self.codex_reasoning_effort =
+                        Self::normalize_codex_reasoning_effort(effort).to_string();
+                }
+                if let Some(model) = v["hermes_model"].as_str() {
+                    self.hermes_model = model.to_string();
+                }
+                if let Some(provider) = v["hermes_provider"].as_str() {
+                    self.hermes_provider = provider.to_string();
+                }
+                // Migration fallback: load credentials from old session.json if keyring is empty.
+                // Secrets are no longer written to session.json (see save_session).
+                // Once a session has been saved under the new code these keys will be absent.
+                if self.finnhub_key.is_empty() {
+                    if let Some(fk) = v["finnhub_key"].as_str() {
+                        self.finnhub_key = fk.to_string();
+                    }
+                }
+                if self.fred_key.is_empty() {
+                    if let Some(fk) = v["fred_key"].as_str() {
+                        self.fred_key = fk.to_string();
+                    }
+                }
+                if self.broker_api_key.is_empty() {
+                    if let Some(ak) = v["broker_api_key"].as_str() {
+                        self.broker_api_key = ak.to_string();
+                    }
+                }
+                if self.broker_secret.is_empty() {
+                    if let Some(bs) = v["broker_secret"].as_str() {
+                        self.broker_secret = bs.to_string();
+                    }
+                }
+                if self.tt_username.is_empty() {
+                    if let Some(tu) = v["tt_username"].as_str() {
+                        self.tt_username = tu.to_string();
+                    }
+                }
+                if self.tt_password.is_empty() {
+                    if let Some(tp) = v["tt_password"].as_str() {
+                        self.tt_password = tp.to_string();
+                    }
+                }
+                if let Some(ts) = v["tt_sandbox"].as_bool() {
+                    self.tt_sandbox = ts;
+                }
+                if let Some(bp) = v["broker_paper"].as_bool() {
+                    self.broker_paper = bp;
+                }
+                // Restore user watchlist
+                if let Some(wl) = v["user_watchlist"].as_array() {
+                    self.user_watchlist = wl
+                        .iter()
+                        .filter_map(|s| s.as_str().map(String::from))
+                        .collect();
+                }
+                if let Some(obj) = v["workspaces"].as_object() {
+                    self.workspaces = obj
+                        .iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect();
+                }
+                // Restore LAN client config
+                if let Some(b) = v["lan_client_enabled"].as_bool() {
+                    self.lan_client_enabled = b;
+                }
+                if let Some(b) = v["lan_server_enabled"].as_bool() {
+                    self.lan_server_enabled = b;
+                }
+                if let Some(b) = v["show_darwin_positions"].as_bool() {
+                    self.show_darwin_positions = b;
+                }
+                if let Some(b) = v["show_alpaca_positions"].as_bool() {
+                    self.show_alpaca_positions = b;
+                }
+                if let Some(b) = v["show_tt_positions"].as_bool() {
+                    self.show_tt_positions = b;
+                }
+                if let Some(b) = v["show_kr_positions"].as_bool() {
+                    self.show_kr_positions = b;
+                }
+                if let Some(b) = v["snap_enabled"].as_bool() {
+                    self.snap_enabled = b;
+                }
+                if let Some(b) = v["cross_tf_drawings"].as_bool() {
+                    self.cross_tf_drawings = b;
+                }
+                if let Some(b) = v["follow_latest"].as_bool() {
+                    self.follow_latest = b;
+                }
+                if let Some(w) = v["draw_width"].as_f64() {
+                    self.draw_width = w as f32;
+                }
+                if let Some(arr) = v["draw_color"].as_array() {
+                    if arr.len() == 3 {
+                        let r = arr[0].as_u64().unwrap_or(0) as u8;
+                        let g = arr[1].as_u64().unwrap_or(188) as u8;
+                        let b = arr[2].as_u64().unwrap_or(212) as u8;
+                        self.draw_color = egui::Color32::from_rgb(r, g, b);
+                    }
+                }
+                if let Some(s) = v["draw_line_style"].as_str() {
+                    self.draw_line_style = match s {
+                        "dashed" => LineStyle::Dashed,
+                        "dotted" => LineStyle::Dotted,
+                        _ => LineStyle::Solid,
+                    };
+                }
+                if let Some(s) = v["lan_server_ip"].as_str() {
+                    self.lan_server_ip = s.to_string();
+                }
+                if let Some(s) = v["lan_sync_host"].as_str() {
+                    self.lan_sync_host = s.to_string();
+                }
+                if let Some(s) = v["lan_sync_port"].as_str() {
+                    self.lan_sync_port = s.to_string();
+                }
+                // Restore SL/TP state
+                if let Some(sl) = v["sl_enabled"].as_bool() {
+                    self.sl_enabled = sl;
+                }
+                if let Some(tp) = v["tp_enabled"].as_bool() {
+                    self.tp_enabled = tp;
+                }
+                // Restore window visibility
+                if let Some(w) = v.get("windows") {
+                    if let Some(b) = w["settings"].as_bool() {
+                        self.show_settings = b;
+                    }
+                    if let Some(b) = w["darwin_accounts"].as_bool() {
+                        self.show_darwin_accounts = b;
+                    }
+                    if let Some(b) = w["darwin_portfolio"].as_bool() {
+                        self.show_darwin_portfolio = b;
+                    }
+                    if let Some(b) = w["risk_calc"].as_bool() {
+                        self.show_risk_calc = b;
+                    }
+                    if let Some(b) = w["compound_calc"].as_bool() {
+                        self.show_compound_calc = b;
+                    }
+                    if let Some(b) = w["calendar"].as_bool() {
+                        self.show_calendar = b;
+                    }
+                    if let Some(b) = w["backtest"].as_bool() {
+                        self.show_backtest = b;
+                    }
+                    if let Some(b) = w["news"].as_bool() {
+                        self.show_news = b;
+                    }
+                    if let Some(b) = w["indicators_panel"].as_bool() {
+                        self.show_indicators_panel = b;
+                    }
+                    if let Some(b) = w["screener"].as_bool() {
+                        self.show_screener = b;
+                    }
+                    if let Some(b) = w["symbols"].as_bool() {
+                        self.show_symbols = b;
+                    }
+                    if let Some(b) = w["optimizer"].as_bool() {
+                        self.show_optimizer = b;
+                    }
+                    if let Some(b) = w["ai_chat"].as_bool() {
+                        self.show_ai_chat = b;
+                    }
+                    if let Some(b) = w["claude_code"].as_bool() {
+                        self.show_claude_code = b;
+                    }
+                    if let Some(b) = w["gemini_cli"].as_bool() {
+                        self.show_gemini_cli = b;
+                    }
+                    if let Some(b) = w["codex_cli"].as_bool() {
+                        self.show_codex_cli = b;
+                    }
+                    if let Some(b) = w["hermes_cli"].as_bool() {
+                        self.show_hermes_cli = b;
+                    }
+                    if let Some(b) = w["matrix_chat"].as_bool() {
+                        self.show_matrix_chat = b;
+                    }
+                    if let Some(b) = w["sec"].as_bool() {
+                        self.show_sec = b;
+                    }
+                    if let Some(b) = w["insider"].as_bool() {
+                        self.show_insider = b;
+                    }
+                    if let Some(b) = w["fundamentals"].as_bool() {
+                        self.show_fundamentals = b;
+                    }
+                    if let Some(b) = w["order_flow"].as_bool() {
+                        self.show_order_flow = b;
+                    }
+                    if let Some(b) = w["bookmap"].as_bool() {
+                        self.show_bookmap = b;
+                    }
+                    if let Some(b) = w["journal"].as_bool() {
+                        self.show_journal = b;
+                    }
+                    if let Some(b) = w["var_mult"].as_bool() {
+                        self.show_var_mult = b;
+                    }
+                    if let Some(b) = w["montecarlo"].as_bool() {
+                        self.show_montecarlo = b;
+                    }
+                    if let Some(b) = w["earnings_calendar"].as_bool() {
+                        self.show_earnings_calendar = b;
+                    }
+                    if let Some(b) = w["dividend_calendar"].as_bool() {
+                        self.show_dividend_calendar = b;
+                    }
+                    if let Some(b) = w["event_calendar"].as_bool() {
+                        self.show_event_calendar = b;
+                    }
+                    if let Some(b) = w["ev_scanner"].as_bool() {
+                        self.show_ev_scanner = b;
+                    }
+                    if let Some(b) = w["darwin_browser"].as_bool() {
+                        self.show_darwin_browser = b;
+                    }
+                    if let Some(b) = w["stress_test"].as_bool() {
+                        self.show_stress_test = b;
+                    }
+                    if let Some(b) = w["volume_profile"].as_bool() {
+                        self.show_volume_profile = b;
+                    }
+                    if let Some(b) = w["hv_cone"].as_bool() {
+                        self.show_hv_cone = b;
+                    }
+                    if let Some(b) = w["sector_heatmap"].as_bool() {
+                        self.show_sector_heatmap = b;
+                    }
+                    if let Some(b) = w["dividends_screen"].as_bool() {
+                        self.show_dividends = b;
+                    }
+                    if let Some(b) = w["alert_builder"].as_bool() {
+                        self.show_alert_builder = b;
+                    }
+                    if let Some(b) = w["storage"].as_bool() {
+                        self.show_storage = b;
+                    }
+                    if let Some(b) = w["sync_status"].as_bool() {
+                        self.show_sync_status = b;
+                    }
+                    if let Some(b) = w["lan_sync"].as_bool() {
+                        self.show_lan_sync = b;
+                    }
+                    if let Some(b) = w["unusual_volume"].as_bool() {
+                        self.show_unusual_volume = b;
+                    }
+                    if let Some(b) = w["sector_rotation"].as_bool() {
+                        self.show_sector_rotation = b;
+                    }
+                    if let Some(b) = w["fred"].as_bool() {
+                        self.show_fred = b;
+                    }
+                    if let Some(b) = w["econ_calendar"].as_bool() {
+                        self.show_econ_calendar = b;
+                    }
+                    if let Some(b) = w["congress"].as_bool() {
+                        self.show_congress = b;
+                    }
+                    if let Some(b) = w["world_indices"].as_bool() {
+                        self.show_world_indices = b;
+                    }
+                    if let Some(b) = w["crypto_top50"].as_bool() {
+                        self.show_crypto_top50 = b;
+                    }
+                    if let Some(b) = w["forex_matrix"].as_bool() {
+                        self.show_forex_matrix = b;
+                    }
+                    if let Some(b) = w["help"].as_bool() {
+                        self.show_help = b;
+                    }
+                    if let Some(b) = w["connect"].as_bool() {
+                        self.show_connect = b;
+                    }
+                    if let Some(b) = w["data_window"].as_bool() {
+                        self.show_data_window = b;
+                    }
+                    if let Some(b) = w["alerts"].as_bool() {
+                        self.show_alerts = b;
+                    }
+                    if let Some(b) = w["swap_harvest"].as_bool() {
+                        self.show_swap_harvest = b;
+                    }
+                    if let Some(b) = w["darwinex_radar"].as_bool() {
+                        self.show_darwinex_radar = b;
+                    }
+                    if let Some(b) = w["scope_window"].as_bool() {
+                        self.show_scope_window = b;
+                    }
+                    if let Some(b) = w["scrape_status"].as_bool() {
+                        self.show_scrape_status = b;
+                    }
+                    if let Some(b) = w["fear_greed"].as_bool() {
+                        self.show_fear_greed = b;
+                    }
+                }
+                // Restore journal entries
+                if let Some(journal) = v["journal"].as_array() {
+                    for entry in journal {
+                        self.journal_entries.push(JournalEntry {
+                            timestamp: entry["timestamp"].as_str().unwrap_or("").to_string(),
+                            symbol: entry["symbol"].as_str().unwrap_or("").to_string(),
+                            side: entry["side"].as_str().unwrap_or("BUY").to_string(),
+                            qty: entry["qty"].as_f64().unwrap_or(1.0),
+                            entry_price: entry["entry_price"].as_f64().unwrap_or(0.0),
+                            exit_price: entry["exit_price"].as_f64(),
+                            pnl: entry["pnl"].as_f64(),
+                            strategy: entry["strategy"].as_str().unwrap_or("").to_string(),
+                            notes: entry["notes"].as_str().unwrap_or("").to_string(),
+                        });
+                    }
+                }
+                self.log.push_back(LogEntry::info("Session restored"));
+            }
+        }
+        self.sync_preferences_load();
+    }
+}

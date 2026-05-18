@@ -13,12 +13,20 @@ exclude = [
 ]
 
 [profile.release]
-opt-level = 3        # max optimizations (was 2)
-lto = "fat"          # full-program LTO (was thin) — better inlining
-codegen-units = 1    # single codegen unit for max optimization
+opt-level = 3
+lto = "thin"         # parallel incremental-friendly LTO for normal launch/build
+codegen-units = 44   # match this workstation's logical cores (nproc=44)
+incremental = true   # much faster edit/run cycles for the native trading terminal
 strip = true
-panic = "abort"      # smaller binary, no unwind tables
+panic = "abort"
 debug = false
+
+# Use when you explicitly want the slowest/smallest full-program optimized artifact.
+[profile.release-max]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+incremental = false
 
 [patch.crates-io]
 thirtyfour = { path = "vendor/thirtyfour" }

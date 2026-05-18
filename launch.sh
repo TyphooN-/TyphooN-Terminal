@@ -3,9 +3,10 @@
 # Pure Rust, zero WebKit, zero JS.
 #
 # Usage:
-#   ./launch.sh          — release build + run
+#   ./launch.sh          — release-max full-LTO build + run
 #   ./launch.sh dev      — debug build + run (faster compile)
-#   ./launch.sh build    — release build only
+#   ./launch.sh build    — faster thin-LTO release build only
+#   ./launch.sh max      — release-max full-LTO build + run
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -37,13 +38,18 @@ case "${1:-}" in
         cargo build -p typhoon-native --release
         echo "Binary: target/release/typhoon"
         ;;
+    max)
+        echo "TyphooN Terminal (release-max/full LTO)..."
+        build_wasm
+        cargo run -p typhoon-native --profile release-max
+        ;;
     web)
         echo "Building WASM web client (force)..."
         (cd web && trunk build --release)
         ;;
     *)
-        echo "TyphooN Terminal (release)..."
+        echo "TyphooN Terminal (release-max/full LTO)..."
         build_wasm
-        cargo run -p typhoon-native --release
+        cargo run -p typhoon-native --profile release-max
         ;;
 esac
