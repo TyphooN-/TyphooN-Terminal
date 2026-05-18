@@ -1723,9 +1723,11 @@ impl KrakenBroker {
 
         let resp = self.get_trades_history(&params).await?;
 
-        let result = resp
-            .get("result")
-            .ok_or_else(|| "Kraken TradesHistory missing result".to_string())?;
+        // private_post_owned already unwraps Kraken's {error,result} envelope and
+        // returns the result object. Older callers/tests may still pass a full
+        // envelope, so accept both shapes instead of logging a false
+        // "TradesHistory missing result" error.
+        let result = resp.get("result").unwrap_or(&resp);
 
         let trades_obj = result
             .get("trades")
@@ -1736,60 +1738,7 @@ impl KrakenBroker {
 
         for (trade_id, trade_value) in trades_obj {
             if let Some(trade) = trade_value.as_object() {
-                let kraken_trade = KrakenTrade {
-                    trade_id: trade_id.clone(),
-                    ordertxid: trade
-                        .get("ordertxid")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    pair: trade
-                        .get("pair")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    time: trade.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                    side: trade
-                        .get("side")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    ordertype: trade
-                        .get("ordertype")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    price: trade
-                        .get("price")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(0.0),
-                    cost: trade
-                        .get("cost")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(0.0),
-                    fee: trade
-                        .get("fee")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(0.0),
-                    vol: trade
-                        .get("vol")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(0.0),
-                    margin: trade
-                        .get("margin")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(0.0),
-                    misc: trade
-                        .get("misc")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                };
-                trades.push(kraken_trade);
+                trades.push(kraken_trade_from_object(trade_id.clone(), trade));
             }
         }
 
