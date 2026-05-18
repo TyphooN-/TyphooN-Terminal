@@ -2146,6 +2146,18 @@ fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &str) -> Vec<S
                 }
             }
         }
+    } else if source == "kraken" {
+        // Kraken account scope can include xStock/equity balances whose market data is
+        // not exposed through Kraken's public OHLC/AssetPairs API. Keep Kraken keys
+        // first, then allow underlying-equity caches so active Kraken-scope charts
+        // can still render HRTX/GDC/TNDM-style holdings.
+        for fallback_source in ["alpaca", "tastytrade", "default"] {
+            for key in chart_source_cache_keys(fallback_source, symbol, timeframe) {
+                if !keys.iter().any(|k: &String| k.eq_ignore_ascii_case(&key)) {
+                    keys.push(key);
+                }
+            }
+        }
     }
 
     keys
