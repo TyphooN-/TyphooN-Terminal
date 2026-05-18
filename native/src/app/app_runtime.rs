@@ -9117,7 +9117,8 @@ impl eframe::App for TyphooNApp {
                     ui.label(egui::RichText::new("~").color(AXIS_TEXT).small());
                     ui.separator();
                     // Determine if we have any data source (broker, MT5, LAN, API keys)
-                    let has_broker = self.broker_connected || self.tt_connected;
+                    let has_broker =
+                        self.broker_connected || self.tt_connected || self.kraken_connected;
                     let has_mt5 = !self.mt5_db_paths.iter().all(|p| p.is_empty());
                     let has_lan = self.lan_sync_mode == "client" || self.lan_sync_mode == "server";
                     let has_api = !self.finnhub_key.is_empty() || !self.fred_key.is_empty();
@@ -9130,7 +9131,11 @@ impl eframe::App for TyphooNApp {
                     if has_broker || has_mt5 || has_lan || has_api || has_cache {
                         let mut sources: Vec<String> = Vec::new();
                         if self.broker_connected {
-                            sources.push("Alpaca".into());
+                            let mode = if self.broker_paper { "Paper" } else { "Live" };
+                            sources.push(format!("Alpaca - {}", mode));
+                        }
+                        if self.kraken_connected {
+                            sources.push("Kraken - Live".into());
                         }
                         if self.tt_connected {
                             sources.push("tastytrade".into());
@@ -9184,11 +9189,26 @@ impl eframe::App for TyphooNApp {
                                 .color(color)
                                 .small(),
                         );
-                        if let Some(ref acct) = self.live_account {
+                        if self.kraken_connected {
+                            let kraken_balance = self.kraken_quote_balance();
                             ui.label(
-                                egui::RichText::new(format!("${:.0}", acct.equity))
-                                    .color(egui::Color32::WHITE)
-                                    .small(),
+                                egui::RichText::new(format!(
+                                    "${:.0} Kraken - Live",
+                                    kraken_balance
+                                ))
+                                .color(egui::Color32::WHITE)
+                                .small(),
+                            );
+                        }
+                        if let Some(ref acct) = self.live_account {
+                            let mode = if self.broker_paper { "Paper" } else { "Live" };
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "${:.0} Alpaca - {}",
+                                    acct.equity, mode
+                                ))
+                                .color(egui::Color32::WHITE)
+                                .small(),
                             );
                         }
                     } else {
