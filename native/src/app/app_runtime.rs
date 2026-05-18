@@ -9190,7 +9190,7 @@ impl eframe::App for TyphooNApp {
                                 .small(),
                         );
                         if self.kraken_connected {
-                            let kraken_balance = self.kraken_quote_balance();
+                            let kraken_balance = self.kraken_usd_equivalent_balance();
                             ui.label(
                                 egui::RichText::new(format!(
                                     "${:.0} Kraken - Live",

@@ -1037,6 +1037,37 @@ impl TyphooNApp {
             .sum()
     }
 
+    pub(super) fn kraken_usd_equivalent_balance(&self) -> f64 {
+        self.kraken_balances
+            .iter()
+            .filter(|(_, balance)| balance.is_finite() && *balance > 0.0)
+            .map(|(asset, balance)| {
+                let display = Self::kraken_display_asset(asset);
+                match display.as_str() {
+                    "USD" | "USDT" | "USDC" | "USDG" | "DAI" | "PYUSD" => *balance,
+                    _ => self
+                        .kraken_usd_price_for_balance_asset(&display)
+                        .map(|price| *balance * price)
+                        .unwrap_or(0.0),
+                }
+            })
+            .sum()
+    }
+
+    pub(super) fn kraken_usd_price_for_balance_asset(&self, display_asset: &str) -> Option<f64> {
+        let display = display_asset.trim().to_ascii_uppercase();
+        let mut candidates = vec![format!("{}USD", display)];
+        if let Some(stripped) = display.strip_suffix(".EQ") {
+            candidates.push(stripped.to_string());
+            candidates.push(format!("{}USD", stripped));
+        }
+        candidates.push(display);
+        candidates.into_iter().find_map(|symbol| {
+            self.latest_cached_price_for_symbol(&symbol)
+                .filter(|price| price.is_finite() && *price > 0.0)
+        })
+    }
+
     pub(super) fn kraken_base_asset_for_pair(pair: &str) -> String {
         let upper = pair.trim().to_ascii_uppercase();
         upper
@@ -1370,18 +1401,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn kraken_trade_account_snapshot(&self) -> Option<TradeAccountSnapshot> {
-        let usd_like: f64 = self
-            .kraken_balances
-            .iter()
-            .filter(|(asset, balance)| {
-                *balance > 0.0
-                    && matches!(
-                        asset.to_ascii_uppercase().as_str(),
-                        "USD" | "ZUSD" | "USDT" | "USDC"
-                    )
-            })
-            .map(|(_, balance)| *balance)
-            .sum();
+        let usd_like = self.kraken_usd_equivalent_balance();
         if usd_like <= 0.0 {
             None
         } else {
