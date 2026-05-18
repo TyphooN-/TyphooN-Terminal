@@ -17,6 +17,13 @@ const SPOT_PUBLIC_MAX_ATTEMPTS: usize = 3;
 
 static SPOT_PUBLIC_LIMITER: LazyLock<KrakenSpotPublicLimiter> =
     LazyLock::new(KrakenSpotPublicLimiter::new);
+static SPOT_PAIR_CATALOG: LazyLock<Mutex<Option<KrakenPairCatalog>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+#[derive(Debug, Clone, Default)]
+struct KrakenPairCatalog {
+    by_symbol: HashMap<String, String>,
+}
 
 #[derive(Debug, Default)]
 struct KrakenSpotPublicState {
@@ -158,7 +165,8 @@ pub fn to_kraken_pair(sym: &str) -> Option<&'static str> {
         "DOTUSD" => Some("DOTUSD"),
         "LINKUSD" => Some("LINKUSD"),
         "AVAXUSD" => Some("AVAXUSD"),
-        "MATICUSD" | "POLUSD" => Some("MATICUSD"),
+        "MATICUSD" => Some("POLUSD"),
+        "POLUSD" => Some("POLUSD"),
         "UNIUSD" => Some("UNIUSD"),
         "LTCUSD" => Some("LTCUSD"),
         "BCHUSD" => Some("BCHUSD"),
@@ -251,6 +259,89 @@ pub fn to_kraken_pair_lossy(sym: &str) -> Option<String> {
         return Some(format!("XDG{rest}"));
     }
     Some(normalized)
+}
+
+fn insert_kraken_pair_alias(
+    map: &mut HashMap<String, String>,
+    source: impl AsRef<str>,
+    pair_name: &str,
+) {
+    let symbol = normalize_pair_symbol(source.as_ref())
+        .replace('/', "")
+        .to_ascii_uppercase();
+    if !symbol.is_empty() {
+        map.entry(symbol).or_insert_with(|| pair_name.to_string());
+    }
+}
+
+fn parse_kraken_pair_catalog(body: &serde_json::Value) -> Result<KrakenPairCatalog, String> {
+    if let Some(err_msg) = kraken_response_error(body) {
+        return Err(format!("Kraken AssetPairs error: {err_msg}"));
+    }
+
+    let result = body
+        .get("result")
+        .and_then(|r| r.as_object())
+        .ok_or("Expected object in Kraken AssetPairs response")?;
+    let mut by_symbol = HashMap::with_capacity(result.len() * 3);
+
+    for (pair_name, info) in result {
+        let status = info
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("online");
+        if status == "delisted" {
+            continue;
+        }
+
+        insert_kraken_pair_alias(&mut by_symbol, pair_name, pair_name);
+        if let Some(altname) = info.get("altname").and_then(|v| v.as_str()) {
+            insert_kraken_pair_alias(&mut by_symbol, altname, pair_name);
+        }
+        if let Some(wsname) = info.get("wsname").and_then(|v| v.as_str()) {
+            insert_kraken_pair_alias(&mut by_symbol, wsname, pair_name);
+        }
+    }
+
+    Ok(KrakenPairCatalog { by_symbol })
+}
+
+async fn load_kraken_pair_catalog(client: &reqwest::Client) -> Result<KrakenPairCatalog, String> {
+    let mut cached = SPOT_PAIR_CATALOG.lock().await;
+    if let Some(catalog) = cached.clone() {
+        return Ok(catalog);
+    }
+
+    SPOT_PUBLIC_LIMITER.wait_ohlc("AssetPairs").await;
+    let body: serde_json::Value = client
+        .get("https://api.kraken.com/0/public/AssetPairs")
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Kraken AssetPairs request failed: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("Kraken AssetPairs JSON parse failed: {e}"))?;
+    let catalog = parse_kraken_pair_catalog(&body)?;
+    *cached = Some(catalog.clone());
+    Ok(catalog)
+}
+
+async fn resolve_kraken_pair(client: &reqwest::Client, symbol: &str) -> Option<String> {
+    let normalized = normalize_pair_symbol(symbol)
+        .replace('/', "")
+        .to_ascii_uppercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    if let Ok(catalog) = load_kraken_pair_catalog(client).await {
+        if let Some(pair) = catalog.by_symbol.get(&normalized) {
+            return Some(pair.clone());
+        }
+    }
+
+    to_kraken_pair_lossy(&normalized)
 }
 
 fn parse_kraken_number(value: &serde_json::Value) -> Option<f64> {
@@ -375,7 +466,8 @@ pub async fn fetch_binance_klines(
 
     let interval = to_kraken_interval(timeframe)
         .ok_or_else(|| format!("Unsupported timeframe for Kraken: {}", timeframe))?;
-    let kraken_pair = to_kraken_pair_lossy(symbol)
+    let kraken_pair = resolve_kraken_pair(client, symbol)
+        .await
         .ok_or_else(|| format!("Unsupported symbol for Kraken: {}", symbol))?;
 
     let since = (start_ms / 1000).max(0);
@@ -524,6 +616,52 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn kraken_pair_catalog_resolves_live_asset_pairs() {
+        let body = json!({
+            "error": [],
+            "result": {
+                "XXMRZUSD": {
+                    "altname": "XMRUSD",
+                    "wsname": "XMR/USD",
+                    "status": "online"
+                },
+                "POLUSD": {
+                    "altname": "POLUSD",
+                    "wsname": "POL/USD",
+                    "status": "online"
+                },
+                "XDGUSD": {
+                    "altname": "XDGUSD",
+                    "wsname": "XDG/USD",
+                    "status": "online"
+                },
+                "MATICUSD": {
+                    "altname": "MATICUSD",
+                    "wsname": "MATIC/USD",
+                    "status": "delisted"
+                }
+            }
+        });
+        let catalog = parse_kraken_pair_catalog(&body).unwrap();
+        assert_eq!(
+            catalog.by_symbol.get("XMRUSD"),
+            Some(&"XXMRZUSD".to_string())
+        );
+        assert_eq!(catalog.by_symbol.get("POLUSD"), Some(&"POLUSD".to_string()));
+        assert_eq!(
+            catalog.by_symbol.get("DOGEUSD"),
+            Some(&"XDGUSD".to_string())
+        );
+        assert!(!catalog.by_symbol.contains_key("MATICUSD"));
+    }
+
+    #[test]
+    fn kraken_pair_static_pol_alias_uses_live_pol_market() {
+        assert_eq!(to_kraken_pair("POLUSD"), Some("POLUSD"));
+        assert_eq!(to_kraken_pair("MATICUSD"), Some("POLUSD"));
+    }
+
     // ── to_kraken_interval ─────────────────────────────────
 
     #[test]
@@ -580,8 +718,8 @@ mod tests {
 
     #[test]
     fn kraken_pair_matic_pol_alias() {
-        assert_eq!(to_kraken_pair("MATICUSD"), Some("MATICUSD"));
-        assert_eq!(to_kraken_pair("POLUSD"), Some("MATICUSD"));
+        assert_eq!(to_kraken_pair("MATICUSD"), Some("POLUSD"));
+        assert_eq!(to_kraken_pair("POLUSD"), Some("POLUSD"));
     }
 
     #[test]
