@@ -18,10 +18,9 @@ pub(super) struct SyncStatsRow {
 }
 
 /// Aggregate `bar_ts_cache` into per-(broker,TF) rows. Always emits rows for
-/// the three trader-facing bar brokers (MT5 / Alpaca / Tastytrade) even when
-/// the cache contains zero matching entries so an operator can see `0%` on a
-/// broker that's configured but hasn't started syncing yet (e.g. Tastytrade
-/// before the first bar fetch).
+/// actively managed live bar sources (Kraken / Alpaca / Tastytrade). MT5 appears
+/// only after it has actually written bars, so unconfigured MT5 sync no longer
+/// consumes Sync Status space.
 pub(super) fn compute_bar_sync_stats(
     detailed_stats: &[(String, i64, i64)],
     bar_ts_cache: &std::collections::HashMap<String, (i64, i64, i64)>,
@@ -53,7 +52,7 @@ pub(super) fn compute_bar_sync_stats(
             _ => None,
         }
     };
-    let required_brokers = ["MT5", "Alpaca", "Tastytrade"];
+    let required_brokers = ["Kraken"];
 
     let mut groups: BTreeMap<(String, String), (u64, u64, u64)> = BTreeMap::new();
     for broker in &required_brokers {
@@ -147,7 +146,7 @@ pub(super) fn compute_bar_sync_stats(
 
 /// Aggregate per-broker totals from a Vec<SyncStatsRow> for the compact
 /// banner / one-liner display. Returns `(broker, total, healthy, pct)`
-/// tuples in display order (MT5, Alpaca, Tastytrade, then any others).
+/// tuples in display order (Kraken, Alpaca, Tastytrade, MT5, then any others).
 pub(super) fn compute_bar_sync_broker_totals(
     rows: &[SyncStatsRow],
 ) -> Vec<(String, u64, u64, f32)> {
@@ -160,7 +159,7 @@ pub(super) fn compute_bar_sync_broker_totals(
         entry.1 += row.healthy;
     }
 
-    let order = ["MT5", "Alpaca", "Tastytrade", "Kraken"];
+    let order = ["Kraken", "Alpaca", "Tastytrade", "MT5"];
     let mut out = Vec::new();
     for name in order {
         if let Some((total, healthy)) = totals.remove(name) {

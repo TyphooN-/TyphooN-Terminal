@@ -1,7 +1,7 @@
 //! Pluggable data source hierarchy (ADR-038 Phase 2).
 //!
 //! Formalizes the cache key prefix routing
-//! (mt5: > alpaca: > tastytrade: > cryptocompare: > kraken: > kraken-futures:)
+//! (mt5: > kraken: > kraken-futures: > cryptocompare: > tastytrade: > alpaca:)
 //! into a trait-based system with per-source health tracking, per-symbol overrides,
 //! and configurable priority ordering.
 
@@ -69,22 +69,22 @@ impl Default for DataSourceManager {
                     asset_classes: vec!["forex".into(), "cfd".into()],
                 },
                 DataSourceEntry {
-                    id: "alpaca".into(),
-                    cache_prefix: "alpaca".into(),
-                    label: "Alpaca".into(),
+                    id: "kraken".into(),
+                    cache_prefix: "kraken".into(),
+                    label: "Kraken".into(),
                     priority: 2,
                     healthy: true,
                     last_success_ts: 0,
-                    asset_classes: vec!["equity".into()],
+                    asset_classes: vec!["crypto".into(), "tokenized_equity".into(), "etf".into()],
                 },
                 DataSourceEntry {
-                    id: "tastytrade".into(),
-                    cache_prefix: "tastytrade".into(),
-                    label: "tastytrade".into(),
+                    id: "kraken-futures".into(),
+                    cache_prefix: "kraken-futures".into(),
+                    label: "Kraken Futures".into(),
                     priority: 3,
                     healthy: true,
                     last_success_ts: 0,
-                    asset_classes: vec!["equity".into(), "options".into()],
+                    asset_classes: vec!["crypto_futures".into(), "futures".into()],
                 },
                 DataSourceEntry {
                     id: "cryptocompare".into(),
@@ -96,22 +96,22 @@ impl Default for DataSourceManager {
                     asset_classes: vec!["crypto".into()],
                 },
                 DataSourceEntry {
-                    id: "kraken".into(),
-                    cache_prefix: "kraken".into(),
-                    label: "Kraken".into(),
+                    id: "tastytrade".into(),
+                    cache_prefix: "tastytrade".into(),
+                    label: "tastytrade".into(),
                     priority: 5,
                     healthy: true,
                     last_success_ts: 0,
-                    asset_classes: vec!["crypto".into(), "tokenized_equity".into(), "etf".into()],
+                    asset_classes: vec!["equity".into(), "options".into()],
                 },
                 DataSourceEntry {
-                    id: "kraken-futures".into(),
-                    cache_prefix: "kraken-futures".into(),
-                    label: "Kraken Futures".into(),
+                    id: "alpaca".into(),
+                    cache_prefix: "alpaca".into(),
+                    label: "Alpaca (delayed fallback)".into(),
                     priority: 6,
                     healthy: true,
                     last_success_ts: 0,
-                    asset_classes: vec!["crypto_futures".into(), "futures".into()],
+                    asset_classes: vec!["equity".into()],
                 },
             ],
             overrides: Vec::new(),
@@ -239,8 +239,9 @@ mod tests {
         assert_eq!(mgr.sources.len(), 6);
         assert_eq!(mgr.sources[0].id, "mt5-darwinex");
         assert_eq!(mgr.sources[0].priority, 1);
-        assert_eq!(mgr.sources[4].id, "kraken");
-        assert_eq!(mgr.sources[5].id, "kraken-futures");
+        assert_eq!(mgr.sources[1].id, "kraken");
+        assert_eq!(mgr.sources[2].id, "kraken-futures");
+        assert_eq!(mgr.sources[5].id, "alpaca");
     }
 
     #[test]
@@ -248,11 +249,11 @@ mod tests {
         let mgr = DataSourceManager::default();
         let candidates = mgr.resolve_candidates("EURUSD", "1Hour");
         assert_eq!(candidates[0], "mt5:EURUSD:1Hour");
-        assert_eq!(candidates[1], "alpaca:EURUSD:1Hour");
-        assert_eq!(candidates[2], "tastytrade:EURUSD:1Hour");
+        assert_eq!(candidates[1], "kraken:EURUSD:1Hour");
+        assert_eq!(candidates[2], "kraken-futures:EURUSD:1Hour");
         assert_eq!(candidates[3], "cryptocompare:EURUSD:1Hour");
-        assert_eq!(candidates[4], "kraken:EURUSD:1Hour");
-        assert_eq!(candidates[5], "kraken-futures:EURUSD:1Hour");
+        assert_eq!(candidates[4], "tastytrade:EURUSD:1Hour");
+        assert_eq!(candidates[5], "alpaca:EURUSD:1Hour");
         assert_eq!(candidates[6], "EURUSD:1Hour"); // bare key
     }
 
@@ -262,7 +263,7 @@ mod tests {
         mgr.mark_failure("mt5-darwinex");
         let candidates = mgr.resolve_candidates("AAPL", "1Day");
         // Healthy first, then unhealthy at end
-        assert_eq!(candidates[0], "alpaca:AAPL:1Day");
+        assert_eq!(candidates[0], "kraken:AAPL:1Day");
         assert!(candidates.iter().any(|c| c == "mt5:AAPL:1Day")); // still present, just last
     }
 
