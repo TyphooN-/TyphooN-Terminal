@@ -335,13 +335,10 @@ async fn resolve_kraken_pair(client: &reqwest::Client, symbol: &str) -> Option<S
         return None;
     }
 
-    if let Ok(catalog) = load_kraken_pair_catalog(client).await {
-        if let Some(pair) = catalog.by_symbol.get(&normalized) {
-            return Some(pair.clone());
-        }
+    match load_kraken_pair_catalog(client).await {
+        Ok(catalog) => catalog.by_symbol.get(&normalized).cloned(),
+        Err(_) => to_kraken_pair_lossy(&normalized),
     }
-
-    to_kraken_pair_lossy(&normalized)
 }
 
 fn parse_kraken_number(value: &serde_json::Value) -> Option<f64> {
