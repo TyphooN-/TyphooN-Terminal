@@ -751,16 +751,7 @@ impl KrakenBroker {
     }
 
     fn normalized_pair_key(pair: &str) -> String {
-        let raw = pair.replace('/', "").to_ascii_uppercase();
-        let bytes = raw.as_bytes();
-        if raw.len() == 8
-            && matches!(bytes[0] as char, 'X' | 'Z')
-            && matches!(bytes[4] as char, 'X' | 'Z')
-        {
-            format!("{}{}", &raw[1..4], &raw[5..8])
-        } else {
-            raw
-        }
+        crate::core::kraken::normalize_pair_symbol(pair)
     }
 
     fn display_pair(pair: &str) -> String {
@@ -807,9 +798,32 @@ impl KrakenBroker {
 
     fn pair_matches(candidate: &str, target: &str) -> bool {
         let candidate = Self::normalized_pair_key(candidate);
+        let candidate_base = Self::base_asset_key(&candidate);
         Self::canonical_pair_forms(target).into_iter().any(|form| {
-            candidate == form || candidate.ends_with(&form) || form.ends_with(&candidate)
+            let form_base = Self::base_asset_key(&form);
+            candidate == form
+                || candidate.ends_with(&form)
+                || form.ends_with(&candidate)
+                || (!candidate_base.is_empty() && candidate_base == form_base)
         })
+    }
+
+    fn base_asset_key(pair: &str) -> String {
+        let normalized = crate::core::kraken::normalize_pair_symbol(pair);
+        normalized
+            .strip_suffix("USDT")
+            .or_else(|| normalized.strip_suffix("USDC"))
+            .or_else(|| normalized.strip_suffix("USD"))
+            .unwrap_or(normalized.as_str())
+            .strip_suffix(".EQ")
+            .unwrap_or_else(|| {
+                normalized
+                    .strip_suffix("USDT")
+                    .or_else(|| normalized.strip_suffix("USDC"))
+                    .or_else(|| normalized.strip_suffix("USD"))
+                    .unwrap_or(normalized.as_str())
+            })
+            .to_string()
     }
 
     fn net_position_volume(raw_positions: &[serde_json::Value], pair: &str) -> f64 {
@@ -1622,6 +1636,8 @@ mod tests {
     #[test]
     fn pair_matches_normalizes_btc_aliases() {
         assert!(KrakenBroker::pair_matches("XXBTZUSD", "BTCUSD"));
+        assert!(KrakenBroker::pair_matches("POMZUSD", "POMUSD"));
+        assert!(KrakenBroker::pair_matches("HRTXZUSD", "HRTX"));
         assert!(KrakenBroker::pair_matches("XBTUSD", "BTC/USD"));
         assert!(KrakenBroker::pair_matches("XDGUSD", "DOGEUSD"));
         assert!(!KrakenBroker::pair_matches("ETHUSD", "SOLUSD"));

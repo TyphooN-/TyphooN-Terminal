@@ -6927,7 +6927,9 @@ impl eframe::App for TyphooNApp {
                         )
                     };
                     self.log.push_back(LogEntry::info(log_msg));
-                    self.settle_market_data_fetch(&source, &symbol, &timeframe);
+                    if source != "alpaca" {
+                        self.settle_market_data_fetch(&source, &symbol, &timeframe);
+                    }
                     if matches!(
                         source.as_str(),
                         "alpaca" | "kraken" | "kraken-futures" | "tastytrade"
@@ -6948,10 +6950,9 @@ impl eframe::App for TyphooNApp {
                     if should_reload {
                         self.queue_chart_reload(self.active_tab);
                     }
-                    if matches!(
-                        source.as_str(),
-                        "alpaca" | "kraken" | "kraken-futures" | "tastytrade"
-                    ) {
+                    if source != "alpaca"
+                        && matches!(source.as_str(), "kraken" | "kraken-futures" | "tastytrade")
+                    {
                         self.refill_market_data_sync_slots();
                     }
                 }
@@ -11107,6 +11108,10 @@ impl eframe::App for TyphooNApp {
                                 let mut sell_balance: Option<(String, f64)> = None;
                                 for (asset, qty) in kraken_sellable_balances {
                                     let display_asset = Self::kraken_display_asset(&asset);
+                                    let display_holding = display_asset
+                                        .strip_suffix(".EQ")
+                                        .unwrap_or(display_asset.as_str())
+                                        .to_string();
                                     let pair = Self::kraken_spot_pair_for_balance_asset(&asset);
                                     let avg_price = self.kraken_balance_avg_price(&asset);
                                     let current_price = self.latest_cached_price_for_symbol(&pair);
@@ -11115,12 +11120,12 @@ impl eframe::App for TyphooNApp {
                                         .map(|(avg, cur)| ((cur - avg) * qty, (cur - avg) / avg * 100.0));
                                     ui.horizontal(|ui| {
                                         ui.label(
-                                            egui::RichText::new(format!("[Kraken balance] {pair}"))
+                                            egui::RichText::new(format!("[Kraken balance] {display_holding}"))
                                                 .small()
                                                 .strong(),
                                         );
                                         ui.label(
-                                            egui::RichText::new(format!("{qty:.8} {display_asset}"))
+                                            egui::RichText::new(format!("{qty:.8} {display_holding}"))
                                                 .small()
                                                 .monospace(),
                                         );
@@ -11199,7 +11204,7 @@ impl eframe::App for TyphooNApp {
                                 (
                                     format!(
                                         "[Kraken] {}",
-                                        typhoon_engine::core::kraken::normalize_pair_symbol(&t.pair)
+                                        Self::kraken_base_asset_for_pair(&t.pair)
                                     ),
                                     t.side.clone(),
                                     t.vol,

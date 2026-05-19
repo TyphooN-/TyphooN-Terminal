@@ -1153,7 +1153,12 @@ impl TyphooNApp {
     }
 
     pub(super) fn kraken_spot_pair_for_balance_asset(asset: &str) -> String {
-        format!("{}USD", Self::kraken_display_asset(asset))
+        let display = Self::kraken_display_asset(asset);
+        if let Some(stripped) = display.strip_suffix(".EQ") {
+            format!("{}USD", stripped)
+        } else {
+            format!("{}USD", display)
+        }
     }
 
     pub(super) fn kraken_quote_balance(&self) -> f64 {
@@ -1189,12 +1194,15 @@ impl TyphooNApp {
 
     pub(super) fn kraken_usd_price_for_balance_asset(&self, display_asset: &str) -> Option<f64> {
         let display = display_asset.trim().to_ascii_uppercase();
-        let mut candidates = vec![format!("{}USD", display)];
+        let mut candidates = Vec::new();
         if let Some(stripped) = display.strip_suffix(".EQ") {
             candidates.push(stripped.to_string());
             candidates.push(format!("{}USD", stripped));
+            candidates.push(format!("{}ZUSD", stripped));
         }
-        candidates.push(display);
+        candidates.push(display.clone());
+        candidates.push(format!("{}USD", display));
+        candidates.push(format!("{}ZUSD", display));
         candidates.into_iter().find_map(|symbol| {
             self.latest_cached_price_for_symbol(&symbol)
                 .filter(|price| price.is_finite() && *price > 0.0)
@@ -1202,13 +1210,16 @@ impl TyphooNApp {
     }
 
     pub(super) fn kraken_base_asset_for_pair(pair: &str) -> String {
-        let upper = pair.trim().replace('/', "").to_ascii_uppercase();
-        upper
-            .strip_suffix("USD")
-            .or_else(|| upper.strip_suffix("USDT"))
+        let upper = typhoon_engine::core::kraken::normalize_pair_symbol(pair)
+            .replace('/', "")
+            .to_ascii_uppercase();
+        let stripped = upper
+            .strip_suffix("USDT")
             .or_else(|| upper.strip_suffix("USDC"))
-            .unwrap_or(upper.as_str())
-            .to_string()
+            .or_else(|| upper.strip_suffix("USD"))
+            .or_else(|| upper.strip_suffix("ZUSD"))
+            .unwrap_or(upper.as_str());
+        stripped.strip_suffix(".EQ").unwrap_or(stripped).to_string()
     }
 
     pub(super) fn latest_cached_price_for_symbol(&self, symbol: &str) -> Option<f64> {
@@ -1222,18 +1233,48 @@ impl TyphooNApp {
             "mt5",
             "default",
         ];
+        let mut symbols = Vec::new();
+        let mut push_symbol = |candidate: String| {
+            if !candidate.is_empty() && !symbols.iter().any(|s| s == &candidate) {
+                symbols.push(candidate);
+            }
+        };
+        let normalized = typhoon_engine::core::kraken::normalize_pair_symbol(symbol)
+            .replace('/', "")
+            .to_ascii_uppercase();
+        push_symbol(normalized.clone());
+        push_symbol(symbol.trim().replace('/', "").to_ascii_uppercase());
+        let base = Self::kraken_base_asset_for_pair(&normalized);
+        if !base.is_empty() && base != normalized {
+            push_symbol(base.clone());
+            push_symbol(format!("{}USD", base));
+            push_symbol(format!("{}ZUSD", base));
+        } else if !normalized.ends_with("USD")
+            && !normalized.ends_with("USDT")
+            && !normalized.ends_with("USDC")
+        {
+            push_symbol(format!("{}USD", normalized));
+            push_symbol(format!("{}ZUSD", normalized));
+        }
+        if let Some(eq) = normalized.strip_suffix(".EQ") {
+            push_symbol(eq.to_string());
+            push_symbol(format!("{}USD", eq));
+            push_symbol(format!("{}ZUSD", eq));
+        }
         for tf in timeframes {
             for source in sources {
-                for key in chart_source_cache_keys(source, symbol, tf) {
-                    let Ok(Some(raw)) = cache.get_bars_raw(&key) else {
-                        continue;
-                    };
-                    if let Some((_, _, _, _, close, _)) =
-                        raw.iter().rev().find(|(ts, _, _, _, close, _)| {
-                            *ts > 0 && *close > 0.0 && close.is_finite()
-                        })
-                    {
-                        return Some(*close);
+                for candidate in &symbols {
+                    for key in chart_source_cache_keys(source, candidate, tf) {
+                        let Ok(Some(raw)) = cache.get_bars_raw(&key) else {
+                            continue;
+                        };
+                        if let Some((_, _, _, _, close, _)) =
+                            raw.iter().rev().find(|(ts, _, _, _, close, _)| {
+                                *ts > 0 && *close > 0.0 && close.is_finite()
+                            })
+                        {
+                            return Some(*close);
+                        }
                     }
                 }
             }

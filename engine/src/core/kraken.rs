@@ -225,6 +225,14 @@ pub fn normalize_pair_symbol(sym: &str) -> String {
             && matches!(bytes[4] as char, 'X' | 'Z')
         {
             format!("{}{}", &raw[1..4], &raw[5..8])
+        } else if raw.len() > 4 {
+            ["ZUSD", "ZEUR", "ZGBP", "ZJPY", "ZCAD", "ZAUD", "ZCHF"]
+                .iter()
+                .find_map(|quote| {
+                    raw.strip_suffix(quote)
+                        .map(|base| format!("{}{}", base, &quote[1..]))
+                })
+                .unwrap_or(raw)
         } else {
             raw
         }
@@ -724,6 +732,9 @@ mod tests {
         assert_eq!(normalize_pair_symbol("BTC/USD"), "BTCUSD");
         assert_eq!(normalize_pair_symbol("XBTUSD"), "BTCUSD");
         assert_eq!(normalize_pair_symbol("XXBTZUSD"), "BTCUSD");
+        assert_eq!(normalize_pair_symbol("POMZUSD"), "POMUSD");
+        assert_eq!(normalize_pair_symbol("HRTXZUSD"), "HRTXUSD");
+        assert_eq!(normalize_pair_symbol("FNGRZUSD"), "FNGRUSD");
         assert_eq!(normalize_pair_symbol("ETH/BTC"), "ETHBTC");
         assert_eq!(normalize_pair_symbol("XDG/USD"), "DOGEUSD");
     }

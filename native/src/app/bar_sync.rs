@@ -99,7 +99,9 @@ pub(super) fn compute_bar_sync_stats(
         if last_ms <= 0 {
             entry.2 += 1;
         } else if let Some(period) = period_ms.get(tf) {
-            if now_ms - last_ms > period * 24 {
+            let write_ms = write_ts_s.saturating_mul(1000);
+            let recently_checked = write_ms > 0 && now_ms - write_ms <= period * 24;
+            if now_ms - last_ms > period * 24 && !recently_checked {
                 entry.1 += 1;
             } else {
                 entry.0 += 1;
@@ -231,17 +233,16 @@ mod tests {
 
     #[test]
     fn compute_bar_sync_stats_counts_current_detailed_rows() {
+        let now_s = chrono::Utc::now().timestamp();
+        let old_bar_ms = (now_s - 90 * 86_400).saturating_mul(1000);
         let rows = compute_bar_sync_stats(
             &[
-                ("alpaca:AAPL:1Day".into(), 42, 1_700_000_000),
+                ("alpaca:AAPL:1Day".into(), 42, now_s),
                 ("alpaca:MSFT:1Day".into(), 42, 1_700_000_000),
-                ("alpaca:__META__:1Day".into(), 42, 1_700_000_000),
-                ("alpaca:QQQ:W1".into(), 10, 1_700_000_000),
+                ("alpaca:__META__:1Day".into(), 42, now_s),
+                ("alpaca:QQQ:W1".into(), 10, now_s),
             ],
-            &std::collections::HashMap::from([(
-                "alpaca:AAPL:1Day".into(),
-                (1, chrono::Utc::now().timestamp_millis(), 1),
-            )]),
+            &std::collections::HashMap::from([("alpaca:AAPL:1Day".into(), (1, old_bar_ms, 1))]),
         );
 
         let day = rows
