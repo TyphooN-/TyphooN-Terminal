@@ -464,6 +464,37 @@ pub(super) fn select_alpaca_sync_workset(
     let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
     let mut staged_pending = pending_fetches.clone();
 
+    // Coverage-first mode: if any candidate has no cached bars at all, fill
+    // those gaps highest timeframe -> lowest before spending slots on stale
+    // refreshes or shallow-cache backfill. Focus still sorts within a bucket,
+    // but it must not allow active-chart refreshes to starve initial coverage.
+    let coverage = select_alpaca_sync_candidates(
+        symbols,
+        timeframes,
+        state_map,
+        focus_symbols,
+        no_data_keys,
+        backfill_complete_pairs,
+        &staged_pending,
+        batch_size,
+        now_s,
+        target_bars_for_tf,
+    );
+    if coverage
+        .first()
+        .is_some_and(|candidate| candidate.bucket == AlpacaSyncBucket::Missing)
+    {
+        for candidate in coverage {
+            if staged_pending.insert(alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)) {
+                selected.push(candidate);
+                if selected.len() >= batch_size {
+                    break;
+                }
+            }
+        }
+        return selected;
+    }
+
     let mut foreground_symbols: Vec<String> = focus_symbols.iter().cloned().collect();
     foreground_symbols.sort();
     let foreground_budget = foreground_slots.min(batch_size);
@@ -524,7 +555,7 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     backfill_complete_pairs: &HashMap<String, AlpacaBackfillCompletePair>,
     pending_fetches: &HashSet<String>,
     batch_size: usize,
-    foreground_slots: usize,
+    _foreground_slots: usize,
     background_scan_limit: usize,
     cursor: &mut usize,
     now_s: i64,
@@ -537,30 +568,11 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
     let mut staged_pending = pending_fetches.clone();
 
-    let mut foreground_symbols: Vec<String> = focus_symbols.iter().cloned().collect();
-    foreground_symbols.sort();
-    let foreground_budget = foreground_slots.min(batch_size);
-    if foreground_budget > 0 && !foreground_symbols.is_empty() {
-        let foreground = select_alpaca_sync_candidates(
-            &foreground_symbols,
-            timeframes,
-            state_map,
-            focus_symbols,
-            no_data_keys,
-            backfill_complete_pairs,
-            &staged_pending,
-            foreground_budget,
-            now_s,
-            target_bars_for_tf,
-        );
-        for candidate in foreground {
-            if staged_pending.insert(alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)) {
-                selected.push(candidate);
-            }
-        }
-    }
+    // Rotating bulk sync is coverage-first: do not spend bounded-scan refill
+    // slots on foreground refreshes before the scanned universe has had a
+    // chance to fill never-cached pairs.
 
-    if selected.len() >= batch_size || symbols.is_empty() {
+    if symbols.is_empty() {
         return selected;
     }
 
@@ -572,12 +584,42 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     }
 
     let start = *cursor % symbols.len();
-    let scanned_symbols =
-        (0..scan_limit).map(|offset| symbols[(start + offset) % symbols.len()].as_str());
     *cursor = (start + scan_limit) % symbols.len();
 
+    let scanned_symbols =
+        || (0..scan_limit).map(|offset| symbols[(start + offset) % symbols.len()].as_str());
+
+    // Coverage-first even in rotating mode: within the current bounded scan
+    // window, missing symbol/timeframe pairs always win over focus refreshes.
+    let coverage = select_alpaca_sync_candidates_from_iter(
+        scanned_symbols(),
+        timeframes,
+        state_map,
+        focus_symbols,
+        no_data_keys,
+        backfill_complete_pairs,
+        &staged_pending,
+        batch_size - selected.len(),
+        now_s,
+        target_bars_for_tf,
+    );
+    if coverage
+        .first()
+        .is_some_and(|candidate| candidate.bucket == AlpacaSyncBucket::Missing)
+    {
+        for candidate in coverage {
+            if selected.len() >= batch_size {
+                break;
+            }
+            if staged_pending.insert(alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)) {
+                selected.push(candidate);
+            }
+        }
+        return selected;
+    }
+
     let background = select_alpaca_sync_candidates_from_iter(
-        scanned_symbols,
+        scanned_symbols(),
         timeframes,
         state_map,
         focus_symbols,
@@ -917,7 +959,7 @@ mod tests {
     }
 
     #[test]
-    fn select_alpaca_sync_workset_reserves_slots_for_focus_symbols() {
+    fn select_alpaca_sync_workset_prioritizes_missing_before_focus_refresh() {
         let now_s = 1_700_000_000i64;
         let symbols = vec!["AAPL".to_string(), "MSFT".to_string()];
         let timeframes = vec!["1Day".to_string()];
@@ -945,11 +987,9 @@ mod tests {
             alpaca_sync_target_bars,
         );
 
-        assert_eq!(selected.len(), 2);
-        assert_eq!(selected[0].symbol, "MSFT");
-        assert_eq!(selected[0].bucket, AlpacaSyncBucket::Stale);
-        assert_eq!(selected[1].symbol, "AAPL");
-        assert_eq!(selected[1].bucket, AlpacaSyncBucket::Missing);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].symbol, "AAPL");
+        assert_eq!(selected[0].bucket, AlpacaSyncBucket::Missing);
     }
 
     #[test]
@@ -1033,7 +1073,7 @@ mod tests {
     }
 
     #[test]
-    fn select_alpaca_sync_workset_rotating_always_serves_focus_first() {
+    fn select_alpaca_sync_workset_rotating_prioritizes_scanned_missing_before_focus() {
         let now_s = 1_700_000_000i64;
         let symbols = vec!["AAPL".to_string(), "MSFT".to_string(), "QQQ".to_string()];
         let timeframes = vec!["1Day".to_string()];
@@ -1057,8 +1097,9 @@ mod tests {
         );
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].symbol, "QQQ");
-        assert_eq!(cursor, 0);
+        assert_eq!(selected[0].symbol, "AAPL");
+        assert_eq!(selected[0].bucket, AlpacaSyncBucket::Missing);
+        assert_eq!(cursor, 1);
     }
 
     #[test]
