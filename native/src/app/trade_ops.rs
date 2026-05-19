@@ -1242,11 +1242,13 @@ impl TyphooNApp {
     }
 
     pub(super) fn kraken_balance_avg_price(&self, asset: &str) -> Option<f64> {
-        self.kraken_avg_price_for_base_asset(&Self::kraken_display_asset(asset))
+        self.kraken_cost_basis_for_base_asset(&Self::kraken_display_asset(asset))
+            .and_then(|basis| basis.avg_price())
     }
 
     pub(super) fn kraken_position_avg_price(&self, symbol: &str) -> Option<f64> {
-        self.kraken_avg_price_for_base_asset(&Self::kraken_base_asset_for_pair(symbol))
+        self.kraken_cost_basis_for_base_asset(&Self::kraken_base_asset_for_pair(symbol))
+            .and_then(|basis| basis.avg_price())
     }
 
     pub(super) fn kraken_asset_keys_match(left: &str, right: &str) -> bool {
@@ -1272,39 +1274,125 @@ impl TyphooNApp {
             })
     }
 
-    pub(super) fn kraken_avg_price_for_base_asset(&self, base: &str) -> Option<f64> {
-        let base = base.trim().to_ascii_uppercase();
-        let mut trades: Vec<_> = self.kraken_trades.iter().collect();
-        trades.sort_by(|a, b| a.time.total_cmp(&b.time));
+    pub(super) fn kraken_trade_key(
+        trade: &typhoon_engine::broker::kraken_broker::KrakenTrade,
+    ) -> String {
+        if !trade.trade_id.is_empty() {
+            trade.trade_id.clone()
+        } else {
+            format!(
+                "{}:{}:{:.9}:{:.12}:{:.12}",
+                trade.ordertxid, trade.pair, trade.time, trade.vol, trade.price
+            )
+        }
+    }
 
-        let mut qty = 0.0_f64;
-        let mut cost = 0.0_f64;
-        for trade in trades {
-            let pair_norm = typhoon_engine::core::kraken::normalize_pair_symbol(&trade.pair);
-            let trade_base = Self::kraken_base_asset_for_pair(&pair_norm);
-            if !Self::kraken_asset_keys_match(&trade_base, &base)
-                || trade.vol <= 0.0
-                || !trade.vol.is_finite()
-            {
-                continue;
+    pub(super) fn rebuild_kraken_trade_indexes(&mut self) {
+        self.kraken_trade_keys.clear();
+        for trade in &self.kraken_trades {
+            self.kraken_trade_keys.insert(Self::kraken_trade_key(trade));
+        }
+        self.rebuild_kraken_cost_basis();
+    }
+
+    pub(super) fn insert_kraken_live_trade(
+        &mut self,
+        trade: typhoon_engine::broker::kraken_broker::KrakenTrade,
+    ) -> bool {
+        let key = Self::kraken_trade_key(&trade);
+        if !self.kraken_trade_keys.insert(key) {
+            return false;
+        }
+        self.kraken_trades.push_front(trade);
+        while self.kraken_trades.len() > KRAKEN_TRADE_HISTORY_CAP {
+            if let Some(removed) = self.kraken_trades.pop_back() {
+                self.kraken_trade_keys
+                    .remove(&Self::kraken_trade_key(&removed));
             }
-            let side = trade.side.to_ascii_lowercase();
-            if side == "buy" {
-                qty += trade.vol;
-                cost += trade.cost.max(0.0) + trade.fee.max(0.0);
-            } else if side == "sell" && qty > 0.0 {
-                let reduce_qty = trade.vol.min(qty);
-                let avg = cost / qty;
-                qty -= reduce_qty;
-                cost -= avg * reduce_qty;
-                if qty <= 1e-12 {
-                    qty = 0.0;
-                    cost = 0.0;
+        }
+        self.rebuild_kraken_cost_basis();
+        true
+    }
+
+    pub(super) fn kraken_cost_basis_for_base_asset(
+        &self,
+        base: &str,
+    ) -> Option<crate::app::KrakenCostBasis> {
+        let base = base.trim().to_ascii_uppercase();
+        self.kraken_cost_basis
+            .iter()
+            .find_map(|(key, basis)| Self::kraken_asset_keys_match(key, &base).then_some(*basis))
+    }
+
+    pub(super) fn refresh_kraken_position_costs(&mut self) {
+        let updates: Vec<_> = self
+            .kr_positions
+            .iter()
+            .map(|pos| {
+                let base = Self::kraken_base_asset_for_pair(&pos.symbol);
+                let avg = self
+                    .kraken_cost_basis_for_base_asset(&base)
+                    .and_then(|basis| basis.avg_price());
+                let current = self.latest_cached_price_for_symbol(&pos.symbol);
+                (pos.symbol.clone(), avg, current)
+            })
+            .collect();
+
+        for pos in &mut self.kr_positions {
+            if let Some((_, avg, current)) =
+                updates.iter().find(|(symbol, _, _)| symbol == &pos.symbol)
+            {
+                if let Some(avg) = avg {
+                    pos.avg_entry_price = *avg;
+                }
+                if let Some(current) = current {
+                    pos.market_value = pos.qty * *current;
+                    let dir = if pos.side == "short" { -1.0 } else { 1.0 };
+                    let basis = if pos.avg_entry_price > 0.0 {
+                        pos.avg_entry_price
+                    } else {
+                        *current
+                    };
+                    pos.unrealized_pl = (*current - basis) * pos.qty * dir;
                 }
             }
         }
+    }
 
-        (qty > 0.0 && cost > 0.0).then_some(cost / qty)
+    pub(super) fn rebuild_kraken_cost_basis(&mut self) {
+        let mut trades: Vec<_> = self.kraken_trades.iter().collect();
+        trades.sort_by(|a, b| a.time.total_cmp(&b.time));
+
+        let mut by_base: std::collections::HashMap<String, crate::app::KrakenCostBasis> =
+            std::collections::HashMap::new();
+        for trade in trades {
+            if trade.vol <= 0.0 || !trade.vol.is_finite() {
+                continue;
+            }
+            let pair_norm = typhoon_engine::core::kraken::normalize_pair_symbol(&trade.pair);
+            let trade_base = Self::kraken_base_asset_for_pair(&pair_norm);
+            if trade_base.is_empty() || Self::kraken_is_cash_balance_asset(&trade_base) {
+                continue;
+            }
+
+            let side = trade.side.to_ascii_lowercase();
+            let basis = by_base.entry(trade_base).or_default();
+            if side == "buy" {
+                basis.qty += trade.vol;
+                basis.cost += trade.cost.max(0.0) + trade.fee.max(0.0);
+            } else if side == "sell" && basis.qty > 0.0 {
+                let reduce_qty = trade.vol.min(basis.qty);
+                let avg = basis.cost / basis.qty;
+                basis.qty -= reduce_qty;
+                basis.cost -= avg * reduce_qty;
+                if basis.qty <= 1e-12 {
+                    basis.qty = 0.0;
+                    basis.cost = 0.0;
+                }
+            }
+        }
+        by_base.retain(|_, basis| basis.qty > 0.0 && basis.cost > 0.0);
+        self.kraken_cost_basis = by_base;
     }
 
     pub(super) fn render_kraken_spot_buy_controls(&mut self, ui: &mut egui::Ui) {

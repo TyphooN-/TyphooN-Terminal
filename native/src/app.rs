@@ -510,6 +510,18 @@ struct JournalEntry {
     notes: String,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KrakenCostBasis {
+    pub qty: f64,
+    pub cost: f64,
+}
+
+impl KrakenCostBasis {
+    pub fn avg_price(self) -> Option<f64> {
+        (self.qty > 0.0 && self.cost > 0.0).then_some(self.cost / self.qty)
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct UnresolvablePair {
     pub broker: String,
@@ -10336,6 +10348,8 @@ pub struct TyphooNApp {
     kraken_spot_buy_pct: f32,
     kraken_spot_buy_qty: f64,
     kraken_trades: VecDeque<typhoon_engine::broker::kraken_broker::KrakenTrade>,
+    kraken_trade_keys: std::collections::HashSet<String>,
+    kraken_cost_basis: std::collections::HashMap<String, KrakenCostBasis>,
     kraken_open_orders: Vec<typhoon_engine::broker::kraken_broker::KrakenOrder>,
     kraken_pairs: Vec<(String, String)>,
     kraken_futures_symbols: Vec<String>,
@@ -29363,6 +29377,8 @@ BrokerCmd::KrakenCloseAll => {
             kraken_spot_buy_pct: 25.0,
             kraken_spot_buy_qty: 0.0,
             kraken_trades: VecDeque::new(),
+            kraken_trade_keys: std::collections::HashSet::new(),
+            kraken_cost_basis: std::collections::HashMap::new(),
             kraken_open_orders: Vec::new(),
             kraken_pairs: Vec::new(),
             kraken_futures_symbols: Vec::new(),
