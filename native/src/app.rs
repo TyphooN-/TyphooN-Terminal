@@ -2167,10 +2167,21 @@ fn preferred_chart_symbol_for_source(source: &str, symbol: &str) -> String {
     let norm = normalize_market_data_symbol(symbol);
     let no_slash = norm.replace('/', "");
     match source {
-        "kraken" if !no_slash.ends_with("USD") && !no_slash.contains('_') => {
-            format!("{no_slash}USD")
+        "kraken" => {
+            let upper = no_slash.to_ascii_uppercase();
+            let known_crypto_base = [
+                "BTC", "XBT", "ETH", "XMR", "DOGE", "XDG", "BABY", "SOL", "ADA", "DOT", "LINK",
+                "LTC", "BCH", "XRP", "AVAX", "MATIC", "POL", "ATOM", "TRX", "UNI", "AAVE", "PEPE",
+                "SHIB",
+            ]
+            .iter()
+            .any(|base| upper == *base);
+            if known_crypto_base {
+                typhoon_engine::core::kraken::normalize_pair_symbol(&format!("{upper}USD"))
+            } else {
+                typhoon_engine::core::kraken::normalize_pair_symbol(&norm)
+            }
         }
-        "kraken" => typhoon_engine::core::kraken::normalize_pair_symbol(&norm),
         "kraken-futures" => typhoon_engine::core::kraken_futures::normalize_futures_symbol(&norm),
         "alpaca" | "tastytrade" | "mt5" => no_slash,
         _ => norm,

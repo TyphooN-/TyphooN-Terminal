@@ -878,8 +878,14 @@ impl KrakenBroker {
             .collect()
     }
 
+    fn equity_balance_ticker(asset: &str) -> Option<String> {
+        let display = Self::display_asset(asset);
+        let ticker = display.strip_suffix(".EQ")?.trim();
+        (!ticker.is_empty()).then(|| ticker.to_string())
+    }
+
     fn is_equity_balance_asset(asset: &str) -> bool {
-        Self::display_asset(asset).contains(".EQ")
+        Self::equity_balance_ticker(asset).is_some()
     }
 
     pub fn equity_position_summaries_from_balances(
@@ -895,12 +901,14 @@ impl KrakenBroker {
                 {
                     return None;
                 }
-                let display_asset = Self::display_asset(asset);
-                if display_asset.is_empty() {
+                let Some(ticker) = Self::equity_balance_ticker(asset) else {
+                    return None;
+                };
+                if ticker.is_empty() {
                     return None;
                 }
                 Some(crate::broker::alpaca::PositionInfo {
-                    symbol: format!("{}USD", display_asset),
+                    symbol: ticker,
                     qty: *qty,
                     side: "long".to_string(),
                     avg_entry_price: 0.0,
@@ -1496,7 +1504,7 @@ mod tests {
         let positions = KrakenBroker::equity_position_summaries_from_balances(&balances);
 
         assert_eq!(positions.len(), 1);
-        assert_eq!(positions[0].symbol, "HRTX.EQUSD");
+        assert_eq!(positions[0].symbol, "HRTX");
         assert_eq!(positions[0].qty, 7.0);
         assert_eq!(positions[0].asset_class, "stock");
         assert_eq!(positions[0].side, "long");
