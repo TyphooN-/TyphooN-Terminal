@@ -1583,6 +1583,12 @@ impl TyphooNApp {
     }
 
     pub(super) fn submit_quick_trade(&mut self) {
+        if self.kraken_connected && matches!(self.order_broker, OrderBroker::Kraken) {
+            self.log.push_back(LogEntry::warn(
+                "Kraken selected: use KrakenPro Buy/Sell controls.",
+            ));
+            return;
+        }
         let plan = match self.quick_trade_plan() {
             Ok(plan) => plan,
             Err(e) => {

@@ -9027,7 +9027,7 @@ impl eframe::App for TyphooNApp {
                             let has_cached_bars = cached_sources
                                 .iter()
                                 .any(|(cached, _)| cached.eq_ignore_ascii_case(source));
-                            if !has_cached_bars && !matches!(source, "kraken" | "kraken-futures") {
+                            if !has_cached_bars && source != "kraken" {
                                 continue;
                             }
                             let label = if has_cached_bars {
@@ -10259,26 +10259,29 @@ impl eframe::App for TyphooNApp {
 
                             // ── Mode / Broker Controls ──────────────────────────
                             ui.separator();
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("Mode").color(AXIS_TEXT).small());
-                                egui::ComboBox::from_id_salt("risk_mode_combo")
-                                    .selected_text(self.risk_mode.label())
-                                    .width(80.0)
-                                    .show_ui(ui, |ui| {
-                                        for mode in &[
-                                            RiskMode::VaR,
-                                            RiskMode::Standard,
-                                            RiskMode::Fixed,
-                                            RiskMode::Dynamic,
-                                        ] {
-                                            ui.selectable_value(
-                                                &mut self.risk_mode,
-                                                *mode,
-                                                mode.label(),
-                                            );
-                                        }
-                                    });
-                            });
+                            let wants_kraken_pro = self.kraken_connected
+                                && matches!(self.order_broker, OrderBroker::Kraken);
+                            if !wants_kraken_pro {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Mode").color(AXIS_TEXT).small());
+                                    egui::ComboBox::from_id_salt("risk_mode_combo")
+                                        .selected_text(self.risk_mode.label())
+                                        .width(80.0)
+                                        .show_ui(ui, |ui| {
+                                            for mode in &[
+                                                RiskMode::VaR,
+                                                RiskMode::Standard,
+                                                RiskMode::Fixed,
+                                                RiskMode::Dynamic,
+                                            ] {
+                                                ui.selectable_value(
+                                                    &mut self.risk_mode,
+                                                    *mode,
+                                                    mode.label(),
+                                                );
+                                            }
+                                        });
+                                });
                             match self.risk_mode {
                                 RiskMode::Standard => {
                                     ui.horizontal(|ui| {
@@ -10421,6 +10424,7 @@ impl eframe::App for TyphooNApp {
                                     );
                                 }
                             }
+                            }
                             // Broker target selector (only show when any broker connected)
                             if self.broker_connected || self.tt_connected || self.kraken_connected {
                                 ui.horizontal(|ui| {
@@ -10464,9 +10468,7 @@ impl eframe::App for TyphooNApp {
                             }
                             ui.add_space(6.0);
 
-                            if matches!(self.broker_scope, EventSource::Kraken)
-                                || matches!(self.order_broker, OrderBroker::Kraken)
-                            {
+                            if wants_kraken_pro {
                                 self.render_kraken_spot_buy_controls(ui);
                                 ui.add_space(6.0);
                             }
