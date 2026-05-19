@@ -492,11 +492,13 @@ impl TyphooNApp {
         } else {
             &symbol[..symbol.len() - quote.len()]
         };
-        let is_xstock = base.ends_with('X')
-            && !matches!(base, "XBT" | "XDG")
-            && matches!(quote, "USD" | "USDG" | "USDC" | "USDT" | "EUR");
+        let is_spot_fx = matches!(base, "USD" | "EUR" | "GBP" | "CAD" | "AUD" | "JPY" | "CHF")
+            && matches!(quote, "USD" | "EUR" | "GBP" | "CAD" | "AUD" | "JPY" | "CHF");
+        let is_xstock = base.ends_with(".EQ");
         if is_xstock {
             0 // xStocks / tokenized ETFs
+        } else if is_spot_fx {
+            2 // fiat FX pairs
         } else if matches!(quote, "USD" | "USDG" | "USDC" | "USDT") {
             1 // USD + stablecoin quoted spot
         } else if matches!(quote, "EUR" | "GBP" | "CAD" | "AUD" | "JPY" | "CHF") {

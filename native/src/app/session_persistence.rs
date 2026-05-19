@@ -270,6 +270,7 @@ impl TyphooNApp {
 
     pub(super) fn build_sync_preferences_value(&self) -> serde_json::Value {
         serde_json::json!({
+            "kraken_scrape_schema": 2,
             "kraken_scrape_xstocks": self.kraken_scrape_xstocks,
             "kraken_scrape_usd_crypto": self.kraken_scrape_usd_crypto,
             "kraken_scrape_fiat_crypto": self.kraken_scrape_fiat_crypto,
@@ -294,6 +295,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn apply_sync_preferences_value(&mut self, value: &serde_json::Value) {
+        let kraken_scrape_schema = value["kraken_scrape_schema"].as_u64().unwrap_or(1);
         if let Some(enabled) = value["kraken_scrape_xstocks"].as_bool() {
             self.kraken_scrape_xstocks = enabled;
         }
@@ -305,6 +307,10 @@ impl TyphooNApp {
         }
         if let Some(enabled) = value["kraken_scrape_crypto_crosses"].as_bool() {
             self.kraken_scrape_crypto_crosses = enabled;
+        }
+        if kraken_scrape_schema < 2 {
+            self.kraken_scrape_fiat_crypto = true;
+            self.kraken_scrape_crypto_crosses = true;
         }
         if let Some(enabled) = value["kraken_scrape_futures"].as_bool() {
             self.kraken_scrape_futures = enabled;
@@ -483,6 +489,7 @@ impl TyphooNApp {
             "mtf_enabled": self.mtf_enabled,
             "mtf_cols": self.mtf_cols,
             "mtf_visible": self.mtf_visible,
+            "kraken_scrape_schema": 2,
             "kraken_scrape_xstocks": self.kraken_scrape_xstocks,
             "kraken_scrape_usd_crypto": self.kraken_scrape_usd_crypto,
             "kraken_scrape_fiat_crypto": self.kraken_scrape_fiat_crypto,

@@ -276,8 +276,8 @@ impl TyphooNApp {
                         .on_hover_text("Crypto pairs quoted in USD, USDG, USDC, or USDT.")
                         .changed();
                     kraken_scrape_changed |= ui
-                        .checkbox(&mut self.kraken_scrape_fiat_crypto, "Fiat crypto")
-                        .on_hover_text("Crypto pairs quoted in EUR, GBP, CAD, AUD, JPY, or CHF.")
+                        .checkbox(&mut self.kraken_scrape_fiat_crypto, "Spot FX + fiat quotes")
+                        .on_hover_text("Fiat FX pairs such as EUR/USD plus crypto quoted in EUR, GBP, CAD, AUD, JPY, or CHF.")
                         .changed();
                     kraken_scrape_changed |= ui
                         .checkbox(&mut self.kraken_scrape_crypto_crosses, "Crypto crosses")

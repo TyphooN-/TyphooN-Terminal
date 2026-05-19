@@ -2024,17 +2024,63 @@ fn normalize_market_data_symbol(symbol: &str) -> String {
     }
 }
 
-fn kraken_xstock_fundamental_symbol(pair_name: &str, display_name: &str) -> Option<String> {
-    let source = if display_name.trim().is_empty() {
+fn kraken_pair_source<'a>(pair_name: &'a str, display_name: &'a str) -> &'a str {
+    if display_name.trim().is_empty() {
         pair_name
     } else {
         display_name
-    };
+    }
+}
+
+fn kraken_pair_base_quote(pair_name: &str, display_name: &str) -> Option<(String, String)> {
+    let source = kraken_pair_source(pair_name, display_name);
+    if let Some((base, quote)) = source.split_once('/') {
+        let base = typhoon_engine::core::kraken::normalize_pair_symbol(base);
+        let quote = typhoon_engine::core::kraken::normalize_pair_symbol(quote);
+        if !base.is_empty() && !quote.is_empty() {
+            return Some((base, quote));
+        }
+    }
     let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(source);
-    const QUOTES: [&str; 6] = ["USDG", "USDT", "USDC", "USD", "EUR", "GBP"];
-    let quote = QUOTES.iter().find(|quote| symbol.ends_with(**quote))?;
+    const QUOTES: [&str; 15] = [
+        "USDG", "USDT", "USDC", "USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "XBT", "BTC",
+        "ETH", "SOL", "DAI",
+    ];
+    let quote = QUOTES
+        .iter()
+        .find(|quote| symbol.ends_with(**quote) && symbol.len() > quote.len())?;
     let base = symbol.strip_suffix(*quote)?;
-    let equity = base.strip_suffix('X')?;
+    Some((base.to_string(), quote.to_string()))
+}
+
+fn kraken_pair_is_fiat_fx(pair_name: &str, display_name: &str) -> bool {
+    let Some((base, quote)) = kraken_pair_base_quote(pair_name, display_name) else {
+        return false;
+    };
+    const FIAT: [&str; 7] = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF"];
+    FIAT.contains(&base.as_str()) && FIAT.contains(&quote.as_str())
+}
+
+fn kraken_pair_asset_class(pair_name: &str, display_name: &str) -> &'static str {
+    if kraken_pair_is_fiat_fx(pair_name, display_name) {
+        "fx"
+    } else if kraken_xstock_fundamental_symbol(pair_name, display_name).is_some() {
+        "xstock"
+    } else {
+        "crypto"
+    }
+}
+
+fn kraken_xstock_fundamental_symbol(pair_name: &str, display_name: &str) -> Option<String> {
+    let source = kraken_pair_source(pair_name, display_name);
+    let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(source);
+    let (base, _quote) = kraken_pair_base_quote(pair_name, display_name)?;
+    // Public AssetPairs currently exposes crypto + spot FX. Tokenized equity
+    // holdings from private balances use `.EQ`; avoid treating ordinary crypto
+    // tickers that end in `X` (AVAX, FLUX, CVX, etc.) as xStocks.
+    let equity = base
+        .strip_suffix(".EQ")
+        .or_else(|| symbol.strip_suffix(".EQ"))?;
     if equity.is_empty()
         || matches!(equity, "XBT" | "BTC" | "XDG" | "DOGE")
         || !equity
@@ -29237,8 +29283,8 @@ BrokerCmd::KrakenCloseAll => {
             kraken_futures_symbols: Vec::new(),
             kraken_scrape_xstocks: true,
             kraken_scrape_usd_crypto: true,
-            kraken_scrape_fiat_crypto: false,
-            kraken_scrape_crypto_crosses: false,
+            kraken_scrape_fiat_crypto: true,
+            kraken_scrape_crypto_crosses: true,
             kraken_scrape_futures: false,
             live_account: None,
             live_positions: Vec::new(),
@@ -30440,6 +30486,29 @@ pub fn cache_db_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kraken_pair_asset_class_identifies_spot_fx() {
+        assert_eq!(kraken_pair_asset_class("ZEURZUSD", "EUR/USD"), "fx");
+        assert_eq!(kraken_pair_asset_class("AUDJPY", "AUD/JPY"), "fx");
+        assert_eq!(kraken_pair_asset_class("XBTUSD", "BTC/USD"), "crypto");
+    }
+
+    #[test]
+    fn kraken_xstock_detection_does_not_strip_crypto_x_suffixes() {
+        assert_eq!(
+            kraken_xstock_fundamental_symbol("AVAXUSD", "AVAX/USD"),
+            None
+        );
+        assert_eq!(
+            kraken_xstock_fundamental_symbol("FLUXUSD", "FLUX/USD"),
+            None
+        );
+        assert_eq!(
+            kraken_xstock_fundamental_symbol("HRTX.EQUSD", "HRTX.EQ/USD"),
+            Some("HRTX".to_string())
+        );
+    }
 
     // ── parse_ask_args (ASKAI/ASKCLAUDE/ASKGEMINI argument parser) ───────────
 

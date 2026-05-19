@@ -8895,7 +8895,8 @@ impl eframe::App for TyphooNApp {
                                     suggestions.push((
                                         display_name.clone(),
                                         pair_name.clone(),
-                                        "crypto".to_string(),
+                                        kraken_pair_asset_class(pair_name, display_name)
+                                            .to_string(),
                                     ));
                                 }
                             }
