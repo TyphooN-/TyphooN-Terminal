@@ -962,19 +962,6 @@ impl TyphooNApp {
             self.cached_alpaca_sync_state = self.build_alpaca_cache_state_map();
             self.cached_alpaca_sync_state_rev = Some(self.bg_rev);
         }
-        if self.cached_kraken_sync_state_rev != Some(self.bg_rev) {
-            self.cached_kraken_sync_state = self.build_source_cache_state_map("kraken:");
-            self.cached_kraken_sync_state_rev = Some(self.bg_rev);
-        }
-        if self.cached_kraken_futures_sync_state_rev != Some(self.bg_rev) {
-            self.cached_kraken_futures_sync_state =
-                self.build_source_cache_state_map("kraken-futures:");
-            self.cached_kraken_futures_sync_state_rev = Some(self.bg_rev);
-        }
-        if self.cached_tastytrade_sync_state_rev != Some(self.bg_rev) {
-            self.cached_tastytrade_sync_state = self.build_source_cache_state_map("tastytrade:");
-            self.cached_tastytrade_sync_state_rev = Some(self.bg_rev);
-        }
         let focus_symbols = self.alpaca_focus_symbols();
         if !self.alpaca_no_data_loaded {
             self.alpaca_no_data_load();

@@ -819,6 +819,73 @@ mod tests {
     }
 
     #[test]
+    fn select_alpaca_sync_candidates_uses_normalized_pending_keys() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec!["BTC/USD".to_string(), "ETH/USD".to_string()];
+        let timeframes = vec!["H4".to_string()];
+        let pending = HashSet::from([alpaca_fetch_key("BTCUSD", "4Hour")]);
+
+        let selected = select_alpaca_sync_candidates(
+            &symbols,
+            &timeframes,
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &pending,
+            2,
+            now_s,
+            alpaca_sync_target_bars,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].symbol, "ETHUSD");
+        assert_eq!(selected[0].timeframe, "4Hour");
+    }
+
+    #[test]
+    fn select_alpaca_sync_candidates_backfill_marker_does_not_hide_stale_pair() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec!["GDC".to_string()];
+        let timeframes = vec!["4Hour".to_string()];
+        let state_map = HashMap::from([(
+            ("GDC".to_string(), "4Hour".to_string()),
+            SyncCacheState {
+                last_bar_ts_s: now_s - 25 * 14_400,
+                write_ts_s: now_s - 60,
+                bar_count: 1_422,
+            },
+        )]);
+        let backfill_complete = HashMap::from([(
+            alpaca_fetch_key("GDC", "4Hour"),
+            AlpacaBackfillCompletePair {
+                symbol: "GDC".to_string(),
+                timeframe: "4Hour".to_string(),
+                marked_at: now_s - 30,
+                bar_count: 1_422,
+                target_bars: 14_000,
+            },
+        )]);
+
+        let selected = select_alpaca_sync_candidates(
+            &symbols,
+            &timeframes,
+            &state_map,
+            &HashSet::new(),
+            &HashSet::new(),
+            &backfill_complete,
+            &HashSet::new(),
+            1,
+            now_s,
+            alpaca_sync_target_bars,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].symbol, "GDC");
+        assert_eq!(selected[0].bucket, AlpacaSyncBucket::Stale);
+    }
+
+    #[test]
     fn select_alpaca_sync_candidates_prioritizes_higher_timeframes_across_symbols() {
         let now_s = 1_700_000_000i64;
         let symbols = vec!["AAPL".to_string(), "MSFT".to_string()];
