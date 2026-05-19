@@ -328,6 +328,13 @@ impl TyphooNApp {
         self.kraken_futures_backfill_complete_dirty_since = None;
     }
 
+    pub(super) fn tastytrade_backfill_complete_load(&mut self) {
+        self.tastytrade_backfill_complete_pairs =
+            self.load_backfill_complete_pairs_from_kv("tastytrade:backfill_complete_pairs");
+        self.tastytrade_backfill_complete_loaded = true;
+        self.tastytrade_backfill_complete_dirty_since = None;
+    }
+
     pub(super) fn kraken_backfill_complete_mark(
         &mut self,
         symbol: &str,
@@ -403,6 +410,43 @@ impl TyphooNApp {
         changed
     }
 
+    pub(super) fn tastytrade_backfill_complete_mark(
+        &mut self,
+        symbol: &str,
+        timeframe: &str,
+        bar_count: usize,
+        target_bars: usize,
+    ) -> bool {
+        if !self.tastytrade_backfill_complete_loaded {
+            self.tastytrade_backfill_complete_load();
+        }
+        let timeframe = normalize_sync_timeframe_key(timeframe)
+            .unwrap_or(timeframe)
+            .to_string();
+        let symbol = normalize_market_data_symbol(symbol);
+        let key = alpaca_fetch_key(&symbol.replace('/', ""), &timeframe);
+        let entry = AlpacaBackfillCompletePair {
+            symbol,
+            timeframe,
+            marked_at: chrono::Utc::now().timestamp(),
+            bar_count: bar_count as i64,
+            target_bars: target_bars as i64,
+        };
+        let changed = match self.tastytrade_backfill_complete_pairs.get(&key) {
+            Some(existing) => {
+                existing.bar_count != entry.bar_count || existing.target_bars != entry.target_bars
+            }
+            None => true,
+        };
+        if changed {
+            self.tastytrade_backfill_complete_pairs.insert(key, entry);
+            if self.tastytrade_backfill_complete_dirty_since.is_none() {
+                self.tastytrade_backfill_complete_dirty_since = Some(std::time::Instant::now());
+            }
+        }
+        changed
+    }
+
     pub(super) fn flush_kraken_backfill_complete_marks(&mut self, force: bool) {
         if let Some(dirty_since) = self.kraken_backfill_complete_dirty_since {
             if force
@@ -426,6 +470,18 @@ impl TyphooNApp {
                     &self.kraken_futures_backfill_complete_pairs,
                 );
                 self.kraken_futures_backfill_complete_dirty_since = None;
+            }
+        }
+        if let Some(dirty_since) = self.tastytrade_backfill_complete_dirty_since {
+            if force
+                || std::time::Instant::now().saturating_duration_since(dirty_since)
+                    >= std::time::Duration::from_secs(2)
+            {
+                self.save_backfill_complete_pairs_to_kv(
+                    "tastytrade:backfill_complete_pairs",
+                    &self.tastytrade_backfill_complete_pairs,
+                );
+                self.tastytrade_backfill_complete_dirty_since = None;
             }
         }
     }

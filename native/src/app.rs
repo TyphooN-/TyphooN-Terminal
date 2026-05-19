@@ -8939,6 +8939,12 @@ enum BrokerMsg {
         bar_count: usize,
         target_bars: usize,
     },
+    TastytradeBackfillComplete {
+        symbol: String,
+        timeframe: String,
+        bar_count: usize,
+        target_bars: usize,
+    },
     /// tastytrade DXLink fetch finished (successfully or not) so UI-side
     /// in-flight dedupe can be released even when no new bars were written.
     TastytradeFetchSettled {
@@ -10794,6 +10800,10 @@ pub struct TyphooNApp {
         std::collections::HashMap<String, AlpacaBackfillCompletePair>,
     kraken_futures_backfill_complete_loaded: bool,
     kraken_futures_backfill_complete_dirty_since: Option<std::time::Instant>,
+    tastytrade_backfill_complete_pairs:
+        std::collections::HashMap<String, AlpacaBackfillCompletePair>,
+    tastytrade_backfill_complete_loaded: bool,
+    tastytrade_backfill_complete_dirty_since: Option<std::time::Instant>,
     show_connect: bool,
     show_indicators_panel: bool,
     show_data_window: bool,
@@ -14010,7 +14020,7 @@ async fn run_tastytrade_fetch_task(
                             "tastytrade {} {} already up to date",
                             symbol, timeframe
                         )));
-                    } else if let Some(cache) = cache_handle.as_ref() {
+                    } else {
                         let new_bars: Vec<serde_json::Value> = candles
                             .iter()
                             .map(|c| {
@@ -14026,31 +14036,45 @@ async fn run_tastytrade_fetch_task(
                                 })
                             })
                             .collect();
-                        let merged = if after_ts.is_some() {
-                            match cache.get_bars_raw(&cache_key) {
-                                Ok(Some(existing_raw)) => {
-                                    merge_json_bars(raw_bars_to_json_values(existing_raw), new_bars)
+                        match store_json_bars_in_cache(
+                            cache_handle.clone(),
+                            cache_key.clone(),
+                            new_bars,
+                            after_ts.is_some(),
+                        )
+                        .await
+                        {
+                            Ok(count) if count > 0 => {
+                                let target_bars =
+                                    tastytrade_sync_target_bars(&timeframe).unwrap_or(0) as usize;
+                                if after_ts.is_none() && target_bars > 0 && count < target_bars {
+                                    let _ =
+                                        broker_msg_tx.send(BrokerMsg::TastytradeBackfillComplete {
+                                            symbol: symbol.clone(),
+                                            timeframe: timeframe.clone(),
+                                            bar_count: count,
+                                            target_bars,
+                                        });
                                 }
-                                _ => new_bars,
+                                let _ = broker_msg_tx.send(BrokerMsg::BarsFetched {
+                                    source: "tastytrade".into(),
+                                    symbol: symbol.clone(),
+                                    timeframe: timeframe.clone(),
+                                    count,
+                                });
                             }
-                        } else {
-                            new_bars
-                        };
-                        let count = merged.len();
-                        if count > 0 {
-                            let json = serde_json::to_string(&merged).unwrap_or_default();
-                            let _ = cache.put_bars(&cache_key, &json);
-                            let _ = broker_msg_tx.send(BrokerMsg::BarsFetched {
-                                source: "tastytrade".into(),
-                                symbol: symbol.clone(),
-                                timeframe: timeframe.clone(),
-                                count,
-                            });
-                        } else {
-                            let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
-                                "tastytrade: no candles for {} {}",
-                                symbol, timeframe
-                            )));
+                            Ok(_) => {
+                                let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                                    "tastytrade: no candles for {} {}",
+                                    symbol, timeframe
+                                )));
+                            }
+                            Err(e) => {
+                                let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                                    "tastytrade cache write failed for {} {}: {}",
+                                    symbol, timeframe, e
+                                )));
+                            }
                         }
                     }
                     last_error = None;
@@ -27262,6 +27286,9 @@ BrokerCmd::KrakenCloseAll => {
             kraken_futures_backfill_complete_pairs: std::collections::HashMap::new(),
             kraken_futures_backfill_complete_loaded: false,
             kraken_futures_backfill_complete_dirty_since: None,
+            tastytrade_backfill_complete_pairs: std::collections::HashMap::new(),
+            tastytrade_backfill_complete_loaded: false,
+            tastytrade_backfill_complete_dirty_since: None,
             show_connect: false,
             show_indicators_panel: false,
             show_data_window: false,

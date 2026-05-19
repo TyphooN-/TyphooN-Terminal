@@ -656,6 +656,20 @@ impl TyphooNApp {
     pub(super) fn tastytrade_sync_symbols(&self) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
+        let mut tasty_available: std::collections::HashSet<String> =
+            self.cached_tastytrade_symbols.clone();
+        tasty_available.extend(
+            self.tastytrade_universe_symbols
+                .iter()
+                .map(|symbol| normalize_market_data_symbol(symbol).replace('/', ""))
+                .filter(|symbol| !symbol.is_empty()),
+        );
+        tasty_available.extend(
+            self.tt_positions
+                .iter()
+                .map(|pos| normalize_market_data_symbol(&pos.symbol).replace('/', ""))
+                .filter(|symbol| !symbol.is_empty()),
+        );
         for symbol in &self.tastytrade_universe_symbols {
             let symbol = normalize_market_data_symbol(symbol);
             if !symbol.is_empty() && seen.insert(symbol.clone()) {
@@ -670,18 +684,16 @@ impl TyphooNApp {
         }
         for chart in &self.charts {
             let symbol = normalize_market_data_symbol(&chart.symbol);
-            if !symbol.is_empty()
-                && self.tastytrade_has_symbol(&symbol)
-                && seen.insert(symbol.clone())
+            let bare = symbol.replace('/', "");
+            if !symbol.is_empty() && tasty_available.contains(&bare) && seen.insert(symbol.clone())
             {
                 out.push(symbol);
             }
         }
         for symbol in &self.user_watchlist {
             let symbol = normalize_market_data_symbol(symbol);
-            if !symbol.is_empty()
-                && self.tastytrade_has_symbol(&symbol)
-                && seen.insert(symbol.clone())
+            let bare = symbol.replace('/', "");
+            if !symbol.is_empty() && tasty_available.contains(&bare) && seen.insert(symbol.clone())
             {
                 out.push(symbol);
             }
@@ -770,6 +782,7 @@ impl TyphooNApp {
         if self
             .alpaca_no_data_pairs
             .contains_key(&alpaca_fetch_key(&symbol, tf))
+            || self.is_unresolvable_fetch_key("alpaca", &symbol, tf)
         {
             self.log.push_back(LogEntry::warn(format!(
                 "Alpaca {} {}: known no-data symbol — skipping fetch",
@@ -803,6 +816,9 @@ impl TyphooNApp {
         {
             return false;
         }
+        if self.is_unresolvable_fetch_key("kraken", &symbol, tf) {
+            return false;
+        }
         let fetch_key = alpaca_fetch_key(&symbol, tf);
         if !self.pending_kraken_fetches.insert(fetch_key) {
             return false;
@@ -833,6 +849,9 @@ impl TyphooNApp {
         }
         let symbol = typhoon_engine::core::kraken_futures::normalize_futures_symbol(symbol);
         if symbol.is_empty() || !typhoon_engine::core::kraken_futures::is_futures_symbol(&symbol) {
+            return false;
+        }
+        if self.is_unresolvable_fetch_key("kraken-futures", &symbol, tf) {
             return false;
         }
         let fetch_key = alpaca_fetch_key(&symbol, tf);
@@ -882,6 +901,9 @@ impl TyphooNApp {
         if symbol.is_empty() {
             return false;
         }
+        if self.is_unresolvable_fetch_key("tastytrade", &symbol, tf) {
+            return false;
+        }
         let fetch_key = alpaca_fetch_key(&symbol.replace('/', ""), tf);
         if !self.pending_tastytrade_fetches.insert(fetch_key) {
             return false;
@@ -899,30 +921,21 @@ impl TyphooNApp {
             .remove(&alpaca_fetch_key(symbol, timeframe));
     }
 
-    fn unresolvable_no_data_pairs_for(
-        &self,
-        broker: &str,
-    ) -> std::collections::HashMap<String, AlpacaNoDataPair> {
+    fn unresolvable_fetch_keys_for(&self, broker: &str) -> std::collections::HashSet<String> {
         self.unresolvable_pairs
             .values()
             .filter(|entry| entry.broker.eq_ignore_ascii_case(broker))
             .filter_map(|entry| {
                 let tf = normalize_sync_timeframe_key(&entry.timeframe)?;
                 let symbol = normalize_market_data_symbol(&entry.symbol).replace('/', "");
-                if symbol.is_empty() {
-                    return None;
-                }
-                Some((
-                    alpaca_fetch_key(&symbol, tf),
-                    AlpacaNoDataPair {
-                        symbol,
-                        timeframe: tf.to_string(),
-                        marked_at: entry.ts,
-                        reason: entry.reason.clone(),
-                    },
-                ))
+                (!symbol.is_empty()).then(|| alpaca_fetch_key(&symbol, tf))
             })
             .collect()
+    }
+
+    fn is_unresolvable_fetch_key(&self, broker: &str, symbol: &str, timeframe: &str) -> bool {
+        self.unresolvable_pairs
+            .contains_key(&unresolvable_pair_key(broker, symbol, timeframe))
     }
 
     pub(super) fn schedule_alpaca_pairs(&mut self, symbols: &[String]) -> usize {
@@ -969,21 +982,17 @@ impl TyphooNApp {
             self.alpaca_backfill_complete_load();
         }
         let now_s = chrono::Utc::now().timestamp();
-        let backfill_complete_pairs: std::collections::HashSet<String> = self
-            .alpaca_backfill_complete_pairs
-            .keys()
-            .cloned()
-            .collect();
-        let mut no_data_pairs = self.alpaca_no_data_pairs.clone();
-        no_data_pairs.extend(self.unresolvable_no_data_pairs_for("alpaca"));
+        let mut no_data_keys: std::collections::HashSet<String> =
+            self.alpaca_no_data_pairs.keys().cloned().collect();
+        no_data_keys.extend(self.unresolvable_fetch_keys_for("alpaca"));
         let mut cursor = self.alpaca_sync_cursor;
         let candidates = select_alpaca_sync_workset_rotating(
             symbols,
             &timeframes,
             &self.cached_alpaca_sync_state,
             &focus_symbols,
-            &no_data_pairs,
-            &backfill_complete_pairs,
+            &no_data_keys,
+            &self.alpaca_backfill_complete_pairs,
             &self.pending_alpaca_fetches,
             available_slots,
             capacity.foreground_reserve,
@@ -1051,12 +1060,7 @@ impl TyphooNApp {
             self.kraken_backfill_complete_load();
         }
         let focus_symbols = self.market_data_focus_symbols();
-        let no_data_pairs = self.unresolvable_no_data_pairs_for("kraken");
-        let backfill_complete_pairs: std::collections::HashSet<String> = self
-            .kraken_backfill_complete_pairs
-            .keys()
-            .cloned()
-            .collect();
+        let no_data_keys = self.unresolvable_fetch_keys_for("kraken");
         let now_s = chrono::Utc::now().timestamp();
         let cursor_idx = sector_idx.min(self.kraken_spot_sync_cursors.len().saturating_sub(1));
         let mut cursor = self.kraken_spot_sync_cursors[cursor_idx];
@@ -1065,8 +1069,8 @@ impl TyphooNApp {
             &timeframes,
             &self.cached_kraken_sync_state,
             &focus_symbols,
-            &no_data_pairs,
-            &backfill_complete_pairs,
+            &no_data_keys,
+            &self.kraken_backfill_complete_pairs,
             &self.pending_kraken_fetches,
             available_slots,
             foreground_slots,
@@ -1134,12 +1138,7 @@ impl TyphooNApp {
             self.kraken_futures_backfill_complete_load();
         }
         let focus_symbols = self.market_data_focus_symbols();
-        let no_data_pairs = self.unresolvable_no_data_pairs_for("kraken-futures");
-        let backfill_complete_pairs: std::collections::HashSet<String> = self
-            .kraken_futures_backfill_complete_pairs
-            .keys()
-            .cloned()
-            .collect();
+        let no_data_keys = self.unresolvable_fetch_keys_for("kraken-futures");
         let now_s = chrono::Utc::now().timestamp();
         let cursor_idx = sector_idx.min(self.kraken_futures_sync_cursors.len().saturating_sub(1));
         let mut cursor = self.kraken_futures_sync_cursors[cursor_idx];
@@ -1148,8 +1147,8 @@ impl TyphooNApp {
             &timeframes,
             &self.cached_kraken_futures_sync_state,
             &focus_symbols,
-            &no_data_pairs,
-            &backfill_complete_pairs,
+            &no_data_keys,
+            &self.kraken_futures_backfill_complete_pairs,
             &self.pending_kraken_futures_fetches,
             available_slots,
             foreground_slots,
@@ -1206,16 +1205,19 @@ impl TyphooNApp {
             self.cached_tastytrade_sync_state = self.build_source_cache_state_map("tastytrade:");
             self.cached_tastytrade_sync_state_rev = Some(self.bg_rev);
         }
+        if !self.tastytrade_backfill_complete_loaded {
+            self.tastytrade_backfill_complete_load();
+        }
         let focus_symbols = self.market_data_focus_symbols();
-        let no_data_pairs = self.unresolvable_no_data_pairs_for("tastytrade");
+        let no_data_keys = self.unresolvable_fetch_keys_for("tastytrade");
         let now_s = chrono::Utc::now().timestamp();
         let candidates = select_alpaca_sync_workset(
             symbols,
             &timeframes,
             &self.cached_tastytrade_sync_state,
             &focus_symbols,
-            &no_data_pairs,
-            &std::collections::HashSet::new(),
+            &no_data_keys,
+            &self.tastytrade_backfill_complete_pairs,
             &self.pending_tastytrade_fetches,
             available_slots,
             foreground_slots,

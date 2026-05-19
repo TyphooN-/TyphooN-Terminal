@@ -301,8 +301,8 @@ pub(super) fn select_alpaca_sync_candidates(
     timeframes: &[String],
     state_map: &HashMap<(String, String), SyncCacheState>,
     focus_symbols: &HashSet<String>,
-    no_data_pairs: &HashMap<String, AlpacaNoDataPair>,
-    backfill_complete_pairs: &HashSet<String>,
+    no_data_keys: &HashSet<String>,
+    backfill_complete_pairs: &HashMap<String, AlpacaBackfillCompletePair>,
     pending_fetches: &HashSet<String>,
     batch_size: usize,
     now_s: i64,
@@ -328,10 +328,10 @@ pub(super) fn select_alpaca_sync_candidates(
             let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
                 continue;
             };
-            if no_data_pairs.contains_key(&alpaca_fetch_key(symbol, tf)) {
+            if no_data_keys.contains(&alpaca_fetch_key(&symbol_key, tf)) {
                 continue;
             }
-            let fetch_key = alpaca_fetch_key(symbol, tf);
+            let fetch_key = alpaca_fetch_key(&symbol_key, tf);
             if pending_fetches.contains(&fetch_key) {
                 continue;
             }
@@ -349,7 +349,7 @@ pub(super) fn select_alpaca_sync_candidates(
                 continue;
             };
             if candidate.bucket == AlpacaSyncBucket::Backfill
-                && backfill_complete_pairs.contains(&fetch_key)
+                && backfill_complete_pairs.contains_key(&fetch_key)
             {
                 continue;
             }
@@ -409,8 +409,8 @@ pub(super) fn select_alpaca_sync_workset(
     timeframes: &[String],
     state_map: &HashMap<(String, String), SyncCacheState>,
     focus_symbols: &HashSet<String>,
-    no_data_pairs: &HashMap<String, AlpacaNoDataPair>,
-    backfill_complete_pairs: &HashSet<String>,
+    no_data_keys: &HashSet<String>,
+    backfill_complete_pairs: &HashMap<String, AlpacaBackfillCompletePair>,
     pending_fetches: &HashSet<String>,
     batch_size: usize,
     foreground_slots: usize,
@@ -433,7 +433,7 @@ pub(super) fn select_alpaca_sync_workset(
             timeframes,
             state_map,
             focus_symbols,
-            no_data_pairs,
+            no_data_keys,
             backfill_complete_pairs,
             &staged_pending,
             foreground_budget,
@@ -456,7 +456,7 @@ pub(super) fn select_alpaca_sync_workset(
         timeframes,
         state_map,
         focus_symbols,
-        no_data_pairs,
+        no_data_keys,
         backfill_complete_pairs,
         &staged_pending,
         batch_size - selected.len(),
@@ -480,8 +480,8 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     timeframes: &[String],
     state_map: &HashMap<(String, String), SyncCacheState>,
     focus_symbols: &HashSet<String>,
-    no_data_pairs: &HashMap<String, AlpacaNoDataPair>,
-    backfill_complete_pairs: &HashSet<String>,
+    no_data_keys: &HashSet<String>,
+    backfill_complete_pairs: &HashMap<String, AlpacaBackfillCompletePair>,
     pending_fetches: &HashSet<String>,
     batch_size: usize,
     foreground_slots: usize,
@@ -506,7 +506,7 @@ pub(super) fn select_alpaca_sync_workset_rotating(
             timeframes,
             state_map,
             focus_symbols,
-            no_data_pairs,
+            no_data_keys,
             backfill_complete_pairs,
             &staged_pending,
             foreground_budget,
@@ -543,7 +543,7 @@ pub(super) fn select_alpaca_sync_workset_rotating(
         timeframes,
         state_map,
         focus_symbols,
-        no_data_pairs,
+        no_data_keys,
         backfill_complete_pairs,
         &staged_pending,
         batch_size - selected.len(),
@@ -712,8 +712,8 @@ mod tests {
             &timeframes,
             &state_map,
             &HashSet::new(),
-            &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
             &HashSet::new(),
             3,
             now_s,
@@ -737,8 +737,8 @@ mod tests {
             &timeframes,
             &HashMap::new(),
             &focus,
-            &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
             &HashSet::new(),
             2,
             now_s,
@@ -760,23 +760,15 @@ mod tests {
         let now_s = 1_700_000_000i64;
         let symbols = vec!["AAGIY".to_string(), "AAPL".to_string()];
         let timeframes = vec!["1Hour".to_string()];
-        let no_data = HashMap::from([(
-            alpaca_fetch_key("AAGIY", "1Hour"),
-            AlpacaNoDataPair {
-                symbol: "AAGIY".to_string(),
-                timeframe: "1Hour".to_string(),
-                marked_at: now_s,
-                reason: "No bar data for AAGIY @ 1Hour".to_string(),
-            },
-        )]);
+        let no_data_keys = HashSet::from([alpaca_fetch_key("AAGIY", "1Hour")]);
 
         let selected = select_alpaca_sync_candidates(
             &symbols,
             &timeframes,
             &HashMap::new(),
             &HashSet::new(),
-            &no_data,
-            &HashSet::new(),
+            &no_data_keys,
+            &HashMap::new(),
             &HashSet::new(),
             2,
             now_s,
@@ -799,8 +791,8 @@ mod tests {
             &timeframes,
             &HashMap::new(),
             &HashSet::new(),
-            &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
             &HashSet::new(),
             4,
             now_s,
@@ -839,8 +831,8 @@ mod tests {
             &timeframes,
             &state_map,
             &focus,
-            &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
             &HashSet::new(),
             2,
             1,
@@ -867,8 +859,8 @@ mod tests {
             &timeframes,
             &HashMap::new(),
             &focus,
-            &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
             &HashSet::new(),
             2,
             1,
@@ -899,8 +891,8 @@ mod tests {
             &timeframes,
             &HashMap::new(),
             &HashSet::new(),
-            &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
             &HashSet::new(),
             1,
             0,
@@ -919,8 +911,8 @@ mod tests {
             &timeframes,
             &HashMap::new(),
             &HashSet::new(),
-            &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
             &HashSet::new(),
             1,
             0,
@@ -948,8 +940,8 @@ mod tests {
             &timeframes,
             &HashMap::new(),
             &focus,
-            &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
             &HashSet::new(),
             1,
             1,
@@ -1034,8 +1026,8 @@ mod tests {
             &timeframes,
             &state_map,
             &HashSet::new(),
-            &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
             &HashSet::new(),
             1,
             now_s,
@@ -1065,8 +1057,8 @@ mod tests {
             &timeframes,
             &state_map,
             &HashSet::new(),
-            &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
             &HashSet::new(),
             1,
             now_s,
@@ -1103,8 +1095,8 @@ mod tests {
             &timeframes,
             &state_map,
             &HashSet::new(),
-            &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
             &HashSet::new(),
             1,
             now_s,
@@ -1127,14 +1119,23 @@ mod tests {
                 bar_count: 70,
             },
         )]);
-        let backfill_complete = HashSet::from([alpaca_fetch_key("LUMN", "1Month")]);
+        let backfill_complete = HashMap::from([(
+            alpaca_fetch_key("LUMN", "1Month"),
+            AlpacaBackfillCompletePair {
+                symbol: "LUMN".to_string(),
+                timeframe: "1Month".to_string(),
+                marked_at: now_s,
+                bar_count: 70,
+                target_bars: 240,
+            },
+        )]);
 
         let selected = select_alpaca_sync_candidates(
             &symbols,
             &timeframes,
             &state_map,
             &HashSet::new(),
-            &HashMap::new(),
+            &HashSet::new(),
             &backfill_complete,
             &HashSet::new(),
             1,

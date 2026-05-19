@@ -316,6 +316,7 @@ impl eframe::App for TyphooNApp {
             self.alpaca_backfill_complete_load();
             self.kraken_backfill_complete_load();
             self.kraken_futures_backfill_complete_load();
+            self.tastytrade_backfill_complete_load();
             if !self.alpaca_no_data_pairs.is_empty() {
                 self.log.push_back(LogEntry::info(format!(
                     "Loaded {} Alpaca no-data mark(s) from cache",
@@ -7028,6 +7029,29 @@ impl eframe::App for TyphooNApp {
                 BrokerMsg::TastytradeFetchSettled { symbol, timeframe } => {
                     self.settle_market_data_fetch("tastytrade", &symbol, &timeframe);
                     self.refill_market_data_sync_slots();
+                }
+                BrokerMsg::TastytradeBackfillComplete {
+                    symbol,
+                    timeframe,
+                    bar_count,
+                    target_bars,
+                } => {
+                    let changed = self.tastytrade_backfill_complete_mark(
+                        &symbol,
+                        &timeframe,
+                        bar_count,
+                        target_bars,
+                    );
+                    let marker_count = self.tastytrade_backfill_complete_pairs.len();
+                    let prefix = if changed {
+                        "marked backfill-complete"
+                    } else {
+                        "still backfill-complete"
+                    };
+                    self.log.push_back(LogEntry::info(format!(
+                        "tastytrade {} {}: {} at {}/{} bars — automated sync will do freshness-only ({} marked)",
+                        symbol, timeframe, prefix, bar_count, target_bars, marker_count
+                    )));
                 }
                 BrokerMsg::AlpacaRateLimitObserved { historical_rpm } => {
                     if historical_rpm > 0 && self.alpaca_historical_rpm_observed != historical_rpm {
