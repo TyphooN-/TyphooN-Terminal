@@ -41,6 +41,12 @@ Kraken public bar sync now follows a fully async, queue-friendly model:
 - CryptoCompare and Kraken continue to use independent 6-hour freshness checks
   under `cryptocompare:*` and `kraken:*` keys.
 
+- The shared candidate selector is the same O(1)-membership path used by Alpaca:
+  pending work, unresolvable symbols, and limited-history/backfill-complete markers are checked by normalized `SYMBOL:Timeframe` hash keys before dispatch.
+- Spot/xStocks sectors use independent rotating cursors so a large USD-crypto sector cannot starve xStocks, fiat-quoted crypto, spot FX, or crypto crosses.
+- The bounded background scan borrows symbol names from the source universe instead of cloning each scanned slice; queue pressure is controlled by sector-specific batch/window limits and interaction-aware clamps.
+- `BarsFetched` remains the settlement point for Kraken because each public command writes exactly one cache result before settling; unlike Alpaca there is no separate retry/backfill-complete lifecycle message that can race the slot release.
+
 ## Consequences
 
 - **Pro:** Opening or requesting a crypto chart can start Kraken OHLCV work

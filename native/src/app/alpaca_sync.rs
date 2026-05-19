@@ -131,12 +131,15 @@ fn sync_timeframe_high_first_sort_key(tf: &str) -> usize {
 }
 
 fn ordered_sync_timeframes_high_first(timeframes: &[String]) -> Vec<String> {
-    let mut unique: Vec<String> = Vec::new();
+    let mut seen: HashSet<&'static str> =
+        HashSet::with_capacity(timeframes.len().min(STANDARD_SYNC_TIMEFRAMES.len()));
+    let mut unique: Vec<String> =
+        Vec::with_capacity(timeframes.len().min(STANDARD_SYNC_TIMEFRAMES.len()));
     for timeframe in timeframes {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             continue;
         };
-        if unique.iter().any(|existing| existing == tf) {
+        if !seen.insert(tf) {
             continue;
         }
         unique.push(tf.to_string());
@@ -295,9 +298,8 @@ fn classify_alpaca_sync_candidate(
 
     None
 }
-
-pub(super) fn select_alpaca_sync_candidates(
-    symbols: &[String],
+fn select_alpaca_sync_candidates_from_iter<'a, I>(
+    symbols: I,
     timeframes: &[String],
     state_map: &HashMap<(String, String), SyncCacheState>,
     focus_symbols: &HashSet<String>,
@@ -307,8 +309,11 @@ pub(super) fn select_alpaca_sync_candidates(
     batch_size: usize,
     now_s: i64,
     target_bars_for_tf: fn(&str) -> Option<u32>,
-) -> Vec<AlpacaSyncCandidate> {
-    if batch_size == 0 || symbols.is_empty() || timeframes.is_empty() {
+) -> Vec<AlpacaSyncCandidate>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    if batch_size == 0 || timeframes.is_empty() {
         return Vec::new();
     }
 
@@ -317,22 +322,26 @@ pub(super) fn select_alpaca_sync_candidates(
         return Vec::new();
     }
 
-    let mut missing_by_tf: HashMap<String, Vec<AlpacaSyncCandidate>> = HashMap::new();
-    let mut stale_by_tf: HashMap<String, Vec<AlpacaSyncCandidate>> = HashMap::new();
-    let mut backfill_by_tf: HashMap<String, Vec<AlpacaSyncCandidate>> = HashMap::new();
+    let bucket_capacity = batch_size.saturating_mul(2).max(ordered_timeframes.len());
+    let mut missing_by_tf: HashMap<&'static str, Vec<AlpacaSyncCandidate>> =
+        HashMap::with_capacity(ordered_timeframes.len());
+    let mut stale_by_tf: HashMap<&'static str, Vec<AlpacaSyncCandidate>> =
+        HashMap::with_capacity(ordered_timeframes.len());
+    let mut backfill_by_tf: HashMap<&'static str, Vec<AlpacaSyncCandidate>> =
+        HashMap::with_capacity(ordered_timeframes.len());
 
     for symbol in symbols {
         let symbol_key = normalize_market_data_symbol(symbol).replace('/', "");
+        if symbol_key.is_empty() {
+            continue;
+        }
         let focus = focus_symbols.contains(&symbol_key);
         for timeframe in timeframes {
             let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
                 continue;
             };
-            if no_data_keys.contains(&alpaca_fetch_key(&symbol_key, tf)) {
-                continue;
-            }
             let fetch_key = alpaca_fetch_key(&symbol_key, tf);
-            if pending_fetches.contains(&fetch_key) {
+            if no_data_keys.contains(&fetch_key) || pending_fetches.contains(&fetch_key) {
                 continue;
             }
             let state = state_map
@@ -355,16 +364,16 @@ pub(super) fn select_alpaca_sync_candidates(
             }
             match candidate.bucket {
                 AlpacaSyncBucket::Missing => missing_by_tf
-                    .entry(tf.to_string())
-                    .or_default()
+                    .entry(tf)
+                    .or_insert_with(|| Vec::with_capacity(bucket_capacity))
                     .push(candidate),
                 AlpacaSyncBucket::Stale => stale_by_tf
-                    .entry(tf.to_string())
-                    .or_default()
+                    .entry(tf)
+                    .or_insert_with(|| Vec::with_capacity(bucket_capacity))
                     .push(candidate),
                 AlpacaSyncBucket::Backfill => backfill_by_tf
-                    .entry(tf.to_string())
-                    .or_default()
+                    .entry(tf)
+                    .or_insert_with(|| Vec::with_capacity(bucket_capacity))
                     .push(candidate),
             }
         }
@@ -389,7 +398,10 @@ pub(super) fn select_alpaca_sync_candidates(
     };
 
     for timeframe in &ordered_timeframes {
-        let Some(bucket) = selected_bucket_map.get_mut(timeframe) else {
+        let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
+            continue;
+        };
+        let Some(bucket) = selected_bucket_map.get_mut(tf) else {
             continue;
         };
         sort_bucket(bucket);
@@ -404,6 +416,34 @@ pub(super) fn select_alpaca_sync_candidates(
     selected
 }
 
+pub(super) fn select_alpaca_sync_candidates(
+    symbols: &[String],
+    timeframes: &[String],
+    state_map: &HashMap<(String, String), SyncCacheState>,
+    focus_symbols: &HashSet<String>,
+    no_data_keys: &HashSet<String>,
+    backfill_complete_pairs: &HashMap<String, AlpacaBackfillCompletePair>,
+    pending_fetches: &HashSet<String>,
+    batch_size: usize,
+    now_s: i64,
+    target_bars_for_tf: fn(&str) -> Option<u32>,
+) -> Vec<AlpacaSyncCandidate> {
+    if symbols.is_empty() {
+        return Vec::new();
+    }
+    select_alpaca_sync_candidates_from_iter(
+        symbols.iter().map(String::as_str),
+        timeframes,
+        state_map,
+        focus_symbols,
+        no_data_keys,
+        backfill_complete_pairs,
+        pending_fetches,
+        batch_size,
+        now_s,
+        target_bars_for_tf,
+    )
+}
 pub(super) fn select_alpaca_sync_workset(
     symbols: &[String],
     timeframes: &[String],
@@ -532,14 +572,12 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     }
 
     let start = *cursor % symbols.len();
-    let mut scanned_symbols = Vec::with_capacity(scan_limit);
-    for offset in 0..scan_limit {
-        scanned_symbols.push(symbols[(start + offset) % symbols.len()].clone());
-    }
+    let scanned_symbols =
+        (0..scan_limit).map(|offset| symbols[(start + offset) % symbols.len()].as_str());
     *cursor = (start + scan_limit) % symbols.len();
 
-    let background = select_alpaca_sync_candidates(
-        &scanned_symbols,
+    let background = select_alpaca_sync_candidates_from_iter(
+        scanned_symbols,
         timeframes,
         state_map,
         focus_symbols,

@@ -93,6 +93,17 @@ succeeded. This pairs with ADR-201's cancel-exits-then-close flow:
 the flow can now distinguish a hard reject (asset not closeable)
 from a soft `insufficient qty` race (which the retry handles).
 
+### 5. O(1) scheduler hot path and settled-fetch refill
+
+The automated scheduler now keeps the per-cycle candidate walk allocation-light:
+
+- Pending work is keyed by normalized `SYMBOL:Timeframe` in `HashSet`s, so duplicate dispatch checks are O(1).
+- No-data and backfill-complete markers are consulted as hash maps/sets before any broker command is queued.
+- Candidate selection rotates through a bounded background slice and uses borrowed symbol iterators; it no longer clones the scanned background universe just to choose the next batch.
+- Timeframe de-duplication uses a side `HashSet` while preserving high-to-low ordering (`1Month` → `1Min`).
+- `BarsFetched` updates cache state and UI, but Alpaca pending slots are only released by `AlpacaFetchSettled`. This prevents the `BarsFetched`/`FetchSettled` race that repeatedly requeued shallow symbols such as `GDC @ 4Hour` before backfill-complete bookkeeping arrived.
+- Sync Health uses the last broker check/write time as a recent-health signal when the provider's latest available market bar is intrinsically old. A successfully checked symbol with no newer Alpaca bars should not make the broker look less healthy immediately after sync.
+
 ## Consequences
 
 - **Sync throughput scales with the user's tier** without manual

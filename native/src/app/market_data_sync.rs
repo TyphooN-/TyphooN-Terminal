@@ -337,12 +337,13 @@ impl TyphooNApp {
     where
         I: IntoIterator<Item = &'a str>,
     {
-        let mut out: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::with_capacity(STANDARD_SYNC_TIMEFRAMES.len());
+        let mut out: Vec<String> = Vec::with_capacity(STANDARD_SYNC_TIMEFRAMES.len());
         for tf in tfs {
             let Some(norm) = normalize_sync_timeframe_key(tf) else {
                 continue;
             };
-            if !self.sync_timeframe_enabled(norm) || out.iter().any(|existing| existing == norm) {
+            if !self.sync_timeframe_enabled(norm) || !seen.insert(norm) {
                 continue;
             }
             out.push(norm.to_string());
