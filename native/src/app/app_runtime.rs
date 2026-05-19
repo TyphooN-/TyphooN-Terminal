@@ -6939,6 +6939,7 @@ impl eframe::App for TyphooNApp {
                         self.alpaca_retry_drain(&symbol, &timeframe);
                         // Any newly-written bars supersede prior no-data tombstones.
                         self.alpaca_no_data_drain(&symbol, &timeframe);
+                        self.refresh_storage_snapshot_after_action("alpaca_bars");
                     }
                     if should_reload {
                         self.queue_chart_reload(self.active_tab);
