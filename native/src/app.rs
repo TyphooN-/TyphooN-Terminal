@@ -13700,10 +13700,16 @@ async fn run_kraken_fetch_task(
                         });
                     }
                     Ok(_) => {
-                        let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
-                            "Kraken {} {}: no bars returned",
-                            symbol, timeframe
-                        )));
+                        let reason = format!("Kraken {} {}: no bars returned", symbol, timeframe);
+                        let _ = broker_msg_tx.send(BrokerMsg::OrderResult(reason.clone()));
+                        if after_ts.is_none() {
+                            let _ = broker_msg_tx.send(BrokerMsg::Unresolvable {
+                                broker: "kraken".to_string(),
+                                symbol: symbol.clone(),
+                                timeframe: timeframe.clone(),
+                                reason,
+                            });
+                        }
                     }
                     Err(e) => {
                         let _ = broker_msg_tx.send(BrokerMsg::Error(format!(

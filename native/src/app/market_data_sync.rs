@@ -959,7 +959,10 @@ impl TyphooNApp {
         }
 
         if self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
-            self.cached_alpaca_sync_state = self.build_alpaca_cache_state_map();
+            let previous = self.cached_alpaca_sync_state.clone();
+            let mut rebuilt = self.build_alpaca_cache_state_map();
+            merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
+            self.cached_alpaca_sync_state = rebuilt;
             self.cached_alpaca_sync_state_rev = Some(self.bg_rev);
         }
         let focus_symbols = self.alpaca_focus_symbols();
@@ -1041,7 +1044,10 @@ impl TyphooNApp {
             return 0;
         }
         if self.cached_kraken_sync_state_rev != Some(self.bg_rev) {
-            self.cached_kraken_sync_state = self.build_source_cache_state_map("kraken:");
+            let previous = self.cached_kraken_sync_state.clone();
+            let mut rebuilt = self.build_source_cache_state_map("kraken:");
+            merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
+            self.cached_kraken_sync_state = rebuilt;
             self.cached_kraken_sync_state_rev = Some(self.bg_rev);
         }
         if !self.kraken_backfill_complete_loaded {
@@ -1118,8 +1124,10 @@ impl TyphooNApp {
             return 0;
         }
         if self.cached_kraken_futures_sync_state_rev != Some(self.bg_rev) {
-            self.cached_kraken_futures_sync_state =
-                self.build_source_cache_state_map("kraken-futures:");
+            let previous = self.cached_kraken_futures_sync_state.clone();
+            let mut rebuilt = self.build_source_cache_state_map("kraken-futures:");
+            merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
+            self.cached_kraken_futures_sync_state = rebuilt;
             self.cached_kraken_futures_sync_state_rev = Some(self.bg_rev);
         }
         if !self.kraken_futures_backfill_complete_loaded {
@@ -1190,7 +1198,10 @@ impl TyphooNApp {
             return 0;
         }
         if self.cached_tastytrade_sync_state_rev != Some(self.bg_rev) {
-            self.cached_tastytrade_sync_state = self.build_source_cache_state_map("tastytrade:");
+            let previous = self.cached_tastytrade_sync_state.clone();
+            let mut rebuilt = self.build_source_cache_state_map("tastytrade:");
+            merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
+            self.cached_tastytrade_sync_state = rebuilt;
             self.cached_tastytrade_sync_state_rev = Some(self.bg_rev);
         }
         if !self.tastytrade_backfill_complete_loaded {

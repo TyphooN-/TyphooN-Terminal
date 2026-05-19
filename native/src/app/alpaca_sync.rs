@@ -657,6 +657,31 @@ pub(super) fn sync_timeframe_period_secs(timeframe: &str) -> Option<i64> {
     }
 }
 
+pub(super) fn merge_recent_sync_overrides(
+    rebuilt: &mut HashMap<(String, String), SyncCacheState>,
+    previous: &HashMap<(String, String), SyncCacheState>,
+    now_s: i64,
+) {
+    for (key, prior) in previous {
+        if prior.write_ts_s <= 0 || prior.bar_count <= 0 {
+            continue;
+        }
+        let Some(period_s) = sync_timeframe_period_secs(&key.1) else {
+            continue;
+        };
+        if now_s.saturating_sub(prior.write_ts_s) > period_s.saturating_mul(24) {
+            continue;
+        }
+        let replace = rebuilt
+            .get(key)
+            .map(|current| prior.write_ts_s > current.write_ts_s)
+            .unwrap_or(true);
+        if replace {
+            rebuilt.insert(key.clone(), *prior);
+        }
+    }
+}
+
 fn alpaca_sync_period_secs(timeframe: &str) -> Option<i64> {
     sync_timeframe_period_secs(timeframe)
 }
@@ -883,6 +908,35 @@ mod tests {
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].symbol, "ETHUSD");
         assert_eq!(selected[0].timeframe, "4Hour");
+    }
+
+    #[test]
+    fn merge_recent_sync_overrides_preserves_settled_fetch_across_bg_rev_rebuild() {
+        let now_s = 1_700_000_000i64;
+        let mut rebuilt = HashMap::from([(
+            ("GDC".to_string(), "4Hour".to_string()),
+            SyncCacheState {
+                last_bar_ts_s: now_s - 400 * 14_400,
+                write_ts_s: now_s - 400 * 14_400,
+                bar_count: 1_422,
+            },
+        )]);
+        let previous = HashMap::from([(
+            ("GDC".to_string(), "4Hour".to_string()),
+            SyncCacheState {
+                last_bar_ts_s: now_s - 30,
+                write_ts_s: now_s - 30,
+                bar_count: 1_422,
+            },
+        )]);
+
+        merge_recent_sync_overrides(&mut rebuilt, &previous, now_s);
+
+        let state = rebuilt
+            .get(&("GDC".to_string(), "4Hour".to_string()))
+            .expect("recent override should remain indexed");
+        assert_eq!(state.write_ts_s, now_s - 30);
+        assert_eq!(state.last_bar_ts_s, now_s - 30);
     }
 
     #[test]
