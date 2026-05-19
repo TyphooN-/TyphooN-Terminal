@@ -6927,13 +6927,14 @@ impl eframe::App for TyphooNApp {
                         )
                     };
                     self.log.push_back(LogEntry::info(log_msg));
-                    if source != "alpaca" {
-                        self.settle_market_data_fetch(&source, &symbol, &timeframe);
-                    }
-                    if matches!(
+                    let source_has_terminal_settlement = matches!(
                         source.as_str(),
                         "alpaca" | "kraken" | "kraken-futures" | "tastytrade"
-                    ) {
+                    );
+                    if !source_has_terminal_settlement {
+                        self.settle_market_data_fetch(&source, &symbol, &timeframe);
+                    }
+                    if source_has_terminal_settlement {
                         self.note_cached_sync_success(&source, &symbol, &timeframe, count);
                     }
                     if source == "tastytrade" {
@@ -6956,7 +6957,7 @@ impl eframe::App for TyphooNApp {
                     if should_reload {
                         self.queue_chart_reload(self.active_tab);
                     }
-                    if source != "alpaca"
+                    if !source_has_terminal_settlement
                         && matches!(source.as_str(), "kraken" | "kraken-futures" | "tastytrade")
                     {
                         self.refill_market_data_sync_slots();

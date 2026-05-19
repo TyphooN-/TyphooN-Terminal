@@ -561,84 +561,100 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     now_s: i64,
     target_bars_for_tf: fn(&str) -> Option<u32>,
 ) -> Vec<AlpacaSyncCandidate> {
-    if batch_size == 0 || timeframes.is_empty() {
+    if batch_size == 0 || symbols.is_empty() || timeframes.is_empty() {
         return Vec::new();
     }
 
-    let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
-    let mut staged_pending = pending_fetches.clone();
-
-    // Rotating bulk sync is coverage-first: do not spend bounded-scan refill
-    // slots on foreground refreshes before the scanned universe has had a
-    // chance to fill never-cached pairs.
-
-    if symbols.is_empty() {
-        return selected;
+    let ordered_timeframes = ordered_sync_timeframes_high_first(timeframes);
+    if ordered_timeframes.is_empty() {
+        return Vec::new();
     }
 
-    let scan_limit = background_scan_limit
-        .max(batch_size.saturating_sub(selected.len()))
-        .min(symbols.len());
+    // Treat the broker universe as one high-TF-first ring:
+    //   MN1/all symbols -> W1/all symbols -> ... -> M1/all symbols.
+    // Each refill examines a bounded number of flattened (timeframe,symbol)
+    // slots, so work is independent of total broker universe size while still
+    // preventing low timeframes from being combed before high-timeframe
+    // coverage has had a chance to advance across every symbol.
+    let total_slots = symbols.len().saturating_mul(ordered_timeframes.len());
+    if total_slots == 0 {
+        return Vec::new();
+    }
+    let scan_limit = background_scan_limit.max(batch_size).min(total_slots);
     if scan_limit == 0 {
-        return selected;
+        return Vec::new();
     }
 
-    let start = *cursor % symbols.len();
-    *cursor = (start + scan_limit) % symbols.len();
+    let start = *cursor % total_slots;
+    *cursor = (start + scan_limit) % total_slots;
 
-    let scanned_symbols =
-        || (0..scan_limit).map(|offset| symbols[(start + offset) % symbols.len()].as_str());
+    let bucket_capacity = batch_size.saturating_mul(2).max(ordered_timeframes.len());
+    let mut missing: Vec<AlpacaSyncCandidate> = Vec::with_capacity(bucket_capacity);
+    let mut stale: Vec<AlpacaSyncCandidate> = Vec::with_capacity(bucket_capacity);
+    let mut backfill: Vec<AlpacaSyncCandidate> = Vec::with_capacity(bucket_capacity);
+    let staged_pending = pending_fetches.clone();
 
-    // Coverage-first even in rotating mode: within the current bounded scan
-    // window, missing symbol/timeframe pairs always win over focus refreshes.
-    let coverage = select_alpaca_sync_candidates_from_iter(
-        scanned_symbols(),
-        timeframes,
-        state_map,
-        focus_symbols,
-        no_data_keys,
-        backfill_complete_pairs,
-        &staged_pending,
-        batch_size - selected.len(),
-        now_s,
-        target_bars_for_tf,
-    );
-    if coverage
-        .first()
-        .is_some_and(|candidate| candidate.bucket == AlpacaSyncBucket::Missing)
-    {
-        for candidate in coverage {
-            if selected.len() >= batch_size {
-                break;
-            }
-            if staged_pending.insert(alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)) {
-                selected.push(candidate);
-            }
+    for offset in 0..scan_limit {
+        let flat_idx = (start + offset) % total_slots;
+        let tf_idx = flat_idx / symbols.len();
+        let symbol_idx = flat_idx % symbols.len();
+        let Some(tf) = ordered_timeframes
+            .get(tf_idx)
+            .and_then(|timeframe| normalize_sync_timeframe_key(timeframe))
+        else {
+            continue;
+        };
+        let symbol_key = normalize_market_data_symbol(&symbols[symbol_idx]).replace('/', "");
+        if symbol_key.is_empty() {
+            continue;
         }
-        return selected;
+        let fetch_key = alpaca_fetch_key(&symbol_key, tf);
+        if no_data_keys.contains(&fetch_key) || staged_pending.contains(&fetch_key) {
+            continue;
+        }
+        let state = state_map
+            .get(&(symbol_key.clone(), tf.to_string()))
+            .copied();
+        let Some(candidate) = classify_alpaca_sync_candidate(
+            now_s,
+            &symbol_key,
+            tf,
+            state,
+            focus_symbols.contains(&symbol_key),
+            target_bars_for_tf,
+        ) else {
+            continue;
+        };
+        if candidate.bucket == AlpacaSyncBucket::Backfill
+            && backfill_complete_pairs.contains_key(&fetch_key)
+        {
+            continue;
+        }
+        match candidate.bucket {
+            AlpacaSyncBucket::Missing => missing.push(candidate),
+            AlpacaSyncBucket::Stale => stale.push(candidate),
+            AlpacaSyncBucket::Backfill => backfill.push(candidate),
+        }
     }
 
-    let background = select_alpaca_sync_candidates_from_iter(
-        scanned_symbols(),
-        timeframes,
-        state_map,
-        focus_symbols,
-        no_data_keys,
-        backfill_complete_pairs,
-        &staged_pending,
-        batch_size - selected.len(),
-        now_s,
-        target_bars_for_tf,
-    );
-    for candidate in background {
+    let candidates = if !missing.is_empty() {
+        missing
+    } else if !stale.is_empty() {
+        stale
+    } else {
+        backfill
+    };
+
+    let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
+    let mut staged_selected = pending_fetches.clone();
+    for candidate in candidates {
         if selected.len() >= batch_size {
             break;
         }
-        if staged_pending.insert(alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)) {
+        if staged_selected.insert(alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)) {
             selected.push(candidate);
         }
     }
-
     selected
 }
 
@@ -1154,6 +1170,72 @@ mod tests {
         assert_eq!(selected[0].symbol, "AAPL");
         assert_eq!(selected[0].bucket, AlpacaSyncBucket::Missing);
         assert_eq!(cursor, 1);
+    }
+
+    #[test]
+    fn select_alpaca_sync_workset_rotating_walks_all_symbols_mn1_before_lower_timeframes() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec!["AAPL".to_string(), "MSFT".to_string(), "QQQ".to_string()];
+        let timeframes = vec![
+            "1Min".to_string(),
+            "1Week".to_string(),
+            "1Month".to_string(),
+        ];
+        let mut cursor = 0usize;
+
+        let first = select_alpaca_sync_workset_rotating(
+            &symbols,
+            &timeframes,
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            2,
+            0,
+            2,
+            &mut cursor,
+            now_s,
+            alpaca_sync_target_bars,
+        );
+        assert_eq!(
+            first
+                .iter()
+                .map(|c| (&c.symbol, &c.timeframe))
+                .collect::<Vec<_>>(),
+            vec![
+                (&"AAPL".to_string(), &"1Month".to_string()),
+                (&"MSFT".to_string(), &"1Month".to_string()),
+            ]
+        );
+        assert_eq!(cursor, 2);
+
+        let second = select_alpaca_sync_workset_rotating(
+            &symbols,
+            &timeframes,
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            2,
+            0,
+            2,
+            &mut cursor,
+            now_s,
+            alpaca_sync_target_bars,
+        );
+        assert_eq!(
+            second
+                .iter()
+                .map(|c| (&c.symbol, &c.timeframe))
+                .collect::<Vec<_>>(),
+            vec![
+                (&"QQQ".to_string(), &"1Month".to_string()),
+                (&"AAPL".to_string(), &"1Week".to_string()),
+            ]
+        );
+        assert_eq!(cursor, 4);
     }
 
     #[test]
