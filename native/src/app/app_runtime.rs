@@ -11155,7 +11155,12 @@ impl eframe::App for TyphooNApp {
                                 RightPanelSectionId::RecentFills => {
 
                         // ── Recent Fills Section ──────────────────────────────
-                        let fills_count2 = self.recent_fills.len();
+                        let visible_recent_fills = if self.show_alpaca_positions {
+                            Some(&self.recent_fills)
+                        } else {
+                            None
+                        };
+                        let fills_count2 = visible_recent_fills.map_or(0, |fills| fills.len());
                         let recent_fills_section = egui::CollapsingHeader::new(
                             egui::RichText::new(format!("☰ Recent Fills ({})", fills_count2))
                                 .strong()
@@ -11164,31 +11169,39 @@ impl eframe::App for TyphooNApp {
                         .id_salt("recent_fills_top")
                         .default_open(self.right_recent_fills_open)
                         .show(ui, |ui| {
-                            if self.recent_fills.is_empty() {
+                            if let Some(fills) = visible_recent_fills {
+                                if fills.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new("No recent fills.")
+                                            .color(AXIS_TEXT)
+                                            .small(),
+                                    );
+                                } else {
+                                    for (sym, side, qty, price, time) in fills {
+                                        let c = if side == "buy" { UP } else { DOWN };
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new(sym).small().strong());
+                                            ui.label(egui::RichText::new(side).color(c).small());
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{:.2}@{}",
+                                                    qty,
+                                                    format_price(*price)
+                                                ))
+                                                .small(),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(time).color(AXIS_TEXT).small(),
+                                            );
+                                        });
+                                    }
+                                }
+                            } else {
                                 ui.label(
                                     egui::RichText::new("No recent fills.")
                                         .color(AXIS_TEXT)
                                         .small(),
                                 );
-                            } else {
-                                for (sym, side, qty, price, time) in &self.recent_fills {
-                                    let c = if side == "buy" { UP } else { DOWN };
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new(sym).small().strong());
-                                        ui.label(egui::RichText::new(side).color(c).small());
-                                        ui.label(
-                                            egui::RichText::new(format!(
-                                                "{:.2}@{}",
-                                                qty,
-                                                format_price(*price)
-                                            ))
-                                            .small(),
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(time).color(AXIS_TEXT).small(),
-                                        );
-                                    });
-                                }
                             }
                         });
                         self.right_recent_fills_open = recent_fills_section.fully_open();

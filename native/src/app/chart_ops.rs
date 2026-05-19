@@ -630,29 +630,31 @@ impl TyphooNApp {
         }
 
         // Broker fills (Alpaca/tastytrade) — add to marker map before conversion
-        for (sym, side, qty, price, time) in &self.recent_fills {
-            let fill_sym = sym.replace('/', "").to_uppercase();
-            if !fill_sym.contains(&bare_upper) && !bare_upper.contains(&fill_sym) {
-                continue;
-            }
-            let ts = chrono::NaiveDateTime::parse_from_str(time, "%Y-%m-%dT%H:%M:%S%.fZ")
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S"))
-                .or_else(|_| {
-                    chrono::NaiveDate::parse_from_str(time, "%Y-%m-%d")
-                        .map(|d| d.and_hms_opt(0, 0, 0).unwrap_or_default())
-                })
-                .map(|dt| dt.and_utc().timestamp_millis())
-                .unwrap_or(0);
-            if let Some(bar_idx) = find_bar(ts) {
-                let is_buy = side == "buy";
-                let price_key = (*price * 100000.0) as i64;
-                let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((
-                    0.0,
-                    0,
-                    String::new(),
-                ));
-                entry.0 += qty;
-                entry.1 += 1;
+        if self.show_alpaca_positions {
+            for (sym, side, qty, price, time) in &self.recent_fills {
+                let fill_sym = sym.replace('/', "").to_uppercase();
+                if !fill_sym.contains(&bare_upper) && !bare_upper.contains(&fill_sym) {
+                    continue;
+                }
+                let ts = chrono::NaiveDateTime::parse_from_str(time, "%Y-%m-%dT%H:%M:%S%.fZ")
+                    .or_else(|_| chrono::NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S"))
+                    .or_else(|_| {
+                        chrono::NaiveDate::parse_from_str(time, "%Y-%m-%d")
+                            .map(|d| d.and_hms_opt(0, 0, 0).unwrap_or_default())
+                    })
+                    .map(|dt| dt.and_utc().timestamp_millis())
+                    .unwrap_or(0);
+                if let Some(bar_idx) = find_bar(ts) {
+                    let is_buy = side == "buy";
+                    let price_key = (*price * 100000.0) as i64;
+                    let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((
+                        0.0,
+                        0,
+                        String::new(),
+                    ));
+                    entry.0 += qty;
+                    entry.1 += 1;
+                }
             }
         }
 
