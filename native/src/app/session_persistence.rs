@@ -90,7 +90,13 @@ impl TyphooNApp {
         };
         let pointer_down = ui.input(|i| i.pointer.primary_down());
         if !pointer_down {
-            self.dragging_right_panel_section = None;
+            if dragged != section && response.hovered() {
+                let after_target = ui
+                    .input(|i| i.pointer.hover_pos())
+                    .map(|pos| pos.y > response.rect.center().y)
+                    .unwrap_or(false);
+                self.move_right_panel_section(dragged, section, after_target);
+            }
             return;
         }
 

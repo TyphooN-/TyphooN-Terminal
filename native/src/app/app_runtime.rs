@@ -9002,24 +9002,25 @@ impl eframe::App for TyphooNApp {
                 let cached_sources = self.chart_source_options(&source_state.0, cur_tf);
                 let old_source = source_state.2.clone().unwrap_or_else(|| "auto".to_string());
                 let mut new_source = old_source.clone();
+                let auto_label = if source_state.1.is_empty() {
+                    "Auto".to_string()
+                } else {
+                    format!("Auto ({})", cache_source_label(source_state.1))
+                };
+                let selected_source_label = if old_source == "auto" {
+                    auto_label.as_str()
+                } else {
+                    cache_source_label(&old_source)
+                };
                 egui::ComboBox::from_id_salt("source_combo")
                     .selected_text(
-                        egui::RichText::new(if old_source == "auto" {
-                            "Auto"
-                        } else {
-                            cache_source_label(&old_source)
-                        })
-                        .color(ACCENT)
-                        .strong()
-                        .small(),
+                        egui::RichText::new(selected_source_label)
+                            .color(ACCENT)
+                            .strong()
+                            .small(),
                     )
-                    .width(105.0)
+                    .width(125.0)
                     .show_ui(ui, |ui| {
-                        let auto_label = if source_state.1.is_empty() {
-                            "Auto".to_string()
-                        } else {
-                            format!("Auto ({})", cache_source_label(source_state.1))
-                        };
                         ui.selectable_value(&mut new_source, "auto".to_string(), auto_label);
                         ui.separator();
                         for (source, label) in CHART_SOURCE_ORDER {
@@ -9095,13 +9096,46 @@ impl eframe::App for TyphooNApp {
 
                 ui.separator();
 
-                // Bar count
-                if let Some(c) = self.charts.first() {
+                // Bar count + active-position entry price
+                if let Some(c) = self.charts.get(self.active_tab) {
                     ui.label(
                         egui::RichText::new(format!("{} bars", c.bars.len()))
                             .color(AXIS_TEXT)
                             .small(),
                     );
+                    let active_symbol = bare_symbol_from_key(&c.symbol).to_ascii_uppercase();
+                    let active_entry = self
+                        .live_positions
+                        .iter()
+                        .chain(self.tt_positions.iter())
+                        .find_map(|pos| {
+                            let pos_symbol = bare_symbol_from_key(&pos.symbol).to_ascii_uppercase();
+                            (pos_symbol == active_symbol
+                                && pos.avg_entry_price.is_finite()
+                                && pos.avg_entry_price > 0.0)
+                                .then_some(pos.avg_entry_price)
+                        })
+                        .or_else(|| {
+                            self.kr_positions.iter().find_map(|pos| {
+                                let pos_symbol =
+                                    bare_symbol_from_key(&pos.symbol).to_ascii_uppercase();
+                                if pos_symbol != active_symbol {
+                                    return None;
+                                }
+                                if pos.avg_entry_price.is_finite() && pos.avg_entry_price > 0.0 {
+                                    Some(pos.avg_entry_price)
+                                } else {
+                                    self.kraken_position_avg_price(&pos.symbol)
+                                }
+                            })
+                        });
+                    if let Some(entry) = active_entry {
+                        ui.label(
+                            egui::RichText::new(format!("Entry {}", format_price(entry)))
+                                .color(AXIS_TEXT)
+                                .small(),
+                        );
+                    }
                 }
 
                 if self.cache.is_none() {
@@ -12328,6 +12362,11 @@ impl eframe::App for TyphooNApp {
                         );
                                 }
                             }
+                        }
+                        if self.dragging_right_panel_section.is_some()
+                            && !ui.input(|i| i.pointer.primary_down())
+                        {
+                            self.dragging_right_panel_section = None;
                         }
                     });
             });

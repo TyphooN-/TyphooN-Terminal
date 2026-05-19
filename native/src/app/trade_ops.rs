@@ -1069,7 +1069,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn kraken_base_asset_for_pair(pair: &str) -> String {
-        let upper = pair.trim().to_ascii_uppercase();
+        let upper = pair.trim().replace('/', "").to_ascii_uppercase();
         upper
             .strip_suffix("USD")
             .or_else(|| upper.strip_suffix("USDT"))
@@ -1117,7 +1117,12 @@ impl TyphooNApp {
     }
 
     pub(super) fn kraken_asset_keys_match(left: &str, right: &str) -> bool {
-        let normalize = |s: &str| s.trim().to_ascii_uppercase().replace(".EQ", "");
+        let normalize = |s: &str| {
+            s.trim()
+                .to_ascii_uppercase()
+                .replace('/', "")
+                .replace(".EQ", "")
+        };
         left.eq_ignore_ascii_case(right) || normalize(left) == normalize(right)
     }
 
