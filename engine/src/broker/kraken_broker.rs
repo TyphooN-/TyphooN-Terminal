@@ -1492,6 +1492,35 @@ mod tests {
     }
 
     #[test]
+    fn trades_history_result_parses_unwrapped_result_and_count() {
+        let payload = serde_json::json!({
+            "count": 123,
+            "trades": {
+                "T-HRTX-1": {
+                    "ordertxid": "O-HRTX-1",
+                    "pair": "HRTX.EQUSD",
+                    "time": 1778841060.0,
+                    "type": "buy",
+                    "ordertype": "market",
+                    "price": "0.88",
+                    "cost": "230.56",
+                    "fee": "0.10",
+                    "vol": "262.0",
+                    "margin": "0"
+                }
+            }
+        });
+
+        let (trades, count) = parse_trades_history_result(&payload).unwrap();
+        assert_eq!(count, Some(123));
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].pair, "HRTX.EQUSD");
+        assert_eq!(trades[0].side, "buy");
+        assert_eq!(trades[0].price, 0.88);
+        assert_eq!(trades[0].vol, 262.0);
+    }
+
+    #[test]
     fn equity_position_summaries_convert_only_equity_balances() {
         let balances = vec![
             ("XXBT".to_string(), 0.25),
@@ -1729,28 +1758,86 @@ impl KrakenBroker {
             params.push(("ofs".to_string(), o.to_string()));
         }
 
+        let (trades, _) = self.get_trades_history_page_parsed(start, end, ofs).await?;
+        Ok(trades)
+    }
+
+    /// Fetch one Kraken trade-history page with parsed results and Kraken's total count.
+    pub async fn get_trades_history_page_parsed(
+        &self,
+        start: Option<i64>,
+        end: Option<i64>,
+        ofs: Option<u64>,
+    ) -> Result<(Vec<KrakenTrade>, Option<u64>), String> {
+        let mut params = Vec::new();
+        if let Some(s) = start {
+            params.push(("start".to_string(), s.to_string()));
+        }
+        if let Some(e) = end {
+            params.push(("end".to_string(), e.to_string()));
+        }
+        if let Some(o) = ofs {
+            params.push(("ofs".to_string(), o.to_string()));
+        }
+
         let resp = self.get_trades_history(&params).await?;
+        parse_trades_history_result(&resp)
+    }
 
-        // private_post_owned already unwraps Kraken's {error,result} envelope and
-        // returns the result object. Older callers/tests may still pass a full
-        // envelope, so accept both shapes instead of logging a false
-        // "TradesHistory missing result" error.
-        let result = resp.get("result").unwrap_or(&resp);
+    /// Fetch all Kraken trade-history pages available from the private REST API.
+    pub async fn get_all_trades_history_parsed(
+        &self,
+        start: Option<i64>,
+        end: Option<i64>,
+    ) -> Result<Vec<KrakenTrade>, String> {
+        const MAX_TRADES: usize = 20_000;
+        const MAX_PAGES: u64 = 400;
 
-        let trades_obj = result
-            .get("trades")
-            .and_then(|v| v.as_object())
-            .ok_or_else(|| "Kraken TradesHistory missing trades object".to_string())?;
+        let mut all = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut ofs = 0_u64;
 
-        let mut trades = Vec::new();
+        for _ in 0..MAX_PAGES {
+            let (page, count) = self
+                .get_trades_history_page_parsed(start, end, Some(ofs))
+                .await?;
+            if page.is_empty() {
+                break;
+            }
 
-        for (trade_id, trade_value) in trades_obj {
-            if let Some(trade) = trade_value.as_object() {
-                trades.push(kraken_trade_from_object(trade_id.clone(), trade));
+            let page_len = page.len() as u64;
+            for trade in page {
+                let key = if trade.trade_id.is_empty() {
+                    format!(
+                        "{}:{}:{}:{}",
+                        trade.ordertxid, trade.pair, trade.time, trade.vol
+                    )
+                } else {
+                    trade.trade_id.clone()
+                };
+                if seen.insert(key) {
+                    all.push(trade);
+                }
+            }
+
+            if all.len() >= MAX_TRADES {
+                break;
+            }
+            ofs += page_len;
+            if let Some(total) = count {
+                if ofs >= total {
+                    break;
+                }
             }
         }
 
-        Ok(trades)
+        all.sort_by(|a, b| {
+            b.time
+                .partial_cmp(&a.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        all.truncate(MAX_TRADES);
+        Ok(all)
     }
 
     /// Fetch currently open Kraken orders with parsed typed results.
@@ -1864,6 +1951,35 @@ impl KrakenBroker {
     }
 }
 
+fn parse_trades_history_result(
+    resp: &serde_json::Value,
+) -> Result<(Vec<KrakenTrade>, Option<u64>), String> {
+    // private_post_owned already unwraps Kraken's {error,result} envelope and
+    // returns the result object. Older callers/tests may still pass a full
+    // envelope, so accept both shapes instead of logging a false
+    // "TradesHistory missing result" error.
+    let result = resp.get("result").unwrap_or(resp);
+
+    let trades_obj = result
+        .get("trades")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| "Kraken TradesHistory missing trades object".to_string())?;
+
+    let mut trades = Vec::new();
+    for (trade_id, trade_value) in trades_obj {
+        if let Some(trade) = trade_value.as_object() {
+            trades.push(kraken_trade_from_object(trade_id.clone(), trade));
+        }
+    }
+
+    let count = result.get("count").and_then(|v| {
+        v.as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
+    });
+
+    Ok((trades, count))
+}
+
 fn kraken_trade_from_object(
     trade_id: String,
     trade: &serde_json::Map<String, serde_json::Value>,
@@ -1889,6 +2005,7 @@ fn kraken_trade_from_object(
             .unwrap_or(0.0),
         side: trade
             .get("side")
+            .or_else(|| trade.get("type"))
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),

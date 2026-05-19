@@ -1037,8 +1037,8 @@ impl eframe::App for TyphooNApp {
                             .unwrap_or(std::cmp::Ordering::Equal)
                     });
                     trades.dedup_by(|a, b| a.trade_id == b.trade_id && a.ordertxid == b.ordertxid);
-                    if trades.len() > 500 {
-                        trades.truncate(500);
+                    if trades.len() > KRAKEN_TRADE_HISTORY_CAP {
+                        trades.truncate(KRAKEN_TRADE_HISTORY_CAP);
                     }
                     self.kraken_trades = VecDeque::from(trades);
                     self.log.push_back(LogEntry::info(format!(
@@ -1056,7 +1056,7 @@ impl eframe::App for TyphooNApp {
                     if !duplicate {
                         self.kraken_trades.push_front(trade);
                     }
-                    while self.kraken_trades.len() > 500 {
+                    while self.kraken_trades.len() > KRAKEN_TRADE_HISTORY_CAP {
                         self.kraken_trades.pop_back();
                     }
                 }

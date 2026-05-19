@@ -6320,6 +6320,8 @@ impl RightPanelSectionId {
     }
 }
 
+const KRAKEN_TRADE_HISTORY_CAP: usize = 20_000;
+
 /// Risk sizing mode (old app had dropdown).
 #[derive(Clone, Copy, PartialEq)]
 enum RiskMode {
@@ -24827,7 +24829,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     BrokerCmd::KrakenFetchTrades => {
                         if let Some(ref kb) = kraken_broker {
                             let msg_tx = broker_msg_tx_clone.clone();
-                            match kb.get_trades_history_parsed(None, None, None).await {
+                            match kb.get_all_trades_history_parsed(None, None).await {
                                 Ok(trades) => {
                                     let _ = msg_tx.send(BrokerMsg::KrakenTrades(trades));
                                 }
