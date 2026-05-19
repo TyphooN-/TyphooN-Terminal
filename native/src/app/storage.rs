@@ -163,6 +163,76 @@ impl TyphooNApp {
                 )));
             }
         });
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Unresolvable broker pairs: {}",
+                    self.unresolvable_pairs.len()
+                ))
+                .small()
+                .color(AXIS_TEXT),
+            );
+            if ui
+                .add_enabled(
+                    !self.unresolvable_pairs.is_empty(),
+                    egui::Button::new(
+                        egui::RichText::new("Clear unresolvable")
+                            .small()
+                            .color(egui::Color32::from_rgb(231, 76, 60)),
+                    ),
+                )
+                .on_hover_text(
+                    "Remove generic broker unresolvable tombstones so sync can retry those broker/symbol/timeframe pairs.",
+                )
+                .clicked()
+            {
+                let cleared = self.unresolvable_pairs.len();
+                self.unresolvable_clear_all();
+                self.log.push_back(LogEntry::info(format!(
+                    "Cleared {} unresolvable broker pair(s)",
+                    cleared
+                )));
+            }
+        });
+        if !self.unresolvable_pairs.is_empty() {
+            egui::CollapsingHeader::new("Unresolvable")
+                .default_open(false)
+                .show(ui, |ui| {
+                    let mut entries: Vec<_> = self.unresolvable_pairs.values().cloned().collect();
+                    entries.sort_by(|a, b| {
+                        a.broker.cmp(&b.broker).then(a.symbol.cmp(&b.symbol)).then(
+                            sync_timeframe_sort_key(&a.timeframe)
+                                .cmp(&sync_timeframe_sort_key(&b.timeframe)),
+                        )
+                    });
+                    egui::ScrollArea::vertical()
+                        .max_height(140.0)
+                        .show(ui, |ui| {
+                            egui::Grid::new("unresolvable_pairs_grid")
+                                .striped(true)
+                                .spacing([10.0, 2.0])
+                                .show(ui, |ui| {
+                                    ui.label(egui::RichText::new("Broker").small().strong());
+                                    ui.label(egui::RichText::new("Symbol").small().strong());
+                                    ui.label(egui::RichText::new("TF").small().strong());
+                                    ui.label(egui::RichText::new("Reason").small().strong());
+                                    ui.end_row();
+                                    for entry in entries.iter().take(200) {
+                                        ui.label(egui::RichText::new(&entry.broker).small());
+                                        ui.label(egui::RichText::new(&entry.symbol).small());
+                                        ui.label(egui::RichText::new(&entry.timeframe).small());
+                                        ui.label(
+                                            egui::RichText::new(
+                                                entry.reason.chars().take(120).collect::<String>(),
+                                            )
+                                            .small(),
+                                        );
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                });
+        }
         ui.separator();
         ui.horizontal(|ui| {
             ui.label("Filter:");

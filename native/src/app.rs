@@ -510,6 +510,26 @@ struct JournalEntry {
     notes: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct UnresolvablePair {
+    pub broker: String,
+    pub symbol: String,
+    pub timeframe: String,
+    pub reason: String,
+    pub ts: i64,
+}
+
+fn unresolvable_pair_key(broker: &str, symbol: &str, timeframe: &str) -> String {
+    format!(
+        "{}:{}:{}",
+        broker.to_ascii_lowercase(),
+        normalize_market_data_symbol(symbol)
+            .replace('/', "")
+            .to_ascii_uppercase(),
+        normalize_sync_timeframe_key(timeframe).unwrap_or(timeframe)
+    )
+}
+
 impl LogEntry {
     fn now_ts() -> String {
         chrono::Local::now().format("%H:%M:%S").to_string()
@@ -8802,6 +8822,13 @@ enum BrokerCmd {
     KrakenGetPairs,
     /// Get all Kraken Futures tradeable instruments.
     KrakenFuturesGetInstruments,
+    /// Generic command to tombstone a broker/symbol/timeframe that cannot be resolved for bars.
+    MarkUnresolvable {
+        broker: String,
+        symbol: String,
+        timeframe: String,
+        reason: String,
+    },
 }
 
 /// Messages sent from async broker task → UI.
@@ -8887,6 +8914,12 @@ enum BrokerMsg {
     KrakenFetchSettled {
         symbol: String,
         timeframe: String,
+    },
+    Unresolvable {
+        broker: String,
+        symbol: String,
+        timeframe: String,
+        reason: String,
     },
     KrakenBackfillComplete {
         symbol: String,
@@ -10746,6 +10779,7 @@ pub struct TyphooNApp {
     /// Persisted via cache KV at `alpaca:no_data_pairs` and consulted by all
     /// automated scheduling paths before dispatch.
     alpaca_no_data_pairs: std::collections::HashMap<String, AlpacaNoDataPair>,
+    pub unresolvable_pairs: std::collections::HashMap<String, UnresolvablePair>,
     alpaca_no_data_loaded: bool,
     /// Persisted "bounded full-history fetch already exhausted available
     /// Alpaca bars for this pair" markers. Only suppresses repeat Backfill
@@ -13657,10 +13691,16 @@ async fn run_kraken_fetch_task(
             }
         }
         Err(e) => {
-            let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
-                "Kraken fetch failed for {} {}: {}",
-                symbol, timeframe, e
-            )));
+            let reason = format!("Kraken fetch failed for {} {}: {}", symbol, timeframe, e);
+            if reason.contains("Unsupported symbol") || reason.contains("Unknown asset pair") {
+                let _ = broker_msg_tx.send(BrokerMsg::Unresolvable {
+                    broker: "kraken".to_string(),
+                    symbol: symbol.clone(),
+                    timeframe: timeframe.clone(),
+                    reason: reason.clone(),
+                });
+            }
+            let _ = broker_msg_tx.send(BrokerMsg::Error(reason));
         }
     }
 
@@ -14266,6 +14306,19 @@ impl TyphooNApp {
                             )
                             .await;
                         }
+                    }
+                    BrokerCmd::MarkUnresolvable {
+                        broker,
+                        symbol,
+                        timeframe,
+                        reason,
+                    } => {
+                        let _ = broker_msg_tx_clone.send(BrokerMsg::Unresolvable {
+                            broker,
+                            symbol,
+                            timeframe,
+                            reason,
+                        });
                     }
                     BrokerCmd::GetAccount => {
                         if let Some(ref b) = broker {
@@ -27198,6 +27251,7 @@ BrokerCmd::KrakenCloseAll => {
             alpaca_retry_last_poll: 0,
             alpaca_retry_loaded: false,
             alpaca_no_data_pairs: std::collections::HashMap::new(),
+            unresolvable_pairs: std::collections::HashMap::new(),
             alpaca_no_data_loaded: false,
             alpaca_backfill_complete_pairs: std::collections::HashMap::new(),
             alpaca_backfill_complete_loaded: false,

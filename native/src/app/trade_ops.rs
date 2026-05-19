@@ -114,6 +114,83 @@ impl TyphooNApp {
         self.alpaca_no_data_save();
     }
 
+    pub(super) fn unresolvable_load(&mut self) {
+        if let Some(ref cache) = self.cache {
+            if let Ok(Some(json)) = cache.get_kv("broker:unresolvable_pairs") {
+                match serde_json::from_str::<Vec<UnresolvablePair>>(&json) {
+                    Ok(entries) => {
+                        self.unresolvable_pairs = entries
+                            .into_iter()
+                            .map(|entry| {
+                                let key = unresolvable_pair_key(
+                                    &entry.broker,
+                                    &entry.symbol,
+                                    &entry.timeframe,
+                                );
+                                (key, entry)
+                            })
+                            .collect();
+                    }
+                    Err(e) => tracing::warn!(
+                        "broker:unresolvable_pairs contained unreadable persisted data: {e}"
+                    ),
+                }
+            }
+        }
+    }
+
+    pub(super) fn unresolvable_save(&self) {
+        if let Some(ref cache) = self.cache {
+            let mut entries: Vec<UnresolvablePair> =
+                self.unresolvable_pairs.values().cloned().collect();
+            entries.sort_by(|a, b| {
+                a.broker.cmp(&b.broker).then(a.symbol.cmp(&b.symbol)).then(
+                    sync_timeframe_sort_key(&a.timeframe)
+                        .cmp(&sync_timeframe_sort_key(&b.timeframe)),
+                )
+            });
+            let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
+            let _ = cache.put_kv("broker:unresolvable_pairs", &json);
+        }
+    }
+
+    pub(super) fn unresolvable_mark(
+        &mut self,
+        broker: &str,
+        symbol: &str,
+        timeframe: &str,
+        reason: &str,
+    ) -> bool {
+        let timeframe = normalize_sync_timeframe_key(timeframe)
+            .unwrap_or(timeframe)
+            .to_string();
+        let symbol = normalize_market_data_symbol(symbol).replace('/', "");
+        let broker = broker.to_ascii_lowercase();
+        let key = unresolvable_pair_key(&broker, &symbol, &timeframe);
+        let entry = UnresolvablePair {
+            broker,
+            symbol,
+            timeframe,
+            reason: reason.to_string(),
+            ts: chrono::Utc::now().timestamp(),
+        };
+        let changed = self
+            .unresolvable_pairs
+            .get(&key)
+            .is_none_or(|existing| existing.reason != entry.reason);
+        self.unresolvable_pairs.insert(key, entry);
+        self.unresolvable_save();
+        changed
+    }
+
+    pub(super) fn unresolvable_clear_all(&mut self) {
+        if self.unresolvable_pairs.is_empty() {
+            return;
+        }
+        self.unresolvable_pairs.clear();
+        self.unresolvable_save();
+    }
+
     pub(super) fn alpaca_backfill_complete_load(&mut self) {
         if let Some(ref cache) = self.cache {
             if let Ok(Some(json)) = cache.get_kv("alpaca:backfill_complete_pairs") {

@@ -312,6 +312,7 @@ impl eframe::App for TyphooNApp {
             self.sync_preferences_load();
             self.alpaca_retry_load();
             self.alpaca_no_data_load();
+            self.unresolvable_load();
             self.alpaca_backfill_complete_load();
             self.kraken_backfill_complete_load();
             self.kraken_futures_backfill_complete_load();
@@ -1136,6 +1137,14 @@ impl eframe::App for TyphooNApp {
                     } else {
                         self.log.push_back(LogEntry::err(e));
                     }
+                }
+                BrokerMsg::Unresolvable {
+                    broker,
+                    symbol,
+                    timeframe,
+                    reason,
+                } => {
+                    self.unresolvable_mark(&broker, &symbol, &timeframe, &reason);
                 }
                 BrokerMsg::Account(acct) => {
                     // Store to cache KV for LAN sync — dedup to avoid timestamp churn
