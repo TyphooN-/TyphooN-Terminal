@@ -433,7 +433,7 @@ fn tastytrade_initial_from_time_ms(timeframe: &str, now_ms: i64) -> i64 {
 }
 
 /// Log severity level.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 enum LogLevel {
     Info,
     Warn,
@@ -562,6 +562,11 @@ impl LogEntry {
         display.push_str(icon);
         display.push(' ');
         display.push_str(&msg);
+        match level {
+            LogLevel::Info | LogLevel::Trade | LogLevel::Alert => tracing::info!("{}", msg),
+            LogLevel::Warn => tracing::warn!("{}", msg),
+            LogLevel::Error => tracing::error!("{}", msg),
+        }
         Self {
             level,
             msg,

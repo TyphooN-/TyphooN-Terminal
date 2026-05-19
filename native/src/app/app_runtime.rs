@@ -6908,13 +6908,6 @@ impl eframe::App for TyphooNApp {
                         "kraken-futures" => "Kraken Futures",
                         _ => source.as_str(),
                     };
-                    tracing::info!(
-                        "Market data [{}]: fetched {} bars for {} @ {}",
-                        source_label,
-                        count,
-                        symbol,
-                        timeframe
-                    );
                     let log_msg = if should_reload {
                         format!(
                             "{} fetched {} bars for {} {} — queued active chart reload",
@@ -6997,7 +6990,7 @@ impl eframe::App for TyphooNApp {
                         "still backfill-complete"
                     };
                     self.log.push_back(LogEntry::info(format!(
-                        "Kraken {} {}: {} at {}/{} bars — automated sync will do freshness-only ({} marked)",
+                        "Kraken {} {}: {} at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
                         symbol, timeframe, prefix, bar_count, target_bars, marker_count
                     )));
                 }
@@ -7024,7 +7017,7 @@ impl eframe::App for TyphooNApp {
                         "still backfill-complete"
                     };
                     self.log.push_back(LogEntry::info(format!(
-                        "Kraken Futures {} {}: {} at {}/{} bars — automated sync will do freshness-only ({} marked)",
+                        "Kraken Futures {} {}: {} at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
                         symbol, timeframe, prefix, bar_count, target_bars, marker_count
                     )));
                 }
@@ -7051,7 +7044,7 @@ impl eframe::App for TyphooNApp {
                         "still backfill-complete"
                     };
                     self.log.push_back(LogEntry::info(format!(
-                        "tastytrade {} {}: {} at {}/{} bars — automated sync will do freshness-only ({} marked)",
+                        "tastytrade {} {}: {} at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
                         symbol, timeframe, prefix, bar_count, target_bars, marker_count
                     )));
                 }
@@ -7120,7 +7113,7 @@ impl eframe::App for TyphooNApp {
                         "still backfill-complete"
                     };
                     self.log.push_back(LogEntry::info(format!(
-                        "Alpaca {} {}: {} at {}/{} bars — automated sync will do freshness-only ({} marked)",
+                        "Alpaca {} {}: {} at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
                         symbol,
                         timeframe,
                         prefix,
