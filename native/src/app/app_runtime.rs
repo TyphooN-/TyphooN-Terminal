@@ -9959,6 +9959,19 @@ impl eframe::App for TyphooNApp {
                         .first()
                         .map(|c| c.timeframe.label())
                         .unwrap_or("—");
+                    let data_source = self
+                        .charts
+                        .first()
+                        .map(|c| match c.source_override.as_deref() {
+                            Some(source) => {
+                                format!("Data: {} (selected)", cache_source_label(source))
+                            }
+                            None if c.primary_source.is_empty() => "Data: unresolved".to_string(),
+                            None => {
+                                format!("Data: Auto → {}", cache_source_label(c.primary_source))
+                            }
+                        })
+                        .unwrap_or_else(|| "Data: unresolved".to_string());
                     ui.label(
                         egui::RichText::new(format!("TyphooN Terminal"))
                             .color(QUAKE_CMD)
@@ -9986,22 +9999,17 @@ impl eframe::App for TyphooNApp {
                             .color(AXIS_TEXT)
                             .small(),
                     );
-                    if let Some(chart) = self.charts.first() {
-                        if let Some(bar) = chart.bars.last() {
-                            ui.label(
-                                egui::RichText::new("|")
-                                    .color(egui::Color32::from_rgb(40, 50, 70))
-                                    .small(),
-                            );
-                            let c_col = if bar.close >= bar.open { UP } else { DOWN };
-                            ui.label(
-                                egui::RichText::new(format_price(bar.close))
-                                    .color(c_col)
-                                    .small()
-                                    .monospace(),
-                            );
-                        }
-                    }
+                    ui.label(
+                        egui::RichText::new("|")
+                            .color(egui::Color32::from_rgb(40, 50, 70))
+                            .small(),
+                    );
+                    ui.label(
+                        egui::RichText::new(data_source)
+                            .color(AXIS_TEXT)
+                            .small()
+                            .strong(),
+                    );
                     if let Some(err) = &self.cache_err {
                         ui.label(
                             egui::RichText::new(format!(" | {}", err))
@@ -10781,7 +10789,7 @@ impl eframe::App for TyphooNApp {
                                             continue;
                                         }
                                         let side_c = if pos.side == "buy" { UP } else { DOWN };
-                                        ui.horizontal(|ui| {
+                                        ui.horizontal_wrapped(|ui| {
                                             ui.label(
                                                 egui::RichText::new(&pos.symbol).small().strong(),
                                             );
@@ -10815,10 +10823,13 @@ impl eframe::App for TyphooNApp {
                                             .iter()
                                             .map(|(d, _, _)| d.as_str())
                                             .collect();
-                                        ui.label(
-                                            egui::RichText::new(darwins.join(", "))
-                                                .color(AXIS_TEXT)
-                                                .small(),
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(darwins.join(", "))
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                            )
+                                            .wrap(),
                                         );
                                         ui.separator();
                                     }
@@ -10834,7 +10845,7 @@ impl eframe::App for TyphooNApp {
                                         } else {
                                             egui::Color32::from_rgb(120, 60, 60)
                                         };
-                                        ui.horizontal(|ui| {
+                                        ui.horizontal_wrapped(|ui| {
                                             ui.label(
                                                 egui::RichText::new(&pos.symbol).small().color(dim),
                                             );
@@ -10867,10 +10878,13 @@ impl eframe::App for TyphooNApp {
                                             .iter()
                                             .map(|(d, _, _)| d.as_str())
                                             .collect();
-                                        ui.label(
-                                            egui::RichText::new(darwins.join(", "))
-                                                .color(egui::Color32::from_rgb(60, 60, 70))
-                                                .small(),
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(darwins.join(", "))
+                                                    .color(egui::Color32::from_rgb(60, 60, 70))
+                                                    .small(),
+                                            )
+                                            .wrap(),
                                         );
                                         ui.separator();
                                     }
@@ -10887,7 +10901,7 @@ impl eframe::App for TyphooNApp {
                                 for pos in &self.live_positions {
                                     let side_c = if pos.side == "long" { UP } else { DOWN };
                                     let side_label = if pos.side == "long" { "L" } else { "S" };
-                                    ui.horizontal(|ui| {
+                                    ui.horizontal_wrapped(|ui| {
                                         let (_, act) = symbol_label_with_menu(
                                             ui,
                                             &pos.symbol,
@@ -10928,13 +10942,16 @@ impl eframe::App for TyphooNApp {
                                             }
                                         }
                                     });
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "entry: {}",
-                                            format_price(pos.avg_entry_price)
-                                        ))
-                                        .color(AXIS_TEXT)
-                                        .small(),
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(format!(
+                                                "entry: {}",
+                                                format_price(pos.avg_entry_price)
+                                            ))
+                                            .color(AXIS_TEXT)
+                                            .small(),
+                                        )
+                                        .wrap(),
                                     );
                                     ui.separator();
                                 }
@@ -10955,7 +10972,7 @@ impl eframe::App for TyphooNApp {
                                 for pos in &self.tt_positions {
                                     let side_c = if pos.side == "long" { UP } else { DOWN };
                                     let side_label = if pos.side == "long" { "L" } else { "S" };
-                                    ui.horizontal(|ui| {
+                                    ui.horizontal_wrapped(|ui| {
                                         let (_, act) = symbol_label_with_menu(
                                             ui,
                                             &pos.symbol,
@@ -10993,14 +11010,17 @@ impl eframe::App for TyphooNApp {
                                             close_sym = Some(pos.symbol.clone());
                                         }
                                     });
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "entry: {}  ({})",
-                                            format_price(pos.avg_entry_price),
-                                            pos.asset_class
-                                        ))
-                                        .color(AXIS_TEXT)
-                                        .small(),
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(format!(
+                                                "entry: {}  ({})",
+                                                format_price(pos.avg_entry_price),
+                                                pos.asset_class
+                                            ))
+                                            .color(AXIS_TEXT)
+                                            .small(),
+                                        )
+                                        .wrap(),
                                     );
                                     ui.separator();
                                 }
@@ -11041,7 +11061,7 @@ impl eframe::App for TyphooNApp {
                                     } else {
                                         derived_unrealized_pl.unwrap_or(0.0)
                                     };
-                                    ui.horizontal(|ui| {
+                                    ui.horizontal_wrapped(|ui| {
                                         let (_, act) = symbol_label_with_menu(
                                             ui,
                                             &pos.symbol,
@@ -11075,16 +11095,19 @@ impl eframe::App for TyphooNApp {
                                             close_sym = Some(pos.symbol.clone());
                                         }
                                     });
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "entry: {}  ({})",
-                                            avg_entry
-                                                .map(format_price)
-                                                .unwrap_or_else(|| "—".to_string()),
-                                            pos.asset_class
-                                        ))
-                                        .color(AXIS_TEXT)
-                                        .small(),
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(format!(
+                                                "entry: {}  ({})",
+                                                avg_entry
+                                                    .map(format_price)
+                                                    .unwrap_or_else(|| "—".to_string()),
+                                                pos.asset_class
+                                            ))
+                                            .color(AXIS_TEXT)
+                                            .small(),
+                                        )
+                                        .wrap(),
                                     );
                                     ui.separator();
                                 }
