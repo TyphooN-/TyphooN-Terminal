@@ -6327,6 +6327,7 @@ enum RiskMode {
     Standard,
     Fixed,
     Dynamic,
+    KrakenPro,
 }
 
 impl RiskMode {
@@ -6336,6 +6337,7 @@ impl RiskMode {
             RiskMode::Standard => "Standard",
             RiskMode::Fixed => "Fixed",
             RiskMode::Dynamic => "Dynamic",
+            RiskMode::KrakenPro => "KrakenPro",
         }
     }
 }

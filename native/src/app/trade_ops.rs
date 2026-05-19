@@ -679,7 +679,7 @@ impl TyphooNApp {
             RiskMode::Standard => risk::OrderMode::Standard,
             RiskMode::Fixed => risk::OrderMode::Fixed,
             RiskMode::Dynamic => risk::OrderMode::Dynamic,
-            RiskMode::VaR => risk::OrderMode::VaR,
+            RiskMode::VaR | RiskMode::KrakenPro => risk::OrderMode::VaR,
         };
         cfg.var_mode = risk::VaRMode::PercentVaR;
         cfg.fixed_orders = 1;
@@ -718,7 +718,7 @@ impl TyphooNApp {
                     return Err("Open Trade: Losses must be > 0".to_string());
                 }
             }
-            RiskMode::VaR => {
+            RiskMode::VaR | RiskMode::KrakenPro => {
                 cfg.var_risk_pct = self
                     .trade_var_risk_pct_input
                     .trim()
@@ -1583,10 +1583,9 @@ impl TyphooNApp {
     }
 
     pub(super) fn submit_quick_trade(&mut self) {
-        if self.kraken_connected && matches!(self.order_broker, OrderBroker::Kraken) {
-            self.log.push_back(LogEntry::warn(
-                "Kraken selected: use KrakenPro Buy/Sell controls.",
-            ));
+        if matches!(self.risk_mode, RiskMode::KrakenPro) {
+            self.log
+                .push_back(LogEntry::warn("KrakenPro selected: use Buy/Sell controls."));
             return;
         }
         let plan = match self.quick_trade_plan() {

@@ -10261,170 +10261,181 @@ impl eframe::App for TyphooNApp {
                             // ── Mode / Broker Controls ──────────────────────────
                             ui.separator();
                             let wants_kraken_pro = self.kraken_connected
-                                && matches!(self.order_broker, OrderBroker::Kraken);
-                            if !wants_kraken_pro {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("Mode").color(AXIS_TEXT).small());
-                                    egui::ComboBox::from_id_salt("risk_mode_combo")
-                                        .selected_text(self.risk_mode.label())
-                                        .width(80.0)
-                                        .show_ui(ui, |ui| {
-                                            for mode in &[
-                                                RiskMode::VaR,
-                                                RiskMode::Standard,
-                                                RiskMode::Fixed,
-                                                RiskMode::Dynamic,
-                                            ] {
-                                                ui.selectable_value(
+                                && matches!(self.risk_mode, RiskMode::KrakenPro);
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Mode").color(AXIS_TEXT).small());
+                                egui::ComboBox::from_id_salt("risk_mode_combo")
+                                    .selected_text(self.risk_mode.label())
+                                    .width(96.0)
+                                    .show_ui(ui, |ui| {
+                                        for mode in [
+                                            RiskMode::VaR,
+                                            RiskMode::Standard,
+                                            RiskMode::Fixed,
+                                            RiskMode::Dynamic,
+                                        ] {
+                                            ui.selectable_value(
+                                                &mut self.risk_mode,
+                                                mode,
+                                                mode.label(),
+                                            );
+                                        }
+                                        if self.kraken_connected
+                                            && ui
+                                                .selectable_value(
                                                     &mut self.risk_mode,
-                                                    *mode,
-                                                    mode.label(),
-                                                );
-                                            }
-                                        });
-                                });
-                            match self.risk_mode {
-                                RiskMode::Standard => {
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            egui::RichText::new("Risk %")
-                                                .color(AXIS_TEXT)
-                                                .small(),
-                                        );
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.trade_risk_pct_input,
-                                            )
-                                            .desired_width(64.0)
-                                            .hint_text("0.5")
-                                            .font(egui::TextStyle::Small),
-                                        );
+                                                    RiskMode::KrakenPro,
+                                                    RiskMode::KrakenPro.label(),
+                                                )
+                                                .clicked()
+                                        {
+                                            self.order_broker = OrderBroker::Kraken;
+                                        }
                                     });
-                                }
-                                RiskMode::Fixed => {
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            egui::RichText::new("Qty")
-                                                .color(AXIS_TEXT)
-                                                .small(),
-                                        );
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.order_qty)
-                                                .desired_width(80.0)
-                                                .hint_text("1.0")
+                            });
+                            if !wants_kraken_pro {
+                                match self.risk_mode {
+                                    RiskMode::Standard => {
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                egui::RichText::new("Risk %")
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                            );
+                                            ui.add(
+                                                egui::TextEdit::singleline(
+                                                    &mut self.trade_risk_pct_input,
+                                                )
+                                                .desired_width(64.0)
+                                                .hint_text("0.5")
                                                 .font(egui::TextStyle::Small),
-                                        );
-                                    });
+                                            );
+                                        });
+                                    }
+                                    RiskMode::Fixed => {
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                egui::RichText::new("Qty")
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                            );
+                                            ui.add(
+                                                egui::TextEdit::singleline(&mut self.order_qty)
+                                                    .desired_width(80.0)
+                                                    .hint_text("1.0")
+                                                    .font(egui::TextStyle::Small),
+                                            );
+                                        });
+                                    }
+                                    RiskMode::Dynamic => {
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                egui::RichText::new("Min Bal")
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                            );
+                                            ui.add(
+                                                egui::TextEdit::singleline(
+                                                    &mut self.trade_min_balance_input,
+                                                )
+                                                .desired_width(80.0)
+                                                .hint_text("96100")
+                                                .font(egui::TextStyle::Small),
+                                            );
+                                        });
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                egui::RichText::new("Losses")
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                            );
+                                            ui.add(
+                                                egui::TextEdit::singleline(
+                                                    &mut self.trade_losses_to_min_input,
+                                                )
+                                                .desired_width(64.0)
+                                                .hint_text("10")
+                                                .font(egui::TextStyle::Small),
+                                            );
+                                        });
+                                    }
+                                    RiskMode::VaR | RiskMode::KrakenPro => {
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                egui::RichText::new("VaR %")
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                            );
+                                            ui.add(
+                                                egui::TextEdit::singleline(
+                                                    &mut self.trade_var_risk_pct_input,
+                                                )
+                                                .desired_width(64.0)
+                                                .hint_text("0.9")
+                                                .font(egui::TextStyle::Small),
+                                            );
+                                        });
+                                    }
                                 }
-                                RiskMode::Dynamic => {
+                                if let Ok(plan) = self.quick_trade_plan() {
                                     ui.horizontal(|ui| {
                                         ui.label(
-                                            egui::RichText::new("Min Bal")
+                                            egui::RichText::new(format!(
+                                                "Setup {} {:.4}",
+                                                if plan.side_idx == 0 { "BUY" } else { "SELL" },
+                                                plan.qty
+                                            ))
+                                            .color(if plan.side_idx == 0 { UP } else { DOWN })
+                                            .small()
+                                            .strong(),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(plan.symbol.clone())
                                                 .color(AXIS_TEXT)
                                                 .small(),
                                         );
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.trade_min_balance_input,
-                                            )
-                                            .desired_width(80.0)
-                                            .hint_text("96100")
-                                            .font(egui::TextStyle::Small),
-                                        );
                                     });
                                     ui.horizontal(|ui| {
                                         ui.label(
-                                            egui::RichText::new("Losses")
-                                                .color(AXIS_TEXT)
-                                                .small(),
-                                        );
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.trade_losses_to_min_input,
-                                            )
-                                            .desired_width(64.0)
-                                            .hint_text("10")
-                                            .font(egui::TextStyle::Small),
-                                        );
-                                    });
-                                }
-                                RiskMode::VaR => {
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            egui::RichText::new("VaR %")
-                                                .color(AXIS_TEXT)
-                                                .small(),
-                                        );
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.trade_var_risk_pct_input,
-                                            )
-                                            .desired_width(64.0)
-                                            .hint_text("0.9")
-                                            .font(egui::TextStyle::Small),
-                                        );
-                                    });
-                                }
-                            }
-                            if let Ok(plan) = self.quick_trade_plan() {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "Setup {} {:.4}",
-                                            if plan.side_idx == 0 { "BUY" } else { "SELL" },
-                                            plan.qty
-                                        ))
-                                        .color(if plan.side_idx == 0 { UP } else { DOWN })
-                                        .small()
-                                        .strong(),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(plan.symbol.clone())
-                                            .color(AXIS_TEXT)
+                                            egui::RichText::new(format!(
+                                                "Risk ${:.2}",
+                                                plan.risk_dollars
+                                            ))
+                                            .color(DOWN)
                                             .small(),
-                                    );
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "Risk ${:.2}",
-                                            plan.risk_dollars
-                                        ))
-                                        .color(DOWN)
-                                        .small(),
-                                    );
-                                    if let Some(risk_pct) = plan.risk_pct {
+                                        );
+                                        if let Some(risk_pct) = plan.risk_pct {
+                                            ui.label(
+                                                egui::RichText::new(format!("({:.2}%)", risk_pct))
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                            );
+                                        }
                                         ui.label(
-                                            egui::RichText::new(format!("({:.2}%)", risk_pct))
+                                            egui::RichText::new(format!(
+                                                "TP ${:.2}",
+                                                plan.reward_dollars
+                                            ))
+                                            .color(UP)
+                                            .small(),
+                                        );
+                                        if let Some(rr) = plan.rr {
+                                            ui.label(
+                                                egui::RichText::new(format!("RR {:.2}", rr))
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                            );
+                                        }
+                                    });
+                                } else if self.sl_price.is_some() || self.tp_price.is_some() {
+                                    if let Err(e) = self.quick_trade_plan() {
+                                        ui.label(
+                                            egui::RichText::new(e)
                                                 .color(AXIS_TEXT)
                                                 .small(),
                                         );
                                     }
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "TP ${:.2}",
-                                            plan.reward_dollars
-                                        ))
-                                        .color(UP)
-                                        .small(),
-                                    );
-                                    if let Some(rr) = plan.rr {
-                                        ui.label(
-                                            egui::RichText::new(format!("RR {:.2}", rr))
-                                                .color(AXIS_TEXT)
-                                                .small(),
-                                        );
-                                    }
-                                });
-                            } else if self.sl_price.is_some() || self.tp_price.is_some() {
-                                if let Err(e) = self.quick_trade_plan() {
-                                    ui.label(
-                                        egui::RichText::new(e)
-                                            .color(AXIS_TEXT)
-                                            .small(),
-                                    );
                                 }
-                            }
                             }
                             // Broker target selector (only show when any broker connected)
                             if self.broker_connected || self.tt_connected || self.kraken_connected {
