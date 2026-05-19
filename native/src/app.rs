@@ -30478,10 +30478,6 @@ BrokerCmd::KrakenCloseAll => {
                     "GPU compute initialized (indicators + DARWIN analytics + backtester)",
                 ));
             } else {
-                tracing::warn!(
-                    "GPU compute disabled: adapter max_storage_buffers_per_shader_stage={} (need >=6)",
-                    storage_limit
-                );
                 app.log.push_back(LogEntry::warn(format!(
                     "GPU compute disabled: adapter storage-buffer limit {} is below required 6",
                     storage_limit

@@ -350,10 +350,10 @@ impl TyphooNApp {
                             let ticker_clone = ticker.clone();
                             std::thread::spawn(move || {
                                 if let Ok(conn) = cache.connection() {
-                                    match typhoon_engine::core::darwin::delete_darwin_account(&conn, &ticker_clone) {
-                                        Ok(n) => tracing::info!("Deleted DARWIN {} — {} rows", ticker_clone, n),
-                                        Err(e) => tracing::error!("Delete {} failed: {}", ticker_clone, e),
-                                    }
+                                    let _ = typhoon_engine::core::darwin::delete_darwin_account(
+                                        &conn,
+                                        &ticker_clone,
+                                    );
                                 }
                             });
                         }
@@ -3082,7 +3082,9 @@ impl TyphooNApp {
                                 .clicked()
                             {
                                 self.bardata_active = false;
-                                self.bardata_log.push_back("=== STOPPED by user ===".into());
+                                let line = "BARDATA: stopped by user".to_string();
+                                self.bardata_log.push_back(line.clone());
+                                self.log.push_back(LogEntry::warn(line));
                             }
                         } else if completed >= queued && queued > 0 {
                             ui.label(egui::RichText::new("Complete").color(UP).small().strong());

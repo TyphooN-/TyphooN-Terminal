@@ -17254,21 +17254,20 @@ impl TyphooNApp {
                     self.bardata_skipped = skipped_count;
                     self.bardata_completed = 0;
                     self.bardata_log.clear();
-                    self.bardata_log
-                        .push_back(format!("Total symbols: {}", symbols.len()));
-                    self.bardata_log
-                        .push_back(format!("Queued for download: {}", fetched_count));
-                    self.bardata_log
-                        .push_back(format!("Already cached (skipped): {}", skipped_count));
-                    self.bardata_log
-                        .push_back(format!("Uncached (priority): {}", uncached_syms.len()));
+                    for line in [
+                        format!("BARDATA: total symbols: {}", symbols.len()),
+                        format!("BARDATA: queued for download: {}", fetched_count),
+                        format!("BARDATA: already cached (skipped): {}", skipped_count),
+                        format!(
+                            "BARDATA: uncached priority symbols: {}",
+                            uncached_syms.len()
+                        ),
+                    ] {
+                        self.bardata_log.push_back(line.clone());
+                        self.log.push_back(LogEntry::info(line));
+                    }
                     self.show_bardata = true;
                     self.bardata_active = true;
-
-                    self.log.push_back(LogEntry::info(format!(
-                        "BARDATA: queued {} symbols for download ({} already cached, skipped). Uncached first: {}",
-                        fetched_count, skipped_count, uncached_syms.len()
-                    )));
                 }
             }
             "INDICES" | "WORLD_INDICES" => {
@@ -17590,19 +17589,10 @@ impl TyphooNApp {
                             let ticker_clone = ticker.clone();
                             std::thread::spawn(move || {
                                 if let Ok(conn) = cache.connection() {
-                                    match typhoon_engine::core::darwin::delete_darwin_account(
+                                    let _ = typhoon_engine::core::darwin::delete_darwin_account(
                                         &conn,
                                         &ticker_clone,
-                                    ) {
-                                        Ok(n) => tracing::info!(
-                                            "Deleted DARWIN {} — {} rows",
-                                            ticker_clone,
-                                            n
-                                        ),
-                                        Err(e) => {
-                                            tracing::error!("Delete {} failed: {}", ticker_clone, e)
-                                        }
-                                    }
+                                    );
                                 }
                             });
                         }

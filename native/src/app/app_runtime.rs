@@ -1353,9 +1353,6 @@ impl eframe::App for TyphooNApp {
                     self.live_orders = orders;
                 }
                 BrokerMsg::OrderResult(msg) => {
-                    if msg.starts_with("Kraken") || msg.starts_with("tastytrade") {
-                        tracing::info!("Market data: {}", msg);
-                    }
                     // Compact pass completion — manual or auto. Mark scheduler idle and
                     // record the timestamp so the cadence gate counts this run.
                     // The Compact handler also emits per-200-row progress lines starting
