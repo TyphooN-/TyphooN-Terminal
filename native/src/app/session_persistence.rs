@@ -921,18 +921,17 @@ impl TyphooNApp {
         //   a) Staleness — newest cache bar is >5×TF behind now. Handled the
         //      same way Round 1 did it: a lagging cache needs its tail topped
         //      up.
-        //   b) Coverage gap — cache has <95% of the integrity target for
-        //      this TF (see `mt5_tf_spec`). Catches the shallow-but-fresh
-        //      case where the newest bar is current but the cache only
-        //      holds a few thousand bars vs the 100K target. The incremental
-        //      merge path in BCW only appends NEWER bars, so a shallow
-        //      cache never grows on its own — coverage gaps must be
-        //      signalled via demand.txt gap-fills.
+        //   b) Provider-depth gap — cache has <95% of the provider-maximum
+        //      sentinel for this TF (see `mt5_tf_spec`). This deliberately
+        //      asks the EA/server for maximum available history instead of a
+        //      local 10K/50K integrity floor. If the broker naturally has less,
+        //      saturation memory below suppresses repeat full requests after
+        //      the count stops growing.
         //
         // Cap the queue at SELF_HEAL_CAP most-deficient entries so demand.txt
         // stays bounded and the EA's linear gap-fill scan stays cheap.
-        // Ranking combines lag and coverage so a severely-shallow 1Day cache
-        // outranks a modestly-lagging 1Min cache.
+        // Ranking combines lag and coverage so a severely under-depth 1Day
+        // cache outranks a modestly-lagging 1Min cache.
         const SELF_HEAL_CAP: usize = 1024;
         let mut candidates: Vec<(String, String, i64, u32, i64)> = Vec::new();
         for ((sym_u, tf), (last_s, bars)) in &last_ts_map {
@@ -958,31 +957,33 @@ impl TyphooNApp {
             let lag_ms = now_ms - last_ms;
             let is_stale = lag_ms > (period_ms * 5);
 
-            // Coverage — < 95% of target. The 5% margin avoids flapping on
-            // brokers whose history happens to clip slightly below 100K.
+            // Provider-depth coverage — < 95% of the max-history sentinel.
+            // The sentinel intentionally dwarfs real broker history; saturation
+            // memory is what turns "not enough bars" into "server exhausted".
             let target_i64 = target_bars as i64;
-            let is_shallow_raw = *bars * 100 < target_i64 * 95;
+            let under_provider_depth_raw = *bars * 100 < target_i64 * 95;
 
-            // Saturation memory: suppress shallow flag when the broker's
-            // available history for this (sym, tf) is less than 100K and
-            // the cache has already reached that natural ceiling. Detected
-            // by "bar count didn't grow between flag-and-recheck cycles".
-            // Without this the self-heal loop churns forever on short-
-            // history symbols (new listings, low-activity pairs).
+            // Saturation memory: suppress provider-depth refetches when the
+            // broker's available history for this (sym, tf) is below the
+            // sentinel and the cache has already reached that natural ceiling.
+            // Detected by "bar count didn't grow between flag-and-recheck
+            // cycles". Without this the self-heal loop churns forever on
+            // short-history symbols (new listings, low-activity pairs).
             let key = (sym_u.clone(), tf.clone());
-            let is_shallow = if is_shallow_raw {
+            let needs_provider_depth = if under_provider_depth_raw {
                 let (prev_count, noops) = self
-                    .mt5_shallow_saturation
+                    .mt5_provider_depth_saturation
                     .get(&key)
                     .copied()
                     .unwrap_or((0i64, 0u8));
                 if *bars > prev_count {
                     // Progress — reset noops, remember new count.
-                    self.mt5_shallow_saturation.insert(key.clone(), (*bars, 0));
+                    self.mt5_provider_depth_saturation
+                        .insert(key.clone(), (*bars, 0));
                     true
                 } else {
                     let next_noops = noops.saturating_add(1);
-                    self.mt5_shallow_saturation
+                    self.mt5_provider_depth_saturation
                         .insert(key.clone(), (*bars, next_noops));
                     // Broker saturated at this count — stop re-flagging
                     // coverage after 2 consecutive no-op cycles.
@@ -991,19 +992,19 @@ impl TyphooNApp {
             } else {
                 // Above-target / at-target — forget memory so any later
                 // regression restarts the cycle cleanly.
-                self.mt5_shallow_saturation.remove(&key);
+                self.mt5_provider_depth_saturation.remove(&key);
                 false
             };
 
-            if !(is_stale || is_shallow) {
+            if !(is_stale || needs_provider_depth) {
                 continue;
             }
 
-            // want_bars: if the cache is shallow, always request the full
-            // target so BCW's shallow-cache-redirect (v1.462) triggers a
-            // full re-export. Otherwise the existing "gap + 10% headroom"
-            // heuristic for pure-staleness.
-            let want_bars: u32 = if is_shallow {
+            // want_bars: if the cache is below provider-depth, request the
+            // max-history sentinel so BCW performs a full server export.
+            // Otherwise use the existing "gap + 10% headroom" heuristic for
+            // pure-staleness.
+            let want_bars: u32 = if needs_provider_depth {
                 target_bars
             } else {
                 let gap_bars = (lag_ms / period_ms).max(1) as u32;
@@ -1015,14 +1016,14 @@ impl TyphooNApp {
 
             // Score: max of lag-in-periods and coverage-deficit-permille,
             // so both metrics compete on a common scale. A 1Day symbol 50
-            // periods behind scores 50; one missing 95% of its target bars
-            // scores 950.
+            // periods behind scores 50; one far below the provider-depth
+            // sentinel scores near 1000.
             //
             // Stale-pair floor at 500 so a recently-stale low-TF pair
             // (1Min 1h behind = lag_score 60) isn't drowned out by a
-            // shallow high-TF pair (coverage_score ~500) when SELF_HEAL_CAP
+            // under-depth high-TF pair (coverage_score ~500) when SELF_HEAL_CAP
             // is crowded. Without this floor, cold-start runs with many
-            // shallow high-TF caches pushed low-TF-stale entries out of
+            // under-depth high-TF caches pushed low-TF-stale entries out of
             // the top-N queue — they never got a gap-fill request → the
             // EA's TF gate blocked passive exports → pairs stayed stale
             // for hours.
@@ -1087,7 +1088,7 @@ impl TyphooNApp {
             // Per-TF breakdown to surface low-TF starvation. Without this
             // the aggregate count hides whether e.g. 1Min / 5Min pairs are
             // reaching demand.txt at all, or whether they're being crowded
-            // out of the SELF_HEAL_CAP-truncated queue by shallow high-TF
+            // out of the SELF_HEAL_CAP-truncated queue by under-depth high-TF
             // pairs.
             let mut by_tf: std::collections::BTreeMap<&str, usize> =
                 std::collections::BTreeMap::new();
@@ -1116,59 +1117,43 @@ impl TyphooNApp {
         }
     }
 
-    /// Look up `(period_seconds, integrity_target_bars)` for a canonical
+    /// Look up `(period_seconds, provider_max_bars_sentinel)` for a canonical
     /// TF string. Returns `None` for unknown TFs so the caller can skip.
     ///
-    /// Tiered targets (must stay in lockstep with BarCacheWriter.mq5's
-    /// `MaxBarsForTF` — gap-detect's coverage threshold and BCW's fetch
-    /// ceiling have to agree or pass-2 thrashes):
-    ///   1Min   50K ≈ 35 days    — intraday backtests
-    ///   5Min   50K ≈ 6 months   — swing backtests
-    ///   15Min  30K ≈ 10 months
-    ///   30Min  30K ≈ 20 months
-    ///   1Hour  30K ≈ 3.4 years  — positional backtests
-    ///   4Hour  20K ≈ 9 years    — long-horizon models
-    ///   1Day+  10K              — broker-served history ceiling
-    ///
-    /// Low-TF targets were lifted above 10K (the previous flat floor) so
-    /// algo backtesting has useful depth — a 1Min cache of 10K covers
-    /// only one trading week, which is thin for any stats pass. 1Day+ stays
-    /// at 10K because the universal "achievable floor": every MT5 broker
-    /// serves at least that many daily bars, so pass-2 converges rather
-    /// than thrashing on brokers with shallow history.
+    /// This intentionally no longer encodes local 10K/20K/50K history targets.
+    /// For MT5, the terminal should ask BarCacheWriter for the largest safe
+    /// MQL5 `MAX_BARS` value and let the broker/server decide how much history
+    /// actually exists. When a symbol/timeframe stops growing below the sentinel,
+    /// `mt5_provider_depth_saturation` records that natural ceiling and suppresses
+    /// repeat full-depth requests while stale/current updates continue.
     ///
     /// Used by `detect_mt5_gaps` for two things:
     ///   1. Seed size on empty-cache / full-gap requests (pass-1 watched).
-    ///   2. Coverage-gap detection in pass-2 — a cache with <95% of the
-    ///      target flags even when the newest bar is fresh, because the
-    ///      incremental merge path only appends newest bars and never
-    ///      grows a shallow cache on its own.
+    ///   2. Provider-depth detection in pass-2 — a cache with <95% of the
+    ///      sentinel requests a full server export rather than accepting an
+    ///      arbitrary terminal-side bar cap.
     pub(super) fn mt5_tf_spec(tf: &str) -> Option<(i64, u32)> {
         match tf {
-            "1Min" => Some((60, 50_000)),
-            "5Min" => Some((300, 50_000)),
-            "15Min" => Some((900, 30_000)),
-            "30Min" => Some((1800, 30_000)),
-            "1Hour" => Some((3600, 30_000)),
-            "4Hour" => Some((14400, 20_000)),
-            "1Day" => Some((86400, 10_000)),
-            "1Week" => Some((604800, 10_000)),
-            "1Month" => Some((2592000, 10_000)),
+            "1Min" => Some((60, MT5_PROVIDER_MAX_BARS)),
+            "5Min" => Some((300, MT5_PROVIDER_MAX_BARS)),
+            "15Min" => Some((900, MT5_PROVIDER_MAX_BARS)),
+            "30Min" => Some((1800, MT5_PROVIDER_MAX_BARS)),
+            "1Hour" => Some((3600, MT5_PROVIDER_MAX_BARS)),
+            "4Hour" => Some((14400, MT5_PROVIDER_MAX_BARS)),
+            "1Day" => Some((86400, MT5_PROVIDER_MAX_BARS)),
+            "1Week" => Some((604800, MT5_PROVIDER_MAX_BARS)),
+            "1Month" => Some((2592000, MT5_PROVIDER_MAX_BARS)),
             _ => None,
         }
     }
 
     /// `expand_for_backtest` profile — when a symbol is in the expand map,
-    /// return its requested target (overriding the tiered default) so algo
-    /// backtests get deeper history for the specific symbols under study
-    /// without inflating every demand-list symbol's cache footprint. BCW
-    /// already honours any MAX_BARS the gap-fill line carries (shallow-
-    /// cache redirect, v1.462), so this is a terminal-side selector only.
+    /// return its requested target. The default is already the provider-max
+    /// sentinel, so this mainly preserves compatibility with saved sessions and
+    /// still never shrinks a request below the default.
     ///
     /// Compares case-insensitively so typing `BACKTEST_EXPAND eurusd` and
     /// `BACKTEST_EXPAND EURUSD` both match MT5's upper-case canonical.
-    /// Returns max(requested, default) so a user specifying a lower count
-    /// never shrinks below the tiered floor.
     pub(super) fn expand_for_backtest(
         expand_map: &std::collections::HashMap<String, u32>,
         sym: &str,

@@ -377,7 +377,8 @@ pub(super) async fn run_kraken_fetch_task(
         .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc).timestamp_millis())
         .unwrap_or_else(|| {
-            let target = kraken_sync_target_bars(&timeframe).unwrap_or(720) as i64;
+            let target = kraken_sync_target_bars(&timeframe)
+                .unwrap_or(KRAKEN_SPOT_PROVIDER_WINDOW_BARS) as i64;
             let headroom = (target / 10).max(24);
             let period_s = sync_timeframe_period_secs(&timeframe).unwrap_or(60);
             now_ms.saturating_sub(
@@ -388,7 +389,7 @@ pub(super) async fn run_kraken_fetch_task(
         });
     let log_msg = if incremental.is_some() && needs_backfill {
         format!(
-            "Kraken {} {}: limited-history cache ({} bars) — refreshing recent window...",
+            "Kraken {} {}: provider-window cache ({} bars) — refreshing recent window...",
             symbol, timeframe, cached_count
         )
     } else if let Some(ref ts) = after_ts {

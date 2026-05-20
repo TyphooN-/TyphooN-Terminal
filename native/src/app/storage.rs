@@ -496,7 +496,7 @@ impl TyphooNApp {
             .map(|(symbol, tf, _, _)| (symbol.clone(), tf.clone()))
             .collect();
         let capped_mt5: std::collections::HashSet<(String, String)> = self
-            .mt5_shallow_saturation
+            .mt5_provider_depth_saturation
             .iter()
             .filter(|(_, (_, noops))| *noops >= 2)
             .map(|(key, _)| key.clone())

@@ -10252,35 +10252,25 @@ pub struct TyphooNApp {
     /// any stale detection. Drives the `mt5_repair_mode` flip.
     mt5_repair_clean_passes: u32,
 
-    /// Per-(sym, tf) saturation memory for pass-2's shallow-cache flag.
+    /// Per-(sym, tf) saturation memory for MT5 provider-depth sync.
     /// Maps key → `(bar_count_when_last_flagged, consecutive_noop_cycles)`.
-    /// Some MT5 symbols (new listings, low-activity pairs, short-history
-    /// tickers) have fewer than the 100K integrity target. Without memory,
-    /// pass-2 would re-flag them every cycle forever: terminal sees
-    /// coverage <95%, requests gap-fill, BCW re-seeds at broker's max
-    /// which is still <100K, terminal re-flags, ad infinitum. When the
-    /// count hasn't grown across 2 consecutive no-op cycles we treat
-    /// the broker as saturated at its current count and suppress the
-    /// shallow flag. Any staleness still flags independently. Cleared
-    /// on any growth (target changed) and on any entry that reaches
-    /// the ≥95% threshold (no longer shallow).
-    mt5_shallow_saturation: std::collections::HashMap<(String, String), (i64, u8)>,
+    /// The terminal asks MT5/BCW for provider-maximum history. Some MT5 servers
+    /// naturally retain less than the max-history sentinel; without memory,
+    /// pass-2 would re-request full depth forever. When the count hasn't grown
+    /// across 2 consecutive no-op cycles we treat the broker as saturated at
+    /// its current count and suppress repeat full-depth requests. Any staleness
+    /// still flags independently. Cleared on any growth or if the sentinel
+    /// threshold is ever reached.
+    mt5_provider_depth_saturation: std::collections::HashMap<(String, String), (i64, u8)>,
 
-    /// Per-symbol opt-in map for deeper backtest history. Key = uppercased
-    /// symbol; value = requested target bar count that will override the
-    /// tiered `mt5_tf_spec` default when `detect_mt5_gaps` computes
-    /// `want_bars`. So a 1Min cache grows from the default 50K (~35 days)
-    /// to whatever the user asked for (typical: 100K-200K), without
-    /// inflating every demand-list symbol's footprint.
+    /// Legacy per-symbol MT5 expansion map. Key = uppercased symbol; value =
+    /// requested target bar count.
     ///
-    /// Managed via palette:
-    ///   `BACKTEST_EXPAND <SYM>`     — 4× the tiered default (cap 500K)
-    ///   `BACKTEST_EXPAND <SYM> <N>` — explicit N bars (clamped to 500K)
-    ///   `BACKTEST_UNEXPAND <SYM>`   — back to tiered default
-    ///
-    /// Persisted in session.json. BCW already honours any MAX_BARS the
-    /// gap-fill line requests (shallow-cache redirect, v1.462), so no EA
-    /// changes are needed; the terminal just asks for more.
+    /// Historical note: this used to lift selected symbols above local
+    /// 10K/20K/50K TF targets. MT5 sync now defaults to the provider-maximum
+    /// sentinel for every enabled symbol/timeframe, so expansion cannot weaken
+    /// the normal max-depth request. The map is retained for saved-session and
+    /// palette-command compatibility only.
     mt5_backtest_expand_symbols: std::collections::HashMap<String, u32>,
 
     /// Content hash (DefaultHasher) of the last demand.txt payload we
@@ -26180,7 +26170,7 @@ BrokerCmd::KrakenCloseAll => {
             mt5_gap_requests: Vec::new(),
             mt5_repair_mode: true,
             mt5_repair_clean_passes: 0,
-            mt5_shallow_saturation: std::collections::HashMap::new(),
+            mt5_provider_depth_saturation: std::collections::HashMap::new(),
             mt5_backtest_expand_symbols: std::collections::HashMap::new(),
             mt5_demand_txt_last_hash: 0,
             darwin_ftp_dir: String::new(),

@@ -1,4 +1,7 @@
-use super::normalize_market_data_symbol;
+use super::{
+    KRAKEN_SPOT_MONTH_PROVIDER_WINDOW_BARS, KRAKEN_SPOT_PROVIDER_WINDOW_BARS,
+    normalize_market_data_symbol,
+};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 pub(super) const STANDARD_SYNC_TIMEFRAMES: [(&str, &str); 9] = [
@@ -211,9 +214,11 @@ pub(super) fn alpaca_sync_target_bars(tf: &str) -> Option<u32> {
 }
 
 pub(super) fn kraken_sync_target_bars(tf: &str) -> Option<u32> {
-    match tf {
-        "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week" => Some(720),
-        "1Month" => Some(24),
+    match normalize_sync_timeframe_key(tf)? {
+        "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week" => {
+            Some(KRAKEN_SPOT_PROVIDER_WINDOW_BARS)
+        }
+        "1Month" => Some(KRAKEN_SPOT_MONTH_PROVIDER_WINDOW_BARS),
         _ => None,
     }
 }
@@ -1341,7 +1346,7 @@ mod tests {
     }
 
     #[test]
-    fn kraken_limited_history_target_does_not_force_permanent_backfill() {
+    fn kraken_provider_window_target_does_not_force_permanent_backfill() {
         let now_s = 1_700_000_000i64;
         let symbols = vec!["BTCUSD".to_string()];
         let timeframes = vec!["1Min".to_string()];
