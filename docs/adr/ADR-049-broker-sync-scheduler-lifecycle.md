@@ -1,0 +1,58 @@
+# ADR-049: Broker market-data sync scheduler lifecycle
+
+Status: Accepted
+Date: 2026-05-20
+
+## Context
+
+TyphooN Terminal can sync large broker universes: Alpaca equities, Kraken Spot, Kraken Futures, and tastytrade. A naïve scheduler pass that scans every symbol/timeframe or releases queue slots on the first cache-write notification does not scale well:
+
+- Kraken Spot's public AssetPairs universe is intentionally complete, including fiat-quoted crypto, crypto crosses, xStocks, and spot FX.
+- Each logical broker fetch can emit multiple runtime messages: a cache-write `BarsFetched`, optional classification messages such as backfill-complete/no-data, then a terminal `FetchSettled` message.
+- If a pending key is cleared on `BarsFetched`, the scheduler can refill the same symbol/timeframe before the terminal settlement and classification messages have landed.
+- Scanning the full broker universe on every refill wastes UI-thread time while background network workers are the real bottleneck.
+
+## Decision
+
+The broker sync scheduler is cursor-limited and high-timeframe-first.
+
+1. Build candidate work from a bounded flattened ring of `(timeframe, symbol)` slots:
+   - `1Month` across all symbols,
+   - then `1Week`,
+   - then `1Day`,
+   - continuing down to `1Min`.
+2. Keep the scan budget fixed per refill, independent of total universe size.
+3. Select work by bucket in this order: `Missing`, `Stale`, `Backfill`.
+4. Skip any `(symbol, timeframe)` whose normalized pending key already exists.
+5. Use persisted no-data and backfill-complete markers to avoid repeating known unproductive backfills.
+6. Brokers with explicit terminal settlement messages keep their pending slot until settlement:
+   - Alpaca: `AlpacaFetchSettled`
+   - Kraken Spot: `KrakenFetchSettled`
+   - Kraken Futures: `KrakenFuturesFetchSettled`
+   - tastytrade: `TastytradeFetchSettled`
+7. `BarsFetched` remains an intermediate UI/cache refresh signal for those brokers; it must not own scheduler release.
+
+## Consequences
+
+- Large universes do not require an O(symbols * timeframes) pass per refill.
+- High timeframes obtain broad initial coverage before low-timeframe backfills consume the queue.
+- Manual/foreground and background fetches are deduplicated through the same normalized pending-key sets.
+- Thin-history instruments converge instead of being requeued every few seconds after successful shallow responses.
+- Recent successful writes are merged back into rebuilt sync-state maps so a `bg_rev` bump does not immediately make a just-settled pair look stale again.
+
+## Verification
+
+Use targeted tests before wider checks:
+
+```bash
+cargo test -p typhoon-native app::alpaca_sync::tests::select_alpaca_sync_workset_rotating_walks_all_symbols_mn1_before_lower_timeframes
+cargo test -p typhoon-native app::alpaca_sync::tests::select_alpaca_sync_workset_rotating_skips_pending_without_advancing_priority
+cargo test -p typhoon-native app::alpaca_sync::tests::merge_recent_sync_overrides_preserves_settled_fetch_across_bg_rev_rebuild
+```
+
+Then run:
+
+```bash
+cargo fmt --all
+cargo check -p typhoon-native
+```

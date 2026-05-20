@@ -10787,8 +10787,9 @@ pub struct TyphooNApp {
     pending_kraken_fetches: std::collections::HashSet<String>,
     pending_kraken_futures_fetches: std::collections::HashSet<String>,
     pending_tastytrade_fetches: std::collections::HashSet<String>,
-    /// Cursor-limited broad sync rotation. Foreground demand is always handled
-    /// first; these cursors only bound background backfill scans per tick.
+    /// Cursor-limited broad sync rotation. Each refill scans only a bounded slice
+    /// of the broker universe in high-timeframe-first order, while the pending
+    /// fetch sets keep foreground/manual and background requests deduplicated.
     alpaca_sync_cursor: usize,
     kraken_spot_sync_cursors: [usize; 4],
     kraken_futures_sync_cursors: [usize; 4],

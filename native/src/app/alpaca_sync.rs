@@ -592,8 +592,6 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     let mut missing: Vec<AlpacaSyncCandidate> = Vec::with_capacity(bucket_capacity);
     let mut stale: Vec<AlpacaSyncCandidate> = Vec::with_capacity(bucket_capacity);
     let mut backfill: Vec<AlpacaSyncCandidate> = Vec::with_capacity(bucket_capacity);
-    let staged_pending = pending_fetches.clone();
-
     for offset in 0..scan_limit {
         let flat_idx = (start + offset) % total_slots;
         let tf_idx = flat_idx / symbols.len();
@@ -609,7 +607,7 @@ pub(super) fn select_alpaca_sync_workset_rotating(
             continue;
         }
         let fetch_key = alpaca_fetch_key(&symbol_key, tf);
-        if no_data_keys.contains(&fetch_key) || staged_pending.contains(&fetch_key) {
+        if no_data_keys.contains(&fetch_key) || pending_fetches.contains(&fetch_key) {
             continue;
         }
         let state = state_map
@@ -1236,6 +1234,43 @@ mod tests {
             ]
         );
         assert_eq!(cursor, 4);
+    }
+
+    #[test]
+    fn select_alpaca_sync_workset_rotating_skips_pending_without_advancing_priority() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec!["AAPL".to_string(), "MSFT".to_string(), "QQQ".to_string()];
+        let timeframes = vec!["1Min".to_string(), "1Month".to_string()];
+        let pending = HashSet::from([alpaca_fetch_key("AAPL", "1Month")]);
+        let mut cursor = 0usize;
+
+        let selected = select_alpaca_sync_workset_rotating(
+            &symbols,
+            &timeframes,
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &pending,
+            2,
+            0,
+            3,
+            &mut cursor,
+            now_s,
+            alpaca_sync_target_bars,
+        );
+
+        assert_eq!(
+            selected
+                .iter()
+                .map(|c| (&c.symbol, &c.timeframe))
+                .collect::<Vec<_>>(),
+            vec![
+                (&"MSFT".to_string(), &"1Month".to_string()),
+                (&"QQQ".to_string(), &"1Month".to_string()),
+            ]
+        );
+        assert_eq!(cursor, 3);
     }
 
     #[test]
