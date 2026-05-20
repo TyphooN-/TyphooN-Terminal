@@ -9200,13 +9200,14 @@ impl eframe::App for TyphooNApp {
                         let mut sources: Vec<String> = Vec::new();
                         if self.broker_connected {
                             let mode = if self.broker_paper { "Paper" } else { "Live" };
-                            sources.push(format!("Alpaca - {}", mode));
+                            sources.push(format!("Alpaca ({})", mode));
                         }
                         if self.kraken_connected {
-                            sources.push("Kraken - Live".into());
+                            sources.push("Kraken (Live)".into());
                         }
                         if self.tt_connected {
-                            sources.push("tastytrade".into());
+                            let mode = if self.tt_sandbox { "Sandbox" } else { "Live" };
+                            sources.push(format!("tastytrade ({})", mode));
                         }
                         if !self.mt5_db_paths.iter().all(|p| p.is_empty()) {
                             sources.push("MT5".into());
@@ -9267,6 +9268,30 @@ impl eframe::App for TyphooNApp {
                                 .color(UP)
                                 .small(),
                             );
+                        }
+                        if self.tt_connected {
+                            let mode = if self.tt_sandbox { "Sandbox" } else { "Live" };
+                            let color = if self.tt_sandbox {
+                                egui::Color32::WHITE
+                            } else {
+                                UP
+                            };
+                            if let Some(ref bal) = self.tt_balances {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "[tastytrade ({}) ${:.0}]",
+                                        mode, bal.net_liquidating_value
+                                    ))
+                                    .color(color)
+                                    .small(),
+                                );
+                            } else {
+                                ui.label(
+                                    egui::RichText::new(format!("[tastytrade ({})]", mode))
+                                        .color(color)
+                                        .small(),
+                                );
+                            }
                         }
                         if let Some(ref acct) = self.live_account {
                             let mode = if self.broker_paper { "Paper" } else { "Live" };
