@@ -95,7 +95,7 @@ TyphooN-Terminal/
 │   │   │   ├── ai.rs               # AI Chat / Claude / Gemini /
 │   │   │   │                       # Codex / Sessions / Response Cache
 │   │   │   ├── alpaca_sync.rs      # Broker sync capacities, TF filters, no-data marks
-│   │   │   ├── auto_compact.rs     # zstd-22 idle auto-compact gate (ADR-205)
+│   │   │   ├── auto_compact.rs     # Legacy/raw-row zstd-22 compact gate (ADR-205)
 │   │   │   ├── bar_sync.rs         # Bar sync health rows for Sync Status / Storage
 │   │   │   ├── settings.rs         # Settings window
 │   │   │   ├── storage.rs          # Storage Manager
@@ -173,7 +173,7 @@ TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal 
 
 The `STORAGE` command opens a cache storage manager with:
 - View and delete data by symbol/source (color-coded by prefix: MT5, Alpaca, tastytrade, CryptoCompare, Kraken, Kraken Futures)
-- **Compact (zstd-22):** Recompress all bar_cache entries at maximum compression (decompression speed unaffected)
+- **Compact (zstd-22):** Cleanup path for legacy/raw/imported bar_cache entries that are not already stored at maximum compression. New Rust bar-cache writes are zstd-22 immediately.
 - **Auto-compact:** Configurable cadence, weekday/hour window, min-row threshold, last-run, next-window, skip-reason, and running-state readout
 - **Purge All Bar Data:** Delete all bar_cache + bar_track entries (with red confirmation prompt)
 - **Purge All DARWIN Data:** Delete all DARWIN accounts, deals, positions, equity snapshots (with red confirmation prompt)
@@ -204,7 +204,7 @@ Right-aligned numeric columns (Last, Chg, Chg%, Vol) with painter-based renderin
 
 ### AI Sessions
 
-Four AI surfaces with persistent, resumable sessions (ADR-157): Claude Code (`claude --resume <uuid>`), Gemini CLI, Codex CLI, and a generic AI Chat (Claude / OpenAI / Gemini / Grok / Mistral / Perplexity / Local). Sessions auto-save to the SqliteCache `kv_cache` (zstd-compressed, level 3 on hot writes) on every reply. Cross-client AI response cache (ADR-162) deduplicates identical hosted-AI prompts across LAN clients so the same prompt issued from server + phone hits the cache once. Slash commands (`RESUMECLAUDE`, `RESUMEGEMINI`, `RESUMECODEX`, `RESUMEAI`) re-enter prior sessions; the AI Sessions browser window shows history with subject lines and last-touched timestamps. If a built-in AI reply includes an ADR-130 `===TYPHOON_INGEST===` Return Path block, ADR-212 queues the existing research-ingest broker path automatically.
+Four AI surfaces with persistent, resumable sessions (ADR-157): Claude Code (`claude --resume <uuid>`), Gemini CLI, Codex CLI, and a generic AI Chat (Claude / OpenAI / Gemini / Grok / Mistral / Perplexity / Local). Sessions auto-save to the SqliteCache `kv_cache` (zstd-compressed, level 3 on hot mutable KV writes) on every reply. Cross-client AI response cache (ADR-162) deduplicates identical hosted-AI prompts across LAN clients so the same prompt issued from server + phone hits the cache once. Slash commands (`RESUMECLAUDE`, `RESUMEGEMINI`, `RESUMECODEX`, `RESUMEAI`) re-enter prior sessions; the AI Sessions browser window shows history with subject lines and last-touched timestamps. If a built-in AI reply includes an ADR-130 `===TYPHOON_INGEST===` Return Path block, ADR-212 queues the existing research-ingest broker path automatically.
 
 ### Research Packet (TA-Lib + Godel Parity)
 

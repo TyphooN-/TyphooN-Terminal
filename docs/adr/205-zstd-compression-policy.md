@@ -1,117 +1,86 @@
 # ADR-205: ZSTD Compression Level Policy and Auto-Compaction
 
-**Status:** Implemented
-**Date:** 2026-04-28 (decision), 2026-04-29 (auto-compact wired), 2026-05-03 (Storage Manager schedule controls), 2026-05-06 (Windows AC probe), 2026-05-17 (macOS AC probe)
+**Status:** Updated / Implemented
+**Date:** 2026-04-28 (original decision), 2026-04-29 (auto-compact wired), 2026-05-03 (Storage Manager schedule controls), 2026-05-20 (bar-cache writes moved to zstd-22)
 **Related:** ADR-003 (SQLite + zstd cache), ADR-052 (performance architecture), ADR-079 (LAN sync bandwidth), `engine/src/core/cache.rs`, `native/src/app/auto_compact.rs`, `native/src/app.rs::BrokerCmd::CompactStorage`
 
 ## Context
 
-The cache uses zstd at three different levels depending on the access pattern:
+TyphooN now targets maximum historical depth across supported brokers. That changes the storage tradeoff: the bar cache is no longer a small rolling cache; it is the long-lived local market-data store. Recompressing later via a scheduled job or manual Storage Manager button is wasted lifecycle complexity when the write path can store final bar blobs at the archival level immediately.
+
+The important distinction is bar data vs hot mutable KV data:
 
 | Class | Level | Examples |
-|---|---|---|
-| Hot synchronous puts | 3 | `put_bars` (`cache.rs:720`), `put_bars_fast` (`cache.rs:1341`), `put_kv` (`cache.rs:863`), `store_filing_content` (`sec_filing.rs:1223`), `darwin` symbol-specs (`darwin.rs:2880`), LAN-sync server responses (`lan_sync.rs:5015, :5198`) |
-| Snapshot / export | 9 | `export_backup` (`cache.rs:1511`), pre-compressed bulk blobs per ADR-079 |
-| User-invoked compact | 22 | `compact_storage` (`cache.rs:2354`), `BrokerCmd::CompactStorage` (`app.rs:35788`) |
+|---|---:|---|
+| Bar cache writes | 22 | `put_bars`, `put_bars_fast`, merge/backfill writes, new bar-cache rows |
+| KV / metadata hot writes | 3 | AI sessions, broker queues, fundamentals metadata, LAN metadata |
+| Backup / export | 22 | compressed SQLite snapshot exports |
+| Manual / auto compact | 22 | legacy rows, raw imported rows, or any entries still marked below 22 |
 
-A schema column `bar_cache.zstd_level` (default 3) tracks the level each entry is currently stored at, so compact passes skip already-compacted rows (`cache.rs:484, :2367`).
-
-A recurring temptation — including in conversation on 2026-04-28 — is to make zstd-22 the default everywhere, on the reasoning that modern CPUs have spare cores, that compression can run async, and that data lives in memory while compressing so there is no real latency penalty.
-
-This ADR exists to record why that move is rejected, and what the periodic auto-compact policy should look like instead.
+A schema column `bar_cache.zstd_level` tracks the level each entry is currently stored at. New bar rows default to 22. Compact remains useful only for legacy rows, LAN/raw rows with unknown provenance, or existing databases created before this policy.
 
 ## Decision
 
-### 1. Keep the tiered model
+### 1. Store bar-cache blobs at zstd-22 immediately
 
-Compression levels stay as in the table above:
+All Rust bar-cache writes should store packed TTBR bar blobs with zstd level 22.
 
-- **Level 3** for all hot synchronous puts (bar/KV/filing/AI-session/LAN-sync responses).
-- **Level 9** for snapshot/transfer paths (backups, pre-compressed bulk blobs).
-- **Level 22** for the user-invoked `STORAGE` compact pass and for periodic auto-compact (§3).
+Rationale:
+- Bar writes are not chart-render hot-path work. Broker sync/import/cache merge work happens outside the immediate painter path.
+- zstd decompression speed is effectively independent of the original compression level for this use case; chart reads still pay one decode plus direct TTBR unpack.
+- Maximum-depth sync means the cache is the product. Smaller persistent storage matters more than shaving encode time on background writes.
+- Writing final-form blobs avoids future scheduled recompression churn and avoids relying on the user to click Compact.
 
-### 2. Reject "zstd-22 by default everywhere"
+### 2. Keep hot mutable KV at zstd-3
 
-The argument *for* default-22 is: ratio improves, async hides latency, cores are cheap. The reasons against, recorded so they survive contributor rotation:
+Do not blindly use zstd-22 for every blob.
 
-**Encode cost vs. ingest are 200x apart, not 2x.** On OHLCV-class data:
+KV/session/metadata paths are small, frequently rewritten, and closer to user-visible interaction loops. They remain level 3 unless a specific path is proven cold and worth promoting.
 
-| Level | Encode | Decode | OHLCV ratio | Per-1MB encode |
-|---|---|---|---|---|
-| 3 | ~500 MB/s | ~1500 MB/s | ~3.5x | ~2 ms |
-| 9 | ~50 MB/s | ~1500 MB/s | ~4.0x | ~20 ms |
-| 22 | ~1–3 MB/s | ~1500 MB/s | ~4.5x | ~333–1000 ms |
+This is not a retreat from max compression for market data; it is separating durable bar storage from mutable app metadata.
 
-Decompression is identical at every level — only encode cost changes. The hot put path (MT5/tastytrade sync threads, AI-session writes, KV puts) can produce data faster than 1–3 MB/s drains.
+### 3. Compression does not replace O(1) render discipline
 
-**Async hides caller latency, not CPU cost.** If hot puts queue into an async compress worker:
-- Without backpressure, RAM grows unbounded under bursty ingest (uncompressed buffers held while the worker drains at 1–3 MB/s).
-- With backpressure, the caller blocks anyway when the queue is full.
+zstd-22 optimizes disk size, not frame time. Full-FPS charting still depends on:
+- Keeping compression and SQLite writes off the render/painter path.
+- Using `get_bars_raw` / TTBR direct unpack for native chart loads rather than JSON serialization when possible.
+- Avoiding repeated parsing in cache merge paths. `merge_bars` parses each timestamp once, sorts keyed bars, deduplicates by epoch-ms, then stores final zstd-22 output.
+- Maintaining metadata columns (`bar_count`, `last_ts`, `second_last_ts`, `zstd_level`) so scheduler/UI checks do not decompress blobs just to answer cache-state questions.
+- Letting SQLite WAL readers proceed independently of the write connection.
 
-Either way the encode cost is paid. "In memory while compressing" is not free — it just shifts where the wait happens.
+### 4. Auto-compaction becomes a compatibility/cleanup path
 
-**Ratio gain is ~20% on already-compressed data.** Going from 3.5x to 4.5x means roughly 1 MB saved per symbol-year of M1 bars at the cost of hundreds of times the CPU per write. SSDs are cheap; CPU time on a hot path is not.
+Auto-compact and manual Compact stay, but their role changes:
+- Existing databases may contain zstd-3 rows from the old policy.
+- MT5/BarCacheWriter/raw LAN rows may arrive without level-22 metadata.
+- Restored backups may contain older rows.
 
-**LAN sync is request/response.** The server compresses per client request (`lan_sync.rs:5015, :5198`). zstd-22 turns a sub-100ms RPC into a multi-second hang from the *client's* perspective. Async on the server does not help — the client is on the wire either way.
-
-**Battery and thermal matter.** This is a desktop trading app that runs on laptops and trading boxes already under thermal pressure during market hours. Sustained zstd-22 work spins fans and drains batteries for a marginal win.
-
-**The read path does not benefit.** Chart render, AI-session resume, and LAN-sync delivery decompress at the same speed regardless of level. Higher levels only optimize cold-storage size, not runtime performance.
-
-The current tiered model is the standard zstd-recommended pattern: fast levels for hot writes, snapshot levels for transfers, max level only for cold-storage compaction. The `bar_cache.zstd_level` column makes compaction one-time per entry — pay zstd-22 once on cold data that won't be rewritten, never again.
-
-### 3. Auto-compaction policy
-
-Periodic auto-compact is allowed and recommended, but conservative:
-
-- **Cadence:** configurable from Storage Manager; defaults to weekly, Sunday 04:00-05:00 local.
-- **Gating, all required** (`auto_compact::evaluate_gate`):
-  - AC power detected (skips on battery on Linux, Windows, and macOS; unknown/unsupported platforms assume AC).
-  - User idle ≥ 5 minutes (no input events seen).
-  - `COUNT(*) FROM bar_cache WHERE zstd_level < 22` exceeds the configured threshold (default 100). Small deltas are not worth waking up for.
-  - Local time inside the configured weekday + hour window.
-  - Cadence: at least the configured number of days since the last run.
-- **Dispatch:** the gate sends `BrokerCmd::CompactStorage { level: 22 }` — the same command the manual button uses. The existing handler (`app.rs::BrokerCmd::CompactStorage`) already sets `importing_flag` so the background stats worker yields, runs `compact_storage` on a worker thread, and calls `incremental_vacuum(10000)` on success. No duplicated logic.
-- **Incrementality:** `compact_storage` already skips entries with `zstd_level >= target` (`cache.rs:2367`). Steady-state work is bounded by the fresh-data delta since the last run, not the full cache.
-- **User opt-out/config:** "Auto-compact" checkbox plus cadence, weekday, start/end hour, and min-row controls in Storage Manager. The manual `Compact (zstd-22)` button always works regardless.
-- **Stale-flag recovery:** the dispatch timestamp is tracked separately; if the in-progress flag has been set for > 8 hours and no completion log arrived, the next tick resets it so the gate can recover from a lost completion message.
-
-This makes the "spare cycles" model work without ever surprising the user mid-trade.
-
-### Implementation pointers
-
-- Gate logic + tests: `native/src/app/auto_compact.rs` (14 unit tests).
-- Tick: `TyphooNApp::tick_auto_compact` in `native/src/app.rs`, called once per `update()` and self-throttled to one evaluation per minute.
-- User-input timestamp updated each frame from `ctx.input(|i| !i.events.is_empty())`.
-- Persistence: `auto_compact_enabled`, `auto_compact_last_run_ms`, and the schedule/threshold fields ride in `app:sync_preferences` KV (alongside `crypto_backfill_enabled`).
-- Completion / failure: `BrokerMsg::OrderResult` matches the `Compact complete:` prefix to clear in-progress and stamp `last_run_ms`; `BrokerMsg::Error` matching `Compact failed:` clears in-progress without bumping the timestamp so the cadence keeps trying.
-- New cache helper: `SqliteCache::count_uncompacted_bars(target)` (`engine/src/core/cache.rs`).
-- UI: Storage Manager checkbox, schedule controls, `last: <duration>` / `next: <time>` / `(skip: <reason>)` / `running…` readout, immediately under the manual `Compact (zstd-22)` button.
+The compactor should keep skipping entries with `zstd_level >= 22`. In steady state, newly-written Rust bar blobs should already be at target and require no scheduled recompression.
 
 ## Consequences
 
-**Pro:**
-- Hot-path latency stays bounded — sub-millisecond compresses on typical bar batches.
-- Storage trends toward zstd-22 without user effort, but only on cold data.
-- LAN-sync RPCs stay fast for clients.
-- Battery/thermal cost bounded to opt-in idle windows.
-- The rationale for rejecting "always 22" is recorded so the discussion does not have to be relitigated.
+**Pros**
+- Minimum persistent storage for full-depth market data.
+- No dependency on scheduled events or manual compaction for new data.
+- Chart decompression path remains unchanged.
+- Metadata-driven cache checks stay cheap.
+- Legacy compaction still exists for old rows.
 
-**Con:**
-- Three compression levels to remember when adding a new write site (mitigated: pick the level by access pattern, not by site).
-- Auto-compact requires power-state and idle-detection plumbing (small).
+**Tradeoffs**
+- Background broker/import writes spend more CPU per stored bar blob.
+- Very bursty imports can take longer to persist. That is acceptable as long as the work is not performed on the egui render path and scheduler backpressure remains bounded.
+- zstd-22 is not a magic O(1) optimization. Any per-frame scans, repeated timestamp parsing, full JSON roundtrips, or synchronous stats refreshes still need to be eliminated separately.
 
-## Non-Goals
+## Implementation pointers
 
-- Changing the decompression path (already optimal — single decode speed for all levels).
-- Changing the backup level from 9 (appropriate for one-shot exports).
-- Changing the manual `STORAGE` compact level from 22.
+- Bar compression constants: `engine/src/core/cache.rs` (`BAR_ZSTD_LEVEL = 22`, `BACKUP_ZSTD_LEVEL = 22`, `KV_ZSTD_LEVEL = 3`).
+- Bar writes: `put_bars`, `put_bars_fast`, and bar batch metadata should mark new rows as level 22.
+- Merge O(1)-discipline cleanup: `merge_bars` parses RFC3339 timestamps once into keyed bars before sort/dedup.
+- Compact gate/tests: `native/src/app/auto_compact.rs`.
+- Storage UI: manual `Compact (zstd-22)` remains a cleanup button for older or externally imported rows.
 
-## Remaining Tuning Knob
+## Non-goals
 
-- ~~Wire the auto-compact scheduler with the gating described in §3.~~ (Shipped 2026-04-29.)
-- ~~Expose the on/off toggle and last-run readout in the Storage Manager UI.~~ (Shipped 2026-04-29.)
-- ~~Make the cadence, weekday, hour window, and uncompacted-row threshold user-configurable from the Storage Manager.~~ (Shipped 2026-05-03.)
-- ~~Expose `next_auto_compact_at` (next time the gate will be re-evaluated against the schedule) so users can see what is scheduled rather than only when it last ran.~~ (Shipped 2026-05-03 as `next: <local time>`.)
-- ~~AC-power detection on Windows.~~ (Shipped 2026-05-06: `on_ac_power_windows` calls `GetSystemPowerStatus` from `windows-sys` and reads `ACLineStatus`; unknown status (255) defaults to AC because most Windows trading rigs are wall-powered.)
-- ~~AC-power detection on macOS.~~ (Shipped 2026-05-17: `on_ac_power_macos` uses `pmset -g batt` and parses `AC Power` / `Battery Power`; unknown command/output defaults to AC.)
+- Recompressing hot KV/session writes at level 22.
+- Blocking egui rendering while compression runs.
+- Pretending the entire codebase can literally become O(1); full-depth sync and chart rendering still require O(n) work where n is visible bars, changed rows, or provider payload size. The goal is no avoidable O(n) work in per-frame/control paths and no repeated O(n) scans where maintained indexes/metadata suffice.

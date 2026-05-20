@@ -18,7 +18,7 @@ TyphooN-Terminal stores all bar data, DARWIN analytics, and key-value cache in a
 
 Summary:
 
-- `export_backup`: `VACUUM INTO` → zstd level 9 → `.typhoon-backup` file
+- `export_backup`: `VACUUM INTO` → zstd level 22 → `.typhoon-backup` file
 - `import_backup`: zstd decompress → `ATTACH DATABASE` → newer-wins `bar_cache`/`kv_cache` merge
 - CLI: `typhoon-cli --export-cache PATH` / `typhoon-cli --import-cache PATH`
 - Optional password protection: `--cache-backup-passphrase` uses the ADR-207

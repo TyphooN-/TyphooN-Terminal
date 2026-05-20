@@ -41,9 +41,9 @@ Large DarwinIA datasets (>128MB) are processed via chunked batching in the GPU c
 
 ### Storage Compact (zstd-22)
 
-The Storage Manager (`STORAGE` command) can recompress all bar_cache entries at zstd level 22 for maximum compression. Decompression speed is identical regardless of compression level — only on-disk storage shrinks. Progress is reported per 200 entries.
+Rust bar-cache writes now store packed TTBR blobs at zstd level 22 immediately, so new provider-depth sync data lands in final compressed form. The Storage Manager (`STORAGE` command) compact path remains for legacy/raw/imported bar_cache entries whose `zstd_level` metadata is below 22. Decompression speed is effectively unchanged by source compression level — only on-disk storage and encode time change. Progress is reported per 200 entries.
 
-Auto-compact uses the same compaction path, but only runs when the configured cadence/window, AC-power, idle, and min-row gates pass. Defaults are weekly Sunday 04:00-05:00 local and at least 100 uncompacted rows; the Storage Manager exposes those knobs plus last-run, next-window, skip-reason, and running-state readouts.
+Auto-compact uses the same compaction path for leftovers, but only runs when the configured cadence/window, AC-power, idle, and min-row gates pass. Defaults are weekly Sunday 04:00-05:00 local and at least 100 uncompacted rows; the Storage Manager exposes those knobs plus last-run, next-window, skip-reason, and running-state readouts.
 
 ### Auto MT5 Sync
 
@@ -61,7 +61,7 @@ Alpaca, tastytrade, and Kraken Futures no longer use arbitrary local target dept
 
 Bar data stored in TTBR (TyphooN Terminal Binary Record) format:
 - 6 x f64 per bar (timestamp_ms, open, high, low, close, volume) = 48 bytes/bar
-- zstd level 3 compression = ~3-5x ratio
+- zstd level 22 compression for Rust bar-cache writes = minimum durable storage; decode speed remains chart-friendly
 - 10,000 bars = ~100KB compressed on disk
 
 ### GPU Backend Selection

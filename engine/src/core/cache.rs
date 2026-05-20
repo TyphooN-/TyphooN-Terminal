@@ -1,7 +1,7 @@
 //! SQLite-backed cache for unlimited structured storage.
 //!
 //! Replaces IndexedDB's ~50MB limit with SQLite (no practical limit).
-//! Bar data uses packed binary format (44 bytes/bar) + zstd compression.
+//! Bar data uses packed binary format (48 bytes/bar) + zstd-22 compression.
 //! KV data uses JSON + zstd compression.
 //! Binary format: [u32 bar_count][per bar: i64 timestamp_ms, f64 OHLCV]
 
@@ -19,6 +19,9 @@ pub type BgConnection = Connection;
 const BAR_BINARY_MAGIC: &[u8; 4] = b"TTBR"; // TyphooN Terminal Bar Record
 /// Bytes per bar in binary format: i64 timestamp + 5×f64 (OHLCV) = 48 bytes
 const BYTES_PER_BAR: usize = 8 + 5 * 8; // 48
+const BAR_ZSTD_LEVEL: i32 = 22;
+const KV_ZSTD_LEVEL: i32 = 3;
+const BACKUP_ZSTD_LEVEL: i32 = 22;
 const ENCRYPTED_BACKUP_MAGIC: &[u8] = b"TYPHOON-BACKUP-AESGCM-V1\0";
 const ENCRYPTED_BACKUP_ITERATIONS: u32 = 210_000;
 const ENCRYPTED_BACKUP_SALT_LEN: usize = 16;
@@ -481,7 +484,7 @@ impl SqliteCache {
                 data BLOB NOT NULL,
                 timestamp INTEGER NOT NULL,
                 bar_count INTEGER NOT NULL DEFAULT 0,
-                zstd_level INTEGER NOT NULL DEFAULT 3
+                zstd_level INTEGER NOT NULL DEFAULT 22
             );
             CREATE TABLE IF NOT EXISTS kv_cache (
                 key TEXT PRIMARY KEY,
@@ -505,7 +508,7 @@ impl SqliteCache {
         let _ = conn.execute("ALTER TABLE bar_cache ADD COLUMN second_last_ts TEXT", []);
         // Schema migration: track zstd compression level per entry (compact skips already-compacted)
         let _ = conn.execute(
-            "ALTER TABLE bar_cache ADD COLUMN zstd_level INTEGER NOT NULL DEFAULT 3",
+            "ALTER TABLE bar_cache ADD COLUMN zstd_level INTEGER NOT NULL DEFAULT 22",
             [],
         );
 
@@ -715,8 +718,8 @@ impl SqliteCache {
 
     /// Store bar data in packed binary format + zstd compression.
     /// Binary format is ~3-5x smaller than JSON before compression.
-    /// Uses zstd level 3 — same as put_bars_fast. Level 9 was wasteful since
-    /// merge_bars recompresses anyway, and backup export uses level 9 for archival.
+    /// Uses zstd-22 immediately for bar blobs. Writes happen off the render hot path;
+    /// reads pay the same zstd decompression path regardless of source compression level.
     pub fn put_bars(&self, key: &str, json_data: &str) -> Result<(), String> {
         let binary = pack_bars(json_data)?;
         let bar_count = u32::from_le_bytes(
@@ -725,7 +728,7 @@ impl SqliteCache {
                 .map_err(|_| "bar_count header slice failed")?,
         ) as i64;
         let (second_last_ts, last_ts) = get_last_two_bar_timestamps(&binary, bar_count as usize);
-        let zstd_level = 3i32;
+        let zstd_level = BAR_ZSTD_LEVEL;
         let compressed = zstd::encode_all(binary.as_slice(), zstd_level)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
@@ -861,11 +864,10 @@ impl SqliteCache {
 
     /// Store key-value data (fundamentals, news, etc.).
     pub fn put_kv(&self, key: &str, json_data: &str) -> Result<(), String> {
-        // Level 3 (was 9): hot writers re-serialize the same blob on every change
-        // (AI sessions append a turn, fundamentals refresh, broker queue append).
-        // Level 9 burns 5-10x the CPU for ~30% smaller output — same rationale as
-        // put_bars. Backup export uses level 9 separately for archival.
-        let compressed = zstd::encode_all(json_data.as_bytes(), 3)
+        // Keep KV at level 3: this is the hot mutable path for AI sessions,
+        // fundamentals, broker queues, and LAN metadata. Bar storage uses zstd-22;
+        // KV can still be compacted/exported separately without stalling UI writes.
+        let compressed = zstd::encode_all(json_data.as_bytes(), KV_ZSTD_LEVEL)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -1286,8 +1288,8 @@ impl SqliteCache {
     }
 
     /// Merge new bars into existing cached entry. Deduplicates by timestamp, sorts, re-stores.
-    /// Trims to max_bars (keeps most recent) to prevent unbounded cache growth.
-    /// Uses zstd level 3 for merge writes (faster than level 9; archival can re-compress).
+    /// Trims to max_bars (keeps most recent) when a bounded caller explicitly asks for it.
+    /// Uses zstd-22 for final bar storage so rows never need a later recompression pass.
     /// Returns the full merged dataset as JSON.
     pub fn merge_bars(&self, key: &str, new_json: &str, max_bars: usize) -> Result<String, String> {
         // Parse new bars
@@ -1307,28 +1309,29 @@ impl SqliteCache {
             None => Vec::new(),
         };
 
-        // Merge and deduplicate by numeric epoch-ms. String compare on RFC3339 silently
-        // leaks duplicates when format drifts across sources (Z vs +00:00, millis vs no-millis)
-        // and buckets all missing/empty timestamps together at the start of the series.
+        // Merge and deduplicate by numeric epoch-ms. Parse each timestamp once; the old
+        // sort/dedup path reparsed RFC3339 strings during every comparator/key call.
         all_bars.extend(new_bars);
-        let ts_ms_of = |v: &serde_json::Value| -> Option<i64> {
-            v["timestamp"]
-                .as_str()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.timestamp_millis())
-                .filter(|ms| *ms > 0)
-        };
-        all_bars.retain(|b| ts_ms_of(b).is_some());
-        all_bars.sort_by_key(|b| ts_ms_of(b).unwrap_or(0));
-        all_bars.dedup_by(|a, b| ts_ms_of(a) == ts_ms_of(b));
+        let mut keyed_bars: Vec<(i64, serde_json::Value)> = all_bars
+            .into_iter()
+            .filter_map(|bar| {
+                let ts_ms = bar["timestamp"]
+                    .as_str()
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| dt.timestamp_millis())?;
+                (ts_ms > 0).then_some((ts_ms, bar))
+            })
+            .collect();
+        keyed_bars.sort_by_key(|(ts_ms, _)| *ts_ms);
+        keyed_bars.dedup_by_key(|(ts_ms, _)| *ts_ms);
 
-        // Trim to max_bars (keep most recent) — prevents unbounded cache growth
-        if max_bars > 0 && all_bars.len() > max_bars {
-            let skip = all_bars.len() - max_bars;
-            all_bars.drain(..skip);
+        // Trim only when a bounded caller explicitly requests it. Full-depth sync passes 0.
+        if max_bars > 0 && keyed_bars.len() > max_bars {
+            let skip = keyed_bars.len() - max_bars;
+            keyed_bars.drain(..skip);
         }
 
-        // Store merged result (zstd level 3 for merge writes — faster than level 9)
+        let all_bars: Vec<serde_json::Value> = keyed_bars.into_iter().map(|(_, bar)| bar).collect();
         let merged_json =
             serde_json::to_string(&all_bars).map_err(|e| format!("JSON serialize failed: {e}"))?;
         self.put_bars_fast(key, &merged_json)?;
@@ -1336,8 +1339,8 @@ impl SqliteCache {
         Ok(merged_json)
     }
 
-    /// Store bar data with zstd level 3 (fast writes for frequent merge operations).
-    /// Level 3 is ~3× faster than level 9 with only ~15% larger output.
+    /// Store bar data with zstd-22. Broker sync and imports run off the render hot path;
+    /// decompression speed for charts is unaffected by choosing maximum compression here.
     fn put_bars_fast(&self, key: &str, json_data: &str) -> Result<(), String> {
         let binary = pack_bars(json_data)?;
         let bar_count = u32::from_le_bytes(
@@ -1346,7 +1349,7 @@ impl SqliteCache {
                 .map_err(|_| "bar_count header slice failed in put_bars_fast")?,
         ) as i64;
         let (second_last_ts, last_ts) = get_last_two_bar_timestamps(&binary, bar_count as usize);
-        let zstd_level = 3i32;
+        let zstd_level = BAR_ZSTD_LEVEL;
         let compressed = zstd::encode_all(binary.as_slice(), zstd_level)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
@@ -1411,7 +1414,7 @@ impl SqliteCache {
         for (key, compressed, bar_count) in entries {
             match conn.execute(
                 "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![key, compressed, timestamp, bar_count, 3],
+                params![key, compressed, timestamp, bar_count, BAR_ZSTD_LEVEL],
             ) {
                 Ok(_) => count += 1,
                 Err(e) => tracing::warn!("Batch write skip {}: {}", key, e),
@@ -1498,13 +1501,14 @@ impl SqliteCache {
                 })?;
         } // lock released here
 
-        // File I/O + level-9 compression without holding any lock
+        // File I/O + maximum compression without holding any lock
         let data = std::fs::read(&backup_path).map_err(|e| {
             let _ = std::fs::remove_file(&backup_path);
             format!("Read backup failed: {e}")
         })?;
         let _ = std::fs::remove_file(&backup_path);
-        zstd::encode_all(data.as_slice(), 9).map_err(|e| format!("Compress failed: {e}"))
+        zstd::encode_all(data.as_slice(), BACKUP_ZSTD_LEVEL)
+            .map_err(|e| format!("Compress failed: {e}"))
     }
 
     /// Export entire cache to a compressed backup file.

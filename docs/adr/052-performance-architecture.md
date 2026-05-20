@@ -49,11 +49,11 @@ Render Thread (every frame):
 
 ## Compression
 
-- Bar data: TTBR binary format (48 bytes/bar) + zstd level 3
-- KV data: JSON + zstd level 3
-- Backup/export: zstd level 9
-- Level 3 is optimal for live data (fast compress/decompress, ~3x ratio)
-- Level 9+ has diminishing returns on structured numeric data
+- Bar data: TTBR binary format (48 bytes/bar) + zstd level 22 on Rust bar-cache writes
+- KV data: JSON + zstd level 3 for hot mutable metadata/session writes
+- Backup/export: zstd level 22
+- Decompression speed is independent enough of source level for charting; choose level by write-path heat
+- Auto/manual compact remains for legacy/raw/imported rows whose `zstd_level` metadata is below 22
 
 ## Memory Footprint
 

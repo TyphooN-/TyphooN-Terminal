@@ -18,7 +18,7 @@ Phase 1 is now implemented as password-encrypted backup export/import:
 
 - `SqliteCache::export_backup_encrypted(path, passphrase)` creates the same
   `VACUUM INTO` SQLite snapshot as plain backup export, zstd-compresses it at
-  level 9, then writes a TyphooN AES-256-GCM envelope.
+  level 22, then writes a TyphooN AES-256-GCM envelope.
 - `SqliteCache::import_backup_encrypted(path, passphrase)` decrypts the
   envelope, zstd-decompresses the snapshot, attaches it as a temporary SQLite
   database, and uses the same newer-wins `bar_cache`/`kv_cache` merge path as

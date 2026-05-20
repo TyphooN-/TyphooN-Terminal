@@ -9,13 +9,13 @@ Fetching historical bars from broker APIs on every startup is slow and rate-limi
 
 ## Decision
 
-Use SQLite as the local bar cache with zstd-compressed TTBR (TyphooN Terminal Binary Record) format for bulk storage. The `get_bars_raw()` function returns bar data as a zero-copy byte slice that is decoded directly into the chart engine's render structs without intermediate allocation. Session state (open tabs, indicators, drawing tools) is persisted to a JSON file alongside the SQLite database, loaded at startup and saved on graceful shutdown.
+Use SQLite as the local bar cache with zstd-22-compressed TTBR (TyphooN Terminal Binary Record) format for durable bar storage. The `get_bars_raw()` function returns bar data as raw OHLCV tuples decoded directly from TTBR for the chart engine without a JSON roundtrip. Session state (open tabs, indicators, drawing tools) is persisted to a JSON file alongside the SQLite database, loaded at startup and saved on graceful shutdown.
 
 ## Consequences
 
 - SQLite provides ACID guarantees, WAL mode for concurrent read/write, and zero-config deployment
-- zstd compression reduces on-disk size by ~70% for OHLCV data while decompressing at >1 GB/s
-- Zero-copy `get_bars_raw()` avoids allocating Vec<Bar> for large date ranges; data goes straight to GPU
+- zstd-22 compression minimizes durable OHLCV storage while decompressing at chart-friendly speed
+- Direct TTBR raw reads avoid JSON serialization for large date ranges; data goes straight to GPU-ready chart buffers
 - JSON session file is human-readable and easy to debug; schema changes are backward-compatible with serde defaults
 - Trade-off: SQLite single-writer lock means bar cache writes are serialized; acceptable since writes are infrequent batch inserts from broker fetches
 - Trade-off: JSON session file is not crash-safe; a mid-write crash could lose the last session snapshot
