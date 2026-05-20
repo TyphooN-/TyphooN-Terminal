@@ -25,6 +25,10 @@ The broker sync scheduler is cursor-limited and high-timeframe-first for all bro
 3. Select work by bucket in this order: `Missing`, `Stale`, `Backfill`.
 4. Skip any `(symbol, timeframe)` whose normalized pending key already exists.
 5. Use persisted no-data and backfill-complete markers to avoid repeating known unproductive backfills.
+   Persisted broker-unresolvable markers are kept in per-broker `HashSet`
+   indexes (`broker -> SYMBOL:TF`) so each candidate suppression check is an
+   O(1) membership lookup and the scheduler no longer rebuilds filtered
+   tombstone sets on every refill.
 6. Brokers with explicit terminal settlement messages keep their pending slot until settlement:
    - Alpaca: `AlpacaFetchSettled`
    - Kraken Spot: `KrakenFetchSettled`
@@ -37,6 +41,7 @@ The broker sync scheduler is cursor-limited and high-timeframe-first for all bro
 - Large universes do not require an O(symbols * timeframes) pass per refill; every broad broker path has an explicit scan budget.
 - tastytrade uses the same rotating bounded selector as Alpaca/Kraken instead of the legacy whole-symbol workset scan.
 - Sync budgets and tastytrade timeframe-window helpers now live in `native/src/app/sync_config.rs`, keeping policy constants out of `app.rs`.
+- Async broker fetch workers now live in `native/src/app/broker_fetch.rs`, keeping network-response parsing and task dispatch out of the parent `app.rs` integration file.
 - High timeframes obtain broad initial coverage before low-timeframe backfills consume the queue.
 - Manual/foreground and background fetches are deduplicated through the same normalized pending-key sets.
 - Thin-history instruments converge instead of being requeued every few seconds after successful shallow responses.

@@ -41,6 +41,8 @@ native/src/app/auto_compact.rs     — zstd-22 idle auto-compact gate
                                      and schedule helpers
 native/src/app/bar_sync.rs         — bar-sync health aggregates for
                                      Sync Status and Storage Manager
+native/src/app/broker_fetch.rs     — async broker bar-fetch workers and
+                                     response normalization
 native/src/app/settings.rs         — Settings window
 native/src/app/storage.rs          — Storage Manager + filtered bulk delete
 native/src/app/sync_status.rs      — Sync Status (per-broker % healthy)
@@ -54,10 +56,10 @@ compile-speed and storage/sync passes added `alpaca_sync.rs`,
 longer live as anonymous helper islands inside `app.rs`.
 
 The 2026-05-20 sync/compile pass added `sync_config.rs` for broker sync
-budgets and tastytrade timeframe-window helpers. This is intentionally small,
-but it prevents scheduler constants and time-window policy from accreting in
-`app.rs` while the larger async fetch-task extraction remains a future
-mechanical move.
+budgets and tastytrade timeframe-window helpers, then moved the async broker
+bar-fetch worker functions into `broker_fetch.rs`. The parent `app.rs` still
+owns state and message routing, but HTTP/DXLink/Kraken response parsing and
+task completion helpers now compile as their own app submodule.
 
 Each submodule is a sibling of `app.rs`, declared as `mod` from the parent.
 Window functions take `&mut self` on `TyphooNApp` so state mutation works
@@ -104,9 +106,8 @@ thing changed.
   `app/market_data_sync.rs`; do not add new sync islands to `app.rs`.
 - **The remaining largest seams are mechanical but high-touch:**
   `floating_windows.rs` should be split by window family, `command_palette.rs`
-  by command namespace, and the async broker fetch tasks currently embedded in
-  `app.rs` should move as a single broker-fetch module once their shared
-  message/type imports are isolated.
+  by command namespace, and any new broker fetch worker should land in
+  `app/broker_fetch.rs` instead of being added back to `app.rs`.
 - **The default launcher path must stay incremental-friendly.** `./launch.sh`
   runs the thin-LTO `release` profile for normal use; full-LTO
   `release-max` remains available as `./launch.sh max` only for explicit final

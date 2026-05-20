@@ -29,8 +29,8 @@ tokio-native-tls = "0.3" # Async TLS wrapper for tokio
 futures-util = "0.3"
 async-trait = "0.1"
 rusqlite = { workspace = true, features = ["bundled"] }
-# System keyring for credential storage
-keyring = "3"  # Cross-platform keyring (libsecret/Keychain/CredentialManager)
+# System keyring for credential storage (keyring 4.x split crates)
+keyring-core = { version = "1", features = ["sample"] } # Entry/Error API + sample test store
 sha2 = { workspace = true }
 hmac = { workspace = true }
 pbkdf2 = { workspace = true }
@@ -41,6 +41,9 @@ zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 flate2 = "1"  # Gzip decompression for DARWIN FTP quote files
 thirtyfour = { workspace = true, default-features = false, features = ["reqwest", "rustls-tls"] }    # Async WebDriver client (Selenium) for Darwinex Zero scraping
 mql5-compiler = { workspace = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -32,12 +32,13 @@ The dependency audit was repeated with `cargo tree -d` and the workspace manifes
 - Changed `reqwest` direct usage to `default-features = false` plus the explicit feature set actually used by the terminal (`json`, `query`, `cookies` where needed, and `rustls`). This avoids compiling reqwest's default TLS stack for HTTP clients that do not need it.
 - Changed direct `thirtyfour` usage to `default-features = false` plus `reqwest`/`rustls-tls`, omitting its component macro feature because TyphooN only uses the async WebDriver client for Darwinex Zero scraping.
 - Changed native `eframe` from default features to explicit Linux native features (`default_fonts`, `wayland`, `x11`, `wgpu_no_default_features`). The direct `wgpu` dependency now enables only `std`, `parking_lot`, `vulkan`, and `wgsl`, avoiding web, DX12, Metal, GLES, and WebGPU backend feature compilation in the Linux native terminal.
+- Revisited the `keyring` 4.x migration. The umbrella `keyring` 4.0.1 crate pulled in the optional SQLite/Turso backend and conflicted with `typhoon-native`'s global allocator, so TyphooN now uses the keyring 4.x split crates directly: `keyring-core` for `Entry`/`Error` and `dbus-secret-service-keyring-store` for Linux/FreeBSD Secret Service. This preserves the existing libsecret credential namespace without compiling the unused `keyring` CLI/sample wrapper, SQLite store, or Turso stack.
 
 `native-tls` / `openssl` are still present because LAN sync currently builds a native-tls acceptor/connector for local WSS. Removing them safely requires a LAN-sync TLS implementation migration, not a manifest-only edit.
 
-Explicit non-upgrades after this pass:
+Explicit non-upgrades / unresolved upstream constraints after this pass:
 
-- `keyring` stays on 3.6.3. A trial upgrade to 4.0.1 compiled in a much larger backend stack and broke the existing `keyring::Entry` / `keyring::Error` API. It should be handled as a dedicated keyring API migration with credential round-trip testing, not folded into a compile-speed pass.
+- The old `keyring` 3.x crate is removed. Do not re-add the `keyring` 4.x umbrella crate unless the global-allocator conflict with its SQLite/Turso backend is resolved; prefer direct `keyring-core` + platform backend crates.
 - `generic-array` 0.14.7 and `matchit` 0.8.4 are transitive. They are behind patch releases but are owned by upstream dependency constraints, not direct TyphooN manifests.
 
 ## Remaining Transitive Duplicates
@@ -47,8 +48,9 @@ These duplicates come from upstream crates and cannot be resolved without upstre
 - `calloop` 0.13/0.14 — Wayland compositor bindings (smithay)
 - `getrandom` 0.2/0.3/0.4 — rand ecosystem transition
 - `rustix` 0.38/1.1 — smithay/calloop transition
+- `block-buffer` / `digest` / `crypto-common` / `hmac` / `sha2` 0.10/0.11 families — TyphooN's direct crypto deps intentionally stay on the latest stable line (`sha2` 0.11, `hmac` 0.13, `pbkdf2` 0.13); Secret Service and TLS transitive crates still use the 0.10 line.
 - `thiserror` 1/2 — ecosystem-wide migration
-- `hashbrown` 0.15/0.16 — indexmap/hashbrown transition
+- `hashbrown` 0.14/0.15/0.16/0.17 — graphics, SQL, CLI TUI, and HTTP stacks depend on different upstream lines.
 - `zip` 7/8 — `calamine` still depends on zip 7 while engine directly uses zip 8
 
 ## Consequences
@@ -57,4 +59,4 @@ These duplicates come from upstream crates and cannot be resolved without upstre
 - **Pro:** All workspace crates on latest stable versions
 - **Pro:** Reduced compile time from fewer duplicate builds
 - **Pro:** Security: no known CVEs in outdated pinned versions
-- **Con:** Remaining ~20 transitive duplicates are unavoidable until upstream migrates
+- **Con:** Remaining transitive duplicates are documented above; direct TyphooN dependencies should move forward, not backward, even when an older transitive line remains.

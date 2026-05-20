@@ -1,6 +1,31 @@
 use super::*;
 
+pub(super) fn build_unresolvable_fetch_key_index(
+    pairs: &std::collections::HashMap<String, UnresolvablePair>,
+) -> std::collections::HashMap<String, std::collections::HashSet<String>> {
+    let mut index = std::collections::HashMap::new();
+    for entry in pairs.values() {
+        let Some(tf) = normalize_sync_timeframe_key(&entry.timeframe) else {
+            continue;
+        };
+        let symbol = normalize_market_data_symbol(&entry.symbol).replace('/', "");
+        if symbol.is_empty() {
+            continue;
+        }
+        index
+            .entry(entry.broker.to_ascii_lowercase())
+            .or_insert_with(std::collections::HashSet::new)
+            .insert(alpaca_fetch_key(&symbol, tf));
+    }
+    index
+}
+
 impl TyphooNApp {
+    pub(super) fn rebuild_unresolvable_fetch_key_index(&mut self) {
+        self.unresolvable_fetch_keys_by_broker =
+            build_unresolvable_fetch_key_index(&self.unresolvable_pairs);
+    }
+
     pub(super) fn alpaca_retry_backoff_secs(retry_count: u32) -> i64 {
         match retry_count {
             0 | 1 => 15,
@@ -130,6 +155,7 @@ impl TyphooNApp {
                                 (key, entry)
                             })
                             .collect();
+                        self.rebuild_unresolvable_fetch_key_index();
                     }
                     Err(e) => tracing::warn!(
                         "broker:unresolvable_pairs contained unreadable persisted data: {e}"
@@ -178,6 +204,10 @@ impl TyphooNApp {
             .unresolvable_pairs
             .get(&key)
             .is_none_or(|existing| existing.reason != entry.reason);
+        self.unresolvable_fetch_keys_by_broker
+            .entry(entry.broker.clone())
+            .or_default()
+            .insert(alpaca_fetch_key(&entry.symbol, &entry.timeframe));
         self.unresolvable_pairs.insert(key, entry);
         self.unresolvable_save();
         changed
@@ -188,6 +218,7 @@ impl TyphooNApp {
             return;
         }
         self.unresolvable_pairs.clear();
+        self.unresolvable_fetch_keys_by_broker.clear();
         self.unresolvable_save();
     }
 
