@@ -18,20 +18,8 @@ pub(super) fn tastytrade_earliest_history_ms() -> i64 {
         .unwrap_or(0)
 }
 
-pub(super) fn tastytrade_initial_from_time_ms(timeframe: &str, now_ms: i64) -> i64 {
-    let floor_ms = tastytrade_earliest_history_ms();
-    let Some(period_s) = super::sync_timeframe_period_secs(timeframe) else {
-        return floor_ms;
-    };
-    let Some(target_bars) = super::tastytrade_sync_target_bars(timeframe) else {
-        return floor_ms;
-    };
-    let target_bars = i64::from(target_bars);
-    let headroom_bars = (target_bars / 20).max(50);
-    let lookback_ms = period_s
-        .saturating_mul(1000)
-        .saturating_mul(target_bars.saturating_add(headroom_bars));
-    now_ms.saturating_sub(lookback_ms).max(floor_ms)
+pub(super) fn tastytrade_initial_from_time_ms(_timeframe: &str, _now_ms: i64) -> i64 {
+    tastytrade_earliest_history_ms()
 }
 
 #[cfg(test)]

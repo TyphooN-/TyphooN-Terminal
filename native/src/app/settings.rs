@@ -272,14 +272,6 @@ impl TyphooNApp {
                         .on_hover_text("Tokenized stocks and ETFs from Kraken Spot/xStocks.")
                         .changed();
                     kraken_scrape_changed |= ui
-                        .checkbox(&mut self.kraken_scrape_usd_crypto, "USD/stable crypto")
-                        .on_hover_text("Crypto pairs quoted in USD, USDG, USDC, or USDT.")
-                        .changed();
-                    kraken_scrape_changed |= ui
-                        .checkbox(&mut self.kraken_scrape_fiat_crypto, "Spot FX + fiat quotes")
-                        .on_hover_text("Fiat FX pairs such as EUR/USD plus crypto quoted in EUR, GBP, CAD, AUD, JPY, or CHF.")
-                        .changed();
-                    kraken_scrape_changed |= ui
                         .checkbox(&mut self.kraken_scrape_crypto_crosses, "Crypto crosses")
                         .on_hover_text("Non-fiat crypto crosses such as ETH/BTC.")
                         .changed();
@@ -288,7 +280,30 @@ impl TyphooNApp {
                         .on_hover_text("Kraken Futures public instruments and candles.")
                         .changed();
                 });
+                ui.label(egui::RichText::new("Global crypto/fiat quote filters").color(AXIS_TEXT).small());
+                ui.horizontal_wrapped(|ui| {
+                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_usd, "USD").changed();
+                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_usdt, "USDT").changed();
+                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_usdc, "USDC").changed();
+                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_usdg, "USDG").changed();
+                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_eur, "EUR").changed();
+                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_gbp, "GBP").changed();
+                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_cad, "CAD").changed();
+                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_aud, "AUD").changed();
+                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_jpy, "JPY").changed();
+                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_chf, "CHF").changed();
+                });
                 if kraken_scrape_changed {
+                    self.kraken_scrape_usd_crypto = self.crypto_fiat_quote_usd
+                        || self.crypto_fiat_quote_usdt
+                        || self.crypto_fiat_quote_usdc
+                        || self.crypto_fiat_quote_usdg;
+                    self.kraken_scrape_fiat_crypto = self.crypto_fiat_quote_eur
+                        || self.crypto_fiat_quote_gbp
+                        || self.crypto_fiat_quote_cad
+                        || self.crypto_fiat_quote_aud
+                        || self.crypto_fiat_quote_jpy
+                        || self.crypto_fiat_quote_chf;
                     settings_save_after = true;
                     self.pending_kraken_fetches.clear();
                     if !self.kraken_scrape_futures {
@@ -297,7 +312,7 @@ impl TyphooNApp {
                 }
                 ui.label(
                     egui::RichText::new(
-                        "These checkboxes control automated Kraken public scraping only; they do not grant trading permissions.",
+                        "These category and quote filters control automated broker public scraping. Kraken uses them now; future crypto brokers should call the same quote filter instead of adding broker-specific assumptions.",
                     )
                     .color(AXIS_TEXT)
                     .small(),

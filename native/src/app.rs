@@ -4289,6 +4289,19 @@ impl ChartState {
         self.disparity = compute_disparity(&self.bars, 14);
         self.bop = compute_bop(&self.bars, 14);
         self.stddev = compute_stddev(&self.bars, 20);
+        self.mfi = compute_mfi(&self.bars, 14);
+        let (trix_line, trix_signal, trix_hist) = compute_trix(&self.bars, 15, 9);
+        self.trix_line = trix_line;
+        self.trix_signal = trix_signal;
+        self.trix_hist = trix_hist;
+        let (ppo_line, ppo_signal, ppo_hist) = compute_ppo(&self.bars, 12, 26, 9);
+        self.ppo_line = ppo_line;
+        self.ppo_signal = ppo_signal;
+        self.ppo_hist = ppo_hist;
+        self.ultosc = compute_ultosc(&self.bars);
+        let (stochrsi_k, stochrsi_d) = compute_stochrsi(&self.bars, 14, 14, 3, 3);
+        self.stochrsi_k = stochrsi_k;
+        self.stochrsi_d = stochrsi_d;
         self.var_oscillator = compute_var_oscillator(&self.bars, 20);
         self.psar = compute_parabolic_sar(&self.bars, 0.02, 0.2);
         let (au, al) = compute_atr_projection(&self.bars, &self.atr);
@@ -10341,6 +10354,16 @@ pub struct TyphooNApp {
     kraken_scrape_fiat_crypto: bool,
     kraken_scrape_crypto_crosses: bool,
     kraken_scrape_futures: bool,
+    crypto_fiat_quote_usd: bool,
+    crypto_fiat_quote_usdt: bool,
+    crypto_fiat_quote_usdc: bool,
+    crypto_fiat_quote_usdg: bool,
+    crypto_fiat_quote_eur: bool,
+    crypto_fiat_quote_gbp: bool,
+    crypto_fiat_quote_cad: bool,
+    crypto_fiat_quote_aud: bool,
+    crypto_fiat_quote_jpy: bool,
+    crypto_fiat_quote_chf: bool,
 
     /// Finnhub API key.
     finnhub_key: String,
@@ -10713,6 +10736,7 @@ pub struct TyphooNApp {
     storage_filter: String,
     storage_delete_confirm: Option<String>,
     storage_delete_filtered_confirm: bool,
+    storage_prune_disabled_kraken_quotes_confirm: bool,
     storage_purge_bars_confirm: bool,
     storage_purge_darwin_confirm: bool,
     storage_purge_broker_confirm: Option<String>,
@@ -23901,10 +23925,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         if let Some((ws_key, ws_secret, label)) = ws_creds {
                             let ws_kb = KrakenBroker::new(ws_key, ws_secret);
                             ws_status = Some(match ws_kb.get_websockets_token_string().await {
-                                Ok(token) => {
-                                    let preview: String = token.chars().take(8).collect();
-                                    format!("WS auth ready via {} key (token {}...)", label, preview)
-                                }
+                                Ok(_token) => format!("WS auth ready via {} key", label),
                                 Err(e) => format!("WS auth unavailable via {} key: {}", label, e),
                             });
                         }
@@ -25528,7 +25549,7 @@ BrokerCmd::KrakenCloseAll => {
                         let msg_tx = broker_msg_tx_clone.clone();
                         let mut tb = TastytradeBroker::new(sandbox);
                         match tb.login(&username, &password).await {
-                            Ok(session) => {
+                            Ok(_session) => {
                                 let Some(acct) = tb.account_number().map(str::to_string) else {
                                     *tt_dx_token.lock().await = None;
                                     *tt_dx_backoff_until.lock().await = None;
@@ -25575,10 +25596,9 @@ BrokerCmd::KrakenCloseAll => {
                                     }
                                 }
                                 let _ = msg_tx.send(BrokerMsg::Connected(format!(
-                                    "tastytrade {} — account {} (token: {}...)",
+                                    "tastytrade {} — account {}",
                                     if sandbox { "Sandbox" } else { "Production" },
-                                    acct,
-                                    &session.session_token[..session.session_token.len().min(8)]
+                                    acct
                                 )));
                                 if let Some(e) = token_preflight_error {
                                     let _ = msg_tx.send(BrokerMsg::Error(e));
@@ -26410,6 +26430,7 @@ BrokerCmd::KrakenCloseAll => {
             storage_filter: String::new(),
             storage_delete_confirm: None,
             storage_delete_filtered_confirm: false,
+            storage_prune_disabled_kraken_quotes_confirm: false,
             storage_purge_bars_confirm: false,
             storage_purge_darwin_confirm: false,
             storage_purge_broker_confirm: None,
@@ -28542,9 +28563,19 @@ BrokerCmd::KrakenCloseAll => {
             kraken_futures_symbols: Vec::new(),
             kraken_scrape_xstocks: true,
             kraken_scrape_usd_crypto: true,
-            kraken_scrape_fiat_crypto: true,
-            kraken_scrape_crypto_crosses: true,
+            kraken_scrape_fiat_crypto: false,
+            kraken_scrape_crypto_crosses: false,
             kraken_scrape_futures: false,
+            crypto_fiat_quote_usd: true,
+            crypto_fiat_quote_usdt: true,
+            crypto_fiat_quote_usdc: true,
+            crypto_fiat_quote_usdg: true,
+            crypto_fiat_quote_eur: false,
+            crypto_fiat_quote_gbp: false,
+            crypto_fiat_quote_cad: false,
+            crypto_fiat_quote_aud: false,
+            crypto_fiat_quote_jpy: false,
+            crypto_fiat_quote_chf: false,
             live_account: None,
             live_positions: Vec::new(),
             tt_positions: Vec::new(),
@@ -29746,6 +29777,11 @@ mod tests {
     fn kraken_pair_asset_class_identifies_spot_fx() {
         assert_eq!(kraken_pair_asset_class("ZEURZUSD", "EUR/USD"), "fx");
         assert_eq!(kraken_pair_asset_class("AUDJPY", "AUD/JPY"), "fx");
+        assert_eq!(TyphooNApp::kraken_symbol_sector("EURUSD"), 2);
+        assert_eq!(TyphooNApp::kraken_symbol_quote("EURUSD"), Some("USD"));
+        assert!(TyphooNApp::kraken_spot_sector_scrape_enabled_from_flags(
+            2, false, true, false, false, false, false, false, false, false, false, false, false,
+        ));
         assert_eq!(kraken_pair_asset_class("XBTUSD", "BTC/USD"), "crypto");
     }
 
@@ -29762,6 +29798,26 @@ mod tests {
         assert_eq!(
             kraken_xstock_fundamental_symbol("HRTX.EQUSD", "HRTX.EQ/USD"),
             Some("HRTX".to_string())
+        );
+    }
+
+    #[test]
+    fn cryptocompare_backfill_is_crypto_usd_only() {
+        assert_eq!(
+            crate::app::broker_fetch::cryptocompare_backfill_symbol("BTCUSD"),
+            Some("BTCUSD".to_string())
+        );
+        assert_eq!(
+            crate::app::broker_fetch::cryptocompare_backfill_symbol("ETHUSDT"),
+            Some("ETHUSD".to_string())
+        );
+        assert_eq!(
+            crate::app::broker_fetch::cryptocompare_backfill_symbol("EURUSD"),
+            None
+        );
+        assert_eq!(
+            crate::app::broker_fetch::cryptocompare_backfill_symbol("HRTX.EQUSD"),
+            None
         );
     }
 

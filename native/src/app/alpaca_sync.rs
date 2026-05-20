@@ -207,20 +207,7 @@ pub(super) fn alpaca_fetch_key(symbol: &str, timeframe: &str) -> String {
 }
 
 pub(super) fn alpaca_sync_target_bars(tf: &str) -> Option<u32> {
-    match tf {
-        "1Min" => Some(50_000),
-        "5Min" => Some(50_000),
-        "15Min" => Some(30_000),
-        "30Min" => Some(30_000),
-        "1Hour" => Some(30_000),
-        // Keep high-TF targets inside Alpaca's bounded targeted lookback
-        // windows so successful fetches can converge instead of thrashing.
-        "4Hour" => Some(14_000),
-        "1Day" => Some(3_500),
-        "1Week" => Some(1_000),
-        "1Month" => Some(240),
-        _ => None,
-    }
+    normalize_sync_timeframe_key(tf).map(|_| u32::MAX)
 }
 
 pub(super) fn kraken_sync_target_bars(tf: &str) -> Option<u32> {
@@ -231,17 +218,12 @@ pub(super) fn kraken_sync_target_bars(tf: &str) -> Option<u32> {
     }
 }
 
+pub(super) fn kraken_futures_sync_target_bars(tf: &str) -> Option<u32> {
+    normalize_sync_timeframe_key(tf).map(|_| u32::MAX)
+}
+
 pub(super) fn tastytrade_sync_target_bars(tf: &str) -> Option<u32> {
-    match normalize_sync_timeframe_key(tf)? {
-        // DXLink historical candle snapshots have materially shallower practical
-        // limits than Alpaca. Keep targets below the provider cap so successful
-        // fetches converge instead of repeatedly entering shallow-cache backfill.
-        "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" => Some(7_500),
-        "1Day" => Some(3_500),
-        "1Week" => Some(1_000),
-        "1Month" => Some(240),
-        _ => None,
-    }
+    normalize_sync_timeframe_key(tf).map(|_| u32::MAX)
 }
 
 fn classify_alpaca_sync_candidate(
@@ -469,7 +451,7 @@ pub(super) fn select_alpaca_sync_workset(
 
     // Coverage-first mode: if any candidate has no cached bars at all, fill
     // those gaps highest timeframe -> lowest before spending slots on stale
-    // refreshes or shallow-cache backfill. Focus still sorts within a bucket,
+    // refreshes or provider-history backfill. Focus still sorts within a bucket,
     // but it must not allow active-chart refreshes to starve initial coverage.
     let coverage = select_alpaca_sync_candidates(
         symbols,
@@ -1389,15 +1371,15 @@ mod tests {
     }
 
     #[test]
-    fn tastytrade_targets_fit_dxlink_snapshot_depth() {
-        assert_eq!(tastytrade_sync_target_bars("1Min"), Some(7_500));
-        assert_eq!(tastytrade_sync_target_bars("4Hour"), Some(7_500));
-        assert_eq!(tastytrade_sync_target_bars("1Day"), Some(3_500));
-        assert_eq!(tastytrade_sync_target_bars("1Month"), Some(240));
+    fn tastytrade_targets_request_full_dxlink_history() {
+        assert_eq!(tastytrade_sync_target_bars("1Min"), Some(u32::MAX));
+        assert_eq!(tastytrade_sync_target_bars("4Hour"), Some(u32::MAX));
+        assert_eq!(tastytrade_sync_target_bars("1Day"), Some(u32::MAX));
+        assert_eq!(tastytrade_sync_target_bars("1Month"), Some(u32::MAX));
     }
 
     #[test]
-    fn tastytrade_limited_history_target_does_not_force_permanent_backfill() {
+    fn tastytrade_full_history_marker_suppresses_repeat_backfill() {
         let now_s = 1_700_000_000i64;
         let symbols = vec!["AAPL".to_string()];
         let timeframes = vec!["1Hour".to_string()];
@@ -1409,6 +1391,16 @@ mod tests {
                 bar_count: 7_500,
             },
         )]);
+        let backfill_complete = HashMap::from([(
+            alpaca_fetch_key("AAPL", "1Hour"),
+            AlpacaBackfillCompletePair {
+                symbol: "AAPL".to_string(),
+                timeframe: "1Hour".to_string(),
+                marked_at: now_s,
+                bar_count: 7_500,
+                target_bars: 7_500,
+            },
+        )]);
 
         let selected = select_alpaca_sync_candidates(
             &symbols,
@@ -1416,7 +1408,7 @@ mod tests {
             &state_map,
             &HashSet::new(),
             &HashSet::new(),
-            &HashMap::new(),
+            &backfill_complete,
             &HashSet::new(),
             1,
             now_s,
@@ -1424,6 +1416,12 @@ mod tests {
         );
 
         assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn kraken_futures_targets_request_full_history() {
+        assert_eq!(kraken_futures_sync_target_bars("1Min"), Some(u32::MAX));
+        assert_eq!(kraken_futures_sync_target_bars("1Month"), Some(u32::MAX));
     }
 
     #[test]

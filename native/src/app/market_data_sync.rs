@@ -478,16 +478,20 @@ impl TyphooNApp {
             .collect()
     }
 
-    pub(super) fn kraken_symbol_sector(symbol: &str) -> usize {
+    pub(super) fn kraken_symbol_quote(symbol: &str) -> Option<&'static str> {
         let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
         const QUOTES: [&str; 12] = [
             "USDG", "USDT", "USDC", "USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "XBT", "BTC",
         ];
-        let quote = QUOTES
+        QUOTES
             .iter()
             .find(|quote| symbol.ends_with(**quote))
             .copied()
-            .unwrap_or("");
+    }
+
+    pub(super) fn kraken_symbol_sector(symbol: &str) -> usize {
+        let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
+        let quote = Self::kraken_symbol_quote(&symbol).unwrap_or("");
         let base = if quote.is_empty() || quote.len() >= symbol.len() {
             symbol.as_str()
         } else {
@@ -511,17 +515,82 @@ impl TyphooNApp {
 
     pub(super) fn kraken_any_spot_scrape_enabled(&self) -> bool {
         self.kraken_scrape_xstocks
-            || self.kraken_scrape_usd_crypto
-            || self.kraken_scrape_fiat_crypto
+            || self.crypto_fiat_quote_usd
+            || self.crypto_fiat_quote_usdt
+            || self.crypto_fiat_quote_usdc
+            || self.crypto_fiat_quote_usdg
+            || self.crypto_fiat_quote_eur
+            || self.crypto_fiat_quote_gbp
+            || self.crypto_fiat_quote_cad
+            || self.crypto_fiat_quote_aud
+            || self.crypto_fiat_quote_jpy
+            || self.crypto_fiat_quote_chf
             || self.kraken_scrape_crypto_crosses
     }
 
+    pub(super) fn crypto_fiat_quote_scrape_enabled(&self, quote: &str) -> bool {
+        match quote {
+            "USD" => self.crypto_fiat_quote_usd,
+            "USDT" => self.crypto_fiat_quote_usdt,
+            "USDC" => self.crypto_fiat_quote_usdc,
+            "USDG" => self.crypto_fiat_quote_usdg,
+            "EUR" => self.crypto_fiat_quote_eur,
+            "GBP" => self.crypto_fiat_quote_gbp,
+            "CAD" => self.crypto_fiat_quote_cad,
+            "AUD" => self.crypto_fiat_quote_aud,
+            "JPY" => self.crypto_fiat_quote_jpy,
+            "CHF" => self.crypto_fiat_quote_chf,
+            _ => false,
+        }
+    }
+
     pub(super) fn kraken_spot_sector_scrape_enabled(&self, sector: usize) -> bool {
+        Self::kraken_spot_sector_scrape_enabled_from_flags(
+            sector,
+            self.kraken_scrape_xstocks,
+            self.crypto_fiat_quote_usd,
+            self.crypto_fiat_quote_usdt,
+            self.crypto_fiat_quote_usdc,
+            self.crypto_fiat_quote_usdg,
+            self.crypto_fiat_quote_eur,
+            self.crypto_fiat_quote_gbp,
+            self.crypto_fiat_quote_cad,
+            self.crypto_fiat_quote_aud,
+            self.crypto_fiat_quote_jpy,
+            self.crypto_fiat_quote_chf,
+            self.kraken_scrape_crypto_crosses,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn kraken_spot_sector_scrape_enabled_from_flags(
+        sector: usize,
+        xstocks: bool,
+        quote_usd: bool,
+        quote_usdt: bool,
+        quote_usdc: bool,
+        quote_usdg: bool,
+        quote_eur: bool,
+        quote_gbp: bool,
+        quote_cad: bool,
+        quote_aud: bool,
+        quote_jpy: bool,
+        quote_chf: bool,
+        crypto_crosses: bool,
+    ) -> bool {
         match sector {
-            0 => self.kraken_scrape_xstocks,
-            1 => self.kraken_scrape_usd_crypto,
-            2 => self.kraken_scrape_fiat_crypto,
-            3 => self.kraken_scrape_crypto_crosses,
+            0 => xstocks,
+            1 => quote_usd || quote_usdt || quote_usdc || quote_usdg,
+            2 => {
+                quote_usd
+                    || quote_eur
+                    || quote_gbp
+                    || quote_cad
+                    || quote_aud
+                    || quote_jpy
+                    || quote_chf
+            }
+            3 => crypto_crosses,
             _ => false,
         }
     }
@@ -533,7 +602,15 @@ impl TyphooNApp {
         {
             return false;
         }
-        self.kraken_spot_sector_scrape_enabled(Self::kraken_symbol_sector(&symbol))
+        let sector = Self::kraken_symbol_sector(&symbol);
+        if !self.kraken_spot_sector_scrape_enabled(sector) {
+            return false;
+        }
+        match sector {
+            1 | 2 => Self::kraken_symbol_quote(&symbol)
+                .is_some_and(|quote| self.crypto_fiat_quote_scrape_enabled(quote)),
+            _ => true,
+        }
     }
 
     pub(super) fn kraken_sync_symbol_sectors(&self) -> Vec<Vec<String>> {
@@ -930,8 +1007,13 @@ impl TyphooNApp {
     }
 
     fn is_unresolvable_fetch_key(&self, broker: &str, symbol: &str, timeframe: &str) -> bool {
-        self.unresolvable_pairs
-            .contains_key(&unresolvable_pair_key(broker, symbol, timeframe))
+        let fetch_key = alpaca_fetch_key(symbol, timeframe);
+        self.unresolvable_fetch_keys_by_broker
+            .get(&broker.to_ascii_lowercase())
+            .is_some_and(|keys| keys.contains(&fetch_key))
+            || self
+                .unresolvable_pairs
+                .contains_key(&unresolvable_pair_key(broker, symbol, timeframe))
     }
 
     pub(super) fn schedule_alpaca_pairs(&mut self, symbols: &[String]) -> usize {
@@ -974,6 +1056,11 @@ impl TyphooNApp {
         if let Some(unresolvable) = self.unresolvable_fetch_keys_by_broker.get("alpaca") {
             no_data_keys.extend(unresolvable.iter().cloned());
         }
+        no_data_keys.extend(
+            self.alpaca_retry_queue
+                .iter()
+                .map(|retry| alpaca_fetch_key(&retry.symbol, &retry.timeframe)),
+        );
         let mut cursor = self.alpaca_sync_cursor;
         let candidates = select_alpaca_sync_workset_rotating(
             symbols,
@@ -1159,7 +1246,7 @@ impl TyphooNApp {
             scan_limit,
             &mut cursor,
             now_s,
-            kraken_sync_target_bars,
+            kraken_futures_sync_target_bars,
         );
         self.kraken_futures_sync_cursors[cursor_idx] = cursor;
         let mut dispatched = 0usize;

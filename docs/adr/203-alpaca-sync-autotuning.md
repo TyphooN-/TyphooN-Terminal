@@ -73,16 +73,18 @@ The sync loop now reads the user's per-symbol cache-depth target and
 sizes each request to hit it without overshooting. The 250-bar fixed
 window is gone.
 
-### 3. No-data symbol skip set
+### 3. No-data tombstones and retry ownership
 
-Symbols that Alpaca consistently returns empty for are tracked in a
-broker-side skip set. The sync scheduler reads the set before
-queuing a request and bypasses symbol-TF pairs that have failed
-N consecutive times. The set is cleared on tier-change or on user
-action (e.g. when a new subscription unlocks coverage). This is
-effectively the dual of the persistent retry queue from earlier
-work — the queue handles transient 429s, the skip set handles
-permanent no-data.
+Symbols that Alpaca definitively returns no data for are tracked in app-side
+persisted KV tombstones under `alpaca:no_data_pairs`. The sync scheduler reads
+those normalized `SYMBOL:Timeframe` keys before queuing and bypasses pairs the
+broker cannot serve. A successful later bar write clears the no-data mark, and
+users can clear markers explicitly after coverage/subscription changes.
+
+Transient 429/partial/empty outcomes are owned by the persisted Alpaca retry
+queue instead. Retry entries are scheduler exclusions until their backoff
+expires, so a rate-limited partial write cannot be immediately requeued by the
+broad Missing/Stale/Backfill scheduler.
 
 ### 4. Close-reject surfacing
 
@@ -103,7 +105,7 @@ The automated scheduler now keeps the per-cycle candidate walk allocation-light:
 - Alpaca scheduling only rebuilds Alpaca's own cache-state map on `bg_rev` changes; it no longer warms Kraken/Futures/tastytrade maps from the Alpaca tick.
 - Timeframe de-duplication uses a side `HashSet` while preserving high-to-low ordering (`1Month` → `1Min`).
 - Coverage-first scheduling is the top priority: if a scanned symbol/timeframe has no cached bars at all, the scheduler fills those missing pairs highest timeframe → lowest before spending any slot on stale refresh or shallow-cache backfill. Foreground/focus symbols only sort within the same bucket; they no longer preempt never-cached coverage.
-- `BarsFetched` updates cache state and UI, but Alpaca pending slots are only released by `AlpacaFetchSettled`. This prevents the `BarsFetched`/`FetchSettled` race that repeatedly requeued shallow symbols such as `GDC @ 4Hour` before backfill-complete bookkeeping arrived.
+- `BarsFetched` updates cache state and UI, but Alpaca pending slots are only released by `AlpacaFetchSettled`. Successful settlements drain retry entries and refill scheduler slots; failure/rate-limit settlements leave refill to the retry queue or the next normal scheduler tick. This prevents the `BarsFetched`/`FetchSettled` race that repeatedly requeued shallow or rate-limited symbols before retry/backfill-complete bookkeeping arrived.
 - Automated Alpaca writes do not synchronously rescan SQLite storage statistics unless the Storage/Cache windows are visible. Scheduler freshness is updated through `note_cached_sync_success`, keeping chart interaction responsive while bulk sync runs.
 - Sync Health uses the last broker check/write time as a recent-health signal when the provider's latest available market bar is intrinsically old. A successfully checked symbol with no newer Alpaca bars should not make the broker look less healthy immediately after sync.
 

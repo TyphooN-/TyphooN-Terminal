@@ -128,6 +128,41 @@ impl TyphooNApp {
         }
     }
 
+    pub(super) fn disabled_kraken_quote_cache_keys(&self) -> Vec<String> {
+        const FIAT_QUOTES: [&str; 10] = [
+            "USD", "USDT", "USDC", "USDG", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF",
+        ];
+        const FIAT_BASES: [&str; 7] = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF"];
+
+        let mut keys = Vec::new();
+        for (key, _, _) in &self.bg.detailed_stats {
+            let Some(rest) = key.strip_prefix("kraken:") else {
+                continue;
+            };
+            let Some((symbol, _timeframe)) = rest.split_once(':') else {
+                continue;
+            };
+            let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
+            let Some(quote) = Self::kraken_symbol_quote(&symbol) else {
+                continue;
+            };
+            if !FIAT_QUOTES.contains(&quote) || self.crypto_fiat_quote_scrape_enabled(quote) {
+                continue;
+            }
+            let base = symbol
+                .strip_suffix(quote)
+                .unwrap_or(symbol.as_str())
+                .trim_end_matches('/');
+            if FIAT_BASES.contains(&base) {
+                continue;
+            }
+            keys.push(key.clone());
+        }
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+
     pub(super) fn render_storage_table(&mut self, ui: &mut egui::Ui) {
         if !self.alpaca_no_data_loaded {
             self.alpaca_no_data_load();
@@ -233,6 +268,72 @@ impl TyphooNApp {
                         });
                 });
         }
+        let disabled_kraken_quote_keys = self.disabled_kraken_quote_cache_keys();
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Disabled Kraken quote caches: {}",
+                    disabled_kraken_quote_keys.len()
+                ))
+                .small()
+                .color(AXIS_TEXT),
+            );
+            if self.storage_prune_disabled_kraken_quotes_confirm {
+                if ui
+                    .add_enabled(
+                        !disabled_kraken_quote_keys.is_empty(),
+                        egui::Button::new(
+                            egui::RichText::new(format!(
+                                "Confirm prune {} disabled Kraken quotes?",
+                                disabled_kraken_quote_keys.len()
+                            ))
+                            .small()
+                            .strong()
+                            .color(egui::Color32::from_rgb(231, 76, 60)),
+                        ),
+                    )
+                    .on_hover_text("Delete Kraken Spot crypto/fiat cache entries whose quote currency is disabled in the global crypto quote filters. Keeps enabled USD/stablecoin caches and pure fiat FX pairs.")
+                    .clicked()
+                {
+                    if let Some(cache) = self.cache.clone() {
+                        match cache.delete_keys(&disabled_kraken_quote_keys) {
+                            Ok(deleted) => self.log.push_back(LogEntry::info(format!(
+                                "Pruned {} disabled Kraken quote cache entr{}",
+                                deleted,
+                                if deleted == 1 { "y" } else { "ies" }
+                            ))),
+                            Err(e) => self.log.push_back(LogEntry::err(format!(
+                                "Prune disabled Kraken quotes failed: {}",
+                                e
+                            ))),
+                        }
+                        self.refresh_storage_snapshot_after_action("disabled Kraken quote prune");
+                    }
+                    self.pending_kraken_fetches.clear();
+                    self.storage_prune_disabled_kraken_quotes_confirm = false;
+                    self.storage_delete_confirm = None;
+                    self.storage_delete_filtered_confirm = false;
+                    self.storage_page = 0;
+                }
+                if ui.small_button(egui::RichText::new("Cancel").small()).clicked() {
+                    self.storage_prune_disabled_kraken_quotes_confirm = false;
+                }
+            } else if ui
+                .add_enabled(
+                    !disabled_kraken_quote_keys.is_empty(),
+                    egui::Button::new(
+                        egui::RichText::new("Prune disabled Kraken quotes")
+                            .small()
+                            .color(egui::Color32::from_rgb(231, 76, 60)),
+                    ),
+                )
+                .on_hover_text("Delete cached Kraken Spot crypto/fiat pairs whose quote currency is disabled. Useful after narrowing to USD/stablecoin quotes.")
+                .on_disabled_hover_text("No cached Kraken Spot entries currently match disabled quote filters.")
+                .clicked()
+            {
+                self.storage_prune_disabled_kraken_quotes_confirm = true;
+            }
+        });
         ui.separator();
         ui.horizontal(|ui| {
             ui.label("Filter:");

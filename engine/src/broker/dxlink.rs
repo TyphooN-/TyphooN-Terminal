@@ -32,6 +32,19 @@ pub struct DxCandle {
     pub volume: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DxSnapshotStatus {
+    Complete,
+    Snipped,
+    TimedOut,
+}
+
+#[derive(Debug, Clone)]
+pub struct DxCandleFetch {
+    pub candles: Vec<DxCandle>,
+    pub status: DxSnapshotStatus,
+}
+
 /// A live quote snapshot from DXLink.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DxQuote {
@@ -119,6 +132,21 @@ pub async fn fetch_candles(
     interval: &str, // "1d", "1h", "5m", etc.
     from_time_ms: i64,
 ) -> Result<Vec<DxCandle>, String> {
+    Ok(
+        fetch_candles_with_status(dx_token, symbol, interval, from_time_ms)
+            .await?
+            .candles,
+    )
+}
+
+/// Fetch historical candles via DXLink WebSocket and return whether the server
+/// exhausted the requested snapshot or snipped it because more history exists.
+pub async fn fetch_candles_with_status(
+    dx_token: &DxLinkToken,
+    symbol: &str,
+    interval: &str, // "1d", "1h", "5m", etc.
+    from_time_ms: i64,
+) -> Result<DxCandleFetch, String> {
     // Connect
     let (ws_stream, _) = connect_async(&dx_token.url)
         .await
@@ -345,11 +373,16 @@ pub async fn fetch_candles(
 
                             // Check for SNAPSHOT_END (0x8) or SNAPSHOT_SNIP (0x10)
                             if flags & 0x8 != 0 || flags & 0x10 != 0 {
-                                // Snapshot complete — close and return
+                                // Snapshot complete/snipped — close and return
                                 let _ = sink.send(Message::Close(None)).await;
                                 candles.sort_by_key(|c| c.time);
                                 candles.dedup_by_key(|c| c.time);
-                                return Ok(candles);
+                                let status = if flags & 0x10 != 0 {
+                                    DxSnapshotStatus::Snipped
+                                } else {
+                                    DxSnapshotStatus::Complete
+                                };
+                                return Ok(DxCandleFetch { candles, status });
                             }
                         }
                     }
@@ -363,7 +396,10 @@ pub async fn fetch_candles(
     let _ = sink.send(Message::Close(None)).await;
     candles.sort_by_key(|c| c.time);
     candles.dedup_by_key(|c| c.time);
-    Ok(candles)
+    Ok(DxCandleFetch {
+        candles,
+        status: DxSnapshotStatus::TimedOut,
+    })
 }
 
 /// Subscribe to real-time Quote events via a persistent DXLink WebSocket.
@@ -684,6 +720,31 @@ mod tests {
         let cloned = candle.clone();
         assert_eq!(cloned.symbol, "SPY");
         assert_eq!(cloned.time, 100);
+    }
+
+    #[test]
+    fn dx_snapshot_status_distinguishes_complete_from_snipped() {
+        assert_eq!(DxSnapshotStatus::Complete, DxSnapshotStatus::Complete);
+        assert_ne!(DxSnapshotStatus::Complete, DxSnapshotStatus::Snipped);
+        assert_ne!(DxSnapshotStatus::Snipped, DxSnapshotStatus::TimedOut);
+    }
+
+    #[test]
+    fn dx_candle_fetch_carries_snapshot_status() {
+        let fetch = DxCandleFetch {
+            candles: vec![DxCandle {
+                symbol: "SPY".to_string(),
+                time: 100,
+                open: 1.0,
+                high: 2.0,
+                low: 0.5,
+                close: 1.5,
+                volume: 500.0,
+            }],
+            status: DxSnapshotStatus::Snipped,
+        };
+        assert_eq!(fetch.candles.len(), 1);
+        assert_eq!(fetch.status, DxSnapshotStatus::Snipped);
     }
 
     #[test]

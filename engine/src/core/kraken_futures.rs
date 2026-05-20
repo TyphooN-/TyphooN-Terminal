@@ -56,14 +56,6 @@ fn timeframe_period_ms(tf: &str) -> Option<i64> {
     }
 }
 
-fn default_fetch_bars(tf: &str) -> i64 {
-    match tf {
-        "1Day" => 3_500,
-        "1Week" => 1_000,
-        _ => 720,
-    }
-}
-
 pub async fn discover_instruments(client: &reqwest::Client) -> Result<Vec<String>, String> {
     let resp = client
         .get(INSTRUMENTS_URL)
@@ -155,7 +147,10 @@ pub async fn fetch_candles(
     let mut cursor_ms = if start_ms > 0 {
         start_ms
     } else {
-        end_ms.saturating_sub(period_ms.saturating_mul(default_fetch_bars(timeframe)))
+        chrono::NaiveDate::from_ymd_opt(2018, 1, 1)
+            .and_then(|d| d.and_hms_opt(0, 0, 0))
+            .map(|ndt| ndt.and_utc().timestamp_millis())
+            .unwrap_or(0)
     }
     .max(0);
 
@@ -163,7 +158,7 @@ pub async fn fetch_candles(
     let url = format!("{CHARTS_BASE}/trade/{symbol}/{resolution}");
     let mut all_bars = Vec::new();
     let mut guard = 0usize;
-    while cursor_ms <= end_ms && guard < 2_500 {
+    while cursor_ms <= end_ms && guard < 10_000 {
         guard += 1;
         let chunk_end_ms = cursor_ms.saturating_add(chunk_ms).min(end_ms);
         let from = cursor_ms / 1000;
@@ -190,7 +185,7 @@ pub async fn fetch_candles(
         }
         cursor_ms = chunk_end_ms.saturating_add(period_ms);
     }
-    if guard >= 2_500 {
+    if guard >= 10_000 {
         return Err("Kraken futures candle pagination guard reached".into());
     }
 

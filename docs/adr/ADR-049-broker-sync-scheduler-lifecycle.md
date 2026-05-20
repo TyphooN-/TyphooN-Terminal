@@ -24,17 +24,28 @@ The broker sync scheduler is cursor-limited and high-timeframe-first for all bro
 2. Keep the scan budget fixed per refill, independent of total universe size.
 3. Select work by bucket in this order: `Missing`, `Stale`, `Backfill`.
 4. Skip any `(symbol, timeframe)` whose normalized pending key already exists.
-5. Use persisted no-data and backfill-complete markers to avoid repeating known unproductive backfills.
+5. Alpaca retry-queue entries are also scheduler exclusions. Retry dispatch owns
+   those keys until their backoff expires, preventing rate-limited partial
+   results from being immediately requeued by the broad scheduler.
+6. Use persisted no-data and backfill-complete markers to avoid repeating known unproductive backfills.
+   Alpaca has app-side persisted no-data tombstones; Kraken, Kraken Futures,
+   and tastytrade primarily use generic broker-unresolvable markers plus
+   persisted backfill-complete markers. Backfill-complete markers are stored
+   under `{broker}:backfill_complete_pairs` and suppress repeat `Backfill`
+   scheduling while still allowing Missing/Stale freshness sync.
    Persisted broker-unresolvable markers are kept in per-broker `HashSet`
    indexes (`broker -> SYMBOL:TF`) so each candidate suppression check is an
    O(1) membership lookup and the scheduler no longer rebuilds filtered
    tombstone sets on every refill.
-6. Brokers with explicit terminal settlement messages keep their pending slot until settlement:
+7. Brokers with explicit terminal settlement messages keep their pending slot until settlement:
    - Alpaca: `AlpacaFetchSettled`
    - Kraken Spot: `KrakenFetchSettled`
    - Kraken Futures: `KrakenFuturesFetchSettled`
    - tastytrade: `TastytradeFetchSettled`
-7. `BarsFetched` remains an intermediate UI/cache refresh signal for those brokers; it must not own scheduler release.
+8. `BarsFetched` remains an intermediate UI/cache refresh signal for those brokers; it must not own scheduler release.
+9. Settlement handlers release provider-specific pending keys and refill sync
+   slots. Alpaca failure/rate-limit settlements do not immediately refill; the
+   retry queue or the next normal scheduler tick controls the next attempt.
 
 ## Consequences
 
@@ -44,7 +55,7 @@ The broker sync scheduler is cursor-limited and high-timeframe-first for all bro
 - Async broker fetch workers now live in `native/src/app/broker_fetch.rs`, keeping network-response parsing and task dispatch out of the parent `app.rs` integration file.
 - High timeframes obtain broad initial coverage before low-timeframe backfills consume the queue.
 - Manual/foreground and background fetches are deduplicated through the same normalized pending-key sets.
-- Thin-history instruments converge instead of being requeued every few seconds after successful shallow responses.
+- Thin-history or provider-exhausted instruments converge instead of being requeued every few seconds after successful bounded responses.
 - Recent successful writes are merged back into rebuilt sync-state maps so a `bg_rev` bump does not immediately make a just-settled pair look stale again. This applies both in scheduler entry points and in the app-frame cache refresh path.
 
 ## Verification

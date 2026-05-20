@@ -467,6 +467,15 @@ fn encode_form_params(params: &[(String, String)]) -> String {
         .join("&")
 }
 
+fn sanitize_api_error_body(body: &str) -> String {
+    let mut clean = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if clean.len() > 512 {
+        clean.truncate(512);
+        clean.push('…');
+    }
+    clean
+}
+
 fn kraken_private_rest_counter_cost(path: &str) -> f64 {
     let endpoint = path.rsplit('/').next().unwrap_or(path);
     if matches!(
@@ -618,7 +627,12 @@ impl KrakenBroker {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
-                let err = format!("Kraken API error {status}: {body}");
+                let body = sanitize_api_error_body(&body);
+                let err = if body.is_empty() {
+                    format!("Kraken API error {status}")
+                } else {
+                    format!("Kraken API error {status}: {body}")
+                };
                 if cost > 0.0 && crate::core::kraken::is_kraken_rate_limit_error(&err) {
                     let wait = self.private_limiter.record_rate_limited(&err).await;
                     if attempt + 1 < max_attempts {

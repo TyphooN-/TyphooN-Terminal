@@ -270,12 +270,22 @@ impl TyphooNApp {
 
     pub(super) fn build_sync_preferences_value(&self) -> serde_json::Value {
         serde_json::json!({
-            "kraken_scrape_schema": 2,
+            "kraken_scrape_schema": 3,
             "kraken_scrape_xstocks": self.kraken_scrape_xstocks,
             "kraken_scrape_usd_crypto": self.kraken_scrape_usd_crypto,
             "kraken_scrape_fiat_crypto": self.kraken_scrape_fiat_crypto,
             "kraken_scrape_crypto_crosses": self.kraken_scrape_crypto_crosses,
             "kraken_scrape_futures": self.kraken_scrape_futures,
+            "crypto_fiat_quote_usd": self.crypto_fiat_quote_usd,
+            "crypto_fiat_quote_usdt": self.crypto_fiat_quote_usdt,
+            "crypto_fiat_quote_usdc": self.crypto_fiat_quote_usdc,
+            "crypto_fiat_quote_usdg": self.crypto_fiat_quote_usdg,
+            "crypto_fiat_quote_eur": self.crypto_fiat_quote_eur,
+            "crypto_fiat_quote_gbp": self.crypto_fiat_quote_gbp,
+            "crypto_fiat_quote_cad": self.crypto_fiat_quote_cad,
+            "crypto_fiat_quote_aud": self.crypto_fiat_quote_aud,
+            "crypto_fiat_quote_jpy": self.crypto_fiat_quote_jpy,
+            "crypto_fiat_quote_chf": self.crypto_fiat_quote_chf,
             "fund_source_mt5": self.fund_source_mt5,
             "fund_source_alpaca": self.fund_source_alpaca,
             "fund_source_tastytrade": self.fund_source_tastytrade,
@@ -312,6 +322,59 @@ impl TyphooNApp {
             self.kraken_scrape_fiat_crypto = true;
             self.kraken_scrape_crypto_crosses = true;
         }
+        if kraken_scrape_schema < 3 {
+            self.crypto_fiat_quote_usd = self.kraken_scrape_usd_crypto;
+            self.crypto_fiat_quote_usdt = self.kraken_scrape_usd_crypto;
+            self.crypto_fiat_quote_usdc = self.kraken_scrape_usd_crypto;
+            self.crypto_fiat_quote_usdg = self.kraken_scrape_usd_crypto;
+            self.crypto_fiat_quote_eur = self.kraken_scrape_fiat_crypto;
+            self.crypto_fiat_quote_gbp = self.kraken_scrape_fiat_crypto;
+            self.crypto_fiat_quote_cad = self.kraken_scrape_fiat_crypto;
+            self.crypto_fiat_quote_aud = self.kraken_scrape_fiat_crypto;
+            self.crypto_fiat_quote_jpy = self.kraken_scrape_fiat_crypto;
+            self.crypto_fiat_quote_chf = self.kraken_scrape_fiat_crypto;
+        } else {
+            if let Some(enabled) = value["crypto_fiat_quote_usd"].as_bool() {
+                self.crypto_fiat_quote_usd = enabled;
+            }
+            if let Some(enabled) = value["crypto_fiat_quote_usdt"].as_bool() {
+                self.crypto_fiat_quote_usdt = enabled;
+            }
+            if let Some(enabled) = value["crypto_fiat_quote_usdc"].as_bool() {
+                self.crypto_fiat_quote_usdc = enabled;
+            }
+            if let Some(enabled) = value["crypto_fiat_quote_usdg"].as_bool() {
+                self.crypto_fiat_quote_usdg = enabled;
+            }
+            if let Some(enabled) = value["crypto_fiat_quote_eur"].as_bool() {
+                self.crypto_fiat_quote_eur = enabled;
+            }
+            if let Some(enabled) = value["crypto_fiat_quote_gbp"].as_bool() {
+                self.crypto_fiat_quote_gbp = enabled;
+            }
+            if let Some(enabled) = value["crypto_fiat_quote_cad"].as_bool() {
+                self.crypto_fiat_quote_cad = enabled;
+            }
+            if let Some(enabled) = value["crypto_fiat_quote_aud"].as_bool() {
+                self.crypto_fiat_quote_aud = enabled;
+            }
+            if let Some(enabled) = value["crypto_fiat_quote_jpy"].as_bool() {
+                self.crypto_fiat_quote_jpy = enabled;
+            }
+            if let Some(enabled) = value["crypto_fiat_quote_chf"].as_bool() {
+                self.crypto_fiat_quote_chf = enabled;
+            }
+        }
+        self.kraken_scrape_usd_crypto = self.crypto_fiat_quote_usd
+            || self.crypto_fiat_quote_usdt
+            || self.crypto_fiat_quote_usdc
+            || self.crypto_fiat_quote_usdg;
+        self.kraken_scrape_fiat_crypto = self.crypto_fiat_quote_eur
+            || self.crypto_fiat_quote_gbp
+            || self.crypto_fiat_quote_cad
+            || self.crypto_fiat_quote_aud
+            || self.crypto_fiat_quote_jpy
+            || self.crypto_fiat_quote_chf;
         if let Some(enabled) = value["kraken_scrape_futures"].as_bool() {
             self.kraken_scrape_futures = enabled;
         }
@@ -489,12 +552,22 @@ impl TyphooNApp {
             "mtf_enabled": self.mtf_enabled,
             "mtf_cols": self.mtf_cols,
             "mtf_visible": self.mtf_visible,
-            "kraken_scrape_schema": 2,
+            "kraken_scrape_schema": 3,
             "kraken_scrape_xstocks": self.kraken_scrape_xstocks,
             "kraken_scrape_usd_crypto": self.kraken_scrape_usd_crypto,
             "kraken_scrape_fiat_crypto": self.kraken_scrape_fiat_crypto,
             "kraken_scrape_crypto_crosses": self.kraken_scrape_crypto_crosses,
             "kraken_scrape_futures": self.kraken_scrape_futures,
+            "crypto_fiat_quote_usd": self.crypto_fiat_quote_usd,
+            "crypto_fiat_quote_usdt": self.crypto_fiat_quote_usdt,
+            "crypto_fiat_quote_usdc": self.crypto_fiat_quote_usdc,
+            "crypto_fiat_quote_usdg": self.crypto_fiat_quote_usdg,
+            "crypto_fiat_quote_eur": self.crypto_fiat_quote_eur,
+            "crypto_fiat_quote_gbp": self.crypto_fiat_quote_gbp,
+            "crypto_fiat_quote_cad": self.crypto_fiat_quote_cad,
+            "crypto_fiat_quote_aud": self.crypto_fiat_quote_aud,
+            "crypto_fiat_quote_jpy": self.crypto_fiat_quote_jpy,
+            "crypto_fiat_quote_chf": self.crypto_fiat_quote_chf,
             "enabled_sync_timeframes": STANDARD_SYNC_TIMEFRAMES.iter()
                 .filter_map(|(_, tf)| self.enabled_sync_timeframes.contains(*tf).then(|| serde_json::json!(tf)))
                 .collect::<Vec<_>>(),

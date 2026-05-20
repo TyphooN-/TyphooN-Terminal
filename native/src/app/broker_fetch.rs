@@ -68,10 +68,9 @@ pub(super) async fn run_alpaca_fetch_task(
         .map(|(_, count)| *count as i64)
         .unwrap_or(0);
     let mut after_ts = incremental.as_ref().map(|(ts, _)| ts.clone());
-    let shallow = alpaca_sync_target_bars(&timeframe)
+    let needs_backfill = alpaca_sync_target_bars(&timeframe)
         .map(|target| cached_count > 0 && cached_count * 100 < (target as i64) * 95)
         .unwrap_or(false);
-    let target_limit = alpaca_sync_target_bars(&timeframe).unwrap_or(10_000);
 
     let mut success = false;
     if mt5_has_bars {
@@ -87,26 +86,24 @@ pub(super) async fn run_alpaca_fetch_task(
         )));
         success = true;
     } else {
-        if shallow {
+        if needs_backfill {
             after_ts = None;
         }
 
         let result = if after_ts.is_none() {
-            let msg = if incremental.is_some() && shallow {
+            let msg = if incremental.is_some() && needs_backfill {
                 format!(
-                    "Alpaca {} {}: shallow cache ({} bars) — syncing target depth ({} bars)...",
-                    api_symbol, timeframe, cached_count, target_limit
+                    "Alpaca {} {}: cache has {} bars — syncing full server history...",
+                    api_symbol, timeframe, cached_count
                 )
             } else {
                 format!(
-                    "Alpaca {} {}: fetching target depth ({} bars, first sync)...",
-                    api_symbol, timeframe, target_limit
+                    "Alpaca {} {}: fetching full server history (first sync)...",
+                    api_symbol, timeframe
                 )
             };
             let _ = broker_msg_tx.send(BrokerMsg::OrderResult(msg));
-            broker
-                .get_target_bars(&api_symbol, tf_alpaca, target_limit)
-                .await
+            broker.get_all_bars(&api_symbol, tf_alpaca, None).await
         } else {
             if let Some(ref ts) = after_ts {
                 let delta_limit = alpaca_incremental_fetch_limit(&timeframe, after_ts.as_deref());
@@ -183,13 +180,12 @@ pub(super) async fn run_alpaca_fetch_task(
                                 outcome,
                                 typhoon_engine::broker::alpaca::FetchOutcome::Complete
                             )
-                            && count < target_limit as usize
                         {
                             let _ = broker_msg_tx.send(BrokerMsg::AlpacaBackfillComplete {
                                 symbol: symbol.clone(),
                                 timeframe: timeframe.clone(),
                                 bar_count: count,
-                                target_bars: target_limit as usize,
+                                target_bars: count,
                             });
                         }
                         let _ = broker_msg_tx.send(BrokerMsg::BarsFetched {
@@ -289,6 +285,30 @@ fn merge_json_bars(
     existing
 }
 
+pub(super) fn cryptocompare_backfill_symbol(symbol: &str) -> Option<String> {
+    let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
+    if symbol.is_empty() || symbol.contains(".EQ") {
+        return None;
+    }
+    const FIAT: &[&str] = &["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF"];
+    const USD_QUOTES: &[&str] = &["USDG", "USDT", "USDC", "USD"];
+    for quote in USD_QUOTES {
+        if let Some(base) = symbol.strip_suffix(quote) {
+            if !base.is_empty() && !FIAT.contains(&base) {
+                return Some(format!("{base}USD"));
+            }
+        }
+    }
+    None
+}
+
+fn cryptocompare_backfill_floor_ms() -> i64 {
+    chrono::NaiveDate::from_ymd_opt(2010, 1, 1)
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|ndt| ndt.and_utc().timestamp_millis())
+        .unwrap_or(0)
+}
+
 async fn store_json_bars_in_cache(
     cache_handle: Option<std::sync::Arc<SqliteCache>>,
     cache_key: String,
@@ -344,20 +364,29 @@ pub(super) async fn run_kraken_fetch_task(
         .map(|(_, count)| *count as i64)
         .unwrap_or(0);
     let mut after_ts = incremental.as_ref().map(|(ts, _)| ts.clone());
-    let shallow = kraken_sync_target_bars(&timeframe)
+    let needs_backfill = kraken_sync_target_bars(&timeframe)
         .map(|target| cached_count > 0 && cached_count * 100 < (target as i64) * 95)
         .unwrap_or(false);
 
-    if shallow {
+    if needs_backfill {
         after_ts = None;
     }
+    let now_ms = chrono::Utc::now().timestamp_millis();
     let start_ms = after_ts
         .as_deref()
         .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc).timestamp_millis())
-        .unwrap_or(0);
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let log_msg = if incremental.is_some() && shallow {
+        .unwrap_or_else(|| {
+            let target = kraken_sync_target_bars(&timeframe).unwrap_or(720) as i64;
+            let headroom = (target / 10).max(24);
+            let period_s = sync_timeframe_period_secs(&timeframe).unwrap_or(60);
+            now_ms.saturating_sub(
+                period_s
+                    .saturating_mul(1000)
+                    .saturating_mul(target.saturating_add(headroom)),
+            )
+        });
+    let log_msg = if incremental.is_some() && needs_backfill {
         format!(
             "Kraken {} {}: limited-history cache ({} bars) — refreshing recent window...",
             symbol, timeframe, cached_count
@@ -373,12 +402,58 @@ pub(super) async fn run_kraken_fetch_task(
         format!("Kraken {} {}: fetching recent window...", symbol, timeframe)
     };
     let _ = broker_msg_tx.send(BrokerMsg::OrderResult(log_msg));
+    let mut cryptocompare_backfill = Vec::new();
+    if after_ts.is_none() {
+        if let Some(cc_symbol) = cryptocompare_backfill_symbol(&symbol) {
+            if let Some(secs) = typhoon_engine::core::cryptocompare::rate_limited_for_secs() {
+                let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                    "CryptoCompare backfill skipped for {} {}: rate-limit backoff {}s; using Kraken provider window",
+                    symbol, timeframe, secs
+                )));
+            } else {
+                let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                    "CryptoCompare backfill for {} {} before Kraken recent window...",
+                    symbol, timeframe
+                )));
+                match typhoon_engine::core::cryptocompare::fetch_ohlcv(
+                    &client,
+                    &cc_symbol,
+                    &timeframe,
+                    cryptocompare_backfill_floor_ms(),
+                    now_ms,
+                )
+                .await
+                {
+                    Ok(bars) => {
+                        if !bars.is_empty() {
+                            let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                                "CryptoCompare backfill for {} {} returned {} bars",
+                                symbol,
+                                timeframe,
+                                bars.len()
+                            )));
+                            cryptocompare_backfill = bars;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                            "CryptoCompare backfill skipped for {} {}: {}; using Kraken provider window",
+                            symbol, timeframe, e
+                        )));
+                    }
+                }
+            }
+        }
+    }
     match typhoon_engine::core::kraken::fetch_binance_klines(
         &client, &symbol, &timeframe, start_ms, now_ms,
     )
     .await
     {
-        Ok(new_bars) => {
+        Ok(mut new_bars) => {
+            if !cryptocompare_backfill.is_empty() {
+                new_bars = merge_json_bars(cryptocompare_backfill, new_bars);
+            }
             if new_bars.is_empty() && after_ts.is_some() {
                 let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
                     "Kraken {} {} already up to date",
@@ -472,11 +547,11 @@ pub(super) async fn run_kraken_futures_fetch_task(
         .map(|(_, count)| *count as i64)
         .unwrap_or(0);
     let mut after_ts = incremental.as_ref().map(|(ts, _)| ts.clone());
-    let shallow = kraken_sync_target_bars(&timeframe)
+    let needs_backfill = kraken_futures_sync_target_bars(&timeframe)
         .map(|target| cached_count > 0 && cached_count * 100 < (target as i64) * 95)
         .unwrap_or(false);
 
-    if shallow {
+    if needs_backfill {
         after_ts = None;
     }
 
@@ -486,18 +561,14 @@ pub(super) async fn run_kraken_futures_fetch_task(
         .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc).timestamp_millis())
         .unwrap_or_else(|| {
-            let target = kraken_sync_target_bars(&timeframe).unwrap_or(720) as i64;
-            let headroom = (target / 10).max(24);
-            let period_s = sync_timeframe_period_secs(&timeframe).unwrap_or(60);
-            now_ms.saturating_sub(
-                period_s
-                    .saturating_mul(1000)
-                    .saturating_mul(target.saturating_add(headroom)),
-            )
+            chrono::NaiveDate::from_ymd_opt(2018, 1, 1)
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .map(|ndt| ndt.and_utc().timestamp_millis())
+                .unwrap_or(0)
         });
-    let log_msg = if incremental.is_some() && shallow {
+    let log_msg = if incremental.is_some() && needs_backfill {
         format!(
-            "Kraken Futures {} {}: limited-history cache ({} bars) — refreshing target window...",
+            "Kraken Futures {} {}: cache has {} bars — syncing full server history...",
             symbol, timeframe, cached_count
         )
     } else if let Some(ref ts) = after_ts {
@@ -509,7 +580,7 @@ pub(super) async fn run_kraken_futures_fetch_task(
         )
     } else {
         format!(
-            "Kraken Futures {} {}: fetching target window...",
+            "Kraken Futures {} {}: fetching full server history...",
             symbol, timeframe
         )
     };
@@ -535,16 +606,12 @@ pub(super) async fn run_kraken_futures_fetch_task(
                 .await
                 {
                     Ok(count) if count > 0 => {
-                        if after_ts.is_none()
-                            && kraken_sync_target_bars(&timeframe)
-                                .is_some_and(|target| count < target as usize)
-                        {
+                        if after_ts.is_none() {
                             let _ = broker_msg_tx.send(BrokerMsg::KrakenFuturesBackfillComplete {
                                 symbol: symbol.clone(),
                                 timeframe: timeframe.clone(),
                                 bar_count: count,
-                                target_bars: kraken_sync_target_bars(&timeframe).unwrap_or(0)
-                                    as usize,
+                                target_bars: count,
                             });
                         }
                         let _ = broker_msg_tx.send(BrokerMsg::BarsFetched {
@@ -660,7 +727,7 @@ pub(super) async fn run_tastytrade_fetch_task(
         .map(|(_, count)| *count as i64)
         .unwrap_or(0);
     let mut after_ts = incremental.as_ref().map(|(ts, _)| ts.clone());
-    let shallow = tastytrade_sync_target_bars(&timeframe)
+    let needs_backfill = tastytrade_sync_target_bars(&timeframe)
         .map(|target| cached_count > 0 && cached_count * 100 < (target as i64) * 95)
         .unwrap_or(false);
     let interval = match timeframe.as_str() {
@@ -687,7 +754,7 @@ pub(super) async fn run_tastytrade_fetch_task(
             symbol, timeframe
         )));
     } else {
-        if shallow {
+        if needs_backfill {
             after_ts = None;
         }
         let from_time_ms = after_ts
@@ -697,13 +764,10 @@ pub(super) async fn run_tastytrade_fetch_task(
             .unwrap_or_else(|| {
                 tastytrade_initial_from_time_ms(&timeframe, chrono::Utc::now().timestamp_millis())
             });
-        let log_msg = if incremental.is_some() && shallow {
+        let log_msg = if incremental.is_some() && needs_backfill {
             format!(
-                "tastytrade {} {}: shallow cache ({} bars) — syncing target depth ({} bars)...",
-                symbol,
-                timeframe,
-                cached_count,
-                tastytrade_sync_target_bars(&timeframe).unwrap_or_default()
+                "tastytrade {} {}: cache has {} bars — syncing full DXLink history...",
+                symbol, timeframe, cached_count
             )
         } else if let Some(ref ts) = after_ts {
             format!(
@@ -714,7 +778,7 @@ pub(super) async fn run_tastytrade_fetch_task(
             )
         } else {
             format!(
-                "tastytrade: fetching {} {} via DXLink (target window)...",
+                "tastytrade: fetching {} {} full DXLink history...",
                 symbol, timeframe
             )
         };
@@ -740,15 +804,62 @@ pub(super) async fn run_tastytrade_fetch_task(
                     break;
                 }
             };
-            match typhoon_engine::broker::dxlink::fetch_candles(
-                &token,
-                &symbol,
-                interval,
-                from_time_ms,
-            )
-            .await
-            {
-                Ok(candles) => {
+            let mut page_from_time_ms = from_time_ms;
+            let mut all_candles = Vec::new();
+            let mut status = typhoon_engine::broker::dxlink::DxSnapshotStatus::TimedOut;
+            let mut paging_error: Option<String> = None;
+            let period_ms = sync_timeframe_period_secs(&timeframe)
+                .unwrap_or(60)
+                .saturating_mul(1000);
+            let max_pages = 2_048usize;
+            let mut page_guard_exhausted = false;
+            for page in 0..max_pages {
+                match typhoon_engine::broker::dxlink::fetch_candles_with_status(
+                    &token,
+                    &symbol,
+                    interval,
+                    page_from_time_ms,
+                )
+                .await
+                {
+                    Ok(fetch) => {
+                        if fetch.candles.is_empty() {
+                            status = fetch.status;
+                            break;
+                        }
+                        let last_time = fetch
+                            .candles
+                            .iter()
+                            .map(|c| c.time)
+                            .max()
+                            .unwrap_or(page_from_time_ms);
+                        all_candles.extend(fetch.candles);
+                        status = fetch.status;
+                        if status != typhoon_engine::broker::dxlink::DxSnapshotStatus::Snipped {
+                            break;
+                        }
+                        if page + 1 >= max_pages {
+                            page_guard_exhausted = true;
+                            break;
+                        }
+                        let next_from = last_time.saturating_add(period_ms.max(1));
+                        if next_from <= page_from_time_ms {
+                            break;
+                        }
+                        page_from_time_ms = next_from;
+                    }
+                    Err(e) => {
+                        paging_error = Some(e);
+                        break;
+                    }
+                }
+            }
+            let candle_result = match paging_error {
+                Some(e) => Err(e),
+                None => Ok((all_candles, status, page_guard_exhausted)),
+            };
+            match candle_result {
+                Ok((candles, status, page_guard_exhausted)) => {
                     if candles.is_empty() && after_ts.is_some() {
                         let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
                             "tastytrade {} {} already up to date",
@@ -779,15 +890,23 @@ pub(super) async fn run_tastytrade_fetch_task(
                         .await
                         {
                             Ok(count) if count > 0 => {
-                                let target_bars =
-                                    tastytrade_sync_target_bars(&timeframe).unwrap_or(0) as usize;
-                                if after_ts.is_none() && target_bars > 0 && count < target_bars {
+                                if after_ts.is_none()
+                                    && (status
+                                        == typhoon_engine::broker::dxlink::DxSnapshotStatus::Complete
+                                        || page_guard_exhausted)
+                                {
+                                    if page_guard_exhausted {
+                                        let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                                            "tastytrade {} {}: DXLink snapshot still snipped after {} pages; stored guarded maximum history and automated sync will keep it current",
+                                            symbol, timeframe, max_pages
+                                        )));
+                                    }
                                     let _ =
                                         broker_msg_tx.send(BrokerMsg::TastytradeBackfillComplete {
                                             symbol: symbol.clone(),
                                             timeframe: timeframe.clone(),
                                             bar_count: count,
-                                            target_bars,
+                                            target_bars: count,
                                         });
                                 }
                                 let _ = broker_msg_tx.send(BrokerMsg::BarsFetched {

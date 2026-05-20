@@ -6935,8 +6935,6 @@ impl eframe::App for TyphooNApp {
                         self.tastytrade_sync_pause_reason.clear();
                     }
                     if source == "alpaca" {
-                        // Drain any pending Alpaca retry for this pair.
-                        self.alpaca_retry_drain(&symbol, &timeframe);
                         // Any newly-written bars supersede prior no-data tombstones.
                         self.alpaca_no_data_drain(&symbol, &timeframe);
                         // Avoid a synchronous full SQLite storage-stat scan for every
@@ -6964,8 +6962,8 @@ impl eframe::App for TyphooNApp {
                     self.settle_market_data_fetch("alpaca", &symbol, &timeframe);
                     if success {
                         self.alpaca_retry_drain(&symbol, &timeframe);
+                        self.refill_market_data_sync_slots();
                     }
-                    self.refill_market_data_sync_slots();
                 }
                 BrokerMsg::KrakenFetchSettled { symbol, timeframe } => {
                     self.settle_market_data_fetch("kraken", &symbol, &timeframe);
@@ -6983,16 +6981,13 @@ impl eframe::App for TyphooNApp {
                         bar_count,
                         target_bars,
                     );
-                    let marker_count = self.kraken_backfill_complete_pairs.len();
-                    let prefix = if changed {
-                        "marked backfill-complete"
-                    } else {
-                        "still backfill-complete"
-                    };
-                    self.log.push_back(LogEntry::info(format!(
-                        "Kraken {} {}: {} at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
-                        symbol, timeframe, prefix, bar_count, target_bars, marker_count
-                    )));
+                    if changed {
+                        let marker_count = self.kraken_backfill_complete_pairs.len();
+                        self.log.push_back(LogEntry::info(format!(
+                            "Kraken {} {}: marked backfill-complete at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
+                            symbol, timeframe, bar_count, target_bars, marker_count
+                        )));
+                    }
                 }
                 BrokerMsg::KrakenFuturesFetchSettled { symbol, timeframe } => {
                     self.settle_market_data_fetch("kraken-futures", &symbol, &timeframe);
@@ -7010,16 +7005,13 @@ impl eframe::App for TyphooNApp {
                         bar_count,
                         target_bars,
                     );
-                    let marker_count = self.kraken_futures_backfill_complete_pairs.len();
-                    let prefix = if changed {
-                        "marked backfill-complete"
-                    } else {
-                        "still backfill-complete"
-                    };
-                    self.log.push_back(LogEntry::info(format!(
-                        "Kraken Futures {} {}: {} at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
-                        symbol, timeframe, prefix, bar_count, target_bars, marker_count
-                    )));
+                    if changed {
+                        let marker_count = self.kraken_futures_backfill_complete_pairs.len();
+                        self.log.push_back(LogEntry::info(format!(
+                            "Kraken Futures {} {}: marked backfill-complete at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
+                            symbol, timeframe, bar_count, target_bars, marker_count
+                        )));
+                    }
                 }
                 BrokerMsg::TastytradeFetchSettled { symbol, timeframe } => {
                     self.settle_market_data_fetch("tastytrade", &symbol, &timeframe);
@@ -7037,16 +7029,13 @@ impl eframe::App for TyphooNApp {
                         bar_count,
                         target_bars,
                     );
-                    let marker_count = self.tastytrade_backfill_complete_pairs.len();
-                    let prefix = if changed {
-                        "marked backfill-complete"
-                    } else {
-                        "still backfill-complete"
-                    };
-                    self.log.push_back(LogEntry::info(format!(
-                        "tastytrade {} {}: {} at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
-                        symbol, timeframe, prefix, bar_count, target_bars, marker_count
-                    )));
+                    if changed {
+                        let marker_count = self.tastytrade_backfill_complete_pairs.len();
+                        self.log.push_back(LogEntry::info(format!(
+                            "tastytrade {} {}: marked backfill-complete at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
+                            symbol, timeframe, bar_count, target_bars, marker_count
+                        )));
+                    }
                 }
                 BrokerMsg::AlpacaRateLimitObserved { historical_rpm } => {
                     if historical_rpm > 0 && self.alpaca_historical_rpm_observed != historical_rpm {
@@ -7106,21 +7095,13 @@ impl eframe::App for TyphooNApp {
                         bar_count,
                         target_bars,
                     );
-                    let marker_count = self.alpaca_backfill_complete_pairs.len();
-                    let prefix = if changed {
-                        "marked backfill-complete"
-                    } else {
-                        "still backfill-complete"
-                    };
-                    self.log.push_back(LogEntry::info(format!(
-                        "Alpaca {} {}: {} at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
-                        symbol,
-                        timeframe,
-                        prefix,
-                        bar_count,
-                        target_bars,
-                        marker_count
-                    )));
+                    if changed {
+                        let marker_count = self.alpaca_backfill_complete_pairs.len();
+                        self.log.push_back(LogEntry::info(format!(
+                            "Alpaca {} {}: marked backfill-complete at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
+                            symbol, timeframe, bar_count, target_bars, marker_count
+                        )));
+                    }
                 }
                 BrokerMsg::DarwinFtpReturns(returns_data) => {
                     self.log.push_back(LogEntry::info(format!(
@@ -7188,7 +7169,13 @@ impl eframe::App for TyphooNApp {
 
         // ── drain web client commands ────────────────────────────────────
         if let Some(ref mut rx) = self.web_cmd_rx {
-            while let Ok(cmd) = rx.try_recv() {
+            let mut web_cmds_drained = 0usize;
+            const WEB_CMD_DRAIN_MAX: usize = 64;
+            while web_cmds_drained < WEB_CMD_DRAIN_MAX {
+                let Ok(cmd) = rx.try_recv() else {
+                    break;
+                };
+                web_cmds_drained += 1;
                 match cmd {
                     typhoon_web_protocol::WebCmd::GetAccount => {
                         let _ = self.broker_tx.send(BrokerCmd::GetAccount);
@@ -7878,6 +7865,9 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
+            }
+            if web_cmds_drained >= WEB_CMD_DRAIN_MAX {
+                ctx.request_repaint();
             }
         }
 
