@@ -10605,66 +10605,41 @@ impl eframe::App for TyphooNApp {
                                         );
                                     }
 
-                                    // Account summary line for the selected broker target(s)
-                                    let account_snaps = self.selected_trade_account_snapshots();
+                                    let account_snaps: Vec<_> = self
+                                        .selected_trade_account_snapshots()
+                                        .into_iter()
+                                        .filter(|snap| match snap.broker {
+                                            "Alpaca" => self.show_alpaca_positions,
+                                            "tastytrade" | "Tastytrade" | "Tasty" => {
+                                                self.show_tt_positions
+                                            }
+                                            "Kraken" => self.show_kr_positions,
+                                            _ => true,
+                                        })
+                                        .collect();
                                     if !account_snaps.is_empty() {
                                         ui.add_space(4.0);
-                                        for (idx, snap) in account_snaps.iter().enumerate() {
-                                            if account_snaps.len() > 1 {
+                                        ui.horizontal_wrapped(|ui| {
+                                            for snap in &account_snaps {
+                                                let is_alpaca = snap.broker == "Alpaca";
+                                                let is_live = !is_alpaca || !self.broker_paper;
+                                                let mode = if is_alpaca && self.broker_paper {
+                                                    "Paper"
+                                                } else {
+                                                    "Live"
+                                                };
+                                                let color = if is_live { UP } else { egui::Color32::WHITE };
                                                 ui.label(
-                                                    egui::RichText::new(snap.broker)
-                                                        .color(AXIS_TEXT)
-                                                        .small()
-                                                        .strong(),
+                                                    egui::RichText::new(format!(
+                                                        "[{} ({}) ${:.0}]",
+                                                        snap.broker, mode, snap.buying_power
+                                                    ))
+                                                    .color(color)
+                                                    .small()
+                                                    .strong(),
                                                 );
                                             }
-                                            egui::Grid::new(format!("acct_mini_{idx}"))
-                                                .num_columns(2)
-                                                .show(ui, |ui| {
-                                                    ui.label(
-                                                        egui::RichText::new("Eq")
-                                                            .color(AXIS_TEXT)
-                                                            .small(),
-                                                    );
-                                                    ui.label(
-                                                        egui::RichText::new(format!(
-                                                            "${:.0}",
-                                                            snap.equity
-                                                        ))
-                                                        .small(),
-                                                    );
-                                                    ui.end_row();
-                                                    ui.label(
-                                                        egui::RichText::new("Bal")
-                                                            .color(AXIS_TEXT)
-                                                            .small(),
-                                                    );
-                                                    ui.label(
-                                                        egui::RichText::new(format!(
-                                                            "${:.0}",
-                                                            snap.balance
-                                                        ))
-                                                        .small(),
-                                                    );
-                                                    ui.end_row();
-                                                    ui.label(
-                                                        egui::RichText::new("BP")
-                                                            .color(AXIS_TEXT)
-                                                            .small(),
-                                                    );
-                                                    ui.label(
-                                                        egui::RichText::new(format!(
-                                                            "${:.0}",
-                                                            snap.buying_power
-                                                        ))
-                                                        .small(),
-                                                    );
-                                                    ui.end_row();
-                                                });
-                                            if idx + 1 < account_snaps.len() {
-                                                ui.add_space(4.0);
-                                            }
-                                        }
+                                        });
                                     }
                                 }
                             }
@@ -11125,7 +11100,7 @@ impl eframe::App for TyphooNApp {
                                 })
                                 .cloned()
                                 .collect();
-                            if !kraken_sellable_balances.is_empty() {
+                            if self.show_kr_positions && !kraken_sellable_balances.is_empty() {
                                 let mut sell_balance: Option<(String, f64)> = None;
                                 for (asset, qty) in kraken_sellable_balances {
                                     let display_asset = Self::kraken_display_asset(&asset);
