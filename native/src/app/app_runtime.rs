@@ -10884,6 +10884,11 @@ impl eframe::App for TyphooNApp {
                                 for pos in &self.live_positions {
                                     let side_c = if pos.side == "long" { UP } else { DOWN };
                                     let side_label = if pos.side == "long" { "L" } else { "S" };
+                                    let current_price = if pos.qty.abs() > f64::EPSILON {
+                                        Some(pos.market_value.abs() / pos.qty.abs())
+                                    } else {
+                                        None
+                                    };
                                     ui.horizontal_wrapped(|ui| {
                                         let (_, act) = symbol_label_with_menu(
                                             ui,
@@ -10915,6 +10920,17 @@ impl eframe::App for TyphooNApp {
                                             .color(pl_c)
                                             .small(),
                                         );
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "entry {}  cur {}",
+                                                format_price(pos.avg_entry_price),
+                                                current_price
+                                                    .map(format_price)
+                                                    .unwrap_or_else(|| "—".to_string())
+                                            ))
+                                            .color(AXIS_TEXT)
+                                            .small(),
+                                        );
                                         if self.broker_connected && self.lan_sync_mode != "client" {
                                             if ui
                                                 .small_button(egui::RichText::new("x").color(DOWN))
@@ -10925,17 +10941,6 @@ impl eframe::App for TyphooNApp {
                                             }
                                         }
                                     });
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(format!(
-                                                "entry: {}",
-                                                format_price(pos.avg_entry_price)
-                                            ))
-                                            .color(AXIS_TEXT)
-                                            .small(),
-                                        )
-                                        .wrap(),
-                                    );
                                     ui.separator();
                                 }
                                 if let Some(sym) = close_sym {
@@ -10955,6 +10960,11 @@ impl eframe::App for TyphooNApp {
                                 for pos in &self.tt_positions {
                                     let side_c = if pos.side == "long" { UP } else { DOWN };
                                     let side_label = if pos.side == "long" { "L" } else { "S" };
+                                    let current_price = if pos.qty.abs() > f64::EPSILON {
+                                        Some(pos.market_value.abs() / pos.qty.abs())
+                                    } else {
+                                        None
+                                    };
                                     ui.horizontal_wrapped(|ui| {
                                         let (_, act) = symbol_label_with_menu(
                                             ui,
@@ -10981,6 +10991,17 @@ impl eframe::App for TyphooNApp {
                                             .color(pl_c)
                                             .small(),
                                         );
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "entry {}  cur {}",
+                                                format_price(pos.avg_entry_price),
+                                                current_price
+                                                    .map(format_price)
+                                                    .unwrap_or_else(|| "—".to_string())
+                                            ))
+                                            .color(AXIS_TEXT)
+                                            .small(),
+                                        );
                                         // Close button — submits a market order in the opposite direction.
                                         if ui
                                             .small_button("X")
@@ -10993,18 +11014,6 @@ impl eframe::App for TyphooNApp {
                                             close_sym = Some(pos.symbol.clone());
                                         }
                                     });
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(format!(
-                                                "entry: {}  ({})",
-                                                format_price(pos.avg_entry_price),
-                                                pos.asset_class
-                                            ))
-                                            .color(AXIS_TEXT)
-                                            .small(),
-                                        )
-                                        .wrap(),
-                                    );
                                     ui.separator();
                                 }
                                 if let Some(sym) = close_sym {
@@ -11067,6 +11076,19 @@ impl eframe::App for TyphooNApp {
                                                 .color(pl_c)
                                                 .small(),
                                         );
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "entry {}  cur {}",
+                                                avg_entry
+                                                    .map(format_price)
+                                                    .unwrap_or_else(|| "—".to_string()),
+                                                current_price
+                                                    .map(format_price)
+                                                    .unwrap_or_else(|| "—".to_string())
+                                            ))
+                                            .color(AXIS_TEXT)
+                                            .small(),
+                                        );
                                         if ui
                                             .small_button("Close")
                                             .on_hover_text(format!(
@@ -11078,20 +11100,6 @@ impl eframe::App for TyphooNApp {
                                             close_sym = Some(pos.symbol.clone());
                                         }
                                     });
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(format!(
-                                                "entry: {}  ({})",
-                                                avg_entry
-                                                    .map(format_price)
-                                                    .unwrap_or_else(|| "—".to_string()),
-                                                pos.asset_class
-                                            ))
-                                            .color(AXIS_TEXT)
-                                            .small(),
-                                        )
-                                        .wrap(),
-                                    );
                                     ui.separator();
                                 }
                                 if let Some(sym) = close_sym {
