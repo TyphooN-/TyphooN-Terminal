@@ -56,6 +56,7 @@ mod storage;
 mod strategy_windows;
 mod style_scope;
 mod symbol_investigation;
+mod sync_config;
 mod sync_status;
 mod technical_analysis;
 mod tool_windows;
@@ -63,6 +64,7 @@ mod trade_ops;
 
 use self::alpaca_sync::*;
 use self::bar_sync::*;
+use self::sync_config::*;
 use self::technical_analysis::*;
 
 // ─── colours ────────────────────────────────────────────────────────────────
@@ -401,35 +403,6 @@ fn tastytrade_quote_streamer_customer_missing_message(env: &str, error: &str) ->
     format!(
         "tastytrade market data unavailable: {env} login authenticated, but tastytrade says this user is not a quote-streamer customer. Create/attach a customer account for this {env} user or switch to a funded production account. Raw error: {error}"
     )
-}
-
-const KRAKEN_PUBLIC_FETCH_PERMITS: usize = 16;
-const KRAKEN_SPOT_QUEUE_WINDOW: usize = 160;
-const KRAKEN_FUTURES_QUEUE_WINDOW: usize = 96;
-const ALPACA_BACKGROUND_SCAN_LIMIT: usize = 384;
-const KRAKEN_SPOT_BACKGROUND_SCAN_LIMIT: usize = 384;
-const KRAKEN_FUTURES_BACKGROUND_SCAN_LIMIT: usize = 192;
-fn tastytrade_earliest_history_ms() -> i64 {
-    chrono::NaiveDate::from_ymd_opt(2000, 1, 1)
-        .and_then(|d| d.and_hms_opt(0, 0, 0))
-        .map(|ndt| ndt.and_utc().timestamp_millis())
-        .unwrap_or(0)
-}
-
-fn tastytrade_initial_from_time_ms(timeframe: &str, now_ms: i64) -> i64 {
-    let floor_ms = tastytrade_earliest_history_ms();
-    let Some(period_s) = sync_timeframe_period_secs(timeframe) else {
-        return floor_ms;
-    };
-    let Some(target_bars) = tastytrade_sync_target_bars(timeframe) else {
-        return floor_ms;
-    };
-    let target_bars = i64::from(target_bars);
-    let headroom_bars = (target_bars / 20).max(50);
-    let lookback_ms = period_s
-        .saturating_mul(1000)
-        .saturating_mul(target_bars.saturating_add(headroom_bars));
-    now_ms.saturating_sub(lookback_ms).max(floor_ms)
 }
 
 /// Log severity level.
@@ -10793,6 +10766,7 @@ pub struct TyphooNApp {
     alpaca_sync_cursor: usize,
     kraken_spot_sync_cursors: [usize; 4],
     kraken_futures_sync_cursors: [usize; 4],
+    tastytrade_sync_cursor: usize,
     /// Alpaca retry queue — persisted across restarts via cache KV at `alpaca:retry_queue`.
     /// Entries are (symbol, timeframe) pairs that 429'd or partially completed; the
     /// `poll_alpaca_retry_queue()` tick re-dispatches due entries with exponential backoff.
@@ -27297,6 +27271,7 @@ BrokerCmd::KrakenCloseAll => {
             alpaca_sync_cursor: 0,
             kraken_spot_sync_cursors: [0; 4],
             kraken_futures_sync_cursors: [0; 4],
+            tastytrade_sync_cursor: 0,
             alpaca_retry_queue: Vec::new(),
             alpaca_retry_last_poll: 0,
             alpaca_retry_loaded: false,

@@ -1210,7 +1210,13 @@ impl TyphooNApp {
         let focus_symbols = self.market_data_focus_symbols();
         let no_data_keys = self.unresolvable_fetch_keys_for("tastytrade");
         let now_s = chrono::Utc::now().timestamp();
-        let candidates = select_alpaca_sync_workset(
+        let scan_limit = if self.user_interacting {
+            24
+        } else {
+            TASTYTRADE_BACKGROUND_SCAN_LIMIT
+        };
+        let mut cursor = self.tastytrade_sync_cursor;
+        let candidates = select_alpaca_sync_workset_rotating(
             symbols,
             &timeframes,
             &self.cached_tastytrade_sync_state,
@@ -1220,9 +1226,12 @@ impl TyphooNApp {
             &self.pending_tastytrade_fetches,
             available_slots,
             foreground_slots,
+            scan_limit,
+            &mut cursor,
             now_s,
             tastytrade_sync_target_bars,
         );
+        self.tastytrade_sync_cursor = cursor;
         let mut dispatched = 0usize;
         for candidate in candidates {
             if self.queue_tastytrade_fetch(&candidate.symbol, &candidate.timeframe) {

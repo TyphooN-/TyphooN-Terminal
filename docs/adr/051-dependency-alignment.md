@@ -23,6 +23,23 @@ Align all direct dependencies to their latest stable versions across the entire 
 | crossterm | 0.28 | **0.29** | Terminal backend (cli) |
 | rand (cli) | 0.9 | **0.10** | Match engine version |
 
+## Follow-up alignment (2026-05-20)
+
+The dependency audit was repeated with `cargo tree -d` and the workspace manifests were normalized further:
+
+- Added `[workspace.dependencies]` for shared first-party crates and repeated third-party dependencies (`serde`, `serde_json`, `tokio`, `reqwest`, `chrono`, `tracing`, `tracing-subscriber`, `rusqlite`, `zstd`, credential crypto crates, and WebDriver plumbing). This keeps workspace members from drifting onto different direct versions.
+- Ran `cargo update` to pick up compatible patch-level security/bugfix releases in `Cargo.lock`.
+- Changed `reqwest` direct usage to `default-features = false` plus the explicit feature set actually used by the terminal (`json`, `query`, `cookies` where needed, and `rustls`). This avoids compiling reqwest's default TLS stack for HTTP clients that do not need it.
+- Changed direct `thirtyfour` usage to `default-features = false` plus `reqwest`/`rustls-tls`, omitting its component macro feature because TyphooN only uses the async WebDriver client for Darwinex Zero scraping.
+- Changed native `eframe` from default features to explicit Linux native features (`default_fonts`, `wayland`, `x11`, `wgpu_no_default_features`). The direct `wgpu` dependency now enables only `std`, `parking_lot`, `vulkan`, and `wgsl`, avoiding web, DX12, Metal, GLES, and WebGPU backend feature compilation in the Linux native terminal.
+
+`native-tls` / `openssl` are still present because LAN sync currently builds a native-tls acceptor/connector for local WSS. Removing them safely requires a LAN-sync TLS implementation migration, not a manifest-only edit.
+
+Explicit non-upgrades after this pass:
+
+- `keyring` stays on 3.6.3. A trial upgrade to 4.0.1 compiled in a much larger backend stack and broke the existing `keyring::Entry` / `keyring::Error` API. It should be handled as a dedicated keyring API migration with credential round-trip testing, not folded into a compile-speed pass.
+- `generic-array` 0.14.7 and `matchit` 0.8.4 are transitive. They are behind patch releases but are owned by upstream dependency constraints, not direct TyphooN manifests.
+
 ## Remaining Transitive Duplicates
 
 These duplicates come from upstream crates and cannot be resolved without upstream updates:
@@ -32,6 +49,7 @@ These duplicates come from upstream crates and cannot be resolved without upstre
 - `rustix` 0.38/1.1 — smithay/calloop transition
 - `thiserror` 1/2 — ecosystem-wide migration
 - `hashbrown` 0.15/0.16 — indexmap/hashbrown transition
+- `zip` 7/8 — `calamine` still depends on zip 7 while engine directly uses zip 8
 
 ## Consequences
 

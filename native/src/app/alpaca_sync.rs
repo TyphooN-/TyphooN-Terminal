@@ -298,6 +298,7 @@ fn classify_alpaca_sync_candidate(
 
     None
 }
+#[cfg(test)]
 fn select_alpaca_sync_candidates_from_iter<'a, I>(
     symbols: I,
     timeframes: &[String],
@@ -416,6 +417,7 @@ where
     selected
 }
 
+#[cfg(test)]
 pub(super) fn select_alpaca_sync_candidates(
     symbols: &[String],
     timeframes: &[String],
@@ -444,6 +446,7 @@ pub(super) fn select_alpaca_sync_candidates(
         target_bars_for_tf,
     )
 }
+#[cfg(test)]
 pub(super) fn select_alpaca_sync_workset(
     symbols: &[String],
     timeframes: &[String],

@@ -10,36 +10,36 @@ path = "src/main.rs"
 
 [dependencies]
 # Engine (shared core library)
-typhoon-engine = { path = "../engine" }
+typhoon-engine = { workspace = true }
 
 # Web client server (HTTPS + WebSocket relay for phone access)
-typhoon-web-server = { path = "../web-server" }
-typhoon-web-protocol = { path = "../web-protocol" }
+typhoon-web-server = { workspace = true }
+typhoon-web-protocol = { workspace = true }
 
 # MQL5/PineScript compiler (indicator compilation + execution)
-mql5-compiler = { path = "../mql5-compiler" }
+mql5-compiler = { workspace = true }
 
 # Native GPU UI — latest stable egui ecosystem (2026-03-27)
-eframe = { version = "0.34", default-features = true, features = ["wgpu"] }
-egui = "0.34"
+eframe = { version = "0.34", default-features = false, features = ["default_fonts", "wayland", "wgpu_no_default_features", "x11"] }
+egui = { version = "0.34", default-features = false, features = ["default_fonts"] }
 egui_plot = "0.35"
-wgpu = "29"  # Aligned with eframe 0.34
+wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "vulkan", "wgsl"] }  # Aligned with eframe 0.34; Linux-native only, no web/DX/Metal backends
 
 # Async runtime (shared with engine)
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
 
 # HTTP client (for Kraken API in broker task — matches engine)
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { workspace = true, features = ["json", "rustls"] }
 
 # Date/time formatting (for chart time axis labels)
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { workspace = true }
 
 # Native file dialog
 rfd = "0.17"
 
 # Serialization for session persistence
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Safe byte casting for GPU buffer I/O (replaces unsafe custom Pod trait)
 bytemuck = { version = "1", features = ["derive"] }
@@ -52,14 +52,14 @@ axum = "0.8"
 image = { version = "0.25", default-features = false, features = ["webp"] }
 
 # Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 # Custom allocator — mimalloc is 5-15% faster than system malloc on small alloc heavy workloads
 mimalloc = { version = "0.1", default-features = false }
 
 # Selenium WebDriver for Darwinex Zero scraping (ADR-093)
-thirtyfour = "0.36"
+thirtyfour = { workspace = true, default-features = false, features = ["reqwest", "rustls-tls"] }
 
 # Windows AC-power probe for ADR-205 idle auto-compact gate
 [target.'cfg(windows)'.dependencies]

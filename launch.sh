@@ -3,10 +3,10 @@
 # Pure Rust, zero WebKit, zero JS.
 #
 # Usage:
-#   ./launch.sh          — release-max full-LTO build + run
+#   ./launch.sh          — release thin-LTO build + run (fast normal path)
 #   ./launch.sh dev      — debug build + run (faster compile)
 #   ./launch.sh build    — faster thin-LTO release build only
-#   ./launch.sh max      — release-max full-LTO build + run
+#   ./launch.sh max      — release-max full-LTO build + run (slow final artifact)
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -48,8 +48,8 @@ case "${1:-}" in
         (cd web && trunk build --release)
         ;;
     *)
-        echo "TyphooN Terminal (release-max/full LTO)..."
+        echo "TyphooN Terminal (release)..."
         build_wasm
-        cargo run -p typhoon-native --profile release-max
+        cargo run -p typhoon-native --release
         ;;
 esac

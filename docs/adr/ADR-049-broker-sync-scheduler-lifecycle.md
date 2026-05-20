@@ -14,7 +14,7 @@ TyphooN Terminal can sync large broker universes: Alpaca equities, Kraken Spot, 
 
 ## Decision
 
-The broker sync scheduler is cursor-limited and high-timeframe-first.
+The broker sync scheduler is cursor-limited and high-timeframe-first for all broad automated broker rotations, including Alpaca, Kraken Spot sectors, Kraken Futures sectors, and tastytrade.
 
 1. Build candidate work from a bounded flattened ring of `(timeframe, symbol)` slots:
    - `1Month` across all symbols,
@@ -34,11 +34,13 @@ The broker sync scheduler is cursor-limited and high-timeframe-first.
 
 ## Consequences
 
-- Large universes do not require an O(symbols * timeframes) pass per refill.
+- Large universes do not require an O(symbols * timeframes) pass per refill; every broad broker path has an explicit scan budget.
+- tastytrade uses the same rotating bounded selector as Alpaca/Kraken instead of the legacy whole-symbol workset scan.
+- Sync budgets and tastytrade timeframe-window helpers now live in `native/src/app/sync_config.rs`, keeping policy constants out of `app.rs`.
 - High timeframes obtain broad initial coverage before low-timeframe backfills consume the queue.
 - Manual/foreground and background fetches are deduplicated through the same normalized pending-key sets.
 - Thin-history instruments converge instead of being requeued every few seconds after successful shallow responses.
-- Recent successful writes are merged back into rebuilt sync-state maps so a `bg_rev` bump does not immediately make a just-settled pair look stale again.
+- Recent successful writes are merged back into rebuilt sync-state maps so a `bg_rev` bump does not immediately make a just-settled pair look stale again. This applies both in scheduler entry points and in the app-frame cache refresh path.
 
 ## Verification
 

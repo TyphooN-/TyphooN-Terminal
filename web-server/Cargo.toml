@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-typhoon-web-protocol = { path = "../web-protocol" }
+typhoon-web-protocol = { workspace = true }
 axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
-tokio = { version = "1", features = ["sync", "net"] }
-serde_json = "1"
-tracing = "0.1"
+tokio = { workspace = true, features = ["sync", "net"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
 futures-util = "0.3"
 tower-http = { version = "0.6", features = ["fs"] }
 subtle = "2"  # Constant-time comparison for passphrase auth (prevents timing attacks)

@@ -116,7 +116,10 @@ impl eframe::App for TyphooNApp {
             self.cached_mt5_symbols_rev = Some(self.bg_rev);
         }
         if self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
-            self.cached_alpaca_sync_state = self.build_alpaca_cache_state_map();
+            let previous = self.cached_alpaca_sync_state.clone();
+            let mut rebuilt = self.build_alpaca_cache_state_map();
+            merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
+            self.cached_alpaca_sync_state = rebuilt;
             self.cached_alpaca_sync_state_rev = Some(self.bg_rev);
         }
         ctx.set_visuals(Self::dark_visuals());

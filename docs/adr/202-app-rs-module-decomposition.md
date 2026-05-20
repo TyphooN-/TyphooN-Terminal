@@ -53,6 +53,12 @@ compile-speed and storage/sync passes added `alpaca_sync.rs`,
 `auto_compact.rs`, and `bar_sync.rs` so sync policy and scheduler code no
 longer live as anonymous helper islands inside `app.rs`.
 
+The 2026-05-20 sync/compile pass added `sync_config.rs` for broker sync
+budgets and tastytrade timeframe-window helpers. This is intentionally small,
+but it prevents scheduler constants and time-window policy from accreting in
+`app.rs` while the larger async fetch-task extraction remains a future
+mechanical move.
+
 Each submodule is a sibling of `app.rs`, declared as `mod` from the parent.
 Window functions take `&mut self` on `TyphooNApp` so state mutation works
 exactly as before — no trait abstraction, no event bus, no message passing.
@@ -91,6 +97,20 @@ thing changed.
 - **Future renderers should land in submodules from day one.** The
   precedent is set: a new "X Window" renderer goes into
   `native/src/app/x_window.rs` (or a related bundle), not into `app.rs`.
+- **Future broker/sync policy should land in sync modules from day one.**
+  Scheduler budget constants and helper functions belong in
+  `app/sync_config.rs`, selector logic in `app/alpaca_sync.rs` or a broker-
+  specific sync module, and queue/refill orchestration in
+  `app/market_data_sync.rs`; do not add new sync islands to `app.rs`.
+- **The remaining largest seams are mechanical but high-touch:**
+  `floating_windows.rs` should be split by window family, `command_palette.rs`
+  by command namespace, and the async broker fetch tasks currently embedded in
+  `app.rs` should move as a single broker-fetch module once their shared
+  message/type imports are isolated.
+- **The default launcher path must stay incremental-friendly.** `./launch.sh`
+  runs the thin-LTO `release` profile for normal use; full-LTO
+  `release-max` remains available as `./launch.sh max` only for explicit final
+  artifact builds.
 - **No public API change.** All split functions remain `impl TyphooNApp`
   methods; nothing in the engine, web, or web-server crates needs to
   notice.
