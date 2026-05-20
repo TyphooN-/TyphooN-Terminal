@@ -13386,6 +13386,7 @@ impl TyphooNApp {
             let tt_dx_backoff_until: Arc<tokio::sync::Mutex<Option<std::time::Instant>>> =
                 Arc::new(tokio::sync::Mutex::new(None));
             let mut kraken_broker: Option<typhoon_engine::broker::kraken_broker::KrakenBroker> = None;
+            let mut kraken_ws_broker: Option<typhoon_engine::broker::kraken_broker::KrakenBroker> = None;
             let importing_flag = importing_flag_broker;
             let lan_client = lan_client_broker;
             // Shared sender for forwarding requests to LAN sync WebSocket
@@ -23940,6 +23941,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             )));
                             continue;
                         }
+                        let rest_api_key = api_key.clone();
+                        let rest_api_secret = api_secret.clone();
                         let kb = KrakenBroker::new(api_key, api_secret);
                         match kb.get_balance().await {
                             Ok(balances) => {
@@ -23968,6 +23971,11 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 if let Ok(pairs) = kb.get_tradeable_pairs().await {
                                     let _ = msg_tx.send(BrokerMsg::KrakenPairs(pairs));
                                 }
+                                kraken_ws_broker = Some(if ws_override_ready {
+                                    KrakenBroker::new(ws_api_key, ws_api_secret)
+                                } else {
+                                    KrakenBroker::new(rest_api_key, rest_api_secret)
+                                });
                                 kraken_broker = Some(kb);
                             }
                             Err(e) => {
@@ -24121,7 +24129,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                     }
                     BrokerCmd::KrakenStartPrivateWs => {
-                        if let Some(ref kb) = kraken_broker {
+                        let ws_client = kraken_ws_broker.as_ref().or(kraken_broker.as_ref());
+                        if let Some(kb) = ws_client {
                             let msg_tx = broker_msg_tx_clone.clone();
                             match kb.start_private_ws().await {
                                 Ok(mut rx) => {

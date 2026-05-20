@@ -1056,6 +1056,12 @@ impl eframe::App for TyphooNApp {
                 BrokerMsg::KrakenLiveTrade(trade) => {
                     if self.insert_kraken_live_trade(trade) {
                         self.refresh_kraken_position_costs();
+                        // ownTrades is the low-latency fill signal. Reconcile REST snapshots
+                        // after fills so balances, position P/L, and open-order state catch up
+                        // without waiting for a manual refresh.
+                        let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
+                        let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
+                        let _ = self.broker_tx.send(BrokerCmd::KrakenFetchOpenOrders);
                     }
                 }
                 BrokerMsg::KrakenOpenOrders(orders) => {
