@@ -9,6 +9,8 @@
 //!   typhoon --watch AAPL,MSFT   # Watchlist mode
 //!   typhoon --positions         # Show positions and exit
 //!   typhoon --account           # Show account info and exit
+//!   typhoon --cache-stats       # Show shared SQLite cache coverage and exit
+//!   typhoon --sync-status       # Show GUI-managed market-data sync snapshot and exit
 
 use clap::Parser;
 use crossterm::{
@@ -24,6 +26,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, Tabs, Wrap},
 };
+use serde_json::Value;
 use std::collections::VecDeque;
 use std::future::pending;
 use std::io::stdout;
@@ -127,6 +130,33 @@ fn split_cache_key(key: &str) -> (&str, &str) {
     key.rsplit_once(':').unwrap_or((key, "unknown"))
 }
 
+fn format_bytes(bytes: i64) -> String {
+    const KIB: f64 = 1024.0;
+    let bytes_f = bytes as f64;
+    if bytes_f >= KIB * KIB * KIB {
+        format!("{:.2} GiB", bytes_f / KIB / KIB / KIB)
+    } else if bytes_f >= KIB * KIB {
+        format!("{:.2} MiB", bytes_f / KIB / KIB)
+    } else if bytes_f >= KIB {
+        format!("{:.2} KiB", bytes_f / KIB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn open_cli_cache(
+    cache_dir: Option<&PathBuf>,
+) -> Result<(SqliteCache, PathBuf), Box<dyn std::error::Error>> {
+    let cache_dir = resolve_cache_dir(cache_dir)?;
+    let db_path = cache_dir.join("typhoon_cache.db");
+    let cache = if db_path.exists() {
+        SqliteCache::open_readonly(&db_path).or_else(|_| SqliteCache::open(&db_path))?
+    } else {
+        SqliteCache::open(&db_path)?
+    };
+    Ok((cache, db_path))
+}
+
 fn render_lan_metrics(
     cache: &SqliteCache,
     db_path: &Path,
@@ -215,6 +245,183 @@ fn render_lan_metrics(
     }
 
     out
+}
+
+fn format_cache_timestamp(ts: i64) -> String {
+    let seconds = if ts > 10_000_000_000 { ts / 1000 } else { ts };
+    chrono::DateTime::from_timestamp(seconds, 0)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn cache_stats_lines(cache: &SqliteCache, db_path: &Path) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push(format!("Cache: {}", db_path.display()));
+    match cache.stats() {
+        Ok((bar_entries, kv_entries, bytes)) => lines.push(format!(
+            "Rows: {bar_entries} bar entries, {kv_entries} KV entries, {} on disk",
+            format_bytes(bytes)
+        )),
+        Err(e) => lines.push(format!("Stats error: {e}")),
+    }
+
+    match cache.detailed_stats_with_size() {
+        Ok(rows) => {
+            let mut by_source: std::collections::BTreeMap<String, (i64, i64, i64)> =
+                std::collections::BTreeMap::new();
+            let mut by_timeframe: std::collections::BTreeMap<String, (i64, i64)> =
+                std::collections::BTreeMap::new();
+            let mut top = rows.clone();
+            for (key, bars, _ts, bytes) in &rows {
+                let parts: Vec<&str> = key.split(':').collect();
+                let source = if parts.len() >= 3 { parts[0] } else { "cache" };
+                let timeframe = parts.last().copied().unwrap_or("unknown");
+                let src = by_source.entry(source.to_string()).or_default();
+                src.0 += 1;
+                src.1 += *bars;
+                src.2 += *bytes;
+                let tf = by_timeframe.entry(timeframe.to_string()).or_default();
+                tf.0 += 1;
+                tf.1 += *bars;
+            }
+            lines.push("By source:".to_string());
+            for (source, (entries, bars, bytes)) in by_source {
+                lines.push(format!(
+                    "  {source:<14} {entries:>6} entries {bars:>12} bars {:>10}",
+                    format_bytes(bytes)
+                ));
+            }
+            lines.push("By timeframe:".to_string());
+            for (tf, (entries, bars)) in by_timeframe {
+                lines.push(format!("  {tf:<10} {entries:>6} entries {bars:>12} bars"));
+            }
+            top.sort_by(|a, b| b.1.cmp(&a.1));
+            lines.push("Deepest entries:".to_string());
+            for (key, bars, ts, bytes) in top.into_iter().take(10) {
+                lines.push(format!(
+                    "  {key:<38} {bars:>8} bars {:>10} updated {}",
+                    format_bytes(bytes),
+                    format_cache_timestamp(ts)
+                ));
+            }
+        }
+        Err(e) => lines.push(format!("Detailed stats error: {e}")),
+    }
+    lines
+}
+
+fn kv_json(cache: &SqliteCache, key: &str) -> Option<Value> {
+    cache
+        .get_kv(key)
+        .ok()
+        .flatten()
+        .and_then(|json| serde_json::from_str::<Value>(&json).ok())
+}
+
+fn kv_array_len(cache: &SqliteCache, key: &str) -> usize {
+    kv_json(cache, key)
+        .and_then(|v| v.as_array().map(|a| a.len()))
+        .unwrap_or(0)
+}
+
+fn broker_status_lines(cache: &SqliteCache) -> Vec<String> {
+    let mut lines = vec!["Broker snapshot from GUI/shared KV cache:".to_string()];
+    for (label, account_key, positions_key, orders_key) in [
+        (
+            "Alpaca",
+            "broker:account",
+            "broker:positions",
+            "broker:orders",
+        ),
+        (
+            "Kraken",
+            "broker:kr_account",
+            "broker:kr_positions",
+            "broker:kr_orders",
+        ),
+        (
+            "tastytrade",
+            "broker:tt_account",
+            "broker:tt_positions",
+            "broker:tt_orders",
+        ),
+    ] {
+        let account = kv_json(cache, account_key);
+        let acct_text = account
+            .as_ref()
+            .and_then(|v| {
+                let equity = v.get("equity").and_then(Value::as_f64);
+                let cash = v.get("cash").and_then(Value::as_f64);
+                match (equity, cash) {
+                    (Some(e), Some(c)) => Some(format!("equity ${e:.2}, cash ${c:.2}")),
+                    (Some(e), None) => Some(format!("equity ${e:.2}")),
+                    _ => None,
+                }
+            })
+            .unwrap_or_else(|| {
+                if account.is_some() {
+                    "account cached".to_string()
+                } else {
+                    "no account snapshot".to_string()
+                }
+            });
+        lines.push(format!(
+            "  {label:<11} {acct_text}; {} positions; {} open/order rows",
+            kv_array_len(cache, positions_key),
+            kv_array_len(cache, orders_key)
+        ));
+    }
+    let watchlist = kv_array_len(cache, "broker:watchlist");
+    if watchlist > 0 {
+        lines.push(format!("  Watchlist   {watchlist} cached rows"));
+    }
+    lines.push(
+        "Read-only snapshot only; live trading remains through the GUI/broker connection."
+            .to_string(),
+    );
+    lines
+}
+
+fn sync_status_lines(cache: &SqliteCache) -> Vec<String> {
+    let mut lines = vec!["Market-data sync snapshot from GUI/shared KV cache:".to_string()];
+    for (label, key) in [
+        ("Alpaca", "alpaca:backfill_complete_pairs"),
+        ("Kraken Spot", "kraken:backfill_complete_pairs"),
+        ("Kraken Futures", "kraken-futures:backfill_complete_pairs"),
+        ("tastytrade", "tastytrade:backfill_complete_pairs"),
+    ] {
+        lines.push(format!(
+            "  {label:<15} {} full-history exhaustion/completion markers",
+            kv_array_len(cache, key)
+        ));
+    }
+    lines.push(format!(
+        "  Unresolvable   {} broker/symbol/timeframe tombstones",
+        kv_array_len(cache, "broker:unresolvable_pairs")
+    ));
+    match cache.detailed_stats() {
+        Ok(rows) => {
+            let mut by_source: std::collections::BTreeMap<String, (usize, i64, i64)> =
+                std::collections::BTreeMap::new();
+            for (key, bars, ts) in rows {
+                let parts: Vec<&str> = key.split(':').collect();
+                let source = if parts.len() >= 3 { parts[0] } else { "cache" };
+                let entry = by_source.entry(source.to_string()).or_insert((0, 0, 0));
+                entry.0 += 1;
+                entry.1 += bars;
+                entry.2 = entry.2.max(ts);
+            }
+            lines.push("Cached bar coverage by source:".to_string());
+            for (source, (entries, bars, newest)) in by_source {
+                lines.push(format!(
+                    "  {source:<15} {entries:>6} entries {bars:>12} bars newest {}",
+                    format_cache_timestamp(newest)
+                ));
+            }
+        }
+        Err(e) => lines.push(format!("Cached bar coverage unavailable: {e}")),
+    }
+    lines
 }
 
 fn start_lan_metrics_server(cache: Arc<SqliteCache>, db_path: PathBuf, port: u16, mode: String) {
@@ -722,6 +929,18 @@ struct Args {
     #[arg(long, value_name = "PATH", conflicts_with = "export_cache")]
     import_cache: Option<PathBuf>,
 
+    /// Print read-only SQLite cache statistics and exit.
+    #[arg(long)]
+    cache_stats: bool,
+
+    /// Print read-only market-data sync status from the shared GUI cache and exit.
+    #[arg(long)]
+    sync_status: bool,
+
+    /// Print read-only broker account/position/order snapshots from the shared GUI cache and exit.
+    #[arg(long)]
+    broker_status: bool,
+
     /// Password for encrypted cache backup export/import.
     #[arg(
         long,
@@ -797,10 +1016,17 @@ struct App {
     refresh_interval: Duration,
     // Previous close prices for watchlist change tracking
     watchlist_prev_close: std::collections::HashMap<String, f64>,
+    // Shared GUI cache location for read-only ops commands
+    cache_dir: Option<PathBuf>,
 }
 
 impl App {
-    fn new(broker: broker::AlpacaBroker, symbol: String, watchlist: Vec<String>) -> Self {
+    fn new(
+        broker: broker::AlpacaBroker,
+        symbol: String,
+        watchlist: Vec<String>,
+        cache_dir: Option<PathBuf>,
+    ) -> Self {
         let imported_accounts = load_account_registry();
         Self {
             broker,
@@ -840,6 +1066,7 @@ impl App {
             last_refresh: Instant::now() - Duration::from_secs(60), // force initial refresh
             refresh_interval: Duration::from_secs(5),
             watchlist_prev_close: std::collections::HashMap::new(),
+            cache_dir,
         }
     }
 
@@ -850,6 +1077,21 @@ impl App {
         if self.log_messages.len() > 100 {
             self.log_messages.pop_front();
         }
+    }
+
+    fn log_lines(&mut self, lines: Vec<String>, color: Color) {
+        for line in lines {
+            self.log(&line, color);
+        }
+    }
+
+    fn with_cache_lines<F>(&self, f: F) -> Result<Vec<String>, String>
+    where
+        F: FnOnce(&SqliteCache, &Path) -> Vec<String>,
+    {
+        let (cache, db_path) =
+            open_cli_cache(self.cache_dir.as_ref()).map_err(|e| e.to_string())?;
+        Ok(f(&cache, &db_path))
     }
 
     async fn refresh(&mut self) {
@@ -1463,9 +1705,27 @@ impl App {
                     self.log("Usage: unwatch SYMBOL", Color::Yellow);
                 }
             }
+            "cache" | "storage" if parts.get(1).is_some_and(|s| *s == "stats") => {
+                match self.with_cache_lines(cache_stats_lines) {
+                    Ok(lines) => self.log_lines(lines, Color::Cyan),
+                    Err(e) => self.log(&format!("Cache stats failed: {e}"), Color::Red),
+                }
+            }
+            "sync" if parts.get(1).is_some_and(|s| *s == "status") => {
+                match self.with_cache_lines(|cache, _| sync_status_lines(cache)) {
+                    Ok(lines) => self.log_lines(lines, Color::Cyan),
+                    Err(e) => self.log(&format!("Sync status failed: {e}"), Color::Red),
+                }
+            }
+            "broker" if parts.get(1).is_some_and(|s| *s == "status") => {
+                match self.with_cache_lines(|cache, _| broker_status_lines(cache)) {
+                    Ok(lines) => self.log_lines(lines, Color::Cyan),
+                    Err(e) => self.log(&format!("Broker status failed: {e}"), Color::Red),
+                }
+            }
             "cache" | "storage" => {
                 self.log(
-                    "Cache management: CLI supports import/export, LAN sync metrics, and MCP research packets; use GUI for full Storage Manager.",
+                    "Cache ops: use 'cache stats' for read-only stats; CLI also supports import/export, LAN sync metrics, and MCP research packets; GUI owns full Storage Manager.",
                     Color::Yellow,
                 );
             }
@@ -1476,7 +1736,7 @@ impl App {
                     "  Charts: lightweight terminal candles + volume + SMA(20), Alpaca-backed",
                     Color::Cyan,
                 );
-                self.log("  Ops: cache backup import/export, LAN sync server/client + Prometheus metrics, MCP research packet server", Color::Cyan);
+                self.log("  Ops: read-only cache stats, broker/sync snapshots, cache backup import/export, LAN sync server/client + Prometheus metrics, MCP research packet server", Color::Cyan);
                 self.log(
                     "  Imports: MT5 statement CSV account summaries",
                     Color::Cyan,
@@ -1624,6 +1884,7 @@ impl App {
                     "  capabilities                  Show CLI vs GUI coverage",
                     Color::Cyan,
                 );
+                self.log("  cache stats / sync status / broker status", Color::Cyan);
                 self.log(
                     "Tabs: 1-7 or Tab. : for command mode. q to quit.",
                     Color::Cyan,
@@ -2918,6 +3179,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return run_lan_mode(&args).await;
     }
 
+    if args.cache_stats || args.sync_status || args.broker_status {
+        let (cache, db_path) = open_cli_cache(args.cache_dir.as_ref())?;
+        if args.cache_stats {
+            for line in cache_stats_lines(&cache, &db_path) {
+                println!("{line}");
+            }
+        }
+        if args.sync_status {
+            for line in sync_status_lines(&cache) {
+                println!("{line}");
+            }
+        }
+        if args.broker_status {
+            for line in broker_status_lines(&cache) {
+                println!("{line}");
+            }
+        }
+        return Ok(());
+    }
+
     // Load keys: CLI args → env vars → GUI terminal's encrypted storage
     let (api_key, secret_key) = match (args.api_key.clone(), args.secret_key.clone()) {
         (Some(k), Some(s)) => (k, s),
@@ -3095,7 +3376,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_default();
     let symbol = args.symbol.unwrap_or_else(|| "SMCI".to_string());
 
-    let mut app = App::new(broker, symbol, watchlist);
+    let mut app = App::new(broker, symbol, watchlist, args.cache_dir.clone());
 
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
