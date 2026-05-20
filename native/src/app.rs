@@ -8818,6 +8818,10 @@ enum BrokerCmd {
     KrakenFetchTrades,
     KrakenFetchOpenOrders,
     KrakenStartPrivateWs,
+    KrakenStartOrderbookWs {
+        symbol: String,
+        depth: usize,
+    },
     KrakenClosePosition {
         pair: String,
         volume: Option<f64>,
@@ -8851,6 +8855,7 @@ enum BrokerMsg {
         status: String,
         message: String,
     },
+    KrakenOrderbookUpdate(String),
     SecScrapeResult(String),
     FilingContent(String), // fetched SEC filing document text
     FinnhubNewsResult(Vec<(String, String, String)>),
@@ -10603,6 +10608,7 @@ pub struct TyphooNApp {
     holders_result: String, // last fetched SEC EDGAR 13F JSON
     show_orderbook_window: bool,
     orderbook_result: String, // last fetched L2 orderbook JSON
+    market_clock_status: String,
     show_symbol_overlap: bool,
     show_correlation: bool,
     show_seasonals: bool,
@@ -13747,11 +13753,35 @@ impl TyphooNApp {
                             match b.get_market_clock().await {
                                 Ok(v) => {
                                     let is_open = v["is_open"].as_bool().unwrap_or(false);
-                                    let next = v["next_open"].as_str().unwrap_or("—");
-                                    let msg = if is_open { "Market: OPEN".to_string() } else { format!("Market: CLOSED (opens {})", next) };
+                                    let next_open = v["next_open"].as_str().unwrap_or("—");
+                                    let next_close = v["next_close"].as_str().unwrap_or("—");
+                                    let target = if is_open { next_close } else { next_open };
+                                    let countdown = chrono::DateTime::parse_from_rfc3339(target)
+                                        .ok()
+                                        .map(|dt| dt.with_timezone(&chrono::Utc) - chrono::Utc::now())
+                                        .filter(|d| d.num_seconds() > 0)
+                                        .map(|d| {
+                                            let hours = d.num_hours();
+                                            let minutes = (d.num_minutes() % 60).abs();
+                                            if hours >= 24 {
+                                                format!("{}d {}h", hours / 24, hours % 24)
+                                            } else if hours > 0 {
+                                                format!("{}h {}m", hours, minutes)
+                                            } else {
+                                                format!("{}m", minutes.max(1))
+                                            }
+                                        })
+                                        .unwrap_or_else(|| "—".to_string());
+                                    let msg = if is_open {
+                                        format!("US equities OPEN · closes in {countdown}")
+                                    } else {
+                                        format!("US equities CLOSED · opens in {countdown}")
+                                    };
                                     let _ = broker_msg_tx_clone.send(BrokerMsg::MarketClock(msg));
                                 }
-                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                                Err(e) => {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e));
+                                }
                             }
                         }
                     }
@@ -24174,7 +24204,37 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             }
                         }
                     }
-BrokerCmd::KrakenCloseAll => {
+                    BrokerCmd::KrakenStartOrderbookWs { symbol, depth } => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let stream_result = if let Some(ref kb) = kraken_broker {
+                            kb.start_public_orderbook_ws(&symbol, depth).await
+                        } else {
+                            let kb = typhoon_engine::broker::kraken_broker::KrakenBroker::new(
+                                String::new(),
+                                String::new(),
+                            );
+                            kb.start_public_orderbook_ws(&symbol, depth).await
+                        };
+                        match stream_result {
+                            Ok(mut rx) => {
+                                let stream_tx = msg_tx.clone();
+                                tokio::spawn(async move {
+                                    while let Some(update) = rx.recv().await {
+                                        let _ = stream_tx.send(BrokerMsg::KrakenOrderbookUpdate(update));
+                                    }
+                                });
+                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                    "Kraken orderbook WS started: {symbol} depth {depth}"
+                                )));
+                            }
+                            Err(e) => {
+                                let _ = msg_tx.send(BrokerMsg::Error(format!(
+                                    "Kraken orderbook WS failed: {e}"
+                                )));
+                            }
+                        }
+                    }
+                    BrokerCmd::KrakenCloseAll => {
                         if let Some(ref kb) = kraken_broker {
                             match kb.close_all_positions().await {
                                 Ok(count) => {
@@ -26367,6 +26427,7 @@ BrokerCmd::KrakenCloseAll => {
             holders_result: String::new(),
             show_orderbook_window: false,
             orderbook_result: String::new(),
+            market_clock_status: String::new(),
             show_symbol_overlap: false,
             show_correlation: false,
             show_seasonals: false,

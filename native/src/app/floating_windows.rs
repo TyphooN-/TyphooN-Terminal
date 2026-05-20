@@ -57312,6 +57312,12 @@ impl TyphooNApp {
                                 symbol: sym.clone(),
                             });
                         }
+                        if ui.button("Stream L2").clicked() && !sym.is_empty() {
+                            let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
+                                symbol: sym.clone(),
+                                depth: 100,
+                            });
+                        }
                     });
                     ui.separator();
 
@@ -57517,11 +57523,13 @@ impl TyphooNApp {
                                 symbol: sym.clone(),
                             });
                         }
-                        ui.label(
-                            egui::RichText::new("L2 depth snapshot (Kraken public / Alpaca Pro)")
-                                .color(bm_dim)
-                                .small(),
-                        );
+                        if ui.button("Stream Depth").clicked() && !sym.is_empty() {
+                            let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
+                                symbol: sym.clone(),
+                                depth: 100,
+                            });
+                        }
+                        ui.label(egui::RichText::new("L2 depth").color(bm_dim).small());
                     });
                     ui.separator();
 

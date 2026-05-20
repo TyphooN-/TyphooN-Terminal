@@ -2045,6 +2045,250 @@ impl KrakenBroker {
 
         Ok(ws_stream)
     }
+
+    /// Stream Kraken public Level 2 order-book updates for one Spot/xStocks pair.
+    ///
+    /// The task keeps a local book from the initial WS snapshot plus deltas and
+    /// emits TyphooN's existing normalized orderbook JSON shape on every update.
+    pub async fn start_public_orderbook_ws(
+        &self,
+        symbol: &str,
+        depth: usize,
+    ) -> Result<tokio::sync::mpsc::Receiver<String>, String> {
+        let ws_pair = crate::core::kraken::resolve_kraken_ws_pair(&self.client, symbol)
+            .await
+            .ok_or_else(|| format!("Kraken orderbook WS: unsupported pair {symbol}"))?;
+        let display_symbol = crate::core::kraken::normalize_pair_symbol(symbol);
+        let depth = match depth {
+            10 | 25 | 100 | 500 | 1000 => depth,
+            value if value < 25 => 10,
+            value if value < 100 => 25,
+            value if value < 500 => 100,
+            value if value < 1000 => 500,
+            _ => 1000,
+        };
+        let (tx, rx) = tokio::sync::mpsc::channel(512);
+
+        tokio::spawn(async move {
+            let mut reconnect_delay = Duration::from_secs(1);
+            let mut bids: Vec<(f64, f64)> = Vec::new();
+            let mut asks: Vec<(f64, f64)> = Vec::new();
+            loop {
+                match connect_kraken_public_book_once(&ws_pair, depth).await {
+                    Ok(mut ws_stream) => {
+                        reconnect_delay = Duration::from_secs(1);
+                        let _ = tx
+                            .send(kraken_public_book_status_message(
+                                &display_symbol,
+                                &ws_pair,
+                                "online",
+                            ))
+                            .await;
+                        while let Some(msg) = ws_stream.next().await {
+                            match msg {
+                                Ok(Message::Text(text)) => {
+                                    if apply_kraken_public_book_message(
+                                        &text, &mut bids, &mut asks, depth,
+                                    ) {
+                                        let update = kraken_public_book_snapshot_json(
+                                            &display_symbol,
+                                            &ws_pair,
+                                            &bids,
+                                            &asks,
+                                        );
+                                        if tx.send(update).await.is_err() {
+                                            return;
+                                        }
+                                    }
+                                }
+                                Ok(Message::Ping(payload)) => {
+                                    if ws_stream.send(Message::Pong(payload)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Ok(Message::Pong(_)) => {}
+                                Ok(Message::Binary(_)) => {}
+                                Ok(Message::Frame(_)) => {}
+                                Ok(Message::Close(_)) => break,
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx
+                            .send(kraken_public_book_error_message(
+                                &display_symbol,
+                                &ws_pair,
+                                &e,
+                            ))
+                            .await;
+                    }
+                }
+
+                tokio::time::sleep(reconnect_delay).await;
+                reconnect_delay = (reconnect_delay * 2).min(Duration::from_secs(30));
+                bids.clear();
+                asks.clear();
+            }
+        });
+
+        Ok(rx)
+    }
+}
+
+async fn connect_kraken_public_book_once(
+    ws_pair: &str,
+    depth: usize,
+) -> Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    String,
+> {
+    let (mut ws_stream, _) = connect_async("wss://ws.kraken.com")
+        .await
+        .map_err(|e| format!("Kraken public WS connect failed: {e}"))?;
+    let sub = serde_json::json!({
+        "event": "subscribe",
+        "pair": [ws_pair],
+        "subscription": { "name": "book", "depth": depth }
+    });
+    ws_stream
+        .send(Message::Text(sub.to_string().into()))
+        .await
+        .map_err(|e| format!("Kraken public WS subscribe failed: {e}"))?;
+    Ok(ws_stream)
+}
+
+fn apply_kraken_public_book_message(
+    text: &str,
+    bids: &mut Vec<(f64, f64)>,
+    asks: &mut Vec<(f64, f64)>,
+    depth: usize,
+) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return false;
+    };
+    let Some(arr) = value.as_array() else {
+        return false;
+    };
+    if !arr
+        .iter()
+        .any(|v| v.as_str().is_some_and(|s| s.starts_with("book-")))
+    {
+        return false;
+    }
+    let mut changed = false;
+    for payload in arr.iter().filter_map(|v| v.as_object()) {
+        if let Some(levels) = payload.get("as").and_then(|v| v.as_array()) {
+            asks.clear();
+            apply_kraken_book_levels(asks, levels);
+            changed = true;
+        }
+        if let Some(levels) = payload.get("bs").and_then(|v| v.as_array()) {
+            bids.clear();
+            apply_kraken_book_levels(bids, levels);
+            changed = true;
+        }
+        if let Some(levels) = payload.get("a").and_then(|v| v.as_array()) {
+            apply_kraken_book_levels(asks, levels);
+            changed = true;
+        }
+        if let Some(levels) = payload.get("b").and_then(|v| v.as_array()) {
+            apply_kraken_book_levels(bids, levels);
+            changed = true;
+        }
+    }
+    if changed {
+        bids.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        asks.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        bids.truncate(depth);
+        asks.truncate(depth);
+    }
+    changed
+}
+
+fn apply_kraken_book_levels(side: &mut Vec<(f64, f64)>, levels: &[serde_json::Value]) {
+    for level in levels {
+        let Some(arr) = level.as_array() else {
+            continue;
+        };
+        let Some(price) = arr.first().and_then(kraken_json_f64) else {
+            continue;
+        };
+        let Some(size) = arr.get(1).and_then(kraken_json_f64) else {
+            continue;
+        };
+        if let Some(existing_idx) = side
+            .iter()
+            .position(|(existing_price, _)| (*existing_price - price).abs() <= f64::EPSILON)
+        {
+            if size <= 0.0 {
+                side.remove(existing_idx);
+            } else {
+                side[existing_idx] = (price, size);
+            }
+        } else if size > 0.0 {
+            side.push((price, size));
+        }
+    }
+}
+
+fn kraken_json_f64(value: &serde_json::Value) -> Option<f64> {
+    match value {
+        serde_json::Value::String(s) => s.parse::<f64>().ok(),
+        serde_json::Value::Number(n) => n.as_f64(),
+        _ => None,
+    }
+    .filter(|v| v.is_finite())
+}
+
+fn kraken_public_book_snapshot_json(
+    display_symbol: &str,
+    ws_pair: &str,
+    bids: &[(f64, f64)],
+    asks: &[(f64, f64)],
+) -> String {
+    let side_json = |levels: &[(f64, f64)]| -> Vec<serde_json::Value> {
+        levels
+            .iter()
+            .map(|(price, size)| serde_json::json!({ "price": price, "size": size }))
+            .collect()
+    };
+    serde_json::json!({
+        "source": "kraken_ws",
+        "symbol": display_symbol,
+        "ws_pair": ws_pair,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "bids": side_json(bids),
+        "asks": side_json(asks),
+    })
+    .to_string()
+}
+
+fn kraken_public_book_status_message(display_symbol: &str, ws_pair: &str, status: &str) -> String {
+    serde_json::json!({
+        "source": "kraken_ws",
+        "symbol": display_symbol,
+        "ws_pair": ws_pair,
+        "status": status,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "bids": [],
+        "asks": [],
+    })
+    .to_string()
+}
+
+fn kraken_public_book_error_message(display_symbol: &str, ws_pair: &str, error: &str) -> String {
+    serde_json::json!({
+        "source": "kraken_ws",
+        "symbol": display_symbol,
+        "ws_pair": ws_pair,
+        "status": "error",
+        "error": error,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "bids": [],
+        "asks": [],
+    })
+    .to_string()
 }
 
 fn kraken_ws_status_message(status: &str, message: impl Into<String>) -> String {

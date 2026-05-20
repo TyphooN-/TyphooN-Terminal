@@ -1032,6 +1032,7 @@ impl eframe::App for TyphooNApp {
                         let _ = self.broker_tx.send(BrokerCmd::GetPositions);
                         let _ = self.broker_tx.send(BrokerCmd::GetOrders);
                         let _ = self.broker_tx.send(BrokerCmd::GetActivities { limit: 100 });
+                        let _ = self.broker_tx.send(BrokerCmd::GetMarketClock);
                     }
                     self.log.push_back(LogEntry::info(s));
                 }
@@ -1095,6 +1096,15 @@ impl eframe::App for TyphooNApp {
                         self.log.push_back(LogEntry::warn(text));
                     } else {
                         self.log.push_back(LogEntry::info(text));
+                    }
+                }
+                BrokerMsg::KrakenOrderbookUpdate(text) => {
+                    let was_empty = self.orderbook_result.is_empty();
+                    self.orderbook_result = text;
+                    self.show_orderbook_window = true;
+                    if was_empty {
+                        self.log
+                            .push_back(LogEntry::info("Kraken orderbook WS: live depth streaming"));
                     }
                 }
                 BrokerMsg::Error(e) => {
@@ -6674,6 +6684,7 @@ impl eframe::App for TyphooNApp {
                     self.unusual_volume_results = results;
                 }
                 BrokerMsg::MarketClock(msg) => {
+                    self.market_clock_status = msg.clone();
                     self.log.push_back(LogEntry::info(msg));
                 }
                 BrokerMsg::StreamTick {
@@ -9258,6 +9269,32 @@ impl eframe::App for TyphooNApp {
                                 .color(color)
                                 .small(),
                         );
+                        let active_session = self.charts.get(self.active_tab).and_then(|chart| {
+                            let symbol = chart
+                                .symbol
+                                .split(':')
+                                .rev()
+                                .nth(1)
+                                .or_else(|| chart.symbol.split(':').last())
+                                .unwrap_or("");
+                            let kraken_crypto_pair = symbol.contains('/')
+                                && !symbol.to_ascii_uppercase().contains(".EQ");
+                            if self.kraken_connected && kraken_crypto_pair {
+                                Some("24/7".to_string())
+                            } else if self.broker_connected && !self.market_clock_status.is_empty()
+                            {
+                                Some(self.market_clock_status.clone())
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(session) = active_session {
+                            ui.label(
+                                egui::RichText::new(format!("[Session {}]", session))
+                                    .color(AXIS_TEXT)
+                                    .small(),
+                            );
+                        }
                         if self.kraken_connected {
                             let kraken_balance = self.kraken_usd_equivalent_balance();
                             ui.label(

@@ -23,6 +23,7 @@ static SPOT_PAIR_CATALOG: LazyLock<Mutex<Option<KrakenPairCatalog>>> =
 #[derive(Debug, Clone, Default)]
 struct KrakenPairCatalog {
     by_symbol: HashMap<String, String>,
+    wsname_by_symbol: HashMap<String, String>,
 }
 
 #[derive(Debug, Default)]
@@ -282,6 +283,19 @@ fn insert_kraken_pair_alias(
     }
 }
 
+fn insert_kraken_ws_alias(
+    map: &mut HashMap<String, String>,
+    source: impl AsRef<str>,
+    wsname: &str,
+) {
+    let symbol = normalize_pair_symbol(source.as_ref())
+        .replace('/', "")
+        .to_ascii_uppercase();
+    if !symbol.is_empty() && !wsname.is_empty() {
+        map.entry(symbol).or_insert_with(|| wsname.to_string());
+    }
+}
+
 fn parse_kraken_pair_catalog(body: &serde_json::Value) -> Result<KrakenPairCatalog, String> {
     if let Some(err_msg) = kraken_response_error(body) {
         return Err(format!("Kraken AssetPairs error: {err_msg}"));
@@ -292,6 +306,7 @@ fn parse_kraken_pair_catalog(body: &serde_json::Value) -> Result<KrakenPairCatal
         .and_then(|r| r.as_object())
         .ok_or("Expected object in Kraken AssetPairs response")?;
     let mut by_symbol = HashMap::with_capacity(result.len() * 3);
+    let mut wsname_by_symbol = HashMap::with_capacity(result.len() * 3);
 
     for (pair_name, info) in result {
         let status = info
@@ -302,16 +317,27 @@ fn parse_kraken_pair_catalog(body: &serde_json::Value) -> Result<KrakenPairCatal
             continue;
         }
 
+        let wsname = info
+            .get("wsname")
+            .and_then(|v| v.as_str())
+            .unwrap_or(pair_name);
+
         insert_kraken_pair_alias(&mut by_symbol, pair_name, pair_name);
+        insert_kraken_ws_alias(&mut wsname_by_symbol, pair_name, wsname);
         if let Some(altname) = info.get("altname").and_then(|v| v.as_str()) {
             insert_kraken_pair_alias(&mut by_symbol, altname, pair_name);
+            insert_kraken_ws_alias(&mut wsname_by_symbol, altname, wsname);
         }
         if let Some(wsname) = info.get("wsname").and_then(|v| v.as_str()) {
             insert_kraken_pair_alias(&mut by_symbol, wsname, pair_name);
+            insert_kraken_ws_alias(&mut wsname_by_symbol, wsname, wsname);
         }
     }
 
-    Ok(KrakenPairCatalog { by_symbol })
+    Ok(KrakenPairCatalog {
+        by_symbol,
+        wsname_by_symbol,
+    })
 }
 
 async fn load_kraken_pair_catalog(client: &reqwest::Client) -> Result<KrakenPairCatalog, String> {
@@ -347,6 +373,49 @@ async fn resolve_kraken_pair(client: &reqwest::Client, symbol: &str) -> Option<S
         Ok(catalog) => catalog.by_symbol.get(&normalized).cloned(),
         Err(_) => to_kraken_pair_lossy(&normalized),
     }
+}
+
+/// Resolve a TyphooN/Kraken symbol to Kraken's public WebSocket `wsname`
+/// format, e.g. `BTC/USD` -> `XBT/USD`.
+pub async fn resolve_kraken_ws_pair(client: &reqwest::Client, symbol: &str) -> Option<String> {
+    let normalized = normalize_pair_symbol(symbol)
+        .replace('/', "")
+        .to_ascii_uppercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    if let Ok(catalog) = load_kraken_pair_catalog(client).await
+        && let Some(wsname) = catalog.wsname_by_symbol.get(&normalized)
+    {
+        return Some(wsname.clone());
+    }
+
+    kraken_ws_pair_lossy(&normalized)
+}
+
+fn kraken_ws_pair_lossy(normalized: &str) -> Option<String> {
+    const QUOTES: &[&str] = &[
+        "USDT", "USDC", "PYUSD", "EUR", "USD", "GBP", "CAD", "AUD", "JPY", "CHF", "BTC", "XBT",
+        "ETH",
+    ];
+    let normalized = normalize_pair_symbol(normalized)
+        .replace('/', "")
+        .to_ascii_uppercase();
+    for quote in QUOTES {
+        if let Some(base) = normalized.strip_suffix(quote)
+            && !base.is_empty()
+        {
+            let base = match base {
+                "BTC" => "XBT",
+                "DOGE" => "XDG",
+                other => other,
+            };
+            let quote = if *quote == "BTC" { "XBT" } else { quote };
+            return Some(format!("{base}/{quote}"));
+        }
+    }
+    None
 }
 
 fn parse_kraken_number(value: &serde_json::Value) -> Option<f64> {
