@@ -33,7 +33,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  Engine Library (typhoon-engine crate)          │
 │  - AlpacaBroker (REST + WebSocket)              │
 │  - TastytradeBroker (REST + DXLink WebSocket)   │
-│  - KrakenBroker (full Spot REST orders + OHLCV) │
+│  - KrakenBroker (Spot REST orders + private WS) │
 │  - SqliteCache (TTBR binary, zstd compression)  │
 │  - DarwinDB (80+ analytics, 100% wired)         │
 │  - RiskEngine (VaR, TRIM, martingale)           │
@@ -64,10 +64,10 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 | 2 | Alpaca | US equities + crypto, free IEX or paid SIP. Tier-autotuned sync (ADR-203). |
 | 3 | tastytrade DXLink | Real-time historical bars + quotes for funded accounts. |
 | 4 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request, hourly+ TFs. |
-| 5 | Kraken Spot/xStocks | Crypto/xStocks trading (full Spot REST order surface) + public OHLCV recent/provider-window gap-fill. Async queueing with Spot public pacing/cooldown per ADR-211. |
+| 5 | Kraken Spot/xStocks | Crypto/xStocks trading (full Spot REST order surface + private WS ownTrades/openOrders) + public OHLCV recent/provider-window gap-fill. Async queueing with Spot public pacing/cooldown per ADR-211. |
 | 6 | Kraken Futures | Public futures instrument discovery and full chart-candle sync under `kraken-futures:SYMBOL:TF` using explicit from/to ranges. |
 
-MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade execution flows through Alpaca / tastytrade / Kraken with MT5 EA semantics (partial close, close-all, cancel-exits-before-close — see ADR-201). DARWIN account analytics are imported via XLSX trade history exports. Alpaca auto-connects on startup if credentials are saved in the system keyring. tastytrade fully integrated: REST API (auth, positions, orders, quotes, market metrics, option chains) + DXLink WebSocket (historical bars). See ADR-022. Kraken supports public-OHLCV-only mode and authenticated Spot REST trading with full AddOrder parameters, batch orders, amend/edit, dead-man cancel, cancel-all, balances, orders, trades, ledgers, and positions (ADR-072). Kraken public bar sync is fully async at the task level: direct Spot/Futures fetches spawn per-timeframe tasks, Kraken Spot can opportunistically prepend CryptoCompare deep crypto backfill for enabled USD crypto symbols, and all Kraken HTTP work runs under bounded queue/semaphore control (ADR-210). Spot OHLC HTTP calls are paced to Kraken's documented public limit with cooldown on throttles (ADR-211). See ADR-037 for cross-source priority hierarchy.
+MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade execution flows through Alpaca / tastytrade / Kraken with MT5 EA semantics (partial close, close-all, cancel-exits-before-close — see ADR-201). DARWIN account analytics are imported via XLSX trade history exports. Alpaca auto-connects on startup if credentials are saved in the system keyring. tastytrade fully integrated: REST API (auth, positions, orders, quotes, market metrics, option chains) + DXLink WebSocket (historical bars). See ADR-022. Kraken supports public-OHLCV-only mode and authenticated Spot REST trading with full AddOrder parameters, batch orders, amend/edit, dead-man cancel, cancel-all, balances, orders, trades, ledgers, positions, and private WebSocket `ownTrades`/`openOrders` with reconnect/resubscribe (ADR-072). Kraken public bar sync is fully async at the task level: direct Spot/Futures fetches spawn per-timeframe tasks, Kraken Spot can opportunistically prepend CryptoCompare deep crypto backfill for enabled USD crypto symbols, and all Kraken HTTP work runs under bounded queue/semaphore control (ADR-210). Spot OHLC HTTP calls are paced to Kraken's documented public limit with cooldown on throttles (ADR-211). See ADR-037 for cross-source priority hierarchy.
 
 ## Technology Stack
 

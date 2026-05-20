@@ -102,6 +102,31 @@ Authenticated account/history requests use a local Spot REST counter matching
 Kraken's default verified-account guidance. Trading-limit order rejections are
 reported rather than automatically retried, avoiding duplicate order intent.
 
+## Private WebSocket Coverage
+
+TyphooN uses Kraken private WebSocket as the live delta channel and REST as the
+authoritative snapshot/reconciliation channel.
+
+Implemented private WebSocket behavior:
+
+- token bootstrap through `GetWebSocketsToken`;
+- dedicated WS API key/secret support, falling back to REST credentials only
+  when separate WS credentials are absent;
+- `ownTrades` subscription for low-latency fill events;
+- `openOrders` subscription for low-latency order-state updates;
+- batched-message parsing for both private channels;
+- bounded in-memory fill/order state with REST snapshot dedupe/upsert;
+- automatic REST reconciliation of balances, positions/P&L, and open orders
+  after live fills;
+- ping/pong handling;
+- reconnect with exponential backoff and automatic resubscribe;
+- concise UI log status for subscription, disconnect, and reconnect events.
+
+This deliberately does not use WebSocket as the sole source of account truth:
+existing balances, historical trades, and current open orders are still fetched
+from REST on connect and after fill-triggered reconciliation. WebSocket exists
+to reduce latency and REST pressure between authoritative snapshots.
+
 ## UI And Web Routing
 
 Native quick-trade and chart-position controls can route crypto orders to

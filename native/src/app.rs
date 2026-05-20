@@ -8847,6 +8847,10 @@ enum BrokerMsg {
     KrakenTrades(Vec<typhoon_engine::broker::kraken_broker::KrakenTrade>),
     KrakenLiveTrade(typhoon_engine::broker::kraken_broker::KrakenTrade),
     KrakenOpenOrders(Vec<typhoon_engine::broker::kraken_broker::KrakenOrder>),
+    KrakenWsStatus {
+        status: String,
+        message: String,
+    },
     SecScrapeResult(String),
     FilingContent(String), // fetched SEC filing document text
     FinnhubNewsResult(Vec<(String, String, String)>),
@@ -24144,6 +24148,23 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                     for trade in trades {
                                                         let _ = value.send(BrokerMsg::KrakenLiveTrade(trade));
                                                     }
+                                                    continue;
+                                                }
+                                                if parsed.get("event").and_then(|v| v.as_str()) == Some("systemStatus")
+                                                    || parsed.get("event").and_then(|v| v.as_str()) == Some("subscriptionStatus")
+                                                {
+                                                    let status = parsed
+                                                        .get("status")
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or("info")
+                                                        .to_string();
+                                                    let message = parsed
+                                                        .get("message")
+                                                        .or_else(|| parsed.get("subscription").and_then(|v| v.get("name")))
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or("Kraken private WebSocket status")
+                                                        .to_string();
+                                                    let _ = value.send(BrokerMsg::KrakenWsStatus { status, message });
                                                     continue;
                                                 }
                                                 let orders = typhoon_engine::broker::kraken_broker::parse_open_orders_message(&parsed);

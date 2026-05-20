@@ -1089,6 +1089,14 @@ impl eframe::App for TyphooNApp {
                             .unwrap_or(std::cmp::Ordering::Equal)
                     });
                 }
+                BrokerMsg::KrakenWsStatus { status, message } => {
+                    let text = format!("Kraken WS {status}: {message}");
+                    if matches!(status.as_str(), "error" | "closed") {
+                        self.log.push_back(LogEntry::warn(text));
+                    } else {
+                        self.log.push_back(LogEntry::info(text));
+                    }
+                }
                 BrokerMsg::Error(e) => {
                     let now = chrono::Utc::now().timestamp();
                     // Compact pass failed — clear in_progress so the gate can retry next window.

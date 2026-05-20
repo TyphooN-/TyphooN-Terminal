@@ -1931,54 +1931,131 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 impl KrakenBroker {
     /// Connect to Kraken private WebSocket and subscribe to ownTrades + openOrders.
     /// Returns a channel receiver for incoming messages.
+    ///
+    /// The reader owns reconnect/resubscribe. REST remains the authoritative
+    /// snapshot/reconciliation path; private WS is the low-latency delta path.
     pub async fn start_private_ws(&self) -> Result<tokio::sync::mpsc::Receiver<String>, String> {
-        let token = self.get_websockets_token_string().await?;
+        let mut ws_stream = self.connect_private_ws_once().await?;
+        let api_key = self.api_key.to_string();
+        let api_secret = self.api_secret.to_string();
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
 
-        let (ws_stream, _) = connect_async("wss://ws.kraken.com")
-            .await
-            .map_err(|e| format!("Kraken WS connect failed: {}", e))?;
-
-        let (mut write, mut read) = ws_stream.split();
-
-        // Subscribe to ownTrades
-        let own_trades_sub = serde_json::json!({
-            "event": "subscribe",
-            "subscription": {
-                "name": "ownTrades",
-                "token": token
-            }
-        });
-        write
-            .send(Message::Text(own_trades_sub.to_string().into()))
-            .await
-            .map_err(|e| format!("Failed to subscribe to ownTrades: {}", e))?;
-
-        // Subscribe to openOrders
-        let open_orders_sub = serde_json::json!({
-            "event": "subscribe",
-            "subscription": {
-                "name": "openOrders",
-                "token": token
-            }
-        });
-        write
-            .send(Message::Text(open_orders_sub.to_string().into()))
-            .await
-            .map_err(|e| format!("Failed to subscribe to openOrders: {}", e))?;
-
-        let (tx, rx) = tokio::sync::mpsc::channel(100);
-
-        // Spawn reader task
         tokio::spawn(async move {
-            while let Some(msg) = read.next().await {
-                if let Ok(Message::Text(text)) = msg {
-                    let _ = tx.send(text.to_string()).await;
+            let mut reconnect_delay = Duration::from_secs(1);
+            loop {
+                while let Some(msg) = ws_stream.next().await {
+                    match msg {
+                        Ok(Message::Text(text)) => {
+                            reconnect_delay = Duration::from_secs(1);
+                            if tx.send(text.to_string()).await.is_err() {
+                                return;
+                            }
+                        }
+                        Ok(Message::Ping(payload)) => {
+                            if let Err(e) = ws_stream.send(Message::Pong(payload)).await {
+                                let _ = tx
+                                    .send(kraken_ws_status_message(
+                                        "error",
+                                        format!("Kraken WS pong failed: {e}"),
+                                    ))
+                                    .await;
+                                break;
+                            }
+                        }
+                        Ok(Message::Pong(_)) => {}
+                        Ok(Message::Binary(_)) => {}
+                        Ok(Message::Frame(_)) => {}
+                        Ok(Message::Close(frame)) => {
+                            let reason = frame
+                                .as_ref()
+                                .map(|f| f.reason.to_string())
+                                .unwrap_or_else(|| "closed".to_string());
+                            let _ = tx
+                                .send(kraken_ws_status_message(
+                                    "closed",
+                                    format!("Kraken WS closed: {reason}"),
+                                ))
+                                .await;
+                            break;
+                        }
+                        Err(e) => {
+                            let _ = tx
+                                .send(kraken_ws_status_message(
+                                    "error",
+                                    format!("Kraken WS read failed: {e}"),
+                                ))
+                                .await;
+                            break;
+                        }
+                    }
+                }
+
+                tokio::time::sleep(reconnect_delay).await;
+                reconnect_delay = (reconnect_delay * 2).min(Duration::from_secs(30));
+
+                let reconnect_broker = KrakenBroker::new(api_key.clone(), api_secret.clone());
+                match reconnect_broker.connect_private_ws_once().await {
+                    Ok(next_stream) => {
+                        ws_stream = next_stream;
+                        let _ = tx
+                            .send(kraken_ws_status_message("online", "Kraken WS reconnected"))
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = tx
+                            .send(kraken_ws_status_message(
+                                "error",
+                                format!("Kraken WS reconnect failed: {e}"),
+                            ))
+                            .await;
+                    }
                 }
             }
         });
 
         Ok(rx)
     }
+
+    async fn connect_private_ws_once(
+        &self,
+    ) -> Result<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        String,
+    > {
+        let token = self.get_websockets_token_string().await?;
+        let (mut ws_stream, _) = connect_async("wss://ws.kraken.com")
+            .await
+            .map_err(|e| format!("Kraken WS connect failed: {}", e))?;
+
+        for channel in ["ownTrades", "openOrders"] {
+            let sub = serde_json::json!({
+                "event": "subscribe",
+                "subscription": {
+                    "name": channel,
+                    "token": token.clone()
+                }
+            });
+            ws_stream
+                .send(Message::Text(sub.to_string().into()))
+                .await
+                .map_err(|e| format!("Failed to subscribe to {channel}: {e}"))?;
+        }
+
+        Ok(ws_stream)
+    }
+}
+
+fn kraken_ws_status_message(status: &str, message: impl Into<String>) -> String {
+    serde_json::json!({
+        "event": "systemStatus",
+        "status": status,
+        "connectionID": 0,
+        "version": "TyphooN",
+        "message": message.into(),
+    })
+    .to_string()
 }
 
 fn parse_trades_history_result(
