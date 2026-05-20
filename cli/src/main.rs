@@ -1,7 +1,8 @@
-//! TyphooN Terminal CLI — TUI interface for trading, research, and risk management.
+//! TyphooN Terminal CLI — lean TUI/headless interface for trading, cache access, and ops.
 //!
-//! Full terminal interface using ratatui. Connects to Alpaca Markets via REST API.
-//! Shares the same broker logic as the GUI terminal.
+//! This is not a full GUI replacement. Interactive trading is currently Alpaca REST-first;
+//! the GUI remains the complete surface for Kraken/tastytrade, full charting/indicators,
+//! multi-source sync, strategy tools, AI windows, and storage management.
 //!
 //! Usage:
 //!   typhoon                     # Interactive TUI mode
@@ -1464,10 +1465,29 @@ impl App {
             }
             "cache" | "storage" => {
                 self.log(
-                    "Cache management — use GUI for full storage manager",
+                    "Cache management: CLI supports import/export, LAN sync metrics, and MCP research packets; use GUI for full Storage Manager.",
                     Color::Yellow,
                 );
-                self.log("  cache stats: shows key count and sizes", Color::Cyan);
+            }
+            "capabilities" | "caps" | "parity" => {
+                self.log("--- CLI/TUI Capabilities ---", Color::Cyan);
+                self.log("  Alpaca REST: account, positions, orders, market/limit/stop/bracket/trailing/OCO, fills, clock, quotes, bars", Color::Cyan);
+                self.log(
+                    "  Charts: lightweight terminal candles + volume + SMA(20), Alpaca-backed",
+                    Color::Cyan,
+                );
+                self.log("  Ops: cache backup import/export, LAN sync server/client + Prometheus metrics, MCP research packet server", Color::Cyan);
+                self.log(
+                    "  Imports: MT5 statement CSV account summaries",
+                    Color::Cyan,
+                );
+                self.log(
+                    "--- GUI-only / not reasonable to fully mirror in TUI ---",
+                    Color::Yellow,
+                );
+                self.log("  Kraken/tastytrade live broker surfaces, KrakenPro controls, private/public WebSockets, DOM/bookmap/orderbook", Color::Yellow);
+                self.log("  Multi-chart egui workspace, draggable panels, full indicator stack/settings, GPU overlays", Color::Yellow);
+                self.log("  Backtester/optimizer/walk-forward UI, AI assistant windows, full Storage/Sync Status managers", Color::Yellow);
             }
             "symbols" | "sym" => {
                 let filter = if parts.len() > 1 {
@@ -1595,9 +1615,13 @@ impl App {
                     "  fills [N] / history [N]       Recent fills / order history",
                     Color::Cyan,
                 );
-                self.log("--- Accounts ---", Color::Cyan);
+                self.log("--- Accounts / Ops ---", Color::Cyan);
                 self.log(
                     "  import NAME /path.csv, accounts, rmacct NAME",
+                    Color::Cyan,
+                );
+                self.log(
+                    "  capabilities                  Show CLI vs GUI coverage",
                     Color::Cyan,
                 );
                 self.log(
