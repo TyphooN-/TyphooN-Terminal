@@ -9261,21 +9261,26 @@ impl eframe::App for TyphooNApp {
                             let kraken_balance = self.kraken_usd_equivalent_balance();
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "${:.0} Kraken - Live",
+                                    "[Kraken (Live) ${:.0}]",
                                     kraken_balance
                                 ))
-                                .color(egui::Color32::WHITE)
+                                .color(UP)
                                 .small(),
                             );
                         }
                         if let Some(ref acct) = self.live_account {
                             let mode = if self.broker_paper { "Paper" } else { "Live" };
+                            let color = if self.broker_paper {
+                                egui::Color32::WHITE
+                            } else {
+                                UP
+                            };
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "${:.0} Alpaca - {}",
-                                    acct.equity, mode
+                                    "[Alpaca ({}) ${:.0}]",
+                                    mode, acct.equity
                                 ))
-                                .color(egui::Color32::WHITE)
+                                .color(color)
                                 .small(),
                             );
                         }
