@@ -9203,7 +9203,7 @@ impl eframe::App for TyphooNApp {
                             sources.push(format!("Alpaca ({})", mode));
                         }
                         if self.kraken_connected {
-                            sources.push("Kraken (Live)".into());
+                            sources.push("Kraken (REST + WS)".into());
                         }
                         if self.tt_connected {
                             let mode = if self.tt_sandbox { "Sandbox" } else { "Live" };
@@ -9250,9 +9250,9 @@ impl eframe::App for TyphooNApp {
                             sources.push("LAN Server".into());
                         }
                         let src_text = sources.join(" + ");
-                        // Any data source connected = LIVE. OFFLINE only when nothing connected.
+                        // Any data source connected = Connected. OFFLINE only when nothing connected.
                         // Market hours per-symbol can be refined later using symbol specs.
-                        let (status, color) = ("LIVE", UP);
+                        let (status, color) = ("Connected", UP);
                         ui.label(
                             egui::RichText::new(format!("\u{25CF} {} [{}]", status, src_text))
                                 .color(color)
