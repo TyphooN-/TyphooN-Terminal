@@ -17369,7 +17369,7 @@ impl TyphooNApp {
                 if rest.is_empty() {
                     if self.mt5_backtest_expand_symbols.is_empty() {
                         self.log.push_back(LogEntry::info(
-                            "backtest_expand: empty. Usage: BACKTEST_EXPAND EURUSD [bars]  (omit bars → 4× tiered default, cap 500K)"));
+                            "backtest_expand: empty. Usage: BACKTEST_EXPAND EURUSD [bars]  (compatibility override; provider-max MT5 sync is already the default)"));
                     } else {
                         let mut list: Vec<(String, u32)> = self
                             .mt5_backtest_expand_symbols
@@ -17388,11 +17388,11 @@ impl TyphooNApp {
                 } else {
                     let parts: Vec<&str> = rest.split_whitespace().collect();
                     let sym = parts[0].to_uppercase();
-                    // Default: 4× the deepest tiered target (1Min/5Min = 50K → 200K)
-                    // so a bare BACKTEST_EXPAND gives a useful depth without a number.
-                    // Cap at 500K to prevent OOM on runaway user input.
-                    let default_bars: u32 = 200_000;
-                    let cap: u32 = 500_000;
+                    // MT5 sync already asks for provider-maximum history by default.
+                    // Keep this command as a compatibility knob for old saved sessions/manual
+                    // experiments, but never let it shrink below the provider-max sentinel.
+                    let default_bars: u32 = MT5_PROVIDER_MAX_BARS;
+                    let cap: u32 = MT5_PROVIDER_MAX_BARS;
                     let bars: u32 = if parts.len() >= 2 {
                         parts[1].parse::<u32>().unwrap_or(default_bars).min(cap)
                     } else {
@@ -17415,7 +17415,7 @@ impl TyphooNApp {
                     let sym = rest.to_uppercase();
                     if self.mt5_backtest_expand_symbols.remove(&sym).is_some() {
                         self.log.push_back(LogEntry::info(format!(
-                            "backtest_expand: removed {} — back to default tiered target",
+                            "backtest_expand: removed {} — provider-max MT5 sync remains the default",
                             sym
                         )));
                     } else {

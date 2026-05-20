@@ -8,8 +8,8 @@
 ## Context
 
 TyphooN Terminal supports multiple data sources:
-- **MT5 via BarCacheWriter** — 9 standard timeframes (M1→MN1), deep history (up to 50K bars per TF), real-time from broker (Darwinex), synced every 30 seconds
-- **Alpaca free tier** — 15-minute delayed data, rate-limited, shallow history (~69 monthly bars for some symbols)
+- **MT5 via BarCacheWriter** — 9 standard timeframes (M1→MN1), provider-maximum history requested from the broker/server, real-time from broker (Darwinex), synced every 30 seconds
+- **Alpaca** — US equities broker feed; paginated history is traversed until the server reports exhaustion, subject to account/rate-limit constraints
 
 Previously, the system treated the connected broker (Alpaca) as the primary data source with MT5 as supplementary. An enrichment layer attempted to merge deeper MT5 history into Alpaca results. This added complexity and still failed when frontend in-memory caching returned stale Alpaca data before the backend was reached.
 
@@ -32,17 +32,19 @@ Previously, the system treated the connected broker (Alpaca) as the primary data
 
 ### MT5 Coverage via BarCacheWriter
 
-| Timeframe | Max Bars | Approximate History |
-|-----------|----------|-------------------|
-| M1        | 10,000   | ~7 days           |
-| M5        | 20,000   | ~69 days          |
-| M15       | 50,000   | ~520 days         |
-| M30       | 50,000   | ~3 years          |
-| H1        | 50,000   | ~6 years          |
-| H4        | 20,000   | ~10 years         |
-| D1        | 10,000   | ~40 years         |
-| W1        | 2,000    | ~38 years         |
-| MN1       | 1,000    | ~83 years         |
+The old terminal-side 10K/20K/50K per-timeframe table is obsolete. Current MT5 sync emits the largest safe MQL5 `MAX_BARS` sentinel (`i32::MAX`) for every enabled timeframe and lets the broker/server decide how much history exists. If a symbol/timeframe stops growing below that sentinel, saturation memory treats that count as the provider's natural ceiling and suppresses repeat full-depth churn while normal stale/current updates continue.
+
+| Timeframe | Requested Depth |
+|-----------|-----------------|
+| M1        | provider maximum |
+| M5        | provider maximum |
+| M15       | provider maximum |
+| M30       | provider maximum |
+| H1        | provider maximum |
+| H4        | provider maximum |
+| D1        | provider maximum |
+| W1        | provider maximum |
+| MN1       | provider maximum |
 
 ### Implementation
 

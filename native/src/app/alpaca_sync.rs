@@ -1393,7 +1393,7 @@ mod tests {
             SyncCacheState {
                 last_bar_ts_s: now_s - 3600,
                 write_ts_s: now_s - 60,
-                bar_count: 7_500,
+                bar_count: 37_421,
             },
         )]);
         let backfill_complete = HashMap::from([(
@@ -1402,8 +1402,8 @@ mod tests {
                 symbol: "AAPL".to_string(),
                 timeframe: "1Hour".to_string(),
                 marked_at: now_s,
-                bar_count: 7_500,
-                target_bars: 7_500,
+                bar_count: 37_421,
+                target_bars: 37_421,
             },
         )]);
 
@@ -1449,7 +1449,7 @@ mod tests {
                 timeframe: "1Month".to_string(),
                 marked_at: now_s,
                 bar_count: 70,
-                target_bars: 240,
+                target_bars: u32::MAX as i64,
             },
         )]);
 
