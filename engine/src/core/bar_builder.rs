@@ -7,7 +7,7 @@
 //! This eliminates the 10-second polling loop for live bar updates — the frontend
 //! polls completed bars from BarBuilder instead of hitting the API.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 /// Maximum completed bars to buffer before oldest are dropped (prevents unbounded growth).
 const MAX_COMPLETED_BARS: usize = 10_000;
@@ -59,7 +59,7 @@ pub struct BarBuilder {
     /// Active (still forming) bars, one per symbol
     active: HashMap<String, PartialBar>,
     /// Completed bars ready for frontend consumption
-    completed: Vec<CompletedBar>,
+    completed: VecDeque<CompletedBar>,
 }
 
 impl Default for BarBuilder {
@@ -72,7 +72,7 @@ impl BarBuilder {
     pub fn new() -> Self {
         Self {
             active: HashMap::new(),
-            completed: Vec::new(),
+            completed: VecDeque::new(),
         }
     }
 
@@ -109,7 +109,7 @@ impl BarBuilder {
                 bar.trade_count += 1;
             } else {
                 // New minute — complete old bar, start new one
-                self.completed.push(bar.to_completed(symbol));
+                let completed = bar.to_completed(symbol);
                 // Start new bar
                 *bar = PartialBar {
                     minute_epoch: trade_minute,
@@ -120,11 +120,7 @@ impl BarBuilder {
                     volume: size,
                     trade_count: 1,
                 };
-                // Bound completed buffer
-                if self.completed.len() > MAX_COMPLETED_BARS {
-                    self.completed
-                        .drain(0..self.completed.len() - MAX_COMPLETED_BARS);
-                }
+                self.push_completed(completed);
             }
         } else {
             // First trade for this symbol
@@ -143,6 +139,13 @@ impl BarBuilder {
         }
     }
 
+    fn push_completed(&mut self, bar: CompletedBar) {
+        self.completed.push_back(bar);
+        while self.completed.len() > MAX_COMPLETED_BARS {
+            self.completed.pop_front();
+        }
+    }
+
     /// Flush any active bars older than `max_age_secs` into the completed buffer.
     /// Call periodically (e.g., every 60s) to ensure bars don't stay open indefinitely
     /// when no trades arrive for a symbol.
@@ -157,7 +160,8 @@ impl BarBuilder {
             .collect();
         for sym in stale_syms {
             if let Some(bar) = self.active.remove(&sym) {
-                self.completed.push(bar.to_completed(&sym));
+                let completed = bar.to_completed(&sym);
+                self.push_completed(completed);
             }
         }
     }
@@ -178,7 +182,7 @@ impl BarBuilder {
 
     /// Drain all completed bars. Returns them and clears the internal buffer.
     pub fn drain_completed(&mut self) -> Vec<CompletedBar> {
-        std::mem::take(&mut self.completed)
+        std::mem::take(&mut self.completed).into_iter().collect()
     }
 
     /// Get the current (still-forming) bar for a symbol, if any.
@@ -430,6 +434,21 @@ mod tests {
         bb.ingest_trade("AAPL", 160.0, 50.0, "2026-01-15T10:31:00Z");
         assert_eq!(bb.active_count(), 2);
         assert_eq!(bb.pending_count(), 1);
+    }
+
+    #[test]
+    fn completed_buffer_is_bounded_as_fifo() {
+        let mut bb = BarBuilder::new();
+        let start = chrono::DateTime::parse_from_rfc3339("2026-01-15T09:00:00Z").unwrap();
+        for minute in 0..=MAX_COMPLETED_BARS + 1 {
+            let ts = (start + chrono::Duration::minutes(minute as i64)).to_rfc3339();
+            bb.ingest_trade("AAPL", 100.0 + minute as f64, 1.0, &ts);
+        }
+
+        assert_eq!(bb.pending_count(), MAX_COMPLETED_BARS);
+        let completed = bb.drain_completed();
+        assert_eq!(completed.len(), MAX_COMPLETED_BARS);
+        assert!(completed[0].timestamp.contains("2026-01-15T09:01:00"));
     }
 
     #[test]

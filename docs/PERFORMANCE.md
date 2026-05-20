@@ -17,6 +17,10 @@ The terminal uses egui + wgpu for direct GPU rendering. No WebView, no JavaScrip
 | Memory (MTF 4-cell grid) | ~100-150MB |
 | Binary size (release) | ~25MB |
 
+### Live Bar Builder
+
+WebSocket trade streams build 1-minute OHLCV bars in-process. Completed bars use a bounded FIFO buffer (`VecDeque`) so live sessions cannot grow unbounded and old-bar eviction remains O(1) instead of draining/shifting a `Vec` under load.
+
 ### Data Pipeline
 
 | Step | Time |
