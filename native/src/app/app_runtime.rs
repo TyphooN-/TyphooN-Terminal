@@ -11116,7 +11116,7 @@ impl eframe::App for TyphooNApp {
                                         .map(|(avg, cur)| ((cur - avg) * qty, (cur - avg) / avg * 100.0));
                                     ui.horizontal(|ui| {
                                         ui.label(
-                                            egui::RichText::new(format!("[Kraken balance] {display_holding}"))
+                                            egui::RichText::new(format!("[Kraken] {display_holding}"))
                                                 .small()
                                                 .strong(),
                                         );
