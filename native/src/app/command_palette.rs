@@ -17117,8 +17117,6 @@ impl TyphooNApp {
 
                     let mut fetched_count = 0;
                     let mut skipped_count = 0;
-                    let db_path = cache_db_path();
-
                     // Process uncached symbols first (highest priority)
                     for sym in uncached_syms.iter().chain(cached_syms.iter()) {
                         let su = sym.to_uppercase();
@@ -17142,13 +17140,11 @@ impl TyphooNApp {
 
                         if is_kraken_futures {
                             if self.kraken_scrape_futures {
-                                let _ = self.broker_tx.send(BrokerCmd::KrakenFuturesBackfill {
-                                    symbol: su.clone(),
-                                    timeframes: missing_tfs.clone(),
-                                    db_path: db_path.clone(),
-                                    backfill_complete: false,
-                                });
-                                fetched_count += missing_tfs.len();
+                                for tf in &missing_tfs {
+                                    if self.queue_kraken_futures_fetch(&su, tf) {
+                                        fetched_count += 1;
+                                    }
+                                }
                             } else {
                                 skipped_count += 1;
                                 continue;
@@ -17158,38 +17154,31 @@ impl TyphooNApp {
                             // Normalize: remove slashes, uppercase (BTC/USD → BTCUSD)
                             let clean_sym = sym.replace('/', "").to_uppercase();
                             if self.kraken_spot_symbol_scrape_enabled(&clean_sym) {
-                                let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
-                                    symbol: clean_sym.clone(),
-                                    timeframes: missing_tfs.clone(),
-                                    db_path: db_path.clone(),
-                                    backfill_complete: false,
-                                });
-                                fetched_count += missing_tfs.len();
+                                for tf in &missing_tfs {
+                                    if self.queue_kraken_fetch(&clean_sym, tf) {
+                                        fetched_count += 1;
+                                    }
+                                }
                             }
                         } else if self.broker_connected {
                             // Stocks/Forex/CFDs: use Alpaca (AlpacaFetchBars, with MT5 priority + full-history first fetch)
                             for tf in &missing_tfs {
-                                self.queue_alpaca_fetch(&sym, tf);
+                                if self.queue_alpaca_fetch(&sym, tf) {
+                                    fetched_count += 1;
+                                }
                             }
                         }
 
                         // tastytrade: bars + option chain (if connected and not already cached)
                         if self.tt_connected {
                             for tf in &missing_tfs {
-                                let _ = self.broker_tx.send(BrokerCmd::TastyTradeFetchBars {
-                                    symbol: sym.clone(),
-                                    timeframe: tf.clone(),
-                                    backfill_complete: false,
-                                });
-                                fetched_count += 1;
+                                if self.queue_tastytrade_fetch(&sym, tf) {
+                                    fetched_count += 1;
+                                }
                             }
                             let _ = self.broker_tx.send(BrokerCmd::TastytradeOptionChain {
                                 symbol: sym.clone(),
                             });
-                        }
-                        // Count individual TF fetches (not symbols) to match completion counter
-                        if !is_kraken_futures && !is_crypto && self.broker_connected {
-                            fetched_count += missing_tfs.len(); // Alpaca FetchAllBars per TF
                         }
                     }
 

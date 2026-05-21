@@ -201,17 +201,15 @@ impl eframe::App for TyphooNApp {
                                 break; // just the next lower TF for forming bar (Kraken has rate limits)
                             }
                         }
-                        let db_path = cache_db_path();
-                        // Server/standalone: fetch directly from Kraken (LAN clients excluded by outer guard)
+                        // Server/standalone: queue through the scheduler path so periodic chart
+                        // refreshes respect pending slots, no-data tombstones, and persisted
+                        // backfill-complete markers instead of forcing full-history attempts.
                         let timeframes =
                             self.filtered_sync_timeframes(timeframes.iter().map(|tf| tf.as_str()));
-                        if !timeframes.is_empty() && self.kraken_spot_symbol_scrape_enabled(&bare) {
-                            let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
-                                symbol: bare.clone(),
-                                timeframes,
-                                db_path: db_path.clone(),
-                                backfill_complete: false,
-                            });
+                        if self.kraken_spot_symbol_scrape_enabled(&bare) {
+                            for tf in timeframes {
+                                self.queue_kraken_fetch(&bare, &tf);
+                            }
                         }
                     }
                 }

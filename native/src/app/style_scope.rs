@@ -460,13 +460,10 @@ impl TyphooNApp {
                     let kr_tfs = self.filtered_sync_timeframes([
                         "1Day", "1Hour", "4Hour", "15Min", "30Min", "5Min",
                     ]);
-                    if !kr_tfs.is_empty() && self.kraken_spot_symbol_scrape_enabled(&bare) {
-                        let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
-                            symbol: bare,
-                            timeframes: kr_tfs,
-                            db_path: cache_db_path(),
-                            backfill_complete: false,
-                        });
+                    if self.kraken_spot_symbol_scrape_enabled(&bare) {
+                        for tf in kr_tfs {
+                            self.queue_kraken_fetch(&bare, &tf);
+                        }
                     }
                 }
             }
