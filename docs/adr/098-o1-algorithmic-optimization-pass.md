@@ -275,3 +275,7 @@ reusable for future optimizations.
   value in each sampled bucket so volume/MACD spikes are not silently hidden.
   Fisher's zero reference also uses one line primitive instead of dotted segment
   spam.
+- Static horizontal chart levels now avoid faux-dotted rendering built from many
+  tiny primitives. ATR projection levels and previous-candle H/L levels draw one
+  clipped line per exact price level instead of per-pixel dash/circle loops,
+  preserving level accuracy while cutting tessellation and GPU upload work.

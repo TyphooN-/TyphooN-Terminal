@@ -4052,36 +4052,31 @@ pub(super) fn draw_chart(
         );
     }
 
-    // ATR Projection — multi-timeframe horizontal lines (matching ATR_Projection.mqh)
-    // Each HTF draws upper/lower at HTF_open ± HTF_ATR(14), yellow dotted
+    // ATR Projection — multi-timeframe horizontal levels (matching ATR_Projection.mqh).
+    // Draw one clipped line primitive per level; dotted per-pixel segments were pure
+    // tessellation/GPU-upload pressure and did not add price accuracy.
     if flags.atr_proj {
         let atr_yellow = egui::Color32::from_rgb(255, 255, 0); // clrYellow
         for &(label, htf_open, atr_val, line_start_idx) in &chart.atr_proj_levels {
             let upper_price = htf_open + atr_val;
             let lower_price = htf_open - atr_val;
-            // Determine x start from the line_start_idx
             let x_start = if line_start_idx >= start_idx {
                 chart_rect.left() + ((line_start_idx - start_idx) as f32) * bar_w
             } else {
                 chart_rect.left()
-            };
+            }
+            .clamp(chart_rect.left(), chart_rect.right());
             let x_end = chart_rect.right();
             for (price, suffix) in [(upper_price, "Hi"), (lower_price, "Lo")] {
                 let y = price_to_y(price);
                 if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                    // Dotted horizontal line from x_start to x_end
-                    let mut dx = x_start;
-                    while dx < x_end {
-                        let end = (dx + 3.0).min(x_end);
-                        painter.line_segment(
-                            [egui::pos2(dx, y), egui::pos2(end, y)],
-                            egui::Stroke::new(2.0, atr_yellow),
-                        );
-                        dx += 6.0;
-                    }
+                    painter.line_segment(
+                        [egui::pos2(x_start, y), egui::pos2(x_end, y)],
+                        egui::Stroke::new(1.5, atr_yellow),
+                    );
                     // Label: "ATR D1 Hi 1.2345"
                     painter.text(
-                        egui::pos2(x_start.max(chart_rect.left()) + 4.0, y - 10.0),
+                        egui::pos2(x_start + 4.0, y - 10.0),
                         egui::Align2::LEFT_BOTTOM,
                         &format!("ATR {} {} {}", label, suffix, format_price(price)),
                         egui::FontId::monospace(8.0),
@@ -4225,13 +4220,13 @@ pub(super) fn draw_chart(
             if let Some(p) = price_opt {
                 let y = price_to_y(*p);
                 if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                    // Dotted line
-                    let dot = 3.0_f32;
-                    let mut x = chart_rect.left();
-                    while x < chart_rect.right() {
-                        painter.circle_filled(egui::pos2(x, y), 0.5, *color);
-                        x += dot * 3.0;
-                    }
+                    painter.line_segment(
+                        [
+                            egui::pos2(chart_rect.left(), y),
+                            egui::pos2(chart_rect.right(), y),
+                        ],
+                        egui::Stroke::new(0.5, *color),
+                    );
                     painter.text(
                         egui::pos2(chart_rect.right() - 40.0, y - 10.0),
                         egui::Align2::LEFT_TOP,
