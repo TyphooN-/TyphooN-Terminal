@@ -289,26 +289,32 @@ impl TyphooNApp {
         prompt: String,
         tx: std::sync::mpsc::Sender<String>,
     ) {
-        std::thread::spawn(move || {
-            let args = Self::build_codex_exec_args(&model, &reasoning_effort, &prompt);
-            match std::process::Command::new("codex").args(&args).output() {
-                Ok(output) => {
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    let response = if !stdout.trim().is_empty() {
-                        stdout.trim().to_string()
-                    } else if !stderr.trim().is_empty() {
-                        format!("Error: {}", stderr.trim())
-                    } else {
-                        "(empty response)".to_string()
-                    };
-                    let _ = tx.send(response);
+        let tx_on_spawn_err = tx.clone();
+        if let Err(e) = std::thread::Builder::new()
+            .name("typhoon-ai-codex-exec".into())
+            .spawn(move || {
+                let args = Self::build_codex_exec_args(&model, &reasoning_effort, &prompt);
+                match std::process::Command::new("codex").args(&args).output() {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        let response = if !stdout.trim().is_empty() {
+                            stdout.trim().to_string()
+                        } else if !stderr.trim().is_empty() {
+                            format!("Error: {}", stderr.trim())
+                        } else {
+                            "(empty response)".to_string()
+                        };
+                        let _ = tx.send(response);
+                    }
+                    Err(e) => {
+                        let _ = tx.send(format!("Failed to run codex CLI: {e}"));
+                    }
                 }
-                Err(e) => {
-                    let _ = tx.send(format!("Failed to run codex CLI: {e}"));
-                }
-            }
-        });
+            })
+        {
+            let _ = tx_on_spawn_err.send(format!("Failed to spawn codex CLI worker: {e}"));
+        }
     }
 
     pub(super) fn build_hermes_exec_args(model: &str, provider: &str, prompt: &str) -> Vec<String> {
@@ -334,25 +340,31 @@ impl TyphooNApp {
         prompt: String,
         tx: std::sync::mpsc::Sender<String>,
     ) {
-        std::thread::spawn(move || {
-            let args = Self::build_hermes_exec_args(&model, &provider, &prompt);
-            match std::process::Command::new("hermes").args(&args).output() {
-                Ok(output) => {
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    let response = if !stdout.trim().is_empty() {
-                        stdout.trim().to_string()
-                    } else if !stderr.trim().is_empty() {
-                        format!("Error: {}", stderr.trim())
-                    } else {
-                        "(empty response)".to_string()
-                    };
-                    let _ = tx.send(response);
+        let tx_on_spawn_err = tx.clone();
+        if let Err(e) = std::thread::Builder::new()
+            .name("typhoon-ai-hermes-exec".into())
+            .spawn(move || {
+                let args = Self::build_hermes_exec_args(&model, &provider, &prompt);
+                match std::process::Command::new("hermes").args(&args).output() {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        let response = if !stdout.trim().is_empty() {
+                            stdout.trim().to_string()
+                        } else if !stderr.trim().is_empty() {
+                            format!("Error: {}", stderr.trim())
+                        } else {
+                            "(empty response)".to_string()
+                        };
+                        let _ = tx.send(response);
+                    }
+                    Err(e) => {
+                        let _ = tx.send(format!("Failed to run Hermes Agent CLI: {e}"));
+                    }
                 }
-                Err(e) => {
-                    let _ = tx.send(format!("Failed to run Hermes Agent CLI: {e}"));
-                }
-            }
-        });
+            })
+        {
+            let _ = tx_on_spawn_err.send(format!("Failed to spawn Hermes Agent CLI worker: {e}"));
+        }
     }
 }

@@ -215,3 +215,7 @@ reusable for future optimizations.
   screenshot. This keeps short filesystem/image-encode work in the standard
   blocking-offload lane while preserving the rule that long-running daemon or
   private-runtime jobs stay on named dedicated threads.
+- Codex and Hermes Agent one-shot CLI workers now use named dedicated threads
+  (`typhoon-ai-codex-exec`, `typhoon-ai-hermes-exec`) instead of anonymous
+  `std::thread::spawn`, and report thread-spawn failure back to the UI channel
+  instead of silently dropping the request.
