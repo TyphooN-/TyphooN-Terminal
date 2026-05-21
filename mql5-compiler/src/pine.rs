@@ -20,6 +20,7 @@
 
 use crate::ir::*;
 use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, InputParam, PlotDef};
+use std::collections::HashSet;
 
 /// Parse PineScript source and produce IR module.
 pub fn parse_pine(source: &str) -> CompileResult {
@@ -77,6 +78,7 @@ fn build_ir_internal(source: &str) -> (IrModule, IndicatorMeta, u8) {
     let mut ir_body: Vec<IrStmt> = Vec::new();
     let mut inputs: Vec<IrInput> = Vec::new();
     let mut locals: Vec<(String, IrType)> = Vec::new();
+    let mut local_names: HashSet<String> = HashSet::new();
     let mut plot_count = 0usize;
     // Detect version header. v4 scripts use `//@version=4` and call functions
     // without the `ta.`/`math.` namespace prefix. v5 requires the prefix.
@@ -245,10 +247,15 @@ fn build_ir_internal(source: &str) -> (IrModule, IndicatorMeta, u8) {
                 continue;
             } // not a simple assignment
 
-            // Parse RHS expression
+            // Parse RHS expression. Keep stable local order but track membership
+            // in a side set so repeated assignments do not linearly scan or
+            // duplicate local declarations on large imported scripts.
             if let Some(ir_expr) = parse_pine_expr(rhs) {
-                locals.push((var_name.to_string(), IrType::F64));
-                ir_body.push(IrStmt::SetLocal(var_name.to_string(), ir_expr));
+                let var_name = var_name.to_string();
+                if local_names.insert(var_name.clone()) {
+                    locals.push((var_name.clone(), IrType::F64));
+                }
+                ir_body.push(IrStmt::SetLocal(var_name, ir_expr));
             }
             continue;
         }
@@ -692,6 +699,20 @@ plot(val, title="SMA", color=color.blue)
         assert!(out.contains("ta.sma(close, 10)"));
         // Should not produce ta.ta.sma
         assert!(!out.contains("ta.ta.sma"));
+    }
+
+    #[test]
+    fn repeated_assignments_emit_one_local() {
+        let source = r#"
+//@version=5
+indicator("Repeated Local")
+trend = close
+trend = ta.sma(close, 20)
+plot(trend)
+"#;
+        let (module, _) = build_ir(source);
+        let locals = &module.on_calculate.as_ref().unwrap().locals;
+        assert_eq!(locals.iter().filter(|(name, _)| name == "trend").count(), 1);
     }
 
     #[test]

@@ -249,3 +249,7 @@ reusable for future optimizations.
 - Compiler diagnostics now use `VecDeque` so success/error banners are prepended
   with `push_front` instead of front-inserting into a `Vec`. Iteration order and
   visible UI behavior stay the same, but diagnostic banner insertion is O(1).
+- PineScript frontend local declaration tracking now mirrors the other scanner
+  frontends: ordered `Vec` for stable IR emission plus a side `HashSet` for O(1)
+  duplicate suppression. Repeated assignments update the local without emitting
+  duplicate local declarations or front-end scans that grow with script size.
