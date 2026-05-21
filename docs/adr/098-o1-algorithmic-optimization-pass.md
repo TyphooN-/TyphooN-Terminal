@@ -235,3 +235,7 @@ reusable for future optimizations.
   - LAN passphrase/KV persistence is short keyring/cache I/O, so server/client
     start paths now use the app runtime's blocking pool instead of anonymous
     one-shot threads.
+- Chart order-block rendering now walks newest-to-oldest and stops after the
+  20-zone render cap, then reverses for stable old-to-new paint order. This
+  removes the old full-history collect plus front-drain path, which became
+  wasteful once provider-maximum histories replaced shallow local windows.

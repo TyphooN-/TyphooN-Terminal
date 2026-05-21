@@ -4653,9 +4653,13 @@ pub(super) fn draw_chart(
             is_bull: bool,
             end_idx: usize,
         }
-        let mut zones: Vec<OBZone> = Vec::new();
+        let mut zones: Vec<OBZone> = Vec::with_capacity(20);
 
-        for i in 0..bars.len().saturating_sub(1) {
+        // Walk newest-to-oldest and stop once the render cap is full. The old path
+        // scanned every bar, built every historical OB, then drained the front just
+        // to keep the last 20. On provider-maximum histories that did wasted work
+        // proportional to the full cache depth on every chart render.
+        for i in (0..bars.len().saturating_sub(1)).rev() {
             let cur = &bars[i];
             let nxt = &bars[i + 1];
             let atr = local_atr[i];
@@ -4698,12 +4702,12 @@ pub(super) fn draw_chart(
                     end_idx: end,
                 });
             }
-        }
 
-        // Keep only most recent 20
-        if zones.len() > 20 {
-            zones.drain(0..zones.len() - 20);
+            if zones.len() >= 20 {
+                break;
+            }
         }
+        zones.reverse();
 
         for ob in &zones {
             let x_start = chart_rect.left() + (ob.bar_idx as f32 + 0.5) * bar_w;
