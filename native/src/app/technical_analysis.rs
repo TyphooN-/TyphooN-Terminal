@@ -4288,17 +4288,21 @@ pub(super) fn draw_chart(
             }
         }
         let ms_font = egui::FontId::monospace(8.0);
+        let fractal_font = egui::FontId::proportional(10.0);
+        let min_structure_label_gap = if render_step > 1 { 12.0 } else { 0.0 };
+        let mut last_high_label_x = f32::NEG_INFINITY;
+        let mut last_low_label_x = f32::NEG_INFINITY;
         for (rel_idx, bar) in bars.iter().enumerate() {
             let abs_idx = start_idx + rel_idx;
             let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
             if abs_idx < chart.fractal_up.len() && chart.fractal_up[abs_idx] {
                 let y = price_to_y(bar.high) - 8.0;
-                if y >= chart_rect.top() {
+                if y >= chart_rect.top() && x - last_high_label_x >= min_structure_label_gap {
                     painter.text(
                         egui::pos2(x, y),
                         egui::Align2::CENTER_BOTTOM,
                         "▲",
-                        egui::FontId::proportional(10.0),
+                        fractal_font.clone(),
                         UP,
                     );
                     // Market structure label
@@ -4316,17 +4320,18 @@ pub(super) fn draw_chart(
                             col,
                         );
                     }
+                    last_high_label_x = x;
                 }
                 prev_swing_high = Some(bar.high);
             }
             if abs_idx < chart.fractal_down.len() && chart.fractal_down[abs_idx] {
                 let y = price_to_y(bar.low) + 2.0;
-                if y <= chart_rect.bottom() {
+                if y <= chart_rect.bottom() && x - last_low_label_x >= min_structure_label_gap {
                     painter.text(
                         egui::pos2(x, y),
                         egui::Align2::CENTER_TOP,
                         "▼",
-                        egui::FontId::proportional(10.0),
+                        fractal_font.clone(),
                         DOWN,
                     );
                     if let Some(prev_l) = prev_swing_low {
@@ -4343,6 +4348,7 @@ pub(super) fn draw_chart(
                             col,
                         );
                     }
+                    last_low_label_x = x;
                 }
                 prev_swing_low = Some(bar.low);
             }

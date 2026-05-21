@@ -285,3 +285,7 @@ reusable for future optimizations.
 - Harmonic-pattern rendering no longer allocates a `Vec` per pattern just to hold
   five screen-space points; it maps the fixed XABCD tuple array directly into a
   fixed array, removing avoidable per-frame heap churn.
+- Market-structure/fractal labels keep scanning visible bars to preserve HH/LH
+  and HL/LL context, but dense zoomed-out views now enforce a minimum pixel gap
+  between painted up/down labels. This avoids flooding egui with overlapping text
+  glyph primitives while leaving the underlying fractal series untouched.
