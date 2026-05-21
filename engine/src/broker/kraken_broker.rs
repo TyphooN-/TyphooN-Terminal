@@ -1941,51 +1941,102 @@ impl KrakenBroker {
         let (tx, rx) = tokio::sync::mpsc::channel(256);
 
         tokio::spawn(async move {
+            const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(20);
+            const STALE_AFTER: Duration = Duration::from_secs(75);
+
             let mut reconnect_delay = Duration::from_secs(1);
             loop {
-                while let Some(msg) = ws_stream.next().await {
-                    match msg {
-                        Ok(Message::Text(text)) => {
-                            reconnect_delay = Duration::from_secs(1);
-                            if tx.send(text.to_string()).await.is_err() {
-                                return;
+                let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
+                keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                let mut last_seen = Instant::now();
+
+                loop {
+                    tokio::select! {
+                        msg = ws_stream.next() => {
+                            let Some(msg) = msg else {
+                                let _ = tx
+                                    .send(kraken_ws_status_message(
+                                        "closed",
+                                        "Kraken WS stream ended; reconnecting",
+                                    ))
+                                    .await;
+                                break;
+                            };
+
+                            match msg {
+                                Ok(Message::Text(text)) => {
+                                    last_seen = Instant::now();
+                                    reconnect_delay = Duration::from_secs(1);
+                                    if tx.send(text.to_string()).await.is_err() {
+                                        return;
+                                    }
+                                }
+                                Ok(Message::Ping(payload)) => {
+                                    last_seen = Instant::now();
+                                    reconnect_delay = Duration::from_secs(1);
+                                    if let Err(e) = ws_stream.send(Message::Pong(payload)).await {
+                                        let _ = tx
+                                            .send(kraken_ws_status_message(
+                                                "error",
+                                                format!("Kraken WS pong failed: {e}"),
+                                            ))
+                                            .await;
+                                        break;
+                                    }
+                                }
+                                Ok(Message::Pong(_)) => {
+                                    last_seen = Instant::now();
+                                    reconnect_delay = Duration::from_secs(1);
+                                }
+                                Ok(Message::Binary(_)) | Ok(Message::Frame(_)) => {
+                                    last_seen = Instant::now();
+                                    reconnect_delay = Duration::from_secs(1);
+                                }
+                                Ok(Message::Close(frame)) => {
+                                    let reason = frame
+                                        .as_ref()
+                                        .map(|f| f.reason.to_string())
+                                        .unwrap_or_else(|| "closed".to_string());
+                                    let _ = tx
+                                        .send(kraken_ws_status_message(
+                                            "closed",
+                                            format!("Kraken WS closed: {reason}"),
+                                        ))
+                                        .await;
+                                    break;
+                                }
+                                Err(e) => {
+                                    let _ = tx
+                                        .send(kraken_ws_status_message(
+                                            "error",
+                                            format!("Kraken WS read failed: {e}"),
+                                        ))
+                                        .await;
+                                    break;
+                                }
                             }
                         }
-                        Ok(Message::Ping(payload)) => {
-                            if let Err(e) = ws_stream.send(Message::Pong(payload)).await {
+                        _ = keepalive.tick() => {
+                            let idle_for = last_seen.elapsed();
+                            if idle_for >= STALE_AFTER {
+                                let _ = tx
+                                    .send(kraken_ws_status_message(
+                                        "closed",
+                                        format!("Kraken WS stale for {}s; reconnecting", idle_for.as_secs()),
+                                    ))
+                                    .await;
+                                let _ = ws_stream.close(None).await;
+                                break;
+                            }
+                            if let Err(e) = ws_stream.send(Message::Ping(Vec::new().into())).await {
                                 let _ = tx
                                     .send(kraken_ws_status_message(
                                         "error",
-                                        format!("Kraken WS pong failed: {e}"),
+                                        format!("Kraken WS keepalive ping failed: {e}"),
                                     ))
                                     .await;
                                 break;
                             }
-                        }
-                        Ok(Message::Pong(_)) => {}
-                        Ok(Message::Binary(_)) => {}
-                        Ok(Message::Frame(_)) => {}
-                        Ok(Message::Close(frame)) => {
-                            let reason = frame
-                                .as_ref()
-                                .map(|f| f.reason.to_string())
-                                .unwrap_or_else(|| "closed".to_string());
-                            let _ = tx
-                                .send(kraken_ws_status_message(
-                                    "closed",
-                                    format!("Kraken WS closed: {reason}"),
-                                ))
-                                .await;
-                            break;
-                        }
-                        Err(e) => {
-                            let _ = tx
-                                .send(kraken_ws_status_message(
-                                    "error",
-                                    format!("Kraken WS read failed: {e}"),
-                                ))
-                                .await;
-                            break;
                         }
                     }
                 }

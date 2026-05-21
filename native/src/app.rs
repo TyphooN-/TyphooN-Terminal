@@ -24178,12 +24178,24 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                         .and_then(|v| v.as_str())
                                                         .unwrap_or("info")
                                                         .to_string();
-                                                    let message = parsed
-                                                        .get("message")
-                                                        .or_else(|| parsed.get("subscription").and_then(|v| v.get("name")))
-                                                        .and_then(|v| v.as_str())
-                                                        .unwrap_or("Kraken private WebSocket status")
-                                                        .to_string();
+                                                    let channel = parsed
+                                                        .get("subscription")
+                                                        .and_then(|v| v.get("name"))
+                                                        .and_then(|v| v.as_str());
+                                                    let exchange_message = parsed
+                                                        .get("errorMessage")
+                                                        .or_else(|| parsed.get("message"))
+                                                        .and_then(|v| v.as_str());
+                                                    let message = match (channel, exchange_message) {
+                                                        (Some(channel), Some(detail)) => {
+                                                            format!("{channel}: {detail}")
+                                                        }
+                                                        (Some(channel), None) => channel.to_string(),
+                                                        (None, Some(detail)) => detail.to_string(),
+                                                        (None, None) => {
+                                                            "Kraken private WebSocket status".to_string()
+                                                        }
+                                                    };
                                                     let _ = value.send(BrokerMsg::KrakenWsStatus { status, message });
                                                     continue;
                                                 }
