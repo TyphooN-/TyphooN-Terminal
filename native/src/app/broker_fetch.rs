@@ -74,10 +74,11 @@ pub(super) async fn run_alpaca_fetch_task(
         &symbol,
         &timeframe,
     );
-    let needs_backfill = !backfill_already_complete
-        && alpaca_sync_target_bars(&timeframe)
-            .map(|target| cached_count > 0 && cached_count * 100 < (target as i64) * 95)
-            .unwrap_or(false);
+    let needs_backfill = should_request_full_backfill(
+        backfill_already_complete,
+        alpaca_sync_target_bars(&timeframe),
+        cached_count,
+    );
 
     let mut success = false;
     if mt5_has_bars {
@@ -112,23 +113,18 @@ pub(super) async fn run_alpaca_fetch_task(
             let _ = broker_msg_tx.send(BrokerMsg::OrderResult(msg));
             broker.get_all_bars(&api_symbol, tf_alpaca, None).await
         } else {
-            if let Some(ref ts) = after_ts {
-                let delta_limit = alpaca_incremental_fetch_limit(&timeframe, after_ts.as_deref());
-                let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
-                    "Alpaca {} {} delta since {} (limit {})...",
-                    api_symbol,
-                    timeframe,
-                    &ts[..19.min(ts.len())],
-                    delta_limit
-                )));
-                broker
-                    .get_bars_after(&api_symbol, tf_alpaca, delta_limit, after_ts.as_deref())
-                    .await
-            } else {
-                broker
-                    .get_bars_after(&api_symbol, tf_alpaca, 1000, after_ts.as_deref())
-                    .await
-            }
+            let ts = after_ts.as_deref().expect("delta branch requires after_ts");
+            let delta_limit = alpaca_incremental_fetch_limit(&timeframe, after_ts.as_deref());
+            let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                "Alpaca {} {} delta since {} (limit {})...",
+                api_symbol,
+                timeframe,
+                &ts[..19.min(ts.len())],
+                delta_limit
+            )));
+            broker
+                .get_bars_after(&api_symbol, tf_alpaca, delta_limit, after_ts.as_deref())
+                .await
         };
 
         match result {
@@ -148,64 +144,52 @@ pub(super) async fn run_alpaca_fetch_task(
                         "{} {} already up to date",
                         symbol, timeframe
                     )));
-                } else if let Some(cache) = cache_handle.as_ref() {
-                    let merged: Vec<_> = if after_ts.is_some() {
-                        match cache.get_bars_raw(&cache_key) {
-                            Ok(Some(existing_raw)) => {
-                                let mut combined: Vec<typhoon_engine::broker::alpaca::Bar> =
-                                    existing_raw
-                                        .into_iter()
-                                        .map(|(ts_ms, o, h, l, c, v)| {
-                                            let dt = chrono::DateTime::from_timestamp_millis(ts_ms)
-                                                .unwrap_or_default();
-                                            typhoon_engine::broker::alpaca::Bar {
-                                                timestamp: dt.to_rfc3339(),
-                                                open: o,
-                                                high: h,
-                                                low: l,
-                                                close: c,
-                                                volume: v,
-                                            }
-                                        })
-                                        .collect();
-                                combined.extend(new_bars);
-                                combined.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-                                combined.dedup_by(|a, b| a.timestamp == b.timestamp);
-                                combined
+                } else {
+                    let bars: Vec<serde_json::Value> = new_bars
+                        .into_iter()
+                        .filter_map(|bar| serde_json::to_value(bar).ok())
+                        .collect();
+                    match store_json_bars_in_cache(
+                        cache_handle.clone(),
+                        cache_key.clone(),
+                        bars,
+                        after_ts.is_some(),
+                    )
+                    .await
+                    {
+                        Ok(count) if count > 0 => {
+                            if after_ts.is_none()
+                                && matches!(
+                                    outcome,
+                                    typhoon_engine::broker::alpaca::FetchOutcome::Complete
+                                )
+                            {
+                                let _ = broker_msg_tx.send(BrokerMsg::AlpacaBackfillComplete {
+                                    symbol: symbol.clone(),
+                                    timeframe: timeframe.clone(),
+                                    bar_count: count,
+                                    target_bars: count,
+                                });
                             }
-                            _ => new_bars,
-                        }
-                    } else {
-                        new_bars
-                    };
-                    let count = merged.len();
-                    if count > 0 {
-                        let json = serde_json::to_string(&merged).unwrap_or_default();
-                        let _ = cache.put_bars(&cache_key, &json);
-                        if after_ts.is_none()
-                            && matches!(
-                                outcome,
-                                typhoon_engine::broker::alpaca::FetchOutcome::Complete
-                            )
-                        {
-                            let _ = broker_msg_tx.send(BrokerMsg::AlpacaBackfillComplete {
+                            let _ = broker_msg_tx.send(BrokerMsg::BarsFetched {
+                                source: "alpaca".into(),
                                 symbol: symbol.clone(),
                                 timeframe: timeframe.clone(),
-                                bar_count: count,
-                                target_bars: count,
+                                count,
                             });
                         }
-                        let _ = broker_msg_tx.send(BrokerMsg::BarsFetched {
-                            source: "alpaca".into(),
-                            symbol: symbol.clone(),
-                            timeframe: timeframe.clone(),
-                            count,
-                        });
-                    } else {
-                        let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
-                            "No bars returned for {} {}",
-                            symbol, timeframe
-                        )));
+                        Ok(_) => {
+                            let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                                "No bars returned for {} {}",
+                                symbol, timeframe
+                            )));
+                        }
+                        Err(e) => {
+                            let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                                "Alpaca cache write failed for {} {}: {}",
+                                symbol, timeframe, e
+                            )));
+                        }
                     }
                 }
 
@@ -290,6 +274,17 @@ fn merge_json_bars(
     });
     existing.dedup_by(|a, b| a["timestamp"] == b["timestamp"]);
     existing
+}
+
+fn should_request_full_backfill(
+    backfill_already_complete: bool,
+    target_bars: Option<u32>,
+    cached_count: i64,
+) -> bool {
+    !backfill_already_complete
+        && target_bars
+            .map(|target| cached_count > 0 && (cached_count as i128) * 100 < (target as i128) * 95)
+            .unwrap_or(false)
 }
 
 fn backfill_complete_pair_exists(
@@ -399,10 +394,11 @@ pub(super) async fn run_kraken_fetch_task(
         &symbol,
         &timeframe,
     );
-    let needs_backfill = !backfill_already_complete
-        && kraken_sync_target_bars(&timeframe)
-            .map(|target| cached_count > 0 && cached_count * 100 < (target as i64) * 95)
-            .unwrap_or(false);
+    let needs_backfill = should_request_full_backfill(
+        backfill_already_complete,
+        kraken_sync_target_bars(&timeframe),
+        cached_count,
+    );
 
     if needs_backfill {
         after_ts = None;
@@ -590,10 +586,11 @@ pub(super) async fn run_kraken_futures_fetch_task(
         &symbol,
         &timeframe,
     );
-    let needs_backfill = !backfill_already_complete
-        && kraken_futures_sync_target_bars(&timeframe)
-            .map(|target| cached_count > 0 && cached_count * 100 < (target as i64) * 95)
-            .unwrap_or(false);
+    let needs_backfill = should_request_full_backfill(
+        backfill_already_complete,
+        kraken_futures_sync_target_bars(&timeframe),
+        cached_count,
+    );
 
     if needs_backfill {
         after_ts = None;
@@ -777,10 +774,11 @@ pub(super) async fn run_tastytrade_fetch_task(
         &symbol,
         &timeframe,
     );
-    let needs_backfill = !backfill_already_complete
-        && tastytrade_sync_target_bars(&timeframe)
-            .map(|target| cached_count > 0 && cached_count * 100 < (target as i64) * 95)
-            .unwrap_or(false);
+    let needs_backfill = should_request_full_backfill(
+        backfill_already_complete,
+        tastytrade_sync_target_bars(&timeframe),
+        cached_count,
+    );
     let interval = match timeframe.as_str() {
         "1Min" => "1m",
         "5Min" => "5m",
@@ -1004,4 +1002,33 @@ pub(super) async fn run_tastytrade_fetch_task(
     }
 
     let _ = broker_msg_tx.send(BrokerMsg::TastytradeFetchSettled { symbol, timeframe });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_backfill_needed_when_cached_dataset_is_below_target_and_not_complete() {
+        assert!(should_request_full_backfill(false, Some(1_000), 949));
+        assert!(should_request_full_backfill(false, Some(u32::MAX), 10_000));
+    }
+
+    #[test]
+    fn full_backfill_not_needed_without_existing_cache_or_target() {
+        assert!(!should_request_full_backfill(false, Some(1_000), 0));
+        assert!(!should_request_full_backfill(false, None, 100));
+    }
+
+    #[test]
+    fn full_backfill_not_needed_when_cached_dataset_reaches_threshold() {
+        assert!(!should_request_full_backfill(false, Some(1_000), 950));
+        assert!(!should_request_full_backfill(false, Some(1_000), 1_000));
+    }
+
+    #[test]
+    fn backfill_complete_marker_forces_incremental_even_for_thin_history() {
+        assert!(!should_request_full_backfill(true, Some(1_000), 1));
+        assert!(!should_request_full_backfill(true, Some(u32::MAX), 10_000));
+    }
 }
