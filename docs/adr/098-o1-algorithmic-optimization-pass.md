@@ -262,3 +262,8 @@ reusable for future optimizations.
   full provider-depth history available for sync/scrolling while preventing
   zoomed-out charts from uploading tens of thousands of visually indistinguishable
   candle, OHLC, line, and indicator vertices every frame.
+- Overlay fills now share the same pixel-aware render step: MA ribbon, Bollinger
+  fill, VWAP deviation bands, Donchian/Keltner/regression channels, Ichimoku
+  cloud, and Supertrend avoid per-bar rectangle/polyline emission in dense views.
+  Sampled fill rectangles widen to cover the skipped span, preserving continuous
+  visual coverage while cutting GPU primitive count.

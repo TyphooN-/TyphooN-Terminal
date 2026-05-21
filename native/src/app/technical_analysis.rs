@@ -3321,6 +3321,7 @@ pub(super) fn draw_chart(
     let candle_w = (bar_w * 0.7).max(1.0);
     let half_body = candle_w * 0.5;
     let render_step = chart_render_sample_step(bars.len(), chart_rect.width());
+    let fill_half_w = (bar_w * render_step as f32 * 0.5).max(bar_w * 0.5);
 
     // ── session highlighting (Asian / London / New York) ────────────────────
     // Batched: find contiguous session blocks and draw one rect per block (not per bar).
@@ -3423,7 +3424,7 @@ pub(super) fn draw_chart(
 
     // ── MA ribbon fill (KAMA vs SMA200) — only when single-TF lines are visible ──
     if flags.sma200 && flags.kama && chart.mtf_sma.is_empty() && chart.multi_kama.is_empty() {
-        for (rel_idx, _) in bars.iter().enumerate() {
+        for (rel_idx, _) in bars.iter().enumerate().step_by(render_step) {
             let abs_idx = start_idx + rel_idx;
             if abs_idx >= chart.sma200.len() || abs_idx >= chart.kama.len() {
                 continue;
@@ -3445,8 +3446,8 @@ pub(super) fn draw_chart(
                     };
                     painter.rect_filled(
                         egui::Rect::from_min_max(
-                            egui::pos2(x - bar_w * 0.5, top.max(chart_rect.top())),
-                            egui::pos2(x + bar_w * 0.5, bot.min(chart_rect.bottom())),
+                            egui::pos2(x - fill_half_w, top.max(chart_rect.top())),
+                            egui::pos2(x + fill_half_w, bot.min(chart_rect.bottom())),
                         ),
                         0.0,
                         fill,
@@ -3459,10 +3460,12 @@ pub(super) fn draw_chart(
     // ── Bollinger Band fill ──────────────────────────────────────────────────
     if flags.bollinger {
         // Build polygon directly: upper points forward, lower points reversed — no clone needed.
-        // PERF: preallocate to `bars.len()` to avoid the Vec growing via geometric realloc.
-        let mut fill_points_upper: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
-        let mut fill_points_lower: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
-        for (rel_idx, _) in bars.iter().enumerate() {
+        // Dense views use the same pixel-aware decimation as line/candle rendering.
+        let mut fill_points_upper: Vec<egui::Pos2> =
+            Vec::with_capacity(bars.len() / render_step + 1);
+        let mut fill_points_lower: Vec<egui::Pos2> =
+            Vec::with_capacity(bars.len() / render_step + 1);
+        for (rel_idx, _) in bars.iter().enumerate().step_by(render_step) {
             let abs_idx = start_idx + rel_idx;
             if abs_idx >= chart.bb_upper.len() {
                 continue;
@@ -3534,7 +3537,7 @@ pub(super) fn draw_chart(
             (&chart.vwap_upper2, &chart.vwap_lower2, band_col2),
             (&chart.vwap_upper1, &chart.vwap_lower1, band_col1),
         ] {
-            for (rel_idx, _) in bars.iter().enumerate() {
+            for (rel_idx, _) in bars.iter().enumerate().step_by(render_step) {
                 let abs_idx = start_idx + rel_idx;
                 if abs_idx >= upper.len() {
                     continue;
@@ -3547,8 +3550,8 @@ pub(super) fn draw_chart(
                     if top <= chart_rect.bottom() && bot >= chart_rect.top() {
                         painter.rect_filled(
                             egui::Rect::from_min_max(
-                                egui::pos2(x - bar_w * 0.5, top.max(chart_rect.top())),
-                                egui::pos2(x + bar_w * 0.5, bot.min(chart_rect.bottom())),
+                                egui::pos2(x - fill_half_w, top.max(chart_rect.top())),
+                                egui::pos2(x + fill_half_w, bot.min(chart_rect.bottom())),
                             ),
                             0.0,
                             fill_col,
@@ -3622,9 +3625,9 @@ pub(super) fn draw_chart(
         let st_bull_col = egui::Color32::from_rgb(0, 200, 100);
         let st_bear_col = egui::Color32::from_rgb(220, 50, 50);
         // Draw as colored segments — bull=green, bear=red
-        let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
+        let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / render_step + 1);
         let mut prev_bull = true;
-        for (rel_idx, _) in bars.iter().enumerate() {
+        for (rel_idx, _) in bars.iter().enumerate().step_by(render_step) {
             let abs_idx = start_idx + rel_idx;
             if abs_idx >= chart.supertrend.len() {
                 continue;
@@ -3657,7 +3660,7 @@ pub(super) fn draw_chart(
         let dc_col = egui::Color32::from_rgb(0, 180, 255);
         let dc_fill = egui::Color32::from_rgba_premultiplied(0, 180, 255, 15);
         // Fill between upper and lower
-        for (rel_idx, _) in bars.iter().enumerate() {
+        for (rel_idx, _) in bars.iter().enumerate().step_by(render_step) {
             let abs_idx = start_idx + rel_idx;
             if abs_idx >= chart.donchian_upper.len() {
                 continue;
@@ -3671,8 +3674,8 @@ pub(super) fn draw_chart(
                 if yu <= chart_rect.bottom() && yl >= chart_rect.top() {
                     painter.rect_filled(
                         egui::Rect::from_min_max(
-                            egui::pos2(x - bar_w * 0.5, yu.max(chart_rect.top())),
-                            egui::pos2(x + bar_w * 0.5, yl.min(chart_rect.bottom())),
+                            egui::pos2(x - fill_half_w, yu.max(chart_rect.top())),
+                            egui::pos2(x + fill_half_w, yl.min(chart_rect.bottom())),
                         ),
                         0.0,
                         dc_fill,
@@ -3708,7 +3711,7 @@ pub(super) fn draw_chart(
     if flags.keltner {
         let kc_col = egui::Color32::from_rgb(255, 165, 0); // orange
         let kc_fill = egui::Color32::from_rgba_premultiplied(255, 165, 0, 15);
-        for (rel_idx, _) in bars.iter().enumerate() {
+        for (rel_idx, _) in bars.iter().enumerate().step_by(render_step) {
             let abs_idx = start_idx + rel_idx;
             if abs_idx >= chart.keltner_upper.len() {
                 continue;
@@ -3721,8 +3724,8 @@ pub(super) fn draw_chart(
                 if yu <= chart_rect.bottom() && yl >= chart_rect.top() {
                     painter.rect_filled(
                         egui::Rect::from_min_max(
-                            egui::pos2(x - bar_w * 0.5, yu.max(chart_rect.top())),
-                            egui::pos2(x + bar_w * 0.5, yl.min(chart_rect.bottom())),
+                            egui::pos2(x - fill_half_w, yu.max(chart_rect.top())),
+                            egui::pos2(x + fill_half_w, yl.min(chart_rect.bottom())),
                         ),
                         0.0,
                         kc_fill,
@@ -3769,7 +3772,7 @@ pub(super) fn draw_chart(
     if flags.regression {
         let rc_col = egui::Color32::from_rgb(180, 130, 255); // light purple
         let rc_fill = egui::Color32::from_rgba_premultiplied(180, 130, 255, 15);
-        for (rel_idx, _) in bars.iter().enumerate() {
+        for (rel_idx, _) in bars.iter().enumerate().step_by(render_step) {
             let abs_idx = start_idx + rel_idx;
             if abs_idx >= chart.regression_upper.len() {
                 continue;
@@ -3784,8 +3787,8 @@ pub(super) fn draw_chart(
                 if yu <= chart_rect.bottom() && yl >= chart_rect.top() {
                     painter.rect_filled(
                         egui::Rect::from_min_max(
-                            egui::pos2(x - bar_w * 0.5, yu.max(chart_rect.top())),
-                            egui::pos2(x + bar_w * 0.5, yl.min(chart_rect.bottom())),
+                            egui::pos2(x - fill_half_w, yu.max(chart_rect.top())),
+                            egui::pos2(x + fill_half_w, yl.min(chart_rect.bottom())),
                         ),
                         0.0,
                         rc_fill,
@@ -3831,7 +3834,7 @@ pub(super) fn draw_chart(
     // ── Ichimoku cloud ─────────────────────────────────────────────────────
     if flags.ichimoku {
         // Cloud fill between Span A and Span B
-        for (rel_idx, _) in bars.iter().enumerate() {
+        for (rel_idx, _) in bars.iter().enumerate().step_by(render_step) {
             let abs_idx = start_idx + rel_idx;
             if abs_idx >= chart.ichi_span_a.len() {
                 continue;
@@ -3849,8 +3852,8 @@ pub(super) fn draw_chart(
                 if top <= chart_rect.bottom() && bot >= chart_rect.top() {
                     painter.rect_filled(
                         egui::Rect::from_min_max(
-                            egui::pos2(x - bar_w * 0.5, top.max(chart_rect.top())),
-                            egui::pos2(x + bar_w * 0.5, bot.min(chart_rect.bottom())),
+                            egui::pos2(x - fill_half_w, top.max(chart_rect.top())),
+                            egui::pos2(x + fill_half_w, bot.min(chart_rect.bottom())),
                         ),
                         0.0,
                         color,
