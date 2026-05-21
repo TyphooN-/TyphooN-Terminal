@@ -24163,6 +24163,9 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                         while let Some(msg) = rx.recv().await {
                                             // Try to parse as ownTrades update
                                             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg) {
+                                                if parsed.get("event").and_then(|v| v.as_str()) == Some("heartbeat") {
+                                                    continue;
+                                                }
                                                 let trades = typhoon_engine::broker::kraken_broker::parse_own_trades_messages(&parsed);
                                                 if !trades.is_empty() {
                                                     for trade in trades {
