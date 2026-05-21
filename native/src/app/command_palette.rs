@@ -17526,10 +17526,10 @@ impl TyphooNApp {
                                     .unwrap_or_default(),
                             );
 
-                            // Spawn SQL DELETE on background thread
+                            // Offload SQL DELETE through the app runtime's blocking pool.
                             let cache = cache.clone();
                             let ticker_clone = ticker.clone();
-                            std::thread::spawn(move || {
+                            self.rt_handle.spawn_blocking(move || {
                                 if let Ok(conn) = cache.connection() {
                                     let _ = typhoon_engine::core::darwin::delete_darwin_account(
                                         &conn,

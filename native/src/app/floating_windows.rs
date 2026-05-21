@@ -344,11 +344,11 @@ impl TyphooNApp {
                             let _ = cache.put_kv("darwin:account_details", &serde_json::to_string(&self.bg.account_details).unwrap_or_default());
                         }
 
-                        // 3. Spawn SQL DELETE on background thread (avoids DB lock freeze)
+                        // 3. Offload SQL DELETE through the app runtime's blocking pool.
                         if let Some(ref cache) = self.cache {
                             let cache = cache.clone();
                             let ticker_clone = ticker.clone();
-                            std::thread::spawn(move || {
+                            self.rt_handle.spawn_blocking(move || {
                                 if let Ok(conn) = cache.connection() {
                                     let _ = typhoon_engine::core::darwin::delete_darwin_account(
                                         &conn,

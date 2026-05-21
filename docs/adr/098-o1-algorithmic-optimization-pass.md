@@ -224,3 +224,7 @@ reusable for future optimizations.
   removes duplicate process-spawn/output parsing code, gives both tools named
   worker threads (`typhoon-ai-claude-print`, `typhoon-ai-gemini-prompt`), and
   centralizes stdout/stderr/empty-response handling for all AI CLI integrations.
+- DARWIN account deletion no longer creates anonymous one-shot OS threads from
+  the grid or command palette. The UI still removes rows immediately, but the
+  SQLite cleanup runs on the app runtime's blocking pool, matching the short
+  DB-operation offload rule.
