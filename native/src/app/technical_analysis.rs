@@ -3183,9 +3183,15 @@ pub(super) fn draw_chart(
         + show_ehlers_roof as u8
         + show_squeeze as u8;
     const SUB_PANE_H: f32 = 80.0; // Height per indicator sub-pane (RSI, Fisher, MACD, Volume)
+    const MIN_MAIN_CHART_H: f32 = 140.0;
     // When user is interacting, some expensive sub-pane rendering can be skipped in future passes
     let sub_pane_height = if sub_pane_count > 0 {
-        SUB_PANE_H * sub_pane_count as f32
+        // Keep the main price chart valid even when many sub-panes are enabled
+        // or the window is temporarily tiny during startup/layout restore. A
+        // negative-height chart rect makes later f32::clamp calls panic
+        // (`min > max`). The sub-panes may overflow/clipped below, but the app
+        // must never crash because indicator height exceeded available space.
+        (SUB_PANE_H * sub_pane_count as f32).min((rect.height() - MIN_MAIN_CHART_H).max(0.0))
     } else {
         0.0
     };

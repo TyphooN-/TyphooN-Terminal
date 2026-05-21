@@ -25,6 +25,55 @@ fn dirs_home() -> std::path::PathBuf {
     p
 }
 
+#[cfg(target_os = "linux")]
+fn ac_power_available() -> bool {
+    let supplies = match std::fs::read_dir("/sys/class/power_supply") {
+        Ok(entries) => entries,
+        Err(_) => return true,
+    };
+
+    let mut saw_battery = false;
+    let mut saw_discharging_battery = false;
+
+    for entry in supplies.flatten() {
+        let path = entry.path();
+        let supply_type = std::fs::read_to_string(path.join("type"))
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        match supply_type.as_str() {
+            "mains" | "usb" | "usb_c" | "usb_pd" => {
+                if std::fs::read_to_string(path.join("online"))
+                    .map(|s| s.trim() == "1")
+                    .unwrap_or(false)
+                {
+                    return true;
+                }
+            }
+            "battery" => {
+                saw_battery = true;
+                let status = std::fs::read_to_string(path.join("status"))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_ascii_lowercase();
+                if status == "discharging" {
+                    saw_discharging_battery = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Desktop/VM/unknown power topology: fail open so sync/maintenance is not
+    // silently throttled forever. Real laptop on battery reports Discharging.
+    !saw_battery || !saw_discharging_battery
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ac_power_available() -> bool {
+    true
+}
+
 fn main() -> eframe::Result {
     // Initialize logging — suppress noisy wgpu/egl/vulkan adapter probing
     tracing_subscriber::fmt()
@@ -82,10 +131,32 @@ fn main() -> eframe::Result {
     }
 
     // Start tokio runtime in background thread for async broker operations.
+    // Use the machine, not a hard-coded two-thread cap: broker sync, WebSockets,
+    // cache work, and AI/tool subprocess IO should drain behind the UI instead of
+    // competing with it. Keep one core free for egui/wgpu and clamp the range so
+    // small laptops do not oversubscribe while high-core desktops can run every
+    // broker/feed without a two-thread bottleneck.
+    // TYPHOON_TOKIO_WORKERS can override this for profiling.
+    let detected_cpus = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(4);
+    let on_ac_power = ac_power_available();
+    let default_workers = if on_ac_power {
+        detected_cpus.saturating_sub(1).clamp(2, 16)
+    } else {
+        (detected_cpus / 2).clamp(2, 8)
+    };
+    let worker_threads = std::env::var("TYPHOON_TOKIO_WORKERS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(default_workers);
+
     // If this fails we cannot continue — the whole app depends on tokio.
     // We print a user-visible error instead of an anonymous panic.
     let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
+        .worker_threads(worker_threads)
+        .thread_name("typhoon-async")
         .enable_all()
         .build()
     {
@@ -97,10 +168,21 @@ fn main() -> eframe::Result {
         }
     };
     let rt_handle = runtime.handle().clone();
-    tracing::info!("Tokio runtime: 2 worker threads");
+    tracing::info!(
+        "Tokio runtime: {worker_threads} worker threads ({detected_cpus} logical CPUs detected, power={})",
+        if on_ac_power {
+            "AC/max"
+        } else {
+            "battery/balanced"
+        }
+    );
 
     // Keep runtime alive for the lifetime of the app
     let _rt_guard = runtime;
+
+    let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();
+    wgpu_options.present_mode = eframe::wgpu::PresentMode::AutoVsync;
+    wgpu_options.desired_maximum_frame_latency = Some(1);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -108,6 +190,9 @@ fn main() -> eframe::Result {
             .with_inner_size([1920.0, 1080.0])
             .with_min_inner_size([800.0, 600.0]),
         renderer: eframe::Renderer::Wgpu,
+        vsync: true,
+        hardware_acceleration: eframe::HardwareAcceleration::Required,
+        wgpu_options,
         ..Default::default()
     };
 

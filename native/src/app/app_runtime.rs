@@ -7020,7 +7020,7 @@ impl eframe::App for TyphooNApp {
                     if changed {
                         let marker_count = self.kraken_backfill_complete_pairs.len();
                         self.log.push_back(LogEntry::info(format!(
-                            "Kraken {} {}: marked backfill-complete at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
+                            "Kraken {} {}: provider window saturated at {}/{} bars — automated delta sync will keep it current ({} marked)",
                             symbol, timeframe, bar_count, target_bars, marker_count
                         )));
                     }
@@ -16201,21 +16201,28 @@ impl eframe::App for TyphooNApp {
         }
 
         // Repaint strategy:
-        // - egui auto-repaints on ANY user interaction (mouse move, click, scroll, key)
-        // - We set a slow idle repaint for background updates (live data, time)
-        // - Charts stay responsive because mouse events trigger instant repaints
-        // - Floating windows with DB queries only update on idle repaints
-        // Repaint scheduling: fast during startup, then idle.
-        // egui internally triggers repaints on hover/click/animation — we only set
-        // the MINIMUM idle repaint interval (for chart tick updates, clock, etc.).
-        let startup_loading = self.bg.portfolio.is_none() && self.cache.is_some();
-        let idle_ms = if startup_loading || !self.cache_loaded {
-            100
-        } else {
-            250
-        };
+        // - Trading terminals should not idle at 4-10 FPS while prices, cursor
+        //   overlays, live bars, and background sync state are moving.
+        // - Request the next frame every update and let wgpu/eframe vsync cap it
+        //   at the monitor's native refresh rate. This keeps UI latency low while
+        //   still avoiding runaway uncapped presentation.
+        // - TYPHOON_IDLE_FPS can force an explicit refresh-rate cap for
+        //   profiling/problem displays; unset/0 means native-refresh continuous
+        //   repaint through vsync/GSYNC/FreeSync.
         self.maybe_incremental_session_save(ctx);
-        ctx.request_repaint_after(std::time::Duration::from_millis(idle_ms));
+        static IDLE_FPS_CAP: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+        let idle_fps_cap = *IDLE_FPS_CAP.get_or_init(|| {
+            std::env::var("TYPHOON_IDLE_FPS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0)
+        });
+        if idle_fps_cap > 0 {
+            let frame_ms = (1000 / idle_fps_cap.max(1)).max(1);
+            ctx.request_repaint_after(std::time::Duration::from_millis(frame_ms));
+        } else {
+            ctx.request_repaint();
+        }
 
         // UX3: Apply any deferred symbol context-menu action from right-panel renders
         if !matches!(self.deferred_symbol_action, SymbolAction::None) {
