@@ -59813,29 +59813,35 @@ impl TyphooNApp {
                                 self.storage_cache_move_rx = Some(rx);
                                 self.storage_cache_move_result = Some((true, format!("Copying cache to {} ... this may take several minutes for large caches", target.display())));
                                 if let Some(cache) = self.cache.clone() {
-                                    std::thread::spawn(move || {
-                                        if let Err(e) = std::fs::create_dir_all(&target) {
-                                            let _ = tx.send(Err(format!("mkdir {} failed: {}", target.display(), e)));
-                                            return;
-                                        }
-                                        if target_db.exists() {
-                                            let _ = tx.send(Err(format!("{} already exists — delete or pick a different dir", target_db.display())));
-                                            return;
-                                        }
-                                        // VACUUM INTO is the SQLite-blessed way to snapshot a live DB.
-                                        let dest = target_db.display().to_string().replace('\'', "''");
-                                        let sql = format!("VACUUM INTO '{}'", dest);
-                                        match cache.connection() {
-                                            Ok(conn) => match conn.execute(&sql, []) {
-                                                Ok(_) => match write_custom_cache_dir(Some(&target)) {
-                                                    Ok(_) => { let _ = tx.send(Ok(format!("Cache copied to {}. Restart terminal to use it.", target_db.display()))); }
-                                                    Err(e) => { let _ = tx.send(Err(format!("Copy OK but save-setting failed: {}", e))); }
+                                    let tx_on_spawn_err = tx.clone();
+                                    if let Err(e) = std::thread::Builder::new()
+                                        .name("typhoon-cache-vacuum-copy".into())
+                                        .spawn(move || {
+                                            if let Err(e) = std::fs::create_dir_all(&target) {
+                                                let _ = tx.send(Err(format!("mkdir {} failed: {}", target.display(), e)));
+                                                return;
+                                            }
+                                            if target_db.exists() {
+                                                let _ = tx.send(Err(format!("{} already exists — delete or pick a different dir", target_db.display())));
+                                                return;
+                                            }
+                                            // VACUUM INTO is the SQLite-blessed way to snapshot a live DB.
+                                            let dest = target_db.display().to_string().replace('\'', "''");
+                                            let sql = format!("VACUUM INTO '{}'", dest);
+                                            match cache.connection() {
+                                                Ok(conn) => match conn.execute(&sql, []) {
+                                                    Ok(_) => match write_custom_cache_dir(Some(&target)) {
+                                                        Ok(_) => { let _ = tx.send(Ok(format!("Cache copied to {}. Restart terminal to use it.", target_db.display()))); }
+                                                        Err(e) => { let _ = tx.send(Err(format!("Copy OK but save-setting failed: {}", e))); }
+                                                    },
+                                                    Err(e) => { let _ = tx.send(Err(format!("VACUUM INTO failed: {}", e))); }
                                                 },
-                                                Err(e) => { let _ = tx.send(Err(format!("VACUUM INTO failed: {}", e))); }
-                                            },
-                                            Err(e) => { let _ = tx.send(Err(format!("Could not open cache connection: {}", e))); }
-                                        }
-                                    });
+                                                Err(e) => { let _ = tx.send(Err(format!("Could not open cache connection: {}", e))); }
+                                            }
+                                        })
+                                    {
+                                        let _ = tx_on_spawn_err.send(Err(format!("Cache copy worker failed to start: {}", e)));
+                                    }
                                 }
                             }
 
@@ -59922,7 +59928,7 @@ impl TyphooNApp {
                                     // Persist passphrase + server flag to keyring + KV cache
                                     let pass_clone = self.lan_sync_passphrase.clone();
                                     let cache_clone = self.cache.clone();
-                                    std::thread::spawn(move || {
+                                    self.rt_handle.spawn_blocking(move || {
                                         let _ = keyring::store(keyring::keys::LAN_SYNC_PASS, &pass_clone);
                                         if let Some(ref cache) = cache_clone {
                                             let _ = cache.put_kv(&format!("cred:{}", keyring::keys::LAN_SYNC_PASS), &pass_clone);
@@ -59958,7 +59964,7 @@ impl TyphooNApp {
                                     let ip_clone = self.lan_sync_host.clone();
                                     let port_clone = self.lan_sync_port.clone();
                                     let cache_clone = self.cache.clone();
-                                    std::thread::spawn(move || {
+                                    self.rt_handle.spawn_blocking(move || {
                                         let _ = keyring::store(keyring::keys::LAN_SYNC_PASS, &pass_clone);
                                         if let Some(ref cache) = cache_clone {
                                             let _ = cache.put_kv(&format!("cred:{}", keyring::keys::LAN_SYNC_PASS), &pass_clone);

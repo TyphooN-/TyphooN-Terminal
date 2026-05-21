@@ -228,3 +228,10 @@ reusable for future optimizations.
   the grid or command palette. The UI still removes rows immediately, but the
   SQLite cleanup runs on the app runtime's blocking pool, matching the short
   DB-operation offload rule.
+- Storage/LAN cleanup classification:
+  - cache `VACUUM INTO` copy can run for minutes on large SQLite files, so it
+    remains on a dedicated OS thread, now named `typhoon-cache-vacuum-copy`,
+    with worker-spawn failures reported back to the storage UI channel;
+  - LAN passphrase/KV persistence is short keyring/cache I/O, so server/client
+    start paths now use the app runtime's blocking pool instead of anonymous
+    one-shot threads.
