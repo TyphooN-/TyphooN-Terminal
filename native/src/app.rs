@@ -10724,7 +10724,7 @@ pub struct TyphooNApp {
     compiler_language: usize,            // see COMPILER_LANGS below
     compiler_transpile_target: usize,    // target language index for transpile dropdown
     compiler_transpiled: Option<String>, // transpiled source output
-    compiler_diagnostics: Vec<String>,
+    compiler_diagnostics: VecDeque<String>,
     compiler_metadata: Option<mql5_compiler::CompileResult>,
     show_journal: bool,
     show_object_list: bool,
@@ -26499,7 +26499,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             compiler_language: 0,
             compiler_transpile_target: 0,
             compiler_transpiled: None,
-            compiler_diagnostics: Vec::new(),
+            compiler_diagnostics: VecDeque::new(),
             compiler_metadata: None,
             show_journal: false,
             show_object_list: false,

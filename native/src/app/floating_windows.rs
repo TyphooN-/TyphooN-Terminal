@@ -57822,7 +57822,7 @@ impl TyphooNApp {
                             };
                             self.compiler_diagnostics.clear();
                             for d in &result.diagnostics {
-                                self.compiler_diagnostics.push(format!(
+                                self.compiler_diagnostics.push_back(format!(
                                     "{}:{}: {} — {}",
                                     d.line,
                                     d.col,
@@ -57843,13 +57843,10 @@ impl TyphooNApp {
                                     .as_ref()
                                     .map(|m| m.inputs.len())
                                     .unwrap_or(0);
-                                self.compiler_diagnostics.insert(
-                                    0,
-                                    format!(
-                                        "OK: compiled to {} bytes WASM — {} buffers, {} inputs",
-                                        wasm_size, buffers, inputs
-                                    ),
-                                );
+                                self.compiler_diagnostics.push_front(format!(
+                                    "OK: compiled to {} bytes WASM — {} buffers, {} inputs",
+                                    wasm_size, buffers, inputs
+                                ));
                                 self.log.push_back(LogEntry::info(format!(
                                     "Compiled: {} bytes WASM, {} buffers",
                                     wasm_size, buffers
@@ -57951,7 +57948,7 @@ impl TyphooNApp {
                                     self.log
                                         .push_back(LogEntry::err(format!("Transpile failed: {e}")));
                                     self.compiler_diagnostics
-                                        .insert(0, format!("TRANSPILE ERROR: {e}"));
+                                        .push_front(format!("TRANSPILE ERROR: {e}"));
                                 }
                             }
                         }

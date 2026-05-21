@@ -246,3 +246,6 @@ reusable for future optimizations.
   preserving the ordered parameter `Vec` for stable Params struct emission. This
   removes repeated linear scans from expression emission and prevents duplicate
   input declarations from producing duplicate WGSL struct fields.
+- Compiler diagnostics now use `VecDeque` so success/error banners are prepended
+  with `push_front` instead of front-inserting into a `Vec`. Iteration order and
+  visible UI behavior stay the same, but diagnostic banner insertion is O(1).
