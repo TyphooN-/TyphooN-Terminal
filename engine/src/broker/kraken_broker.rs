@@ -18,6 +18,7 @@ use zeroize::Zeroizing;
 type HmacSha512 = Hmac<Sha512>;
 
 const KRAKEN_BASE_URL: &str = "https://api.kraken.com";
+const KRAKEN_INTERNAL_API_BASE_URL: &str = "https://iapi.kraken.com/api/internal";
 const KRAKEN_PRIVATE_REST_MAX_COUNTER: f64 = 20.0;
 const KRAKEN_PRIVATE_REST_DECAY_PER_SEC: f64 = 0.5;
 const KRAKEN_PRIVATE_REST_BASE_COOLDOWN: Duration = Duration::from_secs(5);
@@ -500,6 +501,48 @@ fn kraken_private_rest_counter_cost(path: &str) -> f64 {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KrakenEquityTicker {
+    pub symbol: String,
+    pub bid: f64,
+    pub ask: f64,
+    pub price: f64,
+    pub volume: f64,
+    pub open: Option<f64>,
+    pub high: Option<f64>,
+    pub low: Option<f64>,
+    pub previous_close: Option<f64>,
+    pub time_ms: i64,
+    pub delayed: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KrakenEquityBar {
+    pub time_ms: i64,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+}
+
+fn parse_json_number(value: &serde_json::Value) -> Option<f64> {
+    match value {
+        serde_json::Value::String(s) => s.parse::<f64>().ok(),
+        serde_json::Value::Number(n) => n.as_f64(),
+        _ => None,
+    }
+    .filter(|v| v.is_finite())
+}
+
+fn parse_json_i64(value: &serde_json::Value) -> Option<i64> {
+    match value {
+        serde_json::Value::String(s) => s.parse::<i64>().ok(),
+        serde_json::Value::Number(n) => n.as_i64().or_else(|| n.as_u64().map(|v| v as i64)),
+        _ => None,
+    }
+}
+
 /// Kraken broker client with HMAC-SHA512 request signing.
 pub struct KrakenBroker {
     client: &'static Client,
@@ -531,6 +574,188 @@ impl KrakenBroker {
     /// Returns true if API credentials are configured.
     pub fn is_authenticated(&self) -> bool {
         !self.api_key.is_empty() && !self.api_secret.is_empty()
+    }
+
+    /// Fetch delayed Kraken Securities/equities quote data from Kraken Pro's
+    /// internal equities market-data API. This is separate from Kraken Spot:
+    /// xStock/equity holdings such as `WOK.EQ` are not in public AssetPairs.
+    pub async fn get_equity_ticker(&self, symbol: &str) -> Result<KrakenEquityTicker, String> {
+        let symbol = symbol
+            .trim()
+            .trim_end_matches(".EQ")
+            .replace('/', "")
+            .to_ascii_uppercase();
+        if symbol.is_empty() {
+            return Err("Kraken equity ticker: empty symbol".to_string());
+        }
+
+        let url = format!("{KRAKEN_INTERNAL_API_BASE_URL}/markets/equities/{symbol}/ticker");
+        let resp = self
+            .client
+            .get(&url)
+            .header("Accept", "application/json")
+            .header("Referer", "https://pro.kraken.com/app/")
+            .query(&[("delayed", "true")])
+            .send()
+            .await
+            .map_err(|e| format!("Kraken equity ticker request failed: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!(
+                "Kraken equity ticker request failed: HTTP {status}: {body}"
+            ));
+        }
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Kraken equity ticker parse failed: {e}"))?;
+        if let Some(errors) = body.get("errors").and_then(|v| v.as_array()) {
+            if !errors.is_empty() {
+                let msg = errors
+                    .iter()
+                    .map(|e| {
+                        e.get("msg")
+                            .or_else(|| e.get("type"))
+                            .or_else(|| e.get("error"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown Kraken equity ticker error")
+                            .to_string()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!("Kraken equity ticker error: {msg}"));
+            }
+        }
+
+        let result = body
+            .get("result")
+            .filter(|v| !v.is_null())
+            .ok_or_else(|| format!("Kraken equity ticker: no data for {symbol}"))?;
+
+        let parse = |field: &str| -> Option<f64> {
+            result
+                .get(field)
+                .and_then(parse_json_number)
+                .filter(|v| v.is_finite() && *v >= 0.0)
+        };
+        let bid = parse("bid").unwrap_or(0.0);
+        let ask = parse("ask").unwrap_or(0.0);
+        let price = parse("price")
+            .or_else(|| parse("last"))
+            .or_else(|| match (bid > 0.0, ask > 0.0) {
+                (true, true) => Some((bid + ask) / 2.0),
+                (true, false) => Some(bid),
+                (false, true) => Some(ask),
+                _ => None,
+            })
+            .ok_or_else(|| format!("Kraken equity ticker: missing price for {symbol}"))?;
+
+        Ok(KrakenEquityTicker {
+            symbol,
+            bid,
+            ask,
+            price,
+            volume: parse("volume").unwrap_or(0.0),
+            open: parse("open"),
+            high: parse("high"),
+            low: parse("low"),
+            previous_close: parse("prev_close"),
+            time_ms: result.get("time").and_then(parse_json_i64).unwrap_or_default(),
+            delayed: true,
+        })
+    }
+
+    /// Fetch delayed historical candles for Kraken Securities/equities from
+    /// Kraken Pro's internal equities market-data API. The interval is minutes.
+    pub async fn get_equity_history(
+        &self,
+        symbol: &str,
+        interval_minutes: u32,
+        since_seconds: Option<i64>,
+    ) -> Result<Vec<KrakenEquityBar>, String> {
+        let symbol = symbol
+            .trim()
+            .trim_end_matches(".EQ")
+            .replace('/', "")
+            .to_ascii_uppercase();
+        if symbol.is_empty() {
+            return Err("Kraken equity history: empty symbol".to_string());
+        }
+        let interval = interval_minutes.max(1).to_string();
+        let since = since_seconds.unwrap_or(0).max(0).to_string();
+        let url = format!("{KRAKEN_INTERNAL_API_BASE_URL}/markets/{symbol}/ticker/history");
+        let resp = self
+            .client
+            .get(&url)
+            .header("Accept", "application/json")
+            .header("Referer", "https://pro.kraken.com/app/")
+            .query(&[
+                ("interval", interval.as_str()),
+                ("since", since.as_str()),
+                ("asset_class", "equity"),
+                ("include_range", "market-hours"),
+                ("delayed", "true"),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("Kraken equity history request failed: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!(
+                "Kraken equity history request failed: HTTP {status}: {body}"
+            ));
+        }
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Kraken equity history parse failed: {e}"))?;
+        if let Some(errors) = body.get("errors").and_then(|v| v.as_array()) {
+            if !errors.is_empty() {
+                let msg = errors
+                    .iter()
+                    .map(|e| {
+                        e.get("msg")
+                            .or_else(|| e.get("type"))
+                            .or_else(|| e.get("error"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown Kraken equity history error")
+                            .to_string()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!("Kraken equity history error: {msg}"));
+            }
+        }
+        let rows = body
+            .get("result")
+            .and_then(|v| v.get("data"))
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| format!("Kraken equity history: no data for {symbol}"))?;
+        let mut bars = Vec::with_capacity(rows.len());
+        for row in rows {
+            let time_s = row.get("time").and_then(parse_json_i64).unwrap_or_default();
+            let Some(open) = row.get("open").and_then(parse_json_number) else { continue; };
+            let Some(high) = row.get("high").and_then(parse_json_number) else { continue; };
+            let Some(low) = row.get("low").and_then(parse_json_number) else { continue; };
+            let Some(close) = row.get("close").and_then(parse_json_number) else { continue; };
+            if time_s <= 0 || !(open > 0.0 && high > 0.0 && low > 0.0 && close > 0.0) {
+                continue;
+            }
+            bars.push(KrakenEquityBar {
+                time_ms: time_s.saturating_mul(1000),
+                open,
+                high,
+                low,
+                close,
+                volume: row.get("volume").and_then(parse_json_number).unwrap_or(0.0),
+            });
+        }
+        bars.sort_by_key(|bar| bar.time_ms);
+        bars.dedup_by_key(|bar| bar.time_ms);
+        Ok(bars)
     }
 
     /// Generate the next nonce (monotonically increasing).

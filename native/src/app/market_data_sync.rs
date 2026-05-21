@@ -939,6 +939,38 @@ impl TyphooNApp {
         true
     }
 
+    pub(super) fn queue_kraken_equity_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
+        let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
+            return false;
+        };
+        if !self.sync_timeframe_enabled(tf) {
+            return false;
+        }
+        let symbol = normalize_market_data_symbol(symbol)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        if symbol.is_empty() {
+            return false;
+        }
+        if self.is_unresolvable_fetch_key("kraken-equities", &symbol, tf) {
+            return false;
+        }
+        let fetch_key = alpaca_fetch_key(&symbol, tf);
+        if !self.pending_kraken_fetches.insert(format!("equity:{fetch_key}")) {
+            return false;
+        }
+        let _ = self.broker_tx.send(BrokerCmd::KrakenFetchEquityHistory {
+            symbol: symbol.clone(),
+            timeframe: tf.to_string(),
+        });
+        self.log.push_back(LogEntry::info(format!(
+            "Kraken equities sync queued {} {}",
+            symbol, tf
+        )));
+        true
+    }
+
     pub(super) fn queue_kraken_futures_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
         if !self.kraken_scrape_futures {
             return false;

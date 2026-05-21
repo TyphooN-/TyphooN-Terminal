@@ -1477,6 +1477,111 @@ impl eframe::App for TyphooNApp {
                     )));
                     self.news_articles = articles;
                 }
+                BrokerMsg::KrakenEquityQuote(ticker) => {
+                    let symbol = ticker.symbol.to_ascii_uppercase();
+                    let last = ticker.price;
+                    if last > 0.0 && last.is_finite() {
+                        if let Some(cache) = self.cache.as_ref() {
+                            let ts_ms = if ticker.time_ms > 0 {
+                                ticker.time_ms
+                            } else {
+                                chrono::Utc::now().timestamp_millis()
+                            };
+                            let ts = chrono::DateTime::from_timestamp_millis(ts_ms)
+                                .unwrap_or_else(chrono::Utc::now)
+                                .to_rfc3339();
+                            let open = ticker.open.unwrap_or(last).max(0.0);
+                            let high = ticker.high.unwrap_or(last).max(last);
+                            let low = ticker.low.unwrap_or(last).min(last).max(0.0);
+                            let bar = serde_json::json!({
+                                "timestamp": ts,
+                                "open": open,
+                                "high": high,
+                                "low": low,
+                                "close": last,
+                                "volume": ticker.volume.max(0.0),
+                            });
+                            if let Ok(json) = serde_json::to_string(&vec![bar]) {
+                                let _ = cache.put_bars(&format!("kraken-equities:{symbol}:quote"), &json);
+                            }
+                        }
+                        for chart in &mut self.charts {
+                            let chart_sym = chart.symbol.replace('/', "").to_ascii_uppercase();
+                            let chart_bare = chart_sym
+                                .rsplit(':')
+                                .nth(1)
+                                .or_else(|| chart_sym.rsplit(':').next())
+                                .unwrap_or("")
+                                .trim_end_matches(".EQ")
+                                .to_string();
+                            if chart_bare == symbol {
+                                if let Some(bar) = chart.bars.last_mut() {
+                                    bar.close = last;
+                                    bar.high = bar.high.max(last);
+                                    bar.low = if bar.low > 0.0 { bar.low.min(last) } else { last };
+                                }
+                            }
+                        }
+                        self.refresh_kraken_position_costs();
+                        self.log.push_back(LogEntry::info(format!(
+                            "Kraken equities: {} bid {} ask {} last {}{}",
+                            symbol,
+                            format_price(ticker.bid),
+                            format_price(ticker.ask),
+                            format_price(last),
+                            if ticker.delayed { " (delayed)" } else { "" }
+                        )));
+                    }
+                }
+                BrokerMsg::KrakenEquityBars {
+                    symbol,
+                    timeframe,
+                    bars,
+                } => {
+                    let symbol = symbol.replace('/', "").trim_end_matches(".EQ").to_ascii_uppercase();
+                    let timeframe = normalize_sync_timeframe_key(&timeframe)
+                        .unwrap_or(timeframe.as_str())
+                        .to_string();
+                    self.pending_kraken_fetches.retain(|key| {
+                        key != &format!("equity:{}:{}", symbol, timeframe)
+                    });
+                    if bars.is_empty() {
+                        self.unresolvable_mark(
+                            "kraken-equities",
+                            &symbol,
+                            &timeframe,
+                            "Kraken internal equities history returned no bars",
+                        );
+                        self.log.push_back(LogEntry::warn(format!(
+                            "Kraken equities: no bars for {} {}",
+                            symbol, timeframe
+                        )));
+                    } else if let Some(cache) = self.cache.as_ref() {
+                        let json_bars: Vec<_> = bars
+                            .iter()
+                            .filter_map(|bar| {
+                                let ts = chrono::DateTime::from_timestamp_millis(bar.time_ms)?
+                                    .to_rfc3339();
+                                Some(serde_json::json!({
+                                    "timestamp": ts,
+                                    "open": bar.open,
+                                    "high": bar.high,
+                                    "low": bar.low,
+                                    "close": bar.close,
+                                    "volume": bar.volume,
+                                }))
+                            })
+                            .collect();
+                        if let Ok(json) = serde_json::to_string(&json_bars) {
+                            let _ = cache.put_bars(&format!("kraken-equities:{symbol}:{timeframe}"), &json);
+                        }
+                        self.refresh_kraken_position_costs();
+                        self.log.push_back(LogEntry::info(format!(
+                            "Kraken equities: cached {} bars for {} {}",
+                            bars.len(), symbol, timeframe
+                        )));
+                    }
+                }
                 BrokerMsg::Quote(symbol, bid, ask, last) => {
                     self.log.push_back(LogEntry::info(format!(
                         "{}: bid {} ask {} last {}",
@@ -1707,7 +1812,11 @@ impl eframe::App for TyphooNApp {
                         .collect();
                     for (pair, is_equity) in balance_pairs {
                         if is_equity {
+                            let _ = self.broker_tx.send(BrokerCmd::KrakenFetchEquityTicker {
+                                symbol: pair.clone(),
+                            });
                             let mut queued_equity_tf = false;
+                            queued_equity_tf |= self.queue_kraken_equity_fetch(&pair, active_tf);
                             queued_equity_tf |= self.queue_tastytrade_fetch(&pair, active_tf);
                             queued_equity_tf |= self.queue_alpaca_fetch(&pair, active_tf);
                             if queued_equity_tf {
@@ -1715,19 +1824,20 @@ impl eframe::App for TyphooNApp {
                             }
                             if active_tf != "1Day" {
                                 let mut queued_equity_day = false;
+                                queued_equity_day |= self.queue_kraken_equity_fetch(&pair, "1Day");
                                 queued_equity_day |= self.queue_tastytrade_fetch(&pair, "1Day");
                                 queued_equity_day |= self.queue_alpaca_fetch(&pair, "1Day");
                                 if queued_equity_day {
                                     queued += 1;
                                 }
                             }
-                        } else {
-                            if self.queue_kraken_fetch(&pair, active_tf) {
-                                queued += 1;
-                            }
-                            if active_tf != "1Day" && self.queue_kraken_fetch(&pair, "1Day") {
-                                queued += 1;
-                            }
+                            continue;
+                        }
+                        if self.queue_kraken_fetch(&pair, active_tf) {
+                            queued += 1;
+                        }
+                        if active_tf != "1Day" && self.queue_kraken_fetch(&pair, "1Day") {
+                            queued += 1;
                         }
                     }
                     let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);

@@ -8821,6 +8821,13 @@ enum BrokerCmd {
     KrakenCancelAll,
     KrakenFetchTrades,
     KrakenFetchOpenOrders,
+    KrakenFetchEquityTicker {
+        symbol: String,
+    },
+    KrakenFetchEquityHistory {
+        symbol: String,
+        timeframe: String,
+    },
     KrakenStartPrivateWs,
     KrakenStartOrderbookWs {
         symbol: String,
@@ -8860,6 +8867,12 @@ enum BrokerMsg {
         message: String,
     },
     KrakenOrderbookUpdate(String),
+    KrakenEquityQuote(typhoon_engine::broker::kraken_broker::KrakenEquityTicker),
+    KrakenEquityBars {
+        symbol: String,
+        timeframe: String,
+        bars: Vec<typhoon_engine::broker::kraken_broker::KrakenEquityBar>,
+    },
     SecScrapeResult(String),
     FilingContent(String), // fetched SEC filing document text
     FinnhubNewsResult(Vec<(String, String, String)>),
@@ -24153,6 +24166,60 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 Err(e) => {
                                     let _ = msg_tx.send(BrokerMsg::Error(format!("Kraken open orders failed: {}", e)));
                                 }
+                            }
+                        }
+                    }
+                    BrokerCmd::KrakenFetchEquityTicker { symbol } => {
+                        let result = if let Some(ref kb) = kraken_broker {
+                            kb.get_equity_ticker(&symbol).await
+                        } else {
+                            let kb = typhoon_engine::broker::kraken_broker::KrakenBroker::new(
+                                String::new(),
+                                String::new(),
+                            );
+                            kb.get_equity_ticker(&symbol).await
+                        };
+                        match result {
+                            Ok(ticker) => {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::KrakenEquityQuote(ticker));
+                            }
+                            Err(e) => {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e));
+                            }
+                        }
+                    }
+                    BrokerCmd::KrakenFetchEquityHistory { symbol, timeframe } => {
+                        let interval_minutes = match timeframe.as_str() {
+                            "1Min" => 1,
+                            "5Min" => 5,
+                            "15Min" => 15,
+                            "30Min" => 30,
+                            "1Hour" => 60,
+                            "4Hour" => 240,
+                            "1Day" => 1440,
+                            "1Week" => 10080,
+                            "1Month" => 43200,
+                            _ => 1,
+                        };
+                        let result = if let Some(ref kb) = kraken_broker {
+                            kb.get_equity_history(&symbol, interval_minutes, None).await
+                        } else {
+                            let kb = typhoon_engine::broker::kraken_broker::KrakenBroker::new(
+                                String::new(),
+                                String::new(),
+                            );
+                            kb.get_equity_history(&symbol, interval_minutes, None).await
+                        };
+                        match result {
+                            Ok(bars) => {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::KrakenEquityBars {
+                                    symbol,
+                                    timeframe,
+                                    bars,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e));
                             }
                         }
                     }

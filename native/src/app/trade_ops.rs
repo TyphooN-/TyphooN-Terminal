@@ -1333,8 +1333,10 @@ impl TyphooNApp {
 
     pub(super) fn latest_cached_equity_price_for_symbol(&self, symbol: &str) -> Option<f64> {
         let cache = self.cache.as_ref()?;
-        let timeframes = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day"];
-        let sources = ["tastytrade", "alpaca", "default", "mt5"];
+        let timeframes = [
+            "quote", "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day",
+        ];
+        let sources = ["kraken-equities", "tastytrade", "alpaca", "default", "mt5"];
         let mut symbols = Vec::new();
         let mut push_symbol = |candidate: String| {
             let candidate = candidate.trim().replace('/', "").to_ascii_uppercase();
