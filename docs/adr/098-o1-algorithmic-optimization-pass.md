@@ -253,3 +253,7 @@ reusable for future optimizations.
   frontends: ordered `Vec` for stable IR emission plus a side `HashSet` for O(1)
   duplicate suppression. Repeated assignments update the local without emitting
   duplicate local declarations or front-end scans that grow with script size.
+- Chart grid rendering now uses one faint horizontal/vertical line per grid level
+  instead of building dotted lines from hundreds/thousands of tiny line-segment
+  shapes every frame. This cuts egui primitive pressure during drag/zoom while
+  preserving the same price/time spatial reference.

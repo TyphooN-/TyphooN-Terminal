@@ -3370,25 +3370,25 @@ pub(super) fn draw_chart(
         }
     }
 
-    // ── grid lines (price) — dotted style matching MT5/WebKit ──────────────
+    // ── grid lines (price) ──────────────────────────────────────────────────
+    // Use one faint line per grid level. The old dotted grid emitted hundreds to
+    // thousands of tiny line-segment shapes every frame on large charts, which is
+    // pure UI overhead during drag/zoom. Solid low-alpha grid lines keep the same
+    // spatial reference with a tiny, fixed primitive count.
     let grid_steps = 8;
-    let dot_len = 3.0_f32;
-    let dot_gap = 3.0_f32;
     let grid_col = egui::Color32::from_rgb(33, 33, 33);
+    let grid_stroke = egui::Stroke::new(0.5, grid_col);
     let mut label_buf = String::with_capacity(16); // reuse buffer across grid labels (avoids heap alloc per label per frame)
     for i in 0..=grid_steps {
         let p = price_min + (price_max - price_min) * (i as f64 / grid_steps as f64);
         let y = price_to_y(p);
-        // Dotted horizontal line
-        let mut gx = chart_rect.left();
-        while gx < chart_rect.right() {
-            let end = (gx + dot_len).min(chart_rect.right());
-            painter.line_segment(
-                [egui::pos2(gx, y), egui::pos2(end, y)],
-                egui::Stroke::new(0.5, grid_col),
-            );
-            gx += dot_len + dot_gap;
-        }
+        painter.line_segment(
+            [
+                egui::pos2(chart_rect.left(), y),
+                egui::pos2(chart_rect.right(), y),
+            ],
+            grid_stroke,
+        );
         format_price_buf(p, &mut label_buf);
         painter.text(
             egui::pos2(chart_rect.right() + 4.0, y),
@@ -3399,23 +3399,17 @@ pub(super) fn draw_chart(
         );
     }
 
-    // ── grid lines (time) — dotted style ─────────────────────────────────────
+    // ── grid lines (time) ────────────────────────────────────────────────────
     let time_step = ((80.0 / bar_w) as usize).max(1);
-    for (rel_idx, bar) in bars.iter().enumerate() {
-        if rel_idx % time_step != 0 {
-            continue;
-        }
+    for (rel_idx, bar) in bars.iter().enumerate().step_by(time_step) {
         let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
-        // Dotted vertical line
-        let mut gy = chart_rect.top();
-        while gy < chart_rect.bottom() {
-            let end = (gy + dot_len).min(chart_rect.bottom());
-            painter.line_segment(
-                [egui::pos2(x, gy), egui::pos2(x, end)],
-                egui::Stroke::new(0.5, grid_col),
-            );
-            gy += dot_len + dot_gap;
-        }
+        painter.line_segment(
+            [
+                egui::pos2(x, chart_rect.top()),
+                egui::pos2(x, chart_rect.bottom()),
+            ],
+            grid_stroke,
+        );
         format_ts_buf(bar.ts_ms, chart.timeframe, &mut label_buf);
         painter.text(
             egui::pos2(x, chart_rect.bottom() + 2.0),
