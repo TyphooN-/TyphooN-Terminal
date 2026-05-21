@@ -239,3 +239,6 @@ reusable for future optimizations.
   20-zone render cap, then reverses for stable old-to-new paint order. This
   removes the old full-history collect plus front-drain path, which became
   wasteful once provider-maximum histories replaced shallow local windows.
+- The order-block ATR threshold now maintains a rolling true-range sum instead
+  of recomputing the 14-bar window for each bar. Early-bar behavior is unchanged,
+  but full-depth chart renders avoid repeated fixed-window rescans.

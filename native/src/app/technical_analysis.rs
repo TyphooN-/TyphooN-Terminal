@@ -4622,26 +4622,31 @@ pub(super) fn draw_chart(
         let ob_bear_edge = egui::Color32::from_rgba_premultiplied(220, 50, 50, 100);
         let ob_label_col = egui::Color32::from_rgba_premultiplied(200, 200, 200, 180);
 
-        // Compute rolling ATR(14) for impulsive move threshold
+        // Compute rolling ATR(14) for impulsive move threshold. Keep the early-bar
+        // behavior unchanged, but avoid recomputing the 14-bar true-range window
+        // for every bar on provider-maximum histories.
         let atr_period = 14usize;
+        let mut true_ranges: Vec<f64> = Vec::with_capacity(bars.len());
         let mut local_atr: Vec<f64> = Vec::with_capacity(bars.len());
+        let mut rolling_sum = 0.0;
         for i in 0..bars.len() {
-            if i < atr_period {
-                local_atr.push(bars[i].high - bars[i].low);
+            let bar = &bars[i];
+            let tr = if i == 0 {
+                bar.high - bar.low
             } else {
-                let mut sum = 0.0;
-                for j in (i + 1 - atr_period)..=i {
-                    let tr = if j == 0 {
-                        bars[j].high - bars[j].low
-                    } else {
-                        let hl = bars[j].high - bars[j].low;
-                        let hc = (bars[j].high - bars[j - 1].close).abs();
-                        let lc = (bars[j].low - bars[j - 1].close).abs();
-                        hl.max(hc).max(lc)
-                    };
-                    sum += tr;
-                }
-                local_atr.push(sum / atr_period as f64);
+                let prev_close = bars[i - 1].close;
+                let hl = bar.high - bar.low;
+                let hc = (bar.high - prev_close).abs();
+                let lc = (bar.low - prev_close).abs();
+                hl.max(hc).max(lc)
+            };
+            true_ranges.push(tr);
+            rolling_sum += tr;
+            if i >= atr_period {
+                rolling_sum -= true_ranges[i - atr_period];
+                local_atr.push(rolling_sum / atr_period as f64);
+            } else {
+                local_atr.push(bar.high - bar.low);
             }
         }
 
