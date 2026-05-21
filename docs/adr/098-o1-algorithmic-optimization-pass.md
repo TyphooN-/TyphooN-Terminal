@@ -257,3 +257,8 @@ reusable for future optimizations.
   instead of building dotted lines from hundreds/thousands of tiny line-segment
   shapes every frame. This cuts egui primitive pressure during drag/zoom while
   preserving the same price/time spatial reference.
+- Dense chart rendering now decimates visible bar/indicator samples to roughly
+  two samples per horizontal pixel before emitting egui primitives. This keeps
+  full provider-depth history available for sync/scrolling while preventing
+  zoomed-out charts from uploading tens of thousands of visually indistinguishable
+  candle, OHLC, line, and indicator vertices every frame.

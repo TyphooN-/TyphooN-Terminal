@@ -3320,6 +3320,7 @@ pub(super) fn draw_chart(
     let bar_w = (chart_rect.width() / n_bars).max(1.0);
     let candle_w = (bar_w * 0.7).max(1.0);
     let half_body = candle_w * 0.5;
+    let render_step = chart_render_sample_step(bars.len(), chart_rect.width());
 
     // ── session highlighting (Asian / London / New York) ────────────────────
     // Batched: find contiguous session blocks and draw one rect per block (not per bar).
@@ -4825,9 +4826,11 @@ pub(super) fn draw_chart(
     // ── draw bars (candle/HA/line/OHLC) ──────────────────────────────────
     match chart.chart_type {
         ChartType::Line => {
-            // Line chart: polyline through close prices
-            let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
-            for (rel_idx, bar) in bars.iter().enumerate() {
+            // Line chart: polyline through close prices. Downsample when the view
+            // contains more bars than horizontal pixels can distinguish; drawing
+            // tens of thousands of sub-pixel vertices only adds tessellation work.
+            let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / render_step + 1);
+            for (rel_idx, bar) in bars.iter().enumerate().step_by(render_step) {
                 let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
                 let y = price_to_y(bar.close);
                 if y >= chart_rect.top() && y <= chart_rect.bottom() {
@@ -4840,7 +4843,7 @@ pub(super) fn draw_chart(
         }
         ChartType::OhlcBars => {
             // OHLC Bars: vertical wick + left tick (open) + right tick (close)
-            for (rel_idx, bar) in bars.iter().enumerate() {
+            for (rel_idx, bar) in bars.iter().enumerate().step_by(render_step) {
                 let cx = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
                 let y_open = price_to_y(bar.open);
                 let y_high = price_to_y(bar.high);
@@ -4880,7 +4883,7 @@ pub(super) fn draw_chart(
             let weekend_dn = egui::Color32::from_rgb(180, 0, 180); // dark magenta bear (weekend gap-fill)
             // Volume heatmap uses pre-computed vol_avg_20 from ChartState (no per-frame alloc)
             let vol_avg = &chart.vol_avg_20;
-            for (rel_idx, bar) in render_bars.iter().enumerate() {
+            for (rel_idx, bar) in render_bars.iter().enumerate().step_by(render_step) {
                 let cx = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
                 let y_open = price_to_y(bar.open);
                 let y_high = price_to_y(bar.high);
@@ -10529,6 +10532,22 @@ pub(super) fn draw_adx_pane(
     );
 }
 
+/// Render decimation for dense chart views.
+///
+/// Keep at most ~2 samples per horizontal pixel. More than that is visually
+/// indistinguishable but expensive for egui tessellation and GPU upload.
+pub(super) fn chart_render_sample_step(len: usize, width_px: f32) -> usize {
+    if len <= 1 {
+        return 1;
+    }
+    let max_samples = ((width_px.max(1.0).ceil() as usize).saturating_mul(2)).max(1);
+    if len <= max_samples {
+        1
+    } else {
+        len.saturating_add(max_samples - 1) / max_samples
+    }
+}
+
 /// Render a single indicator series as a polyline.
 pub(super) fn draw_indicator_line(
     painter: &egui::Painter,
@@ -10541,9 +10560,10 @@ pub(super) fn draw_indicator_line(
     color: egui::Color32,
     width: f32,
 ) {
-    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
+    let sample_step = chart_render_sample_step(bars.len(), chart_rect.width());
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
     let stroke = egui::Stroke::new(width, color);
-    for (rel_idx, _bar) in bars.iter().enumerate() {
+    for (rel_idx, _bar) in bars.iter().enumerate().step_by(sample_step) {
         let abs_idx = start_idx + rel_idx;
         if abs_idx >= series.len() {
             continue;

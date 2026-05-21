@@ -17,6 +17,10 @@ The terminal uses egui + wgpu for direct GPU rendering. No WebView, no JavaScrip
 | Memory (MTF 4-cell grid) | ~100-150MB |
 | Binary size (release) | ~25MB |
 
+### Chart Rendering
+
+Chart rendering keeps provider-depth history in memory/cache, but the draw path emits only the detail the current viewport can display. Dense visible ranges are decimated to roughly two samples per horizontal pixel before creating egui line/candle/OHLC/indicator primitives, and grid lines use a fixed primitive count instead of dotted per-pixel segment spam. This protects drag/zoom responsiveness when the user zooms out over very deep synced histories.
+
 ### Live Bar Builder
 
 WebSocket trade streams build 1-minute OHLCV bars in-process. Completed bars use a bounded FIFO buffer (`VecDeque`) so live sessions cannot grow unbounded and old-bar eviction remains O(1) instead of draining/shifting a `Vec` under load.
