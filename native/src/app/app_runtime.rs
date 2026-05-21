@@ -9281,15 +9281,19 @@ impl eframe::App for TyphooNApp {
                                 .small(),
                         );
                         let active_session = self.charts.get(self.active_tab).and_then(|chart| {
-                            let symbol = chart
-                                .symbol
-                                .split(':')
-                                .rev()
-                                .nth(1)
-                                .or_else(|| chart.symbol.split(':').last())
-                                .unwrap_or("");
-                            let kraken_crypto_pair = symbol.contains('/')
-                                && !symbol.to_ascii_uppercase().contains(".EQ");
+                            let chart_source = chart
+                                .source_override
+                                .as_deref()
+                                .filter(|s| !s.trim().is_empty())
+                                .unwrap_or(chart.primary_source);
+                            let symbol = chart.symbol.split(':').next_back().unwrap_or("");
+                            let normalized_symbol = normalize_market_data_symbol(symbol);
+                            let kraken_crypto_pair = chart_source == "kraken"
+                                && !normalized_symbol.to_ascii_uppercase().contains(".EQ")
+                                && typhoon_engine::core::kraken::to_kraken_pair_lossy(
+                                    &normalized_symbol,
+                                )
+                                .is_some();
                             if self.kraken_connected && kraken_crypto_pair {
                                 Some("24/7".to_string())
                             } else if self.broker_connected && !self.market_clock_status.is_empty()
