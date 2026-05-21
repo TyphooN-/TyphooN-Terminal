@@ -2209,7 +2209,7 @@ fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &str) -> Vec<S
         // not exposed through Kraken's public OHLC/AssetPairs API. Keep Kraken keys
         // first, then allow underlying-equity caches so active Kraken-scope charts
         // can still render HRTX/GDC/TNDM-style holdings.
-        for fallback_source in ["alpaca", "tastytrade", "default"] {
+        for fallback_source in ["tastytrade", "alpaca", "default"] {
             for key in chart_source_cache_keys(fallback_source, symbol, timeframe) {
                 if !keys.iter().any(|k: &String| k.eq_ignore_ascii_case(&key)) {
                     keys.push(key);
@@ -29922,6 +29922,22 @@ mod tests {
         assert_eq!(
             crate::app::broker_fetch::cryptocompare_backfill_symbol("HRTX.EQUSD"),
             None
+        );
+    }
+
+    #[test]
+    fn kraken_equity_balances_use_bare_underlying_symbol() {
+        assert_eq!(
+            TyphooNApp::kraken_spot_pair_for_balance_asset("WOK.EQ"),
+            "WOK"
+        );
+        assert_eq!(
+            TyphooNApp::kraken_spot_pair_for_balance_asset("HRTX.EQ"),
+            "HRTX"
+        );
+        assert_eq!(
+            TyphooNApp::kraken_spot_pair_for_balance_asset("XXBT"),
+            "BTCUSD"
         );
     }
 

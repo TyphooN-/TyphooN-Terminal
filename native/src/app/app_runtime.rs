@@ -1690,7 +1690,7 @@ impl eframe::App for TyphooNApp {
                         .map(|chart| chart.timeframe.cache_suffix())
                         .unwrap_or("1Day");
                     let mut queued = 0usize;
-                    let balance_pairs: Vec<String> = self
+                    let balance_pairs: Vec<(String, bool)> = self
                         .kraken_balances
                         .iter()
                         .filter(|(asset, qty)| {
@@ -1698,19 +1698,41 @@ impl eframe::App for TyphooNApp {
                                 && *qty > 0.0
                                 && !Self::kraken_is_cash_balance_asset(asset)
                         })
-                        .map(|(asset, _)| Self::kraken_spot_pair_for_balance_asset(asset))
+                        .map(|(asset, _)| {
+                            (
+                                Self::kraken_spot_pair_for_balance_asset(asset),
+                                Self::kraken_display_asset(asset).ends_with(".EQ"),
+                            )
+                        })
                         .collect();
-                    for pair in balance_pairs {
-                        if self.queue_kraken_fetch(&pair, active_tf) {
-                            queued += 1;
-                        }
-                        if active_tf != "1Day" && self.queue_kraken_fetch(&pair, "1Day") {
-                            queued += 1;
+                    for (pair, is_equity) in balance_pairs {
+                        if is_equity {
+                            let mut queued_equity_tf = false;
+                            queued_equity_tf |= self.queue_tastytrade_fetch(&pair, active_tf);
+                            queued_equity_tf |= self.queue_alpaca_fetch(&pair, active_tf);
+                            if queued_equity_tf {
+                                queued += 1;
+                            }
+                            if active_tf != "1Day" {
+                                let mut queued_equity_day = false;
+                                queued_equity_day |= self.queue_tastytrade_fetch(&pair, "1Day");
+                                queued_equity_day |= self.queue_alpaca_fetch(&pair, "1Day");
+                                if queued_equity_day {
+                                    queued += 1;
+                                }
+                            }
+                        } else {
+                            if self.queue_kraken_fetch(&pair, active_tf) {
+                                queued += 1;
+                            }
+                            if active_tf != "1Day" && self.queue_kraken_fetch(&pair, "1Day") {
+                                queued += 1;
+                            }
                         }
                     }
                     let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
                     self.log.push_back(LogEntry::info(format!(
-                        "Kraken: {} assets with balance; queued {} Kraken bar fetches",
+                        "Kraken: {} assets with balance; queued {} owned-symbol bar fetches",
                         self.kraken_balances.len(),
                         queued
                     )));

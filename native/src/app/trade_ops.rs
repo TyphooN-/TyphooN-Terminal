@@ -1186,7 +1186,10 @@ impl TyphooNApp {
     pub(super) fn kraken_spot_pair_for_balance_asset(asset: &str) -> String {
         let display = Self::kraken_display_asset(asset);
         if let Some(stripped) = display.strip_suffix(".EQ") {
-            format!("{}USD", stripped)
+            // Kraken Securities/equity balances are reported as assets (`WOK.EQ`),
+            // not Spot OHLC pairs. Keep the underlying ticker bare so the UI does
+            // not manufacture `WOKUSD` and collide with stale/non-equity caches.
+            stripped.to_string()
         } else {
             format!("{}USD", display)
         }
@@ -1329,12 +1332,52 @@ impl TyphooNApp {
     }
 
     pub(super) fn latest_cached_equity_price_for_symbol(&self, symbol: &str) -> Option<f64> {
-        // Kraken xStock/equity balances use bare equity tickers (`WOK.EQ` -> `WOK`).
-        // Do not price them from Kraken crypto pairs with the same base symbol.
-        self.latest_cached_price_for_symbol_from_sources(
-            symbol,
-            &["alpaca", "tastytrade", "default", "mt5"],
-        )
+        let cache = self.cache.as_ref()?;
+        let timeframes = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day"];
+        let sources = ["tastytrade", "alpaca", "default", "mt5"];
+        let mut symbols = Vec::new();
+        let mut push_symbol = |candidate: String| {
+            let candidate = candidate.trim().replace('/', "").to_ascii_uppercase();
+            if !candidate.is_empty() && !symbols.iter().any(|s| s == &candidate) {
+                symbols.push(candidate);
+            }
+        };
+        let normalized = typhoon_engine::core::kraken::normalize_pair_symbol(symbol)
+            .replace('/', "")
+            .to_ascii_uppercase();
+        let no_eq = normalized.strip_suffix(".EQ").unwrap_or(&normalized);
+        let base = Self::kraken_base_asset_for_pair(no_eq);
+        // Equities must use the plain underlying ticker. Do not probe `{TICKER}USD`;
+        // that is exactly how WOK picked up a bogus/stale synthetic price.
+        push_symbol(base);
+        push_symbol(no_eq.to_string());
+        if let Some(stripped) = no_eq.strip_suffix("USD") {
+            push_symbol(stripped.to_string());
+        }
+        for tf in timeframes {
+            for source in sources {
+                for candidate in &symbols {
+                    let mut keys = vec![format!("{source}:{candidate}:{tf}")];
+                    if source == "alpaca" {
+                        keys.push(format!("paper_TyphooN:{candidate}:{tf}"));
+                        keys.push(format!("alpaca_paper_TyphooN:{candidate}:{tf}"));
+                    }
+                    for key in keys {
+                        let Ok(Some(raw)) = cache.get_bars_raw(&key) else {
+                            continue;
+                        };
+                        if let Some((_, _, _, _, close, _)) =
+                            raw.iter().rev().find(|(ts, _, _, _, close, _)| {
+                                *ts > 0 && *close > 0.0 && close.is_finite()
+                            })
+                        {
+                            return Some(*close);
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub(super) fn kraken_balance_avg_price(&self, asset: &str) -> Option<f64> {
