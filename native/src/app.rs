@@ -13355,6 +13355,26 @@ pub struct TyphooNApp {
     metrics_registry: Option<std::sync::Arc<crate::metrics::MetricsRegistry>>,
     /// App start time for uptime calculation.
     metrics_start: std::time::Instant,
+    /// Wall-clock gates for periodic work. These must not be derived from frame_count:
+    /// native-refresh rendering can run at 60/144/240Hz, while old code assumed 4fps idle.
+    periodic_crypto_last_refresh: std::time::Instant,
+    kraken_universe_last_schedule: std::time::Instant,
+    kraken_futures_universe_last_schedule: std::time::Instant,
+    tastytrade_universe_last_schedule: std::time::Instant,
+    lan_client_last_reload: std::time::Instant,
+    session_last_autosave: std::time::Instant,
+    metrics_last_update: std::time::Instant,
+    lan_remote_last_poll: std::time::Instant,
+    broker_positions_last_poll: std::time::Instant,
+    kraken_positions_last_poll: std::time::Instant,
+    watchlist_quotes_last_poll: std::time::Instant,
+    weekend_crypto_last_sync: std::time::Instant,
+    mt5_bar_last_sync: std::time::Instant,
+    alpaca_rotation_last_sync: std::time::Instant,
+    mt5_quote_last_refresh: std::time::Instant,
+    mt5_auto_bar_last_sync: std::time::Instant,
+    mt5_self_heal_last: std::time::Instant,
+    mt5_demand_last_flush: std::time::Instant,
 
     /// Screenshot requested via SCREENSHOT command (triggers ViewportCommand::Screenshot next frame).
     screenshot_requested: bool,
@@ -28867,6 +28887,33 @@ When the question touches recent news, sentiment, or prices, combine the researc
             indicators_dirty: false,
             metrics_registry: None,
             metrics_start: std::time::Instant::now(),
+            periodic_crypto_last_refresh: std::time::Instant::now()
+                - std::time::Duration::from_secs(60),
+            kraken_universe_last_schedule: std::time::Instant::now()
+                - std::time::Duration::from_secs(60),
+            kraken_futures_universe_last_schedule: std::time::Instant::now()
+                - std::time::Duration::from_secs(60),
+            tastytrade_universe_last_schedule: std::time::Instant::now()
+                - std::time::Duration::from_secs(60),
+            lan_client_last_reload: std::time::Instant::now() - std::time::Duration::from_secs(5),
+            session_last_autosave: std::time::Instant::now(),
+            metrics_last_update: std::time::Instant::now() - std::time::Duration::from_secs(5),
+            lan_remote_last_poll: std::time::Instant::now() - std::time::Duration::from_secs(5),
+            broker_positions_last_poll: std::time::Instant::now()
+                - std::time::Duration::from_secs(60),
+            kraken_positions_last_poll: std::time::Instant::now()
+                - std::time::Duration::from_secs(60),
+            watchlist_quotes_last_poll: std::time::Instant::now()
+                - std::time::Duration::from_secs(15),
+            weekend_crypto_last_sync: std::time::Instant::now()
+                - std::time::Duration::from_secs(60),
+            mt5_bar_last_sync: std::time::Instant::now() - std::time::Duration::from_secs(60),
+            alpaca_rotation_last_sync: std::time::Instant::now()
+                - std::time::Duration::from_secs(60),
+            mt5_quote_last_refresh: std::time::Instant::now() - std::time::Duration::from_secs(30),
+            mt5_auto_bar_last_sync: std::time::Instant::now() - std::time::Duration::from_secs(30),
+            mt5_self_heal_last: std::time::Instant::now() - std::time::Duration::from_secs(30),
+            mt5_demand_last_flush: std::time::Instant::now() - std::time::Duration::from_secs(1),
             screenshot_requested: false,
             last_screenshot_path: None,
             screenshots_list: Vec::new(),

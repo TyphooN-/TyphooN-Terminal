@@ -21,6 +21,7 @@ impl eframe::App for TyphooNApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_count += 1;
+        let now_instant = std::time::Instant::now();
         // Track user activity for the auto-compact idle gate. Any input event in
         // the frame counts as activity. Cheap — `events` is always queried below.
         if ctx.input(|i| !i.events.is_empty()) {
@@ -47,13 +48,13 @@ impl eframe::App for TyphooNApp {
         }
         // PERF: Cache scoped_fundamentals_owned() only when bg/scope changes — not per frame.
         // Was cloning ~500 Fundamentals structs (≈1 MB) every frame for no reason.
-        if self.cached_scoped_fundamentals_key != Some(scope_key) {
+        if !self.user_interacting && self.cached_scoped_fundamentals_key != Some(scope_key) {
             self.cached_scoped_fundamentals = self.scoped_fundamentals_owned();
             self.cached_scoped_fundamentals_key = Some(scope_key);
         }
         // PERF: Cache Darwin tradability + MT5/tasty bar-coverage sets on bg_rev.
         // Was rebuilding per frame in hot windows and sync loops.
-        if self.cached_mt5_symbols_rev != Some(self.bg_rev) {
+        if !self.user_interacting && self.cached_mt5_symbols_rev != Some(self.bg_rev) {
             // Start with Darwinex symbols from MT5 specs (if any)
             let mut darwin: std::collections::HashSet<String> = self
                 .bg
@@ -115,7 +116,7 @@ impl eframe::App for TyphooNApp {
                 .collect();
             self.cached_mt5_symbols_rev = Some(self.bg_rev);
         }
-        if self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
+        if !self.user_interacting && self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
             let previous = self.cached_alpaca_sync_state.clone();
             let mut rebuilt = self.build_alpaca_cache_state_map();
             merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
@@ -163,7 +164,12 @@ impl eframe::App for TyphooNApp {
         // Uses Kraken (free, no auth) as primary source, Alpaca as fallback
         // Periodic crypto bar refresh — SERVER/STANDALONE ONLY
         // LAN clients get ALL data from server via sync — no direct API calls
-        if self.frame_count % 240 == 120 && self.lan_sync_mode != "client" && self.cache_loaded {
+        if now_instant.duration_since(self.periodic_crypto_last_refresh)
+            >= std::time::Duration::from_secs(60)
+            && self.lan_sync_mode != "client"
+            && self.cache_loaded
+        {
+            self.periodic_crypto_last_refresh = now_instant;
             if let Some(chart) = self.charts.get(self.active_tab) {
                 let sym = chart.symbol.clone();
                 let bare = sym.split(':').last().unwrap_or(&sym).to_string();
@@ -216,29 +222,32 @@ impl eframe::App for TyphooNApp {
             }
         }
 
-        if self.frame_count % 240 == 20
-            && self.frame_count > 0
+        if now_instant.duration_since(self.kraken_universe_last_schedule)
+            >= std::time::Duration::from_secs(60)
             && self.cache_loaded
             && self.lan_sync_mode != "client"
             && !self.kraken_pairs.is_empty()
         {
+            self.kraken_universe_last_schedule = now_instant;
             let _ = self.schedule_kraken_universe_sectors();
         }
 
-        if self.frame_count % 240 == 40
-            && self.frame_count > 0
+        if now_instant.duration_since(self.kraken_futures_universe_last_schedule)
+            >= std::time::Duration::from_secs(60)
             && self.cache_loaded
             && self.lan_sync_mode != "client"
         {
+            self.kraken_futures_universe_last_schedule = now_instant;
             let _ = self.schedule_kraken_futures_universe_sectors();
         }
 
-        if self.frame_count % 240 == 170
-            && self.frame_count > 0
+        if now_instant.duration_since(self.tastytrade_universe_last_schedule)
+            >= std::time::Duration::from_secs(60)
             && self.cache_loaded
             && self.lan_sync_mode != "client"
             && self.tt_connected
         {
+            self.tastytrade_universe_last_schedule = now_instant;
             let symbols = self.tastytrade_sync_symbols();
             let _ = self.schedule_tastytrade_symbols(&symbols);
         }
@@ -755,7 +764,12 @@ impl eframe::App for TyphooNApp {
         }
 
         // ── drain background DARWIN data ─────────────────────────────────
-        while let Ok(data) = self.bg_rx.try_recv() {
+        // Keep this bounded: a backend burst must not monopolize the render thread.
+        // The channel carries full snapshots, so newest wins; apply at most one per frame.
+        if let Ok(mut data) = self.bg_rx.try_recv() {
+            while let Ok(newer) = self.bg_rx.try_recv() {
+                data = newer;
+            }
             // Auto-populate darwinex_radar_data from BG-loaded specs so Darwinex scope
             // filtering works without requiring manual DARWINEXRADAR command.
             if !data.darwinex_specs.is_empty() {
@@ -773,9 +787,11 @@ impl eframe::App for TyphooNApp {
         // Check every ~5s (200 frames). Cheap local SQLite read — only deserializes
         // when KV actually changed (server writes only on position/order updates).
         if self.lan_sync_mode == "client" {
-            if self.frame_count % 200 == 0
+            if now_instant.duration_since(self.lan_client_last_reload)
+                >= std::time::Duration::from_secs(5)
                 || (self.live_positions.is_empty() && self.frame_count > 10)
             {
+                self.lan_client_last_reload = now_instant;
                 if let Some(ref cache) = self.cache {
                     if let Ok(Some(json)) = cache.get_kv("broker:positions") {
                         if let Ok(pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
@@ -15678,7 +15694,10 @@ impl eframe::App for TyphooNApp {
         }
 
         // Auto-save session + keyring sync every 60 seconds — runs off UI thread
-        if self.frame_count % 240 == 0 && self.frame_count > 0 {
+        if now_instant.duration_since(self.session_last_autosave)
+            >= std::time::Duration::from_secs(60)
+        {
+            self.session_last_autosave = now_instant;
             // Collect all state needed for save (cheap copies of strings + JSON)
             let session_json = self.build_session_json();
             self.sync_preferences_save();
@@ -15717,8 +15736,11 @@ impl eframe::App for TyphooNApp {
             });
         }
 
-        // Update Prometheus metrics every ~5 seconds (20 frames at 250ms idle repaint)
-        if self.frame_count % 20 == 3 {
+        // Update Prometheus metrics every ~5 seconds. Keep this wall-clock gated;
+        // frame_count-based throttles become pathological under 144/240Hz repaint.
+        if now_instant.duration_since(self.metrics_last_update) >= std::time::Duration::from_secs(5)
+        {
+            self.metrics_last_update = now_instant;
             if let Some(ref reg) = self.metrics_registry {
                 let mut snap = crate::metrics::MetricsSnapshot::default();
 
@@ -15785,7 +15807,11 @@ impl eframe::App for TyphooNApp {
         // Poll for remote commands from LAN clients (server only, every ~5 seconds).
         // Uses drain_queue for atomic read+delete (O(1) per entry instead of O(n) full
         // array read + rewrite). See cache.rs:append_to_queue for the producer side.
-        if self.frame_count % 20 == 3 && self.lan_sync_mode == "server" {
+        if now_instant.duration_since(self.lan_remote_last_poll)
+            >= std::time::Duration::from_secs(5)
+            && self.lan_sync_mode == "server"
+        {
+            self.lan_remote_last_poll = now_instant;
             if let Some(ref cache) = self.cache {
                 if let Ok(entries) = cache.drain_queue("lan:remote_queue") {
                     if !entries.is_empty() {
@@ -16085,32 +16111,38 @@ impl eframe::App for TyphooNApp {
 
         // Poll tastytrade positions every ~60 seconds so terminal-managed exit changes
         // and broker fills eventually converge back into the unified position view.
-        if self.frame_count % 240 == 30
+        if now_instant.duration_since(self.broker_positions_last_poll)
+            >= std::time::Duration::from_secs(60)
             && self.tt_connected
             && !self.lan_client_enabled
             && self.cache_loaded
         {
+            self.broker_positions_last_poll = now_instant;
             let _ = self.broker_tx.send(BrokerCmd::TastytradePositions);
             let _ = self.broker_tx.send(BrokerCmd::TastytradeGetBalances);
         }
-        if self.frame_count % 240 == 40
+        if now_instant.duration_since(self.kraken_positions_last_poll)
+            >= std::time::Duration::from_secs(60)
             && self.kraken_connected
             && !self.lan_client_enabled
             && self.cache_loaded
         {
+            self.kraken_positions_last_poll = now_instant;
             let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
             let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
         }
 
         // Poll watchlist quotes every ~15 seconds at 60fps (900 frames). Disabled for LAN client.
         // Includes Alpaca snapshot + Yahoo extended hours enrichment per cycle.
-        if self.frame_count % 900 == 5
+        if now_instant.duration_since(self.watchlist_quotes_last_poll)
+            >= std::time::Duration::from_secs(15)
             && !self.user_watchlist.is_empty()
             && self.broker_connected
             && !self.lan_client_enabled
             && self.cache_loaded
             && !self.alpaca_bar_backlog_active()
         {
+            self.watchlist_quotes_last_poll = now_instant;
             let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes {
                 symbols: self.user_watchlist.clone(),
             });
@@ -16125,7 +16157,10 @@ impl eframe::App for TyphooNApp {
             // Symbols come from a hardcoded floor plus any crypto in chart tabs
             // or the user watchlist so user-added coins (incl. XMR/ZEC/DASH
             // which Alpaca doesn't list) still get weekend refresh coverage.
-            if self.frame_count % 240 == 150 && self.frame_count > 0 {
+            if now_instant.duration_since(self.weekend_crypto_last_sync)
+                >= std::time::Duration::from_secs(60)
+            {
+                self.weekend_crypto_last_sync = now_instant;
                 let now_utc = chrono::Utc::now();
                 let eastern = now_utc.with_timezone(
                     &chrono::FixedOffset::west_opt(5 * 3600)
@@ -16180,7 +16215,10 @@ impl eframe::App for TyphooNApp {
             // Mt5Sync handler's "locked by BarCacheWriter" fallback message even
             // though the DB isn't locked, it simply isn't there. Matches the
             // bid/ask refresh below which already guards with .exists().
-            if self.frame_count % 240 == 100 && self.frame_count > 0 {
+            if now_instant.duration_since(self.mt5_bar_last_sync)
+                >= std::time::Duration::from_secs(60)
+            {
+                self.mt5_bar_last_sync = now_instant;
                 let now_utc = chrono::Utc::now();
                 let eastern = now_utc.with_timezone(
                     &chrono::FixedOffset::west_opt(5 * 3600)
@@ -16214,7 +16252,10 @@ impl eframe::App for TyphooNApp {
             // symbols; Alpaca fills the gap (US stocks + ETFs Darwinex doesn't
             // list). Runs 7 days/week — stocks don't trade on weekends but the
             // historical backfill can still progress.
-            if self.frame_count % 240 == 200 && self.frame_count > 0 {
+            if now_instant.duration_since(self.alpaca_rotation_last_sync)
+                >= std::time::Duration::from_secs(60)
+            {
+                self.alpaca_rotation_last_sync = now_instant;
                 self.maybe_request_alpaca_asset_universe();
                 let equity_syms = self.alpaca_equity_rotation_symbols();
                 self.schedule_alpaca_pairs(&equity_syms);
@@ -16223,7 +16264,10 @@ impl eframe::App for TyphooNApp {
             // MT5 live bid/ask refresh every ~30s — fast read of bid_ask table only (no bar sync).
             // Updates forming bars on all charts with latest MT5 mid prices.
             // Reads from /dev/shm ramdisk — sub-millisecond, safe on UI thread.
-            if self.frame_count % 120 == 60 && self.frame_count > 0 {
+            if now_instant.duration_since(self.mt5_quote_last_refresh)
+                >= std::time::Duration::from_secs(30)
+            {
+                self.mt5_quote_last_refresh = now_instant;
                 let paths: Vec<String> = self
                     .mt5_db_paths
                     .iter()
@@ -16296,7 +16340,11 @@ impl eframe::App for TyphooNApp {
             // at least one MT5 path is configured. Matches BarCacheWriter's 30s write
             // cadence (UpdateIntervalSec=30) so the terminal never lags behind the EA.
             // Idle repaint ≈ 250 ms → 120 frames ≈ 30 s.
-            if self.mt5_auto_sync && self.frame_count % 120 == 60 && self.frame_count > 0 {
+            if self.mt5_auto_sync
+                && now_instant.duration_since(self.mt5_auto_bar_last_sync)
+                    >= std::time::Duration::from_secs(30)
+            {
+                self.mt5_auto_bar_last_sync = now_instant;
                 let paths: Vec<String> = self
                     .mt5_db_paths
                     .iter()
@@ -16319,7 +16367,10 @@ impl eframe::App for TyphooNApp {
             // self-healing. Offset by 30 frames (~7.5s) from the full
             // sync trigger so the two passes don't collide on the same
             // frame.
-            if self.frame_count % 120 == 90 && self.frame_count > 0 {
+            if now_instant.duration_since(self.mt5_self_heal_last)
+                >= std::time::Duration::from_secs(30)
+            {
+                self.mt5_self_heal_last = now_instant;
                 let has_mt5 = self
                     .mt5_db_paths
                     .iter()
@@ -16344,7 +16395,10 @@ impl eframe::App for TyphooNApp {
             // written and the EA never saw them — gap-fill was effectively a
             // no-op. `mt5_gap_requests` is already cleared + rebuilt by
             // `detect_mt5_gaps`; re-emitting the existing vector is free.
-            if self.frame_count % 4 == 0 && self.frame_count > 0 {
+            if now_instant.duration_since(self.mt5_demand_last_flush)
+                >= std::time::Duration::from_secs(1)
+            {
+                self.mt5_demand_last_flush = now_instant;
                 let has_mt5 = self
                     .mt5_db_paths
                     .iter()

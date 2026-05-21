@@ -2,7 +2,7 @@
 
 ## Native GPU Renderer
 
-The terminal uses egui + wgpu for direct GPU rendering. No WebView, no JavaScript, no IPC overhead. Native builds request continuous repaint and let wgpu/eframe VSync/adaptive sync cap presentation at the display refresh rate; `TYPHOON_IDLE_FPS` is an opt-in profiling/problem-display cap, not the default. Tokio broker/feed workers scale to available CPU on AC/desktop while reserving one logical core for egui/wgpu; `TYPHOON_TOKIO_WORKERS` remains the explicit override.
+The terminal uses egui + wgpu for direct GPU rendering. No WebView, no JavaScript, no IPC overhead. Native builds request continuous repaint and let wgpu/eframe VSync/adaptive sync cap presentation at the display refresh rate; `TYPHOON_IDLE_FPS` is an opt-in profiling/problem-display cap, not the default. Periodic broker/sync/metrics/MT5 maintenance is wall-clock gated rather than `frame_count` gated, so moving from idle repaint to 60/144/240Hz native refresh does not accidentally multiply backend/UI maintenance work. Tokio broker/feed workers scale to available CPU on AC/desktop while reserving one logical core for egui/wgpu; `TYPHOON_TOKIO_WORKERS` remains the explicit override.
 
 ### Benchmarks
 
