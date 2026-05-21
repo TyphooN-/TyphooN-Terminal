@@ -15,6 +15,7 @@
 use crate::ast::*;
 use crate::error::CompileError;
 use crate::parser;
+use std::collections::HashSet;
 
 /// Bar data field offsets within the interleaved storage buffer.
 const OPEN_OFFSET: u32 = 0;
@@ -39,7 +40,7 @@ pub fn emit_wgsl(program: &Program) -> Result<String, CompileError> {
         if let TopLevel::Input(input) = item {
             let wgsl_type = mql5_type_to_wgsl(&input.type_name);
             if wgsl_type != "/* string */" {
-                ctx.params.push((input.name.clone(), wgsl_type.to_string()));
+                ctx.add_param(input.name.clone(), wgsl_type.to_string());
             }
         }
     }
@@ -128,8 +129,10 @@ pub fn emit_wgsl(program: &Program) -> Result<String, CompileError> {
 
 /// Context for WGSL code generation.
 struct WgslCtx {
-    /// Input parameters for the Params struct.
+    /// Input parameters for the Params struct. Vec preserves stable emission order.
     params: Vec<(String, String)>,
+    /// O(1) input-parameter membership for expression emission.
+    param_names: HashSet<String>,
     /// Variables already declared in the current scope (to avoid re-declaring).
     declared_vars: Vec<String>,
 }
@@ -138,12 +141,19 @@ impl WgslCtx {
     fn new() -> Self {
         Self {
             params: Vec::new(),
+            param_names: HashSet::new(),
             declared_vars: Vec::new(),
         }
     }
 
+    fn add_param(&mut self, name: String, ty: String) {
+        if self.param_names.insert(name.clone()) {
+            self.params.push((name, ty));
+        }
+    }
+
     fn is_param(&self, name: &str) -> bool {
-        self.params.iter().any(|(n, _)| n == name)
+        self.param_names.contains(name)
     }
 }
 
@@ -1138,6 +1148,30 @@ mod tests {
         assert!(
             wgsl.contains("InpFactor: f32"),
             "should have InpFactor in Params: {}",
+            wgsl
+        );
+    }
+
+    #[test]
+    fn duplicate_input_params_emit_once() {
+        let src = r#"
+            input int InpPeriod = 14;
+            input int InpPeriod = 21;
+            int OnCalculate(int rates_total, int prev_calculated) {
+                double x = InpPeriod;
+                return rates_total;
+            }
+        "#;
+        let wgsl = compile(src);
+        assert_eq!(
+            wgsl.matches("InpPeriod: i32").count(),
+            1,
+            "Params struct should keep one field per input name: {}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("params.InpPeriod"),
+            "input references should still resolve through params: {}",
             wgsl
         );
     }

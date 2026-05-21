@@ -242,3 +242,7 @@ reusable for future optimizations.
 - The order-block ATR threshold now maintains a rolling true-range sum instead
   of recomputing the 14-bar window for each bar. Early-bar behavior is unchanged,
   but full-depth chart renders avoid repeated fixed-window rescans.
+- WGSL codegen now keeps a side `HashSet` for input-parameter membership while
+  preserving the ordered parameter `Vec` for stable Params struct emission. This
+  removes repeated linear scans from expression emission and prevents duplicate
+  input declarations from producing duplicate WGSL struct fields.
