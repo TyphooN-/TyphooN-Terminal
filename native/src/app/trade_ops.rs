@@ -1225,6 +1225,7 @@ impl TyphooNApp {
 
     pub(super) fn kraken_usd_price_for_balance_asset(&self, display_asset: &str) -> Option<f64> {
         let display = display_asset.trim().to_ascii_uppercase();
+        let is_equity_balance = display.ends_with(".EQ");
         let mut candidates = Vec::new();
         if let Some(stripped) = display.strip_suffix(".EQ") {
             candidates.push(stripped.to_string());
@@ -1235,8 +1236,12 @@ impl TyphooNApp {
         candidates.push(format!("{}USD", display));
         candidates.push(format!("{}ZUSD", display));
         candidates.into_iter().find_map(|symbol| {
-            self.latest_cached_price_for_symbol(&symbol)
-                .filter(|price| price.is_finite() && *price > 0.0)
+            let price = if is_equity_balance {
+                self.latest_cached_equity_price_for_symbol(&symbol)
+            } else {
+                self.latest_cached_price_for_symbol(&symbol)
+            };
+            price.filter(|price| price.is_finite() && *price > 0.0)
         })
     }
 
@@ -1253,17 +1258,13 @@ impl TyphooNApp {
         stripped.strip_suffix(".EQ").unwrap_or(stripped).to_string()
     }
 
-    pub(super) fn latest_cached_price_for_symbol(&self, symbol: &str) -> Option<f64> {
+    fn latest_cached_price_for_symbol_from_sources(
+        &self,
+        symbol: &str,
+        sources: &[&str],
+    ) -> Option<f64> {
         let cache = self.cache.as_ref()?;
         let timeframes = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day"];
-        let sources = [
-            "kraken",
-            "kraken-futures",
-            "tastytrade",
-            "alpaca",
-            "mt5",
-            "default",
-        ];
         let mut symbols = Vec::new();
         let mut push_symbol = |candidate: String| {
             if !candidate.is_empty() && !symbols.iter().any(|s| s == &candidate) {
@@ -1311,6 +1312,29 @@ impl TyphooNApp {
             }
         }
         None
+    }
+
+    pub(super) fn latest_cached_price_for_symbol(&self, symbol: &str) -> Option<f64> {
+        self.latest_cached_price_for_symbol_from_sources(
+            symbol,
+            &[
+                "kraken",
+                "kraken-futures",
+                "tastytrade",
+                "alpaca",
+                "mt5",
+                "default",
+            ],
+        )
+    }
+
+    pub(super) fn latest_cached_equity_price_for_symbol(&self, symbol: &str) -> Option<f64> {
+        // Kraken xStock/equity balances use bare equity tickers (`WOK.EQ` -> `WOK`).
+        // Do not price them from Kraken crypto pairs with the same base symbol.
+        self.latest_cached_price_for_symbol_from_sources(
+            symbol,
+            &["alpaca", "tastytrade", "default", "mt5"],
+        )
     }
 
     pub(super) fn kraken_balance_avg_price(&self, asset: &str) -> Option<f64> {
@@ -1405,7 +1429,13 @@ impl TyphooNApp {
                 let avg = self
                     .kraken_cost_basis_for_base_asset(&base)
                     .and_then(|basis| basis.avg_price());
-                let current = self.latest_cached_price_for_symbol(&pos.symbol);
+                let current = if pos.asset_id.starts_with("equity_balance:")
+                    || pos.asset_class.eq_ignore_ascii_case("stock")
+                {
+                    self.latest_cached_equity_price_for_symbol(&pos.symbol)
+                } else {
+                    self.latest_cached_price_for_symbol(&pos.symbol)
+                };
                 (pos.symbol.clone(), avg, current)
             })
             .collect();

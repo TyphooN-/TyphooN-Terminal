@@ -11121,7 +11121,13 @@ impl eframe::App for TyphooNApp {
                                     } else {
                                         self.kraken_position_avg_price(&pos.symbol)
                                     };
-                                    let current_price = self.latest_cached_price_for_symbol(&pos.symbol);
+                                    let current_price = if pos.asset_id.starts_with("equity_balance:")
+                                        || pos.asset_class.eq_ignore_ascii_case("stock")
+                                    {
+                                        self.latest_cached_equity_price_for_symbol(&pos.symbol)
+                                    } else {
+                                        self.latest_cached_price_for_symbol(&pos.symbol)
+                                    };
                                     let derived_unrealized_pl = avg_entry.zip(current_price).map(|(avg, cur)| {
                                         let dir = if pos.side == "short" { -1.0 } else { 1.0 };
                                         (cur - avg) * pos.qty * dir
@@ -11213,7 +11219,11 @@ impl eframe::App for TyphooNApp {
                                         .to_string();
                                     let pair = Self::kraken_spot_pair_for_balance_asset(&asset);
                                     let avg_price = self.kraken_balance_avg_price(&asset);
-                                    let current_price = self.latest_cached_price_for_symbol(&pair);
+                                    let current_price = if Self::kraken_display_asset(&asset).ends_with(".EQ") {
+                                        self.latest_cached_equity_price_for_symbol(&pair)
+                                    } else {
+                                        self.latest_cached_price_for_symbol(&pair)
+                                    };
                                     let pl = avg_price
                                         .zip(current_price)
                                         .map(|(avg, cur)| ((cur - avg) * qty, (cur - avg) / avg * 100.0));

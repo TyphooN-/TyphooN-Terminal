@@ -599,6 +599,7 @@ impl TyphooNApp {
         let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
         if symbol.is_empty()
             || typhoon_engine::core::kraken::to_kraken_pair_lossy(&symbol).is_none()
+            || !self.kraken_spot_symbol_in_loaded_pairs(&symbol)
         {
             return false;
         }
@@ -611,6 +612,19 @@ impl TyphooNApp {
                 .is_some_and(|quote| self.crypto_fiat_quote_scrape_enabled(quote)),
             _ => true,
         }
+    }
+
+    fn kraken_spot_symbol_in_loaded_pairs(&self, symbol: &str) -> bool {
+        if self.kraken_pairs.is_empty() {
+            return true;
+        }
+        let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
+        self.kraken_pairs.iter().any(|(pair_name, display_name)| {
+            let pair_symbol = typhoon_engine::core::kraken::normalize_pair_symbol(pair_name);
+            let display_symbol = typhoon_engine::core::kraken::normalize_pair_symbol(display_name);
+            pair_symbol.eq_ignore_ascii_case(&symbol)
+                || display_symbol.eq_ignore_ascii_case(&symbol)
+        })
     }
 
     pub(super) fn kraken_sync_symbol_sectors(&self) -> Vec<Vec<String>> {
