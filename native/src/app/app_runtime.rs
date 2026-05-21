@@ -9289,9 +9289,17 @@ impl eframe::App for TyphooNApp {
                             }
                         });
                         if let Some(session) = active_session {
+                            let session_upper = session.to_ascii_uppercase();
+                            let session_color = if session_upper.contains("CLOSED") {
+                                DOWN
+                            } else if session_upper.contains("OPEN") || session == "24/7" {
+                                UP
+                            } else {
+                                AXIS_TEXT
+                            };
                             ui.label(
                                 egui::RichText::new(format!("[Session {}]", session))
-                                    .color(AXIS_TEXT)
+                                    .color(session_color)
                                     .small(),
                             );
                         }
