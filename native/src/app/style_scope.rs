@@ -465,6 +465,7 @@ impl TyphooNApp {
                             symbol: bare,
                             timeframes: kr_tfs,
                             db_path: cache_db_path(),
+                            backfill_complete: false,
                         });
                     }
                 }

@@ -17146,6 +17146,7 @@ impl TyphooNApp {
                                     symbol: su.clone(),
                                     timeframes: missing_tfs.clone(),
                                     db_path: db_path.clone(),
+                                    backfill_complete: false,
                                 });
                                 fetched_count += missing_tfs.len();
                             } else {
@@ -17161,6 +17162,7 @@ impl TyphooNApp {
                                     symbol: clean_sym.clone(),
                                     timeframes: missing_tfs.clone(),
                                     db_path: db_path.clone(),
+                                    backfill_complete: false,
                                 });
                                 fetched_count += missing_tfs.len();
                             }
@@ -17177,6 +17179,7 @@ impl TyphooNApp {
                                 let _ = self.broker_tx.send(BrokerCmd::TastyTradeFetchBars {
                                     symbol: sym.clone(),
                                     timeframe: tf.clone(),
+                                    backfill_complete: false,
                                 });
                                 fetched_count += 1;
                             }

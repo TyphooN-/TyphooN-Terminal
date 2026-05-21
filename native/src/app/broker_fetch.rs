@@ -6,6 +6,7 @@ pub(super) async fn run_alpaca_fetch_task(
     broker_msg_tx: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
     symbol: String,
     timeframe: String,
+    backfill_already_complete: bool,
 ) {
     let symbol = normalize_market_data_symbol(&symbol);
     let timeframe = normalize_sync_timeframe_key(&timeframe)
@@ -68,12 +69,6 @@ pub(super) async fn run_alpaca_fetch_task(
         .map(|(_, count)| *count as i64)
         .unwrap_or(0);
     let mut after_ts = incremental.as_ref().map(|(ts, _)| ts.clone());
-    let backfill_already_complete = backfill_complete_pair_exists(
-        cache_handle.as_ref(),
-        "alpaca:backfill_complete_pairs",
-        &symbol,
-        &timeframe,
-    );
     let needs_backfill = should_request_full_backfill(
         backfill_already_complete,
         alpaca_sync_target_bars(&timeframe),
@@ -287,28 +282,6 @@ fn should_request_full_backfill(
             .unwrap_or(false)
 }
 
-fn backfill_complete_pair_exists(
-    cache_handle: Option<&Arc<SqliteCache>>,
-    kv_key: &str,
-    symbol: &str,
-    timeframe: &str,
-) -> bool {
-    let Some(cache) = cache_handle else {
-        return false;
-    };
-    let Ok(Some(json)) = cache.get_kv(kv_key) else {
-        return false;
-    };
-    let lookup = alpaca_fetch_key(symbol, timeframe);
-    serde_json::from_str::<Vec<AlpacaBackfillCompletePair>>(&json)
-        .map(|entries| {
-            entries
-                .iter()
-                .any(|entry| alpaca_fetch_key(&entry.symbol, &entry.timeframe) == lookup)
-        })
-        .unwrap_or(false)
-}
-
 pub(super) fn cryptocompare_backfill_symbol(symbol: &str) -> Option<String> {
     let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
     if symbol.is_empty() || symbol.contains(".EQ") {
@@ -373,6 +346,7 @@ pub(super) async fn run_kraken_fetch_task(
     client: reqwest::Client,
     symbol: String,
     timeframe: String,
+    backfill_already_complete: bool,
 ) {
     let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(&symbol);
     let timeframe = normalize_sync_timeframe_key(&timeframe)
@@ -388,12 +362,6 @@ pub(super) async fn run_kraken_fetch_task(
         .map(|(_, count)| *count as i64)
         .unwrap_or(0);
     let mut after_ts = incremental.as_ref().map(|(ts, _)| ts.clone());
-    let backfill_already_complete = backfill_complete_pair_exists(
-        cache_handle.as_ref(),
-        "kraken:backfill_complete_pairs",
-        &symbol,
-        &timeframe,
-    );
     let needs_backfill = should_request_full_backfill(
         backfill_already_complete,
         kraken_sync_target_bars(&timeframe),
@@ -565,6 +533,7 @@ pub(super) async fn run_kraken_futures_fetch_task(
     client: reqwest::Client,
     symbol: String,
     timeframe: String,
+    backfill_already_complete: bool,
 ) {
     let symbol = typhoon_engine::core::kraken_futures::normalize_futures_symbol(&symbol);
     let timeframe = normalize_sync_timeframe_key(&timeframe)
@@ -580,12 +549,6 @@ pub(super) async fn run_kraken_futures_fetch_task(
         .map(|(_, count)| *count as i64)
         .unwrap_or(0);
     let mut after_ts = incremental.as_ref().map(|(ts, _)| ts.clone());
-    let backfill_already_complete = backfill_complete_pair_exists(
-        cache_handle.as_ref(),
-        "kraken-futures:backfill_complete_pairs",
-        &symbol,
-        &timeframe,
-    );
     let needs_backfill = should_request_full_backfill(
         backfill_already_complete,
         kraken_futures_sync_target_bars(&timeframe),
@@ -747,6 +710,7 @@ pub(super) async fn run_tastytrade_fetch_task(
     broker_msg_tx: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
     symbol: String,
     timeframe: String,
+    backfill_already_complete: bool,
 ) {
     let symbol = normalize_market_data_symbol(&symbol);
     let timeframe = normalize_sync_timeframe_key(&timeframe)
@@ -768,12 +732,6 @@ pub(super) async fn run_tastytrade_fetch_task(
         .map(|(_, count)| *count as i64)
         .unwrap_or(0);
     let mut after_ts = incremental.as_ref().map(|(ts, _)| ts.clone());
-    let backfill_already_complete = backfill_complete_pair_exists(
-        cache_handle.as_ref(),
-        "tastytrade:backfill_complete_pairs",
-        &symbol,
-        &timeframe,
-    );
     let needs_backfill = should_request_full_backfill(
         backfill_already_complete,
         tastytrade_sync_target_bars(&timeframe),

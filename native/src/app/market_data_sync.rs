@@ -868,7 +868,11 @@ impl TyphooNApp {
             )));
             return false;
         }
+        if !self.alpaca_backfill_complete_loaded {
+            self.alpaca_backfill_complete_load();
+        }
         let fetch_key = alpaca_fetch_key(&symbol, tf);
+        let backfill_complete = self.alpaca_backfill_complete_pairs.contains_key(&fetch_key);
         if !self.pending_alpaca_fetches.insert(fetch_key) {
             return false;
         }
@@ -876,6 +880,7 @@ impl TyphooNApp {
             symbol,
             timeframe: tf.to_string(),
             db_path: cache_db_path(),
+            backfill_complete,
         });
         true
     }
@@ -897,7 +902,11 @@ impl TyphooNApp {
         if self.is_unresolvable_fetch_key("kraken", &symbol, tf) {
             return false;
         }
+        if !self.kraken_backfill_complete_loaded {
+            self.kraken_backfill_complete_load();
+        }
         let fetch_key = alpaca_fetch_key(&symbol, tf);
+        let backfill_complete = self.kraken_backfill_complete_pairs.contains_key(&fetch_key);
         if !self.pending_kraken_fetches.insert(fetch_key) {
             return false;
         }
@@ -905,6 +914,7 @@ impl TyphooNApp {
             symbol: symbol.clone(),
             timeframes: vec![tf.to_string()],
             db_path: cache_db_path(),
+            backfill_complete,
         });
         self.log.push_back(LogEntry::info(format!(
             "Kraken sync queued {} {} ({} pending)",
@@ -932,7 +942,13 @@ impl TyphooNApp {
         if self.is_unresolvable_fetch_key("kraken-futures", &symbol, tf) {
             return false;
         }
+        if !self.kraken_futures_backfill_complete_loaded {
+            self.kraken_futures_backfill_complete_load();
+        }
         let fetch_key = alpaca_fetch_key(&symbol, tf);
+        let backfill_complete = self
+            .kraken_futures_backfill_complete_pairs
+            .contains_key(&fetch_key);
         if !self.pending_kraken_futures_fetches.insert(fetch_key) {
             return false;
         }
@@ -940,6 +956,7 @@ impl TyphooNApp {
             symbol: symbol.clone(),
             timeframes: vec![tf.to_string()],
             db_path: cache_db_path(),
+            backfill_complete,
         });
         self.log.push_back(LogEntry::info(format!(
             "Kraken Futures sync queued {} {} ({} pending)",
@@ -982,7 +999,13 @@ impl TyphooNApp {
         if self.is_unresolvable_fetch_key("tastytrade", &symbol, tf) {
             return false;
         }
+        if !self.tastytrade_backfill_complete_loaded {
+            self.tastytrade_backfill_complete_load();
+        }
         let fetch_key = alpaca_fetch_key(&symbol.replace('/', ""), tf);
+        let backfill_complete = self
+            .tastytrade_backfill_complete_pairs
+            .contains_key(&fetch_key);
         if !self.pending_tastytrade_fetches.insert(fetch_key) {
             return false;
         }
@@ -990,6 +1013,7 @@ impl TyphooNApp {
         let _ = self.broker_tx.send(BrokerCmd::TastyTradeFetchBars {
             symbol: resolved_symbol,
             timeframe: tf.to_string(),
+            backfill_complete,
         });
         true
     }

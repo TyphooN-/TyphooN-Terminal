@@ -210,6 +210,7 @@ impl eframe::App for TyphooNApp {
                                 symbol: bare.clone(),
                                 timeframes,
                                 db_path: db_path.clone(),
+                                backfill_complete: false,
                             });
                         }
                     }
@@ -15677,6 +15678,7 @@ impl eframe::App for TyphooNApp {
                                                             symbol: symbol.to_string(),
                                                             timeframes: vec![tf_norm.to_string()],
                                                             db_path: db_path.clone(),
+                                                            backfill_complete: false,
                                                         },
                                                     );
                                                     self.log.push_back(LogEntry::info(format!(
@@ -15822,6 +15824,7 @@ impl eframe::App for TyphooNApp {
                                                     symbol: sym.to_string(),
                                                     timeframes: tfs,
                                                     db_path,
+                                                    backfill_complete: false,
                                                 });
                                             self.log.push_back(LogEntry::info(format!(
                                                 "LAN remote: Kraken backfill {} started",
@@ -15841,6 +15844,7 @@ impl eframe::App for TyphooNApp {
                                                     symbol: sym.to_string(),
                                                     timeframes: tfs,
                                                     db_path,
+                                                    backfill_complete: false,
                                                 },
                                             );
                                             self.log.push_back(LogEntry::info(format!(
@@ -16014,6 +16018,7 @@ impl eframe::App for TyphooNApp {
                                 symbol: sym,
                                 timeframes: kraken_tfs,
                                 db_path,
+                                backfill_complete: false,
                             });
                         }
                     }

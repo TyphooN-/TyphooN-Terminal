@@ -6520,18 +6520,21 @@ enum BrokerCmd {
         symbol: String,
         timeframe: String,
         db_path: std::path::PathBuf,
+        backfill_complete: bool,
     },
     /// Kraken public Spot/xStocks backfill via the public OHLC API.
     KrakenBackfill {
         symbol: String,
         timeframes: Vec<String>,
         db_path: std::path::PathBuf,
+        backfill_complete: bool,
     },
     /// Kraken Futures public chart backfill via the public charts API.
     KrakenFuturesBackfill {
         symbol: String,
         timeframes: Vec<String>,
         db_path: std::path::PathBuf,
+        backfill_complete: bool,
     },
     /// Import all MT5 XLSX trade history files from a directory (any server).
     /// Account ID derived from filename: e.g. "THA.xlsx" → "THA", "MyAccount_2024.xlsx" → "MYACCOUNT".
@@ -6613,6 +6616,7 @@ enum BrokerCmd {
     TastyTradeFetchBars {
         symbol: String,
         timeframe: String,
+        backfill_complete: bool,
     },
     /// Fetch ALL available bars from Alpaca (full history, no limit).
     FetchAllBars {
@@ -25451,7 +25455,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             }
                         });
                     }
-                    BrokerCmd::AlpacaFetchBars { symbol, timeframe, db_path: _ } => {
+                    BrokerCmd::AlpacaFetchBars { symbol, timeframe, db_path: _, backfill_complete } => {
                         if let Some(ref b) = broker {
                             let broker = b.clone();
                             let msg_tx = broker_msg_tx_clone.clone();
@@ -25472,6 +25476,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     msg_tx,
                                     symbol,
                                     timeframe,
+                                    backfill_complete,
                                 )
                                 .await;
                             });
@@ -25544,7 +25549,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Connect Alpaca first for BARDATA".into()));
                         }
                     }
-                    BrokerCmd::KrakenBackfill { symbol, timeframes, db_path: _ } => {
+                    BrokerCmd::KrakenBackfill { symbol, timeframes, db_path: _, backfill_complete } => {
                         let msg_tx = broker_msg_tx_clone.clone();
                         let shared_cache = shared_cache_broker.clone();
                         let permits = kraken_fetch_permits.clone();
@@ -25565,12 +25570,13 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     client,
                                     symbol,
                                     timeframe,
+                                    backfill_complete,
                                 )
                                 .await;
                             });
                         }
                     }
-                    BrokerCmd::KrakenFuturesBackfill { symbol, timeframes, db_path: _ } => {
+                    BrokerCmd::KrakenFuturesBackfill { symbol, timeframes, db_path: _, backfill_complete } => {
                         let msg_tx = broker_msg_tx_clone.clone();
                         let shared_cache = shared_cache_broker.clone();
                         let permits = kraken_fetch_permits.clone();
@@ -25591,6 +25597,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     client,
                                     symbol,
                                     timeframe,
+                                    backfill_complete,
                                 )
                                 .await;
                             });
@@ -25823,7 +25830,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("tastytrade: connect first".into()));
                         }
                     }
-                    BrokerCmd::TastyTradeFetchBars { symbol, timeframe } => {
+                    BrokerCmd::TastyTradeFetchBars { symbol, timeframe, backfill_complete } => {
                         if let Some(ref tb) = tt_broker {
                             let broker = tb.clone();
                             let dx_token_cache = tt_dx_token.clone();
@@ -25847,6 +25854,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     msg_tx,
                                     symbol,
                                     timeframe,
+                                    backfill_complete,
                                 )
                                 .await;
                             });
