@@ -26337,7 +26337,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             show_pivots: false,
             show_fractals: false, // Bill Williams — separate from NNFX
             show_harmonics: false,
-            show_auto_fib: true,      // MT5 default: AutoFibonacci
+            show_auto_fib: false, // off by default; manual toggle/presets can enable
             show_supply_demand: true, // NNFX zones
             show_ehlers_ss: false,
             show_ehlers_decycler: false,

@@ -219,11 +219,11 @@ impl TyphooNApp {
                         self.show_kama = true;
                         self.show_sma200 = true;
                         self.show_supply_demand = true;
-                        self.show_auto_fib = true;
+                        self.show_auto_fib = false;
                         self.show_fisher = true;
                         self.show_better_volume = true;
                         self.log.push_back(LogEntry::info(
-                            "Preset: TyphooN (NNFX) — 1:1 MT5 parity: ATR_Proj + PrevLevels + MultiKAMA + MTF_MA + S/D + AutoFib + Fisher + BVol",
+                            "Preset: TyphooN (NNFX) — ATR_Proj + PrevLevels + MultiKAMA + MTF_MA + S/D + Fisher + BVol",
                         ));
                     }
                     if ui.button("Carney").clicked() {

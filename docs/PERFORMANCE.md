@@ -2,7 +2,7 @@
 
 ## Native GPU Renderer
 
-The terminal uses egui + wgpu for direct GPU rendering. No WebView, no JavaScript, no IPC overhead.
+The terminal uses egui + wgpu for direct GPU rendering. No WebView, no JavaScript, no IPC overhead. Native builds request continuous repaint and let wgpu/eframe VSync/adaptive sync cap presentation at the display refresh rate; `TYPHOON_IDLE_FPS` is an opt-in profiling/problem-display cap, not the default. Tokio broker/feed workers scale to available CPU on AC/desktop while reserving one logical core for egui/wgpu; `TYPHOON_TOKIO_WORKERS` remains the explicit override.
 
 ### Benchmarks
 
@@ -19,7 +19,7 @@ The terminal uses egui + wgpu for direct GPU rendering. No WebView, no JavaScrip
 
 ### Chart Rendering
 
-Chart rendering keeps provider-depth history in memory/cache, but the draw path emits only the detail the current viewport can display. Dense visible ranges are decimated to roughly two samples per horizontal pixel before creating egui line/candle/OHLC/indicator/PSAR primitives, and grid/reference lines use fixed primitive counts instead of dotted per-pixel dash/circle spam. Overlay fills use the same sampling step and widen sampled spans, so clouds/ribbons/bands stay continuous without per-bar rectangle emission. Indicator sub-panes use the same render-only sampling for lines and histograms; histogram buckets preserve the strongest volume/MACD value, and calculations/trading/algo inputs still use the full underlying series. Dense market-structure/fractal overlays keep their context scan but enforce a minimum pixel gap between painted text labels, preventing overlapping HH/LH/HL/LL glyph storms. Fixed-size overlays avoid per-frame heap allocations where possible, e.g. harmonic XABCD screen points stay in arrays. This protects drag/zoom responsiveness when the user zooms out over very deep synced histories.
+Chart rendering keeps provider-depth history in memory/cache, but the draw path emits only the detail the current viewport can display. Dense visible ranges are decimated to roughly two samples per horizontal pixel before creating egui line/candle/OHLC/indicator/PSAR primitives, and grid/reference/AutoFib lines use fixed primitive counts instead of dotted per-pixel dash/circle spam. Overlay fills use the same sampling step and widen sampled spans, so clouds/ribbons/bands stay continuous without per-bar rectangle emission. Indicator sub-panes use the same render-only sampling for lines and histograms; histogram buckets preserve the strongest volume/MACD value, and calculations/trading/algo inputs still use the full underlying series. Dense market-structure/fractal overlays keep their context scan but enforce a minimum pixel gap between painted text labels, preventing overlapping HH/LH/HL/LL glyph storms. Fixed-size overlays avoid per-frame heap allocations where possible, e.g. harmonic XABCD screen points stay in arrays. This protects drag/zoom responsiveness when the user zooms out over very deep synced histories.
 
 ### Live Bar Builder
 

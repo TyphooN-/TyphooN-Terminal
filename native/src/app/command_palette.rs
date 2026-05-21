@@ -16416,17 +16416,19 @@ impl TyphooNApp {
                 self.show_ehlers_cyber = false;
                 self.show_ehlers_cg = false;
                 self.show_ehlers_roof = false;
-                // Main chart: ATR_Projection + PreviousCandleLevels + MultiKAMA + MTF_MA + SupplyDemand + AutoFib
+                // Main chart: ATR_Projection + PreviousCandleLevels + MultiKAMA + MTF_MA + SupplyDemand
                 self.show_atr_proj = true;
                 self.show_prev_levels = true;
                 self.show_kama = true;
                 self.show_sma200 = true;
                 self.show_supply_demand = true;
-                self.show_auto_fib = true;
+                self.show_auto_fib = false;
                 // Sub-pane 1: EhlersFisherTransform | Sub-pane 2: BetterVolume
                 self.show_fisher = true;
                 self.show_better_volume = true;
-                self.log.push_back(LogEntry::info("NNFX preset (1:1 MT5): ATR_Proj + PrevLevels + MultiKAMA + MTF_MA + S/D + AutoFib + Fisher + BVol"));
+                self.log.push_back(LogEntry::info(
+                    "NNFX preset: ATR_Proj + PrevLevels + MultiKAMA + MTF_MA + S/D + Fisher + BVol",
+                ));
             }
             "RESET_IND" => {
                 self.show_sma200 = false;

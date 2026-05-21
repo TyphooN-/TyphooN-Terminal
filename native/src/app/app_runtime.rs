@@ -1502,7 +1502,8 @@ impl eframe::App for TyphooNApp {
                                 "volume": ticker.volume.max(0.0),
                             });
                             if let Ok(json) = serde_json::to_string(&vec![bar]) {
-                                let _ = cache.put_bars(&format!("kraken-equities:{symbol}:quote"), &json);
+                                let _ = cache
+                                    .put_bars(&format!("kraken-equities:{symbol}:quote"), &json);
                             }
                         }
                         for chart in &mut self.charts {
@@ -1518,7 +1519,11 @@ impl eframe::App for TyphooNApp {
                                 if let Some(bar) = chart.bars.last_mut() {
                                     bar.close = last;
                                     bar.high = bar.high.max(last);
-                                    bar.low = if bar.low > 0.0 { bar.low.min(last) } else { last };
+                                    bar.low = if bar.low > 0.0 {
+                                        bar.low.min(last)
+                                    } else {
+                                        last
+                                    };
                                 }
                             }
                         }
@@ -1538,13 +1543,15 @@ impl eframe::App for TyphooNApp {
                     timeframe,
                     bars,
                 } => {
-                    let symbol = symbol.replace('/', "").trim_end_matches(".EQ").to_ascii_uppercase();
+                    let symbol = symbol
+                        .replace('/', "")
+                        .trim_end_matches(".EQ")
+                        .to_ascii_uppercase();
                     let timeframe = normalize_sync_timeframe_key(&timeframe)
                         .unwrap_or(timeframe.as_str())
                         .to_string();
-                    self.pending_kraken_fetches.retain(|key| {
-                        key != &format!("equity:{}:{}", symbol, timeframe)
-                    });
+                    self.pending_kraken_fetches
+                        .retain(|key| key != &format!("equity:{}:{}", symbol, timeframe));
                     if bars.is_empty() {
                         self.unresolvable_mark(
                             "kraken-equities",
@@ -1573,12 +1580,15 @@ impl eframe::App for TyphooNApp {
                             })
                             .collect();
                         if let Ok(json) = serde_json::to_string(&json_bars) {
-                            let _ = cache.put_bars(&format!("kraken-equities:{symbol}:{timeframe}"), &json);
+                            let _ = cache
+                                .put_bars(&format!("kraken-equities:{symbol}:{timeframe}"), &json);
                         }
                         self.refresh_kraken_position_costs();
                         self.log.push_back(LogEntry::info(format!(
                             "Kraken equities: cached {} bars for {} {}",
-                            bars.len(), symbol, timeframe
+                            bars.len(),
+                            symbol,
+                            timeframe
                         )));
                     }
                 }

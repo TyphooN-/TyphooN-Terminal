@@ -133,16 +133,17 @@ fn main() -> eframe::Result {
     // Start tokio runtime in background thread for async broker operations.
     // Use the machine, not a hard-coded two-thread cap: broker sync, WebSockets,
     // cache work, and AI/tool subprocess IO should drain behind the UI instead of
-    // competing with it. Keep one core free for egui/wgpu and clamp the range so
-    // small laptops do not oversubscribe while high-core desktops can run every
-    // broker/feed without a two-thread bottleneck.
+    // competing with it. Keep one core free for egui/wgpu on AC/desktop, but do
+    // not cap high-core machines at an arbitrary low worker count; the terminal
+    // is expected to sync brokers/feed/cache work aggressively while presentation
+    // is capped by VSync/adaptive sync.
     // TYPHOON_TOKIO_WORKERS can override this for profiling.
     let detected_cpus = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
         .unwrap_or(4);
     let on_ac_power = ac_power_available();
     let default_workers = if on_ac_power {
-        detected_cpus.saturating_sub(1).clamp(2, 16)
+        detected_cpus.saturating_sub(1).max(2)
     } else {
         (detected_cpus / 2).clamp(2, 8)
     };

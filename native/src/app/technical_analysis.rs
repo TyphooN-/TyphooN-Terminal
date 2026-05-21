@@ -4775,27 +4775,30 @@ pub(super) fn draw_chart(
         for (price, label, is_ext) in &chart.auto_fib_levels {
             let y = price_to_y(*price);
             if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                // Dotted line: gold for retracement, dodger blue for extension
+                // One clipped line per level. Dotted Fib levels used to emit a
+                // per-pixel segment loop, which is bad for dense adaptive-sync
+                // repaint. Keep the exact level, drop the decorative primitive spam.
                 let color = if *is_ext {
                     egui::Color32::from_rgb(30, 144, 255) // clrDodgerBlue
                 } else {
                     egui::Color32::from_rgb(255, 215, 0) // clrGold
                 };
-                // Dotted line
-                let mut fx = chart_rect.left();
-                while fx < chart_rect.right() {
-                    let end = (fx + 4.0).min(chart_rect.right());
-                    painter.line_segment(
-                        [egui::pos2(fx, y), egui::pos2(end, y)],
-                        egui::Stroke::new(1.0, color),
-                    );
-                    fx += 7.0;
-                }
+                painter.line_segment(
+                    [
+                        egui::pos2(chart_rect.left(), y),
+                        egui::pos2(chart_rect.right(), y),
+                    ],
+                    egui::Stroke::new(1.0, color),
+                );
                 // Label on right
+                let mut fib_label = String::with_capacity(label.len() + 24);
+                fib_label.push_str(label);
+                fib_label.push(' ');
+                fib_label.push_str(&format_price(*price));
                 painter.text(
                     egui::pos2(chart_rect.right() - 4.0, y - 1.0),
                     egui::Align2::RIGHT_BOTTOM,
-                    &format!("{} {}", label, format_price(*price)),
+                    fib_label,
                     egui::FontId::monospace(8.0),
                     color,
                 );

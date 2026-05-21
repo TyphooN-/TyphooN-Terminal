@@ -254,13 +254,13 @@ impl TyphooNApp {
         }
     }
 
-    /// Built-in template: NNFX (KAMA+Fisher+ATR+BVol+S/D+AutoFib+PrevLevels+SMA200).
+    /// Built-in template: NNFX (KAMA+Fisher+ATR+BVol+S/D+PrevLevels+SMA200).
     pub(super) fn builtin_template_nnfx() -> serde_json::Value {
         serde_json::json!({
             "sma200": true, "sma100": false, "kama": true, "ema21": false,
             "bollinger": false, "ichimoku": false, "wma": false, "hma": false,
             "psar": false, "atr_proj": true, "prev_levels": true, "pivots": false,
-            "fractals": false, "harmonics": false, "auto_fib": true, "supply_demand": true,
+            "fractals": false, "harmonics": false, "auto_fib": false, "supply_demand": true,
             "ehlers_ss": false, "ehlers_decycler": false, "ehlers_itl": false, "ehlers_mama": false,
             "ehlers_ebsw": false, "ehlers_cyber": false, "ehlers_cg": false, "ehlers_roof": false,
             "rsi": false, "fisher": true, "macd": false, "stochastic": false,
@@ -957,7 +957,10 @@ impl TyphooNApp {
             return false;
         }
         let fetch_key = alpaca_fetch_key(&symbol, tf);
-        if !self.pending_kraken_fetches.insert(format!("equity:{fetch_key}")) {
+        if !self
+            .pending_kraken_fetches
+            .insert(format!("equity:{fetch_key}"))
+        {
             return false;
         }
         let _ = self.broker_tx.send(BrokerCmd::KrakenFetchEquityHistory {
