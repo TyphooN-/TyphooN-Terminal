@@ -1013,11 +1013,13 @@ impl eframe::App for TyphooNApp {
                 BrokerMsg::Connected(s) => {
                     if s.contains("Kraken") {
                         self.kraken_connected = true;
-                        // Auto-fetch trade history when Kraken connects
+                        // REST is authoritative: load balances/positions/history/orders before
+                        // relying on private WS deltas.
+                        let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
+                        let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
                         let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
-                        // Auto-fetch open orders before WS deltas start arriving.
                         let _ = self.broker_tx.send(BrokerCmd::KrakenFetchOpenOrders);
-                        // Start private WebSocket for real-time ownTrades / openOrders
+                        // Start private WebSocket for real-time ownTrades / openOrders.
                         let _ = self.broker_tx.send(BrokerCmd::KrakenStartPrivateWs);
                     } else if s.contains("tastytrade") {
                         self.tt_connected = true;
@@ -1091,11 +1093,20 @@ impl eframe::App for TyphooNApp {
                     });
                 }
                 BrokerMsg::KrakenWsStatus { status, message } => {
+                    let should_reconcile = status == "online" && message.contains("reconnected");
                     let text = format!("Kraken WS {status}: {message}");
                     if matches!(status.as_str(), "error" | "closed") {
                         self.log.push_back(LogEntry::warn(text));
                     } else {
                         self.log.push_back(LogEntry::info(text));
+                    }
+                    if should_reconcile {
+                        // A reconnect means a delta gap may exist. Pull REST snapshots so
+                        // balances, cost basis, P/L, and open orders converge immediately.
+                        let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
+                        let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
+                        let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
+                        let _ = self.broker_tx.send(BrokerCmd::KrakenFetchOpenOrders);
                     }
                 }
                 BrokerMsg::KrakenOrderbookUpdate(text) => {
