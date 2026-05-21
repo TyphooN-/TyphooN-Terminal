@@ -284,7 +284,7 @@ impl eframe::App for TyphooNApp {
                     path.display()
                 )));
                 self.last_screenshot_path = Some(last_screenshot_path);
-                std::thread::spawn(move || {
+                self.rt_handle.spawn_blocking(move || {
                     if let Some(img) = image::RgbaImage::from_raw(w, h, rgba) {
                         let dyn_img = image::DynamicImage::ImageRgba8(img);
                         match dyn_img.save(&path) {

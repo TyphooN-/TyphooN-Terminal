@@ -207,3 +207,11 @@ reusable for future optimizations.
   suggestions instead of repeatedly rescanning accumulated results.
 - Added regression coverage for EasyLanguage and thinkScript ternary lowering;
   `mql5-compiler` coverage is now 229 unit tests.
+
+## 2026-05-20 GUI Offload Comb-over
+
+- Screenshot image encoding/saving now uses the app's Tokio runtime
+  `spawn_blocking` handle instead of creating an anonymous OS thread per
+  screenshot. This keeps short filesystem/image-encode work in the standard
+  blocking-offload lane while preserving the rule that long-running daemon or
+  private-runtime jobs stay on named dedicated threads.
