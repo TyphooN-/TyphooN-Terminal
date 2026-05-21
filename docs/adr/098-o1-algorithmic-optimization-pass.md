@@ -267,3 +267,11 @@ reusable for future optimizations.
   cloud, and Supertrend avoid per-bar rectangle/polyline emission in dense views.
   Sampled fill rectangles widen to cover the skipped span, preserving continuous
   visual coverage while cutting GPU primitive count.
+- Indicator sub-panes now use the same viewport-density sampling for oscillator
+  polylines and histogram panes (RSI-style oscillators, Fisher, MACD, Volume,
+  Better Volume, Stochastic, ADX). This is render-only: indicator/algo series
+  stay computed from full data, while dense zoomed-out panes stop emitting one
+  egui primitive per historical bar. Histogram panes preserve the strongest
+  value in each sampled bucket so volume/MACD spikes are not silently hidden.
+  Fisher's zero reference also uses one line primitive instead of dotted segment
+  spam.

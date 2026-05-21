@@ -9986,9 +9986,11 @@ pub(super) fn draw_oscillator_pane(
         egui::Stroke::new(0.3, GRID),
     );
 
-    // Data line
-    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
-    for (rel_idx, _) in bars.iter().enumerate() {
+    // Data line. Sub-panes share the main chart's pixel-aware decimation so
+    // dense views don't upload invisible sub-pixel oscillator vertices.
+    let sample_step = chart_render_sample_step(bars.len(), rect.width());
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
+    for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
         let abs_idx = start_idx + rel_idx;
         if abs_idx >= series.len() {
             continue;
@@ -10055,23 +10057,21 @@ pub(super) fn draw_fisher_pane(
         rect.top() + frac as f32 * rect.height()
     };
 
-    // Zero line (thin dotted)
+    let sample_step = chart_render_sample_step(bars.len(), rect.width());
+
+    // Zero line. Use one primitive instead of dotted per-pixel segment spam.
     let zero_y = val_to_y(0.0);
-    let dot_len = 3.0_f32;
-    let dot_gap = 3.0_f32;
-    let mut gx = rect.left();
-    while gx < rect.right() {
-        let end = (gx + dot_len).min(rect.right());
-        painter.line_segment(
-            [egui::pos2(gx, zero_y), egui::pos2(end, zero_y)],
-            egui::Stroke::new(0.5, egui::Color32::from_rgb(60, 60, 60)),
-        );
-        gx += dot_len + dot_gap;
-    }
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), zero_y),
+            egui::pos2(rect.right(), zero_y),
+        ],
+        egui::Stroke::new(0.5, egui::Color32::from_rgb(60, 60, 60)),
+    );
 
     // Signal line FIRST (behind Fisher — MT5: clrDarkGray/orange, width 1)
-    let mut sig_points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
-    for (rel_idx, _) in bars.iter().enumerate() {
+    let mut sig_points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
+    for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
         let abs_idx = start_idx + rel_idx;
         if abs_idx >= signal.len() {
             continue;
@@ -10089,14 +10089,16 @@ pub(super) fn draw_fisher_pane(
         )); // clrDarkGray signal (MT5 buffer 3)
     }
 
-    // Fisher line — colored segments per bar (MT5 exact: green when Fisher > Signal, red when < Signal)
+    // Fisher line — colored segments per sampled bar (MT5 exact: green when Fisher > Signal, red when < Signal)
     // NO histogram bars — just the line (matching MT5 screenshot exactly)
-    for (rel_idx, _) in bars.iter().enumerate() {
+    for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
         let abs_idx = start_idx + rel_idx;
-        if abs_idx + 1 >= fisher.len() || rel_idx + 1 >= bars.len() {
+        let next_rel_idx = (rel_idx + sample_step).min(bars.len().saturating_sub(1));
+        let next_abs_idx = start_idx + next_rel_idx;
+        if next_abs_idx >= fisher.len() || next_rel_idx == rel_idx {
             continue;
         }
-        if let (Some(f0), Some(f1)) = (fisher[abs_idx], fisher[abs_idx + 1]) {
+        if let (Some(f0), Some(f1)) = (fisher[abs_idx], fisher[next_abs_idx]) {
             let sig = if abs_idx < signal.len() {
                 signal[abs_idx]
             } else {
@@ -10115,7 +10117,7 @@ pub(super) fn draw_fisher_pane(
                 }
             };
             let x0 = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
-            let x1 = rect.left() + (rel_idx as f32 + 1.5) * bar_w;
+            let x1 = rect.left() + (next_rel_idx as f32 + 0.5) * bar_w;
             let y0 = val_to_y(f0).clamp(rect.top(), rect.bottom());
             let y1 = val_to_y(f1).clamp(rect.top(), rect.bottom());
             painter.line_segment(
@@ -10190,6 +10192,8 @@ pub(super) fn draw_macd_pane(
         rect.top() + frac as f32 * rect.height()
     };
 
+    let sample_step = chart_render_sample_step(bars.len(), rect.width());
+
     // Zero line
     let zero_y = val_to_y(0.0);
     painter.line_segment(
@@ -10200,15 +10204,22 @@ pub(super) fn draw_macd_pane(
         egui::Stroke::new(0.3, GRID),
     );
 
-    // Histogram
-    let hist_w = (bar_w * 0.6).max(1.0);
-    for (rel_idx, _) in bars.iter().enumerate() {
-        let abs_idx = start_idx + rel_idx;
-        if abs_idx >= macd_hist.len() {
-            continue;
+    // Histogram. Preserve the strongest absolute bar in each sampled bucket so
+    // dense rendering does not hide spikes while still emitting ~pixel-count rects.
+    let hist_w = (bar_w * sample_step as f32 * 0.6).max(1.0);
+    for rel_idx in (0..bars.len()).step_by(sample_step) {
+        let bucket_end = (rel_idx + sample_step).min(bars.len());
+        let mut selected: Option<(usize, f64)> = None;
+        for bucket_rel in rel_idx..bucket_end {
+            let abs_idx = start_idx + bucket_rel;
+            if let Some(Some(v)) = macd_hist.get(abs_idx) {
+                if selected.map_or(true, |(_, cur)| v.abs() > cur.abs()) {
+                    selected = Some((bucket_rel, *v));
+                }
+            }
         }
-        if let Some(v) = macd_hist[abs_idx] {
-            let x = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+        if let Some((bucket_rel, v)) = selected {
+            let x = rect.left() + (bucket_rel as f32 + 0.5) * bar_w;
             let y = val_to_y(v);
             // MACD histogram: teal green positive, coral red negative (TradingView/MT5 style)
             let color = if v >= 0.0 {
@@ -10229,8 +10240,8 @@ pub(super) fn draw_macd_pane(
     }
 
     // MACD line
-    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
-    for (rel_idx, _) in bars.iter().enumerate() {
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
+    for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
         let abs_idx = start_idx + rel_idx;
         if let Some(Some(v)) = macd_line.get(abs_idx) {
             points.push(egui::pos2(
@@ -10247,8 +10258,8 @@ pub(super) fn draw_macd_pane(
     }
 
     // Signal line
-    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
-    for (rel_idx, _) in bars.iter().enumerate() {
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
+    for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
         let abs_idx = start_idx + rel_idx;
         if let Some(Some(v)) = macd_signal.get(abs_idx) {
             points.push(egui::pos2(
@@ -10299,9 +10310,19 @@ pub(super) fn draw_volume_pane(
         return;
     }
 
-    let hist_w = (bar_w * 0.7).max(1.0);
-    for (rel_idx, b) in bars.iter().enumerate() {
-        let x = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+    let sample_step = chart_render_sample_step(bars.len(), rect.width());
+    let hist_w = (bar_w * sample_step as f32 * 0.7).max(1.0);
+    for rel_idx in (0..bars.len()).step_by(sample_step) {
+        let bucket_end = (rel_idx + sample_step).min(bars.len());
+        let Some((bucket_rel, b)) = bars[rel_idx..bucket_end]
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.volume.total_cmp(&b.volume))
+            .map(|(offset, b)| (rel_idx + offset, b))
+        else {
+            continue;
+        };
+        let x = rect.left() + (bucket_rel as f32 + 0.5) * bar_w;
         let h = (b.volume / max_vol) as f32 * rect.height();
         let color = if b.close >= b.open {
             egui::Color32::from_rgba_premultiplied(UP.r(), UP.g(), UP.b(), 150)
@@ -10354,10 +10375,20 @@ pub(super) fn draw_better_volume_pane(
         return;
     }
 
-    let hist_w = (bar_w * 0.7).max(1.0);
-    for (rel_idx, b) in bars.iter().enumerate() {
-        let abs_idx = start_idx + rel_idx;
-        let x = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+    let sample_step = chart_render_sample_step(bars.len(), rect.width());
+    let hist_w = (bar_w * sample_step as f32 * 0.7).max(1.0);
+    for rel_idx in (0..bars.len()).step_by(sample_step) {
+        let bucket_end = (rel_idx + sample_step).min(bars.len());
+        let Some((bucket_rel, b)) = bars[rel_idx..bucket_end]
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.volume.total_cmp(&b.volume))
+            .map(|(offset, b)| (rel_idx + offset, b))
+        else {
+            continue;
+        };
+        let abs_idx = start_idx + bucket_rel;
+        let x = rect.left() + (bucket_rel as f32 + 0.5) * bar_w;
         let h = (b.volume / max_vol) as f32 * rect.height();
         let vt = vol_type.get(abs_idx).copied().unwrap_or(5);
         // MQL5 enum: 0=low(yellow), 1=climax_up(red), 2=climax_dn(white),
@@ -10427,9 +10458,11 @@ pub(super) fn draw_stoch_pane(
         );
     }
 
+    let sample_step = chart_render_sample_step(bars.len(), rect.width());
+
     // %K line
-    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
-    for (rel_idx, _) in bars.iter().enumerate() {
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
+    for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
         if let Some(Some(v)) = stoch_k.get(start_idx + rel_idx) {
             points.push(egui::pos2(
                 rect.left() + (rel_idx as f32 + 0.5) * bar_w,
@@ -10445,8 +10478,8 @@ pub(super) fn draw_stoch_pane(
     }
 
     // %D line
-    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
-    for (rel_idx, _) in bars.iter().enumerate() {
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
+    for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
         if let Some(Some(v)) = stoch_d.get(start_idx + rel_idx) {
             points.push(egui::pos2(
                 rect.left() + (rel_idx as f32 + 0.5) * bar_w,
@@ -10507,13 +10540,14 @@ pub(super) fn draw_adx_pane(
         ),
     );
 
+    let sample_step = chart_render_sample_step(bars.len(), rect.width());
     for (series, color, width) in [
         (adx, ADX_COL, 1.5_f32),
         (di_plus, DI_PLUS_COL, 1.0),
         (di_minus, DI_MINUS_COL, 1.0),
     ] {
-        let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
-        for (rel_idx, _) in bars.iter().enumerate() {
+        let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
+        for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
             if let Some(Some(v)) = series.get(start_idx + rel_idx) {
                 points.push(egui::pos2(
                     rect.left() + (rel_idx as f32 + 0.5) * bar_w,

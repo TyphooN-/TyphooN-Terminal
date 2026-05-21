@@ -19,7 +19,7 @@ The terminal uses egui + wgpu for direct GPU rendering. No WebView, no JavaScrip
 
 ### Chart Rendering
 
-Chart rendering keeps provider-depth history in memory/cache, but the draw path emits only the detail the current viewport can display. Dense visible ranges are decimated to roughly two samples per horizontal pixel before creating egui line/candle/OHLC/indicator primitives, and grid lines use a fixed primitive count instead of dotted per-pixel segment spam. Overlay fills use the same sampling step and widen sampled spans, so clouds/ribbons/bands stay continuous without per-bar rectangle emission. This protects drag/zoom responsiveness when the user zooms out over very deep synced histories.
+Chart rendering keeps provider-depth history in memory/cache, but the draw path emits only the detail the current viewport can display. Dense visible ranges are decimated to roughly two samples per horizontal pixel before creating egui line/candle/OHLC/indicator primitives, and grid lines use a fixed primitive count instead of dotted per-pixel segment spam. Overlay fills use the same sampling step and widen sampled spans, so clouds/ribbons/bands stay continuous without per-bar rectangle emission. Indicator sub-panes use the same render-only sampling for lines and histograms; histogram buckets preserve the strongest volume/MACD value, and calculations/trading/algo inputs still use the full underlying series. This protects drag/zoom responsiveness when the user zooms out over very deep synced histories.
 
 ### Live Bar Builder
 
