@@ -16803,39 +16803,7 @@ impl TyphooNApp {
                             );
                             let (tx, rx) = std::sync::mpsc::channel();
                             self.claude_code_rx = Some(rx);
-                            std::thread::spawn(move || {
-                                match std::process::Command::new("claude")
-                                    .arg("--print")
-                                    .arg("--model")
-                                    .arg(&model)
-                                    .arg("--allowed-tools")
-                                    .arg("WebSearch WebFetch Read Grep Glob Bash")
-                                    .arg("--permission-mode")
-                                    .arg("acceptEdits")
-                                    .arg("--session-id")
-                                    .arg(&session_id)
-                                    .arg(&full_prompt)
-                                    .output()
-                                {
-                                    Ok(output) => {
-                                        let stdout =
-                                            String::from_utf8_lossy(&output.stdout).to_string();
-                                        let stderr =
-                                            String::from_utf8_lossy(&output.stderr).to_string();
-                                        let response = if !stdout.trim().is_empty() {
-                                            stdout.trim().to_string()
-                                        } else if !stderr.trim().is_empty() {
-                                            format!("Error: {}", stderr.trim())
-                                        } else {
-                                            "(empty response)".to_string()
-                                        };
-                                        let _ = tx.send(response);
-                                    }
-                                    Err(e) => {
-                                        let _ = tx.send(format!("Failed to run claude CLI: {e}"));
-                                    }
-                                }
-                            });
+                            Self::spawn_claude_print(model, session_id, true, full_prompt, tx);
                             self.log.push_back(LogEntry::info(format!(
                                 "Claude Code investigation dispatched: {} ({} symbols, {} model)",
                                 syms.join(", "),
@@ -16895,33 +16863,7 @@ impl TyphooNApp {
                             );
                             let (tx, rx) = std::sync::mpsc::channel();
                             self.gemini_cli_rx = Some(rx);
-                            std::thread::spawn(move || {
-                                match std::process::Command::new("gemini")
-                                    .arg("--model")
-                                    .arg(&model)
-                                    .arg("--prompt")
-                                    .arg(&full_prompt)
-                                    .output()
-                                {
-                                    Ok(output) => {
-                                        let stdout =
-                                            String::from_utf8_lossy(&output.stdout).to_string();
-                                        let stderr =
-                                            String::from_utf8_lossy(&output.stderr).to_string();
-                                        let response = if !stdout.trim().is_empty() {
-                                            stdout.trim().to_string()
-                                        } else if !stderr.trim().is_empty() {
-                                            format!("Error: {}", stderr.trim())
-                                        } else {
-                                            "(empty response)".to_string()
-                                        };
-                                        let _ = tx.send(response);
-                                    }
-                                    Err(e) => {
-                                        let _ = tx.send(format!("Failed to run gemini CLI: {e}"));
-                                    }
-                                }
-                            });
+                            Self::spawn_gemini_prompt(model, full_prompt, tx);
                             self.log.push_back(LogEntry::info(format!(
                                 "Gemini CLI investigation dispatched: {} ({} symbols, {})",
                                 syms.join(", "),

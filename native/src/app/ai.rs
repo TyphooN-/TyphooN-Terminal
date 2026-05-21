@@ -414,36 +414,7 @@ impl TyphooNApp {
 
                             let (tx, rx) = std::sync::mpsc::channel();
                             self.claude_code_rx = Some(rx);
-                            std::thread::spawn(move || {
-                                let mut cmd = std::process::Command::new("claude");
-                                cmd.arg("--print")
-                                    .arg("--model").arg(&model)
-                                    .arg("--allowed-tools").arg("WebSearch WebFetch Read Grep Glob Bash")
-                                    .arg("--permission-mode").arg("acceptEdits");
-                                if is_first {
-                                    cmd.arg("--session-id").arg(&session_id);
-                                } else {
-                                    cmd.arg("--resume").arg(&session_id);
-                                }
-                                cmd.arg(&full_prompt);
-                                match cmd.output() {
-                                    Ok(output) => {
-                                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                                        let response = if !stdout.trim().is_empty() {
-                                            stdout.trim().to_string()
-                                        } else if !stderr.trim().is_empty() {
-                                            format!("Error: {}", stderr.trim())
-                                        } else {
-                                            "(empty response)".to_string()
-                                        };
-                                        let _ = tx.send(response);
-                                    }
-                                    Err(e) => {
-                                        let _ = tx.send(format!("Failed to run claude CLI: {e}"));
-                                    }
-                                }
-                            });
+                            Self::spawn_claude_print(model, session_id, is_first, full_prompt, tx);
                         }
                     });
                 });
@@ -613,33 +584,7 @@ impl TyphooNApp {
                             let model = self.gemini_model.clone();
                             let (tx, rx) = std::sync::mpsc::channel();
                             self.gemini_cli_rx = Some(rx);
-                            std::thread::spawn(move || {
-                                match std::process::Command::new("gemini")
-                                    .arg("--model")
-                                    .arg(&model)
-                                    .arg("--prompt")
-                                    .arg(&full_prompt)
-                                    .output()
-                                {
-                                    Ok(output) => {
-                                        let stdout =
-                                            String::from_utf8_lossy(&output.stdout).to_string();
-                                        let stderr =
-                                            String::from_utf8_lossy(&output.stderr).to_string();
-                                        let response = if !stdout.trim().is_empty() {
-                                            stdout.trim().to_string()
-                                        } else if !stderr.trim().is_empty() {
-                                            format!("Error: {}", stderr.trim())
-                                        } else {
-                                            "(empty response)".to_string()
-                                        };
-                                        let _ = tx.send(response);
-                                    }
-                                    Err(e) => {
-                                        let _ = tx.send(format!("Failed to run gemini CLI: {e}"));
-                                    }
-                                }
-                            });
+                            Self::spawn_gemini_prompt(model, full_prompt, tx);
                         }
                     });
                 });

@@ -283,6 +283,77 @@ impl TyphooNApp {
         args
     }
 
+    fn cli_output_response(tool: &str, result: std::io::Result<std::process::Output>) -> String {
+        match result {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                if !stdout.trim().is_empty() {
+                    stdout.trim().to_string()
+                } else if !stderr.trim().is_empty() {
+                    format!("Error: {}", stderr.trim())
+                } else {
+                    "(empty response)".to_string()
+                }
+            }
+            Err(e) => format!("Failed to run {tool} CLI: {e}"),
+        }
+    }
+
+    pub(super) fn spawn_claude_print(
+        model: String,
+        session_id: String,
+        is_first: bool,
+        prompt: String,
+        tx: std::sync::mpsc::Sender<String>,
+    ) {
+        let tx_on_spawn_err = tx.clone();
+        if let Err(e) = std::thread::Builder::new()
+            .name("typhoon-ai-claude-print".into())
+            .spawn(move || {
+                let mut cmd = std::process::Command::new("claude");
+                cmd.arg("--print")
+                    .arg("--model")
+                    .arg(&model)
+                    .arg("--allowed-tools")
+                    .arg("WebSearch WebFetch Read Grep Glob Bash")
+                    .arg("--permission-mode")
+                    .arg("acceptEdits");
+                if is_first {
+                    cmd.arg("--session-id").arg(&session_id);
+                } else {
+                    cmd.arg("--resume").arg(&session_id);
+                }
+                cmd.arg(&prompt);
+                let _ = tx.send(Self::cli_output_response("claude", cmd.output()));
+            })
+        {
+            let _ = tx_on_spawn_err.send(format!("Failed to spawn claude CLI worker: {e}"));
+        }
+    }
+
+    pub(super) fn spawn_gemini_prompt(
+        model: String,
+        prompt: String,
+        tx: std::sync::mpsc::Sender<String>,
+    ) {
+        let tx_on_spawn_err = tx.clone();
+        if let Err(e) = std::thread::Builder::new()
+            .name("typhoon-ai-gemini-prompt".into())
+            .spawn(move || {
+                let result = std::process::Command::new("gemini")
+                    .arg("--model")
+                    .arg(&model)
+                    .arg("--prompt")
+                    .arg(&prompt)
+                    .output();
+                let _ = tx.send(Self::cli_output_response("gemini", result));
+            })
+        {
+            let _ = tx_on_spawn_err.send(format!("Failed to spawn gemini CLI worker: {e}"));
+        }
+    }
+
     pub(super) fn spawn_codex_exec(
         model: String,
         reasoning_effort: String,
@@ -294,23 +365,8 @@ impl TyphooNApp {
             .name("typhoon-ai-codex-exec".into())
             .spawn(move || {
                 let args = Self::build_codex_exec_args(&model, &reasoning_effort, &prompt);
-                match std::process::Command::new("codex").args(&args).output() {
-                    Ok(output) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                        let response = if !stdout.trim().is_empty() {
-                            stdout.trim().to_string()
-                        } else if !stderr.trim().is_empty() {
-                            format!("Error: {}", stderr.trim())
-                        } else {
-                            "(empty response)".to_string()
-                        };
-                        let _ = tx.send(response);
-                    }
-                    Err(e) => {
-                        let _ = tx.send(format!("Failed to run codex CLI: {e}"));
-                    }
-                }
+                let result = std::process::Command::new("codex").args(&args).output();
+                let _ = tx.send(Self::cli_output_response("codex", result));
             })
         {
             let _ = tx_on_spawn_err.send(format!("Failed to spawn codex CLI worker: {e}"));
@@ -345,23 +401,8 @@ impl TyphooNApp {
             .name("typhoon-ai-hermes-exec".into())
             .spawn(move || {
                 let args = Self::build_hermes_exec_args(&model, &provider, &prompt);
-                match std::process::Command::new("hermes").args(&args).output() {
-                    Ok(output) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                        let response = if !stdout.trim().is_empty() {
-                            stdout.trim().to_string()
-                        } else if !stderr.trim().is_empty() {
-                            format!("Error: {}", stderr.trim())
-                        } else {
-                            "(empty response)".to_string()
-                        };
-                        let _ = tx.send(response);
-                    }
-                    Err(e) => {
-                        let _ = tx.send(format!("Failed to run Hermes Agent CLI: {e}"));
-                    }
-                }
+                let result = std::process::Command::new("hermes").args(&args).output();
+                let _ = tx.send(Self::cli_output_response("Hermes Agent", result));
             })
         {
             let _ = tx_on_spawn_err.send(format!("Failed to spawn Hermes Agent CLI worker: {e}"));

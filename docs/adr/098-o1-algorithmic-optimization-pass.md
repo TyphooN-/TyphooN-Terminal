@@ -219,3 +219,8 @@ reusable for future optimizations.
   (`typhoon-ai-codex-exec`, `typhoon-ai-hermes-exec`) instead of anonymous
   `std::thread::spawn`, and report thread-spawn failure back to the UI channel
   instead of silently dropping the request.
+- Claude and Gemini CLI launches are routed through shared helpers used by both
+  the chat windows and `ASKCLAUDE` / `ASKGEMINI` command-palette paths. This
+  removes duplicate process-spawn/output parsing code, gives both tools named
+  worker threads (`typhoon-ai-claude-print`, `typhoon-ai-gemini-prompt`), and
+  centralizes stdout/stderr/empty-response handling for all AI CLI integrations.
