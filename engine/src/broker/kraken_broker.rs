@@ -2076,9 +2076,12 @@ impl KrakenBroker {
         String,
     > {
         let token = self.get_websockets_token_string().await?;
-        let (mut ws_stream, _) = connect_async("wss://ws.kraken.com")
+        // Authenticated private account/trading channels are rejected on Kraken's
+        // public WS endpoint. Public books/tickers stay on ws.kraken.com; private
+        // ownTrades/openOrders must use ws-auth.kraken.com with a REST-issued token.
+        let (mut ws_stream, _) = connect_async("wss://ws-auth.kraken.com")
             .await
-            .map_err(|e| format!("Kraken WS connect failed: {}", e))?;
+            .map_err(|e| format!("Kraken private WS connect failed: {e}"))?;
 
         for channel in ["ownTrades", "openOrders"] {
             let sub = serde_json::json!({
