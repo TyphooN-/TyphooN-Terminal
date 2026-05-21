@@ -4087,9 +4087,10 @@ pub(super) fn draw_chart(
         }
     }
 
-    // Parabolic SAR dots
+    // Parabolic SAR dots. Dense zoomed-out views cannot distinguish one dot per
+    // historical bar, so sample at viewport density like candles/indicator lines.
     if flags.psar {
-        for (rel_idx, _) in bars.iter().enumerate() {
+        for (rel_idx, _) in bars.iter().enumerate().step_by(render_step) {
             let abs_idx = start_idx + rel_idx;
             if abs_idx >= chart.psar.len() {
                 continue;
@@ -4355,19 +4356,16 @@ pub(super) fn draw_chart(
         let sl_col = egui::Color32::from_rgb(220, 40, 40);
         for pat in &chart.harmonics {
             let pts = [pat.x, pat.a, pat.b, pat.c, pat.d];
-            let screen_pts: Vec<Option<egui::Pos2>> = pts
-                .iter()
-                .map(|(idx, price)| {
-                    if *idx >= start_idx && *idx < end_idx {
-                        Some(egui::pos2(
-                            chart_rect.left() + ((*idx - start_idx) as f32 + 0.5) * bar_w,
-                            price_to_y(*price),
-                        ))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            let screen_pts = pts.map(|(idx, price)| {
+                if idx >= start_idx && idx < end_idx {
+                    Some(egui::pos2(
+                        chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w,
+                        price_to_y(price),
+                    ))
+                } else {
+                    None
+                }
+            });
             // XABCD lines
             for w in screen_pts.windows(2) {
                 if let (Some(p1), Some(p2)) = (w[0], w[1]) {

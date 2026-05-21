@@ -279,3 +279,9 @@ reusable for future optimizations.
   tiny primitives. ATR projection levels and previous-candle H/L levels draw one
   clipped line per exact price level instead of per-pixel dash/circle loops,
   preserving level accuracy while cutting tessellation and GPU upload work.
+- Parabolic SAR overlay dots now use the same pixel-aware render step as dense
+  candles/indicator lines, avoiding one circle primitive per historical bar in
+  zoomed-out views while preserving the full PSAR series for calculations.
+- Harmonic-pattern rendering no longer allocates a `Vec` per pattern just to hold
+  five screen-space points; it maps the fixed XABCD tuple array directly into a
+  fixed array, removing avoidable per-frame heap churn.
