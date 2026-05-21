@@ -2114,6 +2114,8 @@ fn cache_source_from_key(key: &str) -> &'static str {
         "alpaca"
     } else if key.starts_with("tastytrade:") {
         "tastytrade"
+    } else if key.starts_with("kraken-equities:") {
+        "kraken-equities"
     } else if key.starts_with("kraken-futures:") {
         "kraken-futures"
     } else if key.starts_with("kraken:") {
@@ -2125,9 +2127,10 @@ fn cache_source_from_key(key: &str) -> &'static str {
     }
 }
 
-const CHART_SOURCE_ORDER: [(&str, &str); 6] = [
+const CHART_SOURCE_ORDER: [(&str, &str); 7] = [
     ("mt5", "MT5"),
     ("kraken", "Kraken"),
+    ("kraken-equities", "Kraken Equities"),
     ("kraken-futures", "Kraken Futures"),
     ("tastytrade", "tastytrade"),
     ("alpaca", "Alpaca"),
@@ -2183,6 +2186,7 @@ fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &str) -> Vec<S
     for variant in variants {
         let source_variant = match source {
             "mt5" | "kraken" | "kraken-futures" => variant.replace('/', ""),
+            "kraken-equities" => variant.replace('/', "").trim_end_matches(".EQ").to_string(),
             _ => variant,
         };
         let key = match source {
@@ -2209,7 +2213,7 @@ fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &str) -> Vec<S
         // not exposed through Kraken's public OHLC/AssetPairs API. Keep Kraken keys
         // first, then allow underlying-equity caches so active Kraken-scope charts
         // can still render HRTX/GDC/TNDM-style holdings.
-        for fallback_source in ["tastytrade", "alpaca", "default"] {
+        for fallback_source in ["kraken-equities", "tastytrade", "alpaca", "default"] {
             for key in chart_source_cache_keys(fallback_source, symbol, timeframe) {
                 if !keys.iter().any(|k: &String| k.eq_ignore_ascii_case(&key)) {
                     keys.push(key);
@@ -2241,6 +2245,7 @@ fn preferred_chart_symbol_for_source(source: &str, symbol: &str) -> String {
             }
         }
         "kraken-futures" => typhoon_engine::core::kraken_futures::normalize_futures_symbol(&norm),
+        "kraken-equities" => no_slash.trim_end_matches(".EQ").to_string(),
         "alpaca" | "tastytrade" | "mt5" => no_slash,
         _ => norm,
     }
@@ -2429,6 +2434,65 @@ impl ChartState {
             || self.primary_source.eq_ignore_ascii_case(source)
     }
 
+    fn latest_quote_bar_from_cache(cache: &SqliteCache, symbol: &str) -> Option<Bar> {
+        chart_source_cache_keys("kraken-equities", symbol, "quote")
+            .into_iter()
+            .filter_map(|key| cache.get_bars_raw(&key).ok().flatten())
+            .flat_map(|raw| raw.into_iter())
+            .filter(|(ts, o, h, l, c, _v)| {
+                *ts > 0
+                    && *o > 0.0
+                    && *h > 0.0
+                    && *l > 0.0
+                    && *c > 0.0
+                    && o.is_finite()
+                    && h.is_finite()
+                    && l.is_finite()
+                    && c.is_finite()
+                    && *h >= *l
+            })
+            .max_by_key(|(ts, _, _, _, _, _)| *ts)
+            .map(|(ts_ms, open, high, low, close, volume)| Bar {
+                ts_ms,
+                open,
+                high,
+                low,
+                close,
+                volume,
+            })
+    }
+
+    fn apply_quote_cache_overlay(&mut self, cache: &SqliteCache, symbol: &str) -> bool {
+        let Some(quote) = Self::latest_quote_bar_from_cache(cache, symbol) else {
+            return false;
+        };
+        if self.bars.is_empty() {
+            self.bars.push(quote);
+            self.primary_source = "kraken-equities";
+            return true;
+        }
+        let tf_ms = (self.timeframe.minutes().max(1) as i64) * 60_000;
+        let Some(last) = self.bars.last_mut() else {
+            return false;
+        };
+        if quote.ts_ms < last.ts_ms {
+            return false;
+        }
+        if quote.ts_ms < last.ts_ms.saturating_add(tf_ms) {
+            last.close = quote.close;
+            last.high = last.high.max(quote.high).max(quote.close);
+            last.low = if last.low > 0.0 {
+                last.low.min(quote.low).min(quote.close)
+            } else {
+                quote.low.min(quote.close)
+            };
+            last.volume = last.volume.max(quote.volume);
+        } else {
+            self.bars.push(quote);
+        }
+        true
+    }
+
     /// Cache key for this symbol + timeframe.
     /// Try multiple prefix variants to find data in cache.
     fn find_cache_key(
@@ -2591,6 +2655,7 @@ impl ChartState {
         let mut keys_to_try = vec![
             format!("mt5:{}:{}", sym, tf),
             format!("kraken:{}:{}", sym, tf),
+            format!("kraken-equities:{}:{}", sym, tf),
             format!("kraken-futures:{}:{}", sym, tf),
             format!("tastytrade:{}:{}", sym, tf),
             format!("alpaca:{}:{}", sym, tf),
@@ -2599,6 +2664,7 @@ impl ChartState {
             keys_to_try.extend([
                 format!("mt5:{}:{}", sym_norm, tf),
                 format!("kraken:{}:{}", sym_norm, tf),
+                format!("kraken-equities:{}:{}", sym_norm, tf),
                 format!("kraken-futures:{}:{}", sym_norm, tf),
                 format!("tastytrade:{}:{}", sym_norm, tf),
                 format!("alpaca:{}:{}", sym_norm, tf),
@@ -2786,6 +2852,7 @@ impl ChartState {
                 String::new()
             };
 
+            let quote_overlaid = self.apply_quote_cache_overlay(cache, &sym);
             let new_max_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
             self.view_offset = if old_bars_empty || old_view_distance_from_right <= 2 {
                 new_max_offset
@@ -2806,6 +2873,8 @@ impl ChartState {
             };
             let gap_info = if gap_filled > 0 {
                 format!(" +{} gap-fill", gap_filled)
+            } else if quote_overlaid {
+                " +quote".to_string()
             } else {
                 String::new()
             };
@@ -3120,6 +3189,8 @@ impl ChartState {
             }
         }
 
+        let quote_overlaid = self.apply_quote_cache_overlay(cache, &bare_sym);
+
         if self.bars.is_empty() {
             log.push_back(LogEntry::warn(format!(
                 "No data found for key '{}' — run the MT5 XML import pipeline first",
@@ -3139,12 +3210,14 @@ impl ChartState {
             } else {
                 String::new()
             };
+            let quote_info = if quote_overlaid { " +quote" } else { "" };
             log.push_back(LogEntry::info(format!(
-                "Loaded {} bars for {} [{}]{}",
+                "Loaded {} bars for {} [{}]{}{}",
                 self.bars.len(),
                 self.symbol,
                 self.timeframe.label(),
-                mtf_info
+                mtf_info,
+                quote_info
             )));
         }
         // Steady-state cap of 200 (was 500). Console log is diagnostic, not forensic —

@@ -187,6 +187,7 @@ impl TyphooNApp {
                         "alpaca" => self.queue_alpaca_fetch(&source_symbol, tf_key),
                         "tastytrade" => self.queue_tastytrade_fetch(&source_symbol, tf_key),
                         "kraken" => self.queue_kraken_fetch(&source_symbol, tf_key),
+                        "kraken-equities" => self.queue_kraken_equity_fetch(&source_symbol, tf_key),
                         "kraken-futures" => self.queue_kraken_futures_fetch(&source_symbol, tf_key),
                         _ => false,
                     };
@@ -260,6 +261,12 @@ impl TyphooNApp {
             .filter_map(|(source, label)| {
                 let has_bars = chart_source_cache_keys(source, symbol, tf_key)
                     .iter()
+                    .chain(
+                        (source == &"kraken-equities")
+                            .then(|| chart_source_cache_keys(source, symbol, "quote"))
+                            .unwrap_or_default()
+                            .iter(),
+                    )
                     .any(|key| matches!(cache.get_incremental_start(key), Ok(Some(_))));
                 has_bars.then(|| ((*source).to_string(), *label))
             })
