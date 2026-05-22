@@ -285,7 +285,6 @@ fn classify_alpaca_sync_candidate(
 
     None
 }
-#[cfg(test)]
 fn select_alpaca_sync_candidates_from_iter<'a, I>(
     symbols: I,
     timeframes: &[String],
@@ -404,7 +403,6 @@ where
     selected
 }
 
-#[cfg(test)]
 pub(super) fn select_alpaca_sync_candidates(
     symbols: &[String],
     timeframes: &[String],
@@ -545,7 +543,7 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     backfill_complete_pairs: &HashMap<String, AlpacaBackfillCompletePair>,
     pending_fetches: &HashSet<String>,
     batch_size: usize,
-    _foreground_slots: usize,
+    foreground_slots: usize,
     background_scan_limit: usize,
     cursor: &mut usize,
     now_s: i64,
@@ -560,7 +558,45 @@ pub(super) fn select_alpaca_sync_workset_rotating(
         return Vec::new();
     }
 
-    // Treat the broker universe as one high-TF-first ring:
+    let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
+    let mut staged_selected = pending_fetches.clone();
+
+    // Foreground symbols are open charts, actively traded symbols, and broker
+    // positions. Give them first shot across every enabled timeframe before the
+    // broad universe ring advances; otherwise a 12k-symbol Kraken equities scan
+    // can leave a visible chart saying "syncing" far too long.
+    let foreground_budget = foreground_slots
+        .max(ordered_timeframes.len())
+        .min(batch_size);
+    if foreground_budget > 0 && !focus_symbols.is_empty() {
+        let mut foreground_symbols: Vec<String> = focus_symbols.iter().cloned().collect();
+        foreground_symbols.sort();
+        let foreground = select_alpaca_sync_candidates(
+            &foreground_symbols,
+            timeframes,
+            state_map,
+            focus_symbols,
+            no_data_keys,
+            backfill_complete_pairs,
+            &staged_selected,
+            foreground_budget,
+            now_s,
+            target_bars_for_tf,
+        );
+        for candidate in foreground {
+            if selected.len() >= batch_size {
+                break;
+            }
+            if staged_selected.insert(alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)) {
+                selected.push(candidate);
+            }
+        }
+        if selected.len() >= batch_size {
+            return selected;
+        }
+    }
+
+    // Treat the remaining broker universe as one high-TF-first ring:
     //   MN1/all symbols -> W1/all symbols -> ... -> M1/all symbols.
     // Each refill examines a bounded number of flattened (timeframe,symbol)
     // slots, so work is independent of total broker universe size while still
@@ -568,11 +604,11 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     // coverage has had a chance to advance across every symbol.
     let total_slots = symbols.len().saturating_mul(ordered_timeframes.len());
     if total_slots == 0 {
-        return Vec::new();
+        return selected;
     }
     let scan_limit = background_scan_limit.max(batch_size).min(total_slots);
     if scan_limit == 0 {
-        return Vec::new();
+        return selected;
     }
 
     let start = *cursor % total_slots;
@@ -633,8 +669,6 @@ pub(super) fn select_alpaca_sync_workset_rotating(
         backfill
     };
 
-    let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
-    let mut staged_selected = pending_fetches.clone();
     for candidate in candidates {
         if selected.len() >= batch_size {
             break;
@@ -1131,7 +1165,7 @@ mod tests {
     }
 
     #[test]
-    fn select_alpaca_sync_workset_rotating_prioritizes_scanned_missing_before_focus() {
+    fn select_alpaca_sync_workset_rotating_prioritizes_focus_before_background_scan() {
         let now_s = 1_700_000_000i64;
         let symbols = vec!["AAPL".to_string(), "MSFT".to_string(), "QQQ".to_string()];
         let timeframes = vec!["1Day".to_string()];
@@ -1155,9 +1189,9 @@ mod tests {
         );
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].symbol, "AAPL");
+        assert_eq!(selected[0].symbol, "QQQ");
         assert_eq!(selected[0].bucket, AlpacaSyncBucket::Missing);
-        assert_eq!(cursor, 1);
+        assert_eq!(cursor, 0);
     }
 
     #[test]

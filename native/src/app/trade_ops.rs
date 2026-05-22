@@ -705,31 +705,23 @@ impl TyphooNApp {
                     syms.push(t);
                 }
             };
-        // Chart symbols
-        if self.mtf_enabled {
-            for c in &self.charts {
-                add(&c.symbol, &mut syms, &mut seen);
-            }
-        } else if let Some(c) = self.charts.get(self.active_tab) {
+        // Open chart tabs are always foreground sync targets, not just the
+        // currently visible tab. If a chart exists, it should stop showing
+        // "waiting for data" before broad-universe backfill gets more slots.
+        for c in &self.charts {
             add(&c.symbol, &mut syms, &mut seen);
         }
-        // Alpaca positions
-        if self.show_alpaca_positions {
-            for p in &self.live_positions {
-                add(&p.symbol, &mut syms, &mut seen);
-            }
+        // Broker positions are foreground sync targets even when their table is
+        // collapsed/hidden. Visibility toggles should not decide whether owned
+        // risk gets fresh bars.
+        for p in &self.live_positions {
+            add(&p.symbol, &mut syms, &mut seen);
         }
-        // TastyTrade positions
-        if self.show_tt_positions {
-            for p in &self.tt_positions {
-                add(&p.symbol, &mut syms, &mut seen);
-            }
+        for p in &self.tt_positions {
+            add(&p.symbol, &mut syms, &mut seen);
         }
-        // Kraken positions
-        if self.show_kr_positions {
-            for p in &self.kr_positions {
-                add(&p.symbol, &mut syms, &mut seen);
-            }
+        for p in &self.kr_positions {
+            add(&p.symbol, &mut syms, &mut seen);
         }
         // Watchlist
         for s in &self.user_watchlist {

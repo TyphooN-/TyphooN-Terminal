@@ -838,8 +838,10 @@ impl TyphooNApp {
         };
         let foreground_slots = if self.user_interacting && !full_tilt {
             1
+        } else if full_tilt {
+            KRAKEN_EQUITIES_FULL_TILT_BATCH_SIZE
         } else {
-            2
+            4
         };
         let available_slots = queue_window
             .saturating_sub(
