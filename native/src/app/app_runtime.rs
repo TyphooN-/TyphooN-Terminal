@@ -12640,6 +12640,44 @@ impl eframe::App for TyphooNApp {
                         .show(ui, |ui| {
                         let tf_labels = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"];
                         let ma_labels = ["SMA200", "KAMA", "Fisher"];
+                        let mtf_news_symbols = self.mtf_grid_news_symbols();
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} symbol{}",
+                                    mtf_news_symbols.len(),
+                                    if mtf_news_symbols.len() == 1 { "" } else { "s" }
+                                ))
+                                .color(AXIS_TEXT)
+                                .small(),
+                            );
+                            if ui
+                                .add_enabled(
+                                    !mtf_news_symbols.is_empty(),
+                                    egui::Button::new("Fetch News").fill(BTN_BLUE),
+                                )
+                                .on_hover_text(
+                                    "Fetch/cache multi-source news once per unique MTF Grid ticker",
+                                )
+                                .clicked()
+                            {
+                                let symbols = mtf_news_symbols.clone();
+                                let count = symbols.len();
+                                let label = symbols.join(", ");
+                                let _ = self.broker_tx.send(BrokerCmd::NewsScrapeSymbols {
+                                    symbols,
+                                    marketaux_key: self.marketaux_key.clone(),
+                                    alpha_vantage_key: self.alpha_vantage_key.clone(),
+                                    fmp_key: self.fmp_key.clone(),
+                                });
+                                self.news_loading = true;
+                                self.show_news = true;
+                                self.log.push_back(LogEntry::info(format!(
+                                    "News: fetching {} deduped MTF Grid symbol(s): {}",
+                                    count, label
+                                )));
+                            }
+                        });
                         egui::Grid::new("mtf_ma_grid")
                             .spacing(egui::vec2(4.0, 2.0))
                             .show(ui, |ui| {

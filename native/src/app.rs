@@ -8860,6 +8860,14 @@ enum BrokerCmd {
         alpha_vantage_key: String,
         fmp_key: String,
     },
+    /// Scrape news for an explicit, already-normalized symbol set. Used by MTF Grid
+    /// so multiple timeframe cells for the same ticker fetch once.
+    NewsScrapeSymbols {
+        symbols: Vec<String>,
+        marketaux_key: String,
+        alpha_vantage_key: String,
+        fmp_key: String,
+    },
     /// Connect to Kraken crypto exchange.
     KrakenConnect {
         api_key: String,
@@ -23935,6 +23943,148 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("News search: {e}"))); }
                             }
                         });
+                    }
+                    BrokerCmd::NewsScrapeSymbols {
+                        symbols,
+                        marketaux_key,
+                        alpha_vantage_key,
+                        fmp_key,
+                    } => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        let _ = std::thread::Builder::new()
+                            .name("typhoon-news-scrape-symbols".into())
+                            .spawn(move || {
+                                use typhoon_engine::core::news;
+                                let rt = tokio::runtime::Builder::new_current_thread()
+                                    .enable_all()
+                                    .build()
+                                    .unwrap_or_else(|e| {
+                                        eprintln!("FATAL: tokio runtime init failed: {e}");
+                                        std::process::exit(1);
+                                    });
+                                rt.block_on(async {
+                                    let Some(cache) = shared_cache_broker
+                                        .read()
+                                        .ok()
+                                        .and_then(|g| g.clone())
+                                    else {
+                                        let _ = msg_tx.send(BrokerMsg::Error(
+                                            "NewsScrapeSymbols: cache not ready".into(),
+                                        ));
+                                        return;
+                                    };
+                                    let mut tickers: Vec<String> = symbols
+                                        .into_iter()
+                                        .map(|s| s.trim().to_uppercase())
+                                        .filter(|s| !s.is_empty())
+                                        .collect::<std::collections::BTreeSet<_>>()
+                                        .into_iter()
+                                        .collect();
+                                    tickers.sort();
+                                    if tickers.is_empty() {
+                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
+                                            "News scrape: no MTF Grid symbols".into(),
+                                        ));
+                                        return;
+                                    }
+                                    let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
+                                        "News scrape: starting for {} MTF Grid symbol(s): {}",
+                                        tickers.len(),
+                                        tickers.join(", ")
+                                    )));
+                                    let client = match reqwest::Client::builder()
+                                        .user_agent(
+                                            "Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1",
+                                        )
+                                        .timeout(std::time::Duration::from_secs(25))
+                                        .build()
+                                    {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            let _ = msg_tx.send(BrokerMsg::Error(format!(
+                                                "News client: {e}"
+                                            )));
+                                            return;
+                                        }
+                                    };
+                                    let mut ok = 0usize;
+                                    let mut fail = 0usize;
+                                    let total = tickers.len();
+                                    for (i, ticker) in tickers.iter().enumerate() {
+                                        let log_tx = msg_tx.clone();
+                                        let cb = move |s: &str| {
+                                            let _ = log_tx.send(BrokerMsg::FundamentalsProgress(
+                                                s.to_string(),
+                                            ));
+                                        };
+                                        match news::fetch_all_sources_for_symbol(
+                                            &client,
+                                            ticker,
+                                            &marketaux_key,
+                                            &alpha_vantage_key,
+                                            &fmp_key,
+                                            cb,
+                                        )
+                                        .await
+                                        {
+                                            Ok(articles) => {
+                                                if let Ok(conn) = cache.connection() {
+                                                    match news::upsert_news_batch(&conn, &articles) {
+                                                        Ok(n) => {
+                                                            ok += 1;
+                                                            let _ = msg_tx.send(
+                                                                BrokerMsg::FundamentalsProgress(
+                                                                    format!(
+                                                                        "News {}: {} cached ({}/{})",
+                                                                        ticker,
+                                                                        n,
+                                                                        i + 1,
+                                                                        total
+                                                                    ),
+                                                                ),
+                                                            );
+                                                        }
+                                                        Err(e) => {
+                                                            fail += 1;
+                                                            let _ = msg_tx.send(
+                                                                BrokerMsg::FundamentalsProgress(
+                                                                    format!(
+                                                                        "News {} upsert failed: {e}",
+                                                                        ticker
+                                                                    ),
+                                                                ),
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                fail += 1;
+                                                let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
+                                                    format!("News {} failed: {e}", ticker),
+                                                ));
+                                            }
+                                        }
+                                        tokio::time::sleep(std::time::Duration::from_millis(500))
+                                            .await;
+                                    }
+                                    let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
+                                        "News scrape complete: {} OK, {} failed of {} MTF Grid symbol(s)",
+                                        ok, fail, total
+                                    )));
+                                    if let Some(first) = tickers.first() {
+                                        if let Ok(conn) = cache.connection() {
+                                            if let Ok(list) = news::get_news_by_symbol(&conn, first, 200) {
+                                                let _ = msg_tx.send(BrokerMsg::NewsArticlesLoaded {
+                                                    symbol: first.clone(),
+                                                    articles: list,
+                                                });
+                                            }
+                                        }
+                                    }
+                                });
+                            });
                     }
                     BrokerCmd::NewsScrapeAll {
                         use_mt5, use_alpaca, use_tastytrade,

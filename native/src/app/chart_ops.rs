@@ -374,6 +374,58 @@ impl TyphooNApp {
         }
     }
 
+    /// Return the unique news tickers represented by the current MTF grid charts.
+    /// The grid may contain the same ticker across many timeframes/source-prefixed
+    /// cache keys; news fetches should happen once per underlying ticker.
+    pub(super) fn mtf_grid_news_symbols(&self) -> Vec<String> {
+        fn is_timeframe_token(token: &str) -> bool {
+            matches!(
+                token.to_ascii_uppercase().as_str(),
+                "M1" | "M5"
+                    | "M15"
+                    | "M30"
+                    | "H1"
+                    | "H4"
+                    | "D1"
+                    | "W1"
+                    | "MN1"
+                    | "1MIN"
+                    | "5MIN"
+                    | "15MIN"
+                    | "30MIN"
+                    | "1HOUR"
+                    | "4HOUR"
+                    | "1DAY"
+                    | "1WEEK"
+                    | "1MONTH"
+            )
+        }
+
+        let mut symbols = std::collections::BTreeSet::new();
+        for (i, chart) in self.charts.iter().enumerate() {
+            if self.mtf_enabled && !self.mtf_visible.get(i).copied().unwrap_or(true) {
+                continue;
+            }
+            let parts: Vec<&str> = chart.symbol.split(':').collect();
+            let candidate = match parts.as_slice() {
+                [source, sym] if !is_timeframe_token(sym) && !source.eq_ignore_ascii_case(sym) => {
+                    *sym
+                }
+                [sym, tf] if is_timeframe_token(tf) => *sym,
+                [_, sym, _tf] => *sym,
+                _ => chart.symbol.as_str(),
+            };
+            let mut symbol = normalize_market_data_symbol(candidate).replace('/', "");
+            if let Some(stripped) = symbol.strip_suffix(".EQ") {
+                symbol = stripped.to_string();
+            }
+            if !symbol.is_empty() && !is_timeframe_token(&symbol) {
+                symbols.insert(symbol);
+            }
+        }
+        symbols.into_iter().collect()
+    }
+
     /// Set up MTF grid with N columns and target chart count.
     /// Creates charts for all 9 timeframes, filling up to `target` charts.
     pub(super) fn setup_mtf_grid(&mut self, cols: usize, target: usize) {
