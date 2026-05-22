@@ -12724,12 +12724,6 @@ impl eframe::App for TyphooNApp {
                                                 ui.end_row();
                                             });
                                     }
-                                } else {
-                                    ui.label(
-                                        egui::RichText::new("Import DARWIN data")
-                                            .color(AXIS_TEXT)
-                                            .small(),
-                                    );
                                 }
                             }
                             ui.add_space(6.0);
