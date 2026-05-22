@@ -11109,22 +11109,45 @@ impl eframe::App for TyphooNApp {
                                 RightPanelSectionId::Positions => {
 
                         // ── Positions Section ─────────────────────────────────
-                        let darwin_count = if self.show_darwin_positions {
+                        let darwin_positions_available = self
+                            .bg
+                            .portfolio
+                            .as_ref()
+                            .map(|p| !p.accounts.is_empty())
+                            .unwrap_or(false)
+                            || !self.bg.open_positions.is_empty();
+                        let alpaca_positions_available = self.alpaca_enabled;
+                        let tt_positions_available = self.tastytrade_enabled;
+                        let kr_positions_available = self.kraken_enabled;
+                        let show_darwin_positions = darwin_positions_available && self.show_darwin_positions;
+                        let show_alpaca_positions = alpaca_positions_available && self.show_alpaca_positions;
+                        let show_tt_positions = tt_positions_available && self.show_tt_positions;
+                        let show_kr_positions = kr_positions_available && self.show_kr_positions;
+                        let position_source_count = [
+                            darwin_positions_available,
+                            alpaca_positions_available,
+                            tt_positions_available,
+                            kr_positions_available,
+                        ]
+                        .into_iter()
+                        .filter(|visible| *visible)
+                        .count();
+                        let darwin_count = if show_darwin_positions {
                             self.bg.open_positions.len()
                         } else {
                             0
                         };
-                        let alpaca_count = if self.show_alpaca_positions {
+                        let alpaca_count = if show_alpaca_positions {
                             self.live_positions.len()
                         } else {
                             0
                         };
-                        let tt_count = if self.show_tt_positions {
+                        let tt_count = if show_tt_positions {
                             self.tt_positions.len()
                         } else {
                             0
                         };
-                        let kr_count = if self.show_kr_positions {
+                        let kr_count = if show_kr_positions {
                             self.kr_positions.len()
                         } else {
                             0
@@ -11142,31 +11165,43 @@ impl eframe::App for TyphooNApp {
                         .id_salt("positions_section")
                         .default_open(self.right_positions_open)
                         .show(ui, |ui| {
-                            // Visibility toggles (compact horizontal checkboxes)
-                            ui.horizontal(|ui| {
-                                ui.checkbox(
-                                    &mut self.show_darwin_positions,
-                                    egui::RichText::new("DARWIN").small(),
-                                );
-                                ui.checkbox(
-                                    &mut self.show_alpaca_positions,
-                                    egui::RichText::new("Alpaca").small(),
-                                );
-                                ui.checkbox(
-                                    &mut self.show_tt_positions,
-                                    egui::RichText::new("Tasty").small(),
-                                );
-                                ui.checkbox(
-                                    &mut self.show_kr_positions,
-                                    egui::RichText::new("Kraken").small(),
-                                );
-                            });
-                            ui.add_space(4.0);
+                            // Visibility toggles only matter when more than one eligible
+                            // position source exists. Do not show disabled brokers, and do
+                            // not show DARWIN unless imported data exists.
+                            if position_source_count > 1 {
+                                ui.horizontal(|ui| {
+                                    if darwin_positions_available {
+                                        ui.checkbox(
+                                            &mut self.show_darwin_positions,
+                                            egui::RichText::new("DARWIN").small(),
+                                        );
+                                    }
+                                    if alpaca_positions_available {
+                                        ui.checkbox(
+                                            &mut self.show_alpaca_positions,
+                                            egui::RichText::new("Alpaca").small(),
+                                        );
+                                    }
+                                    if tt_positions_available {
+                                        ui.checkbox(
+                                            &mut self.show_tt_positions,
+                                            egui::RichText::new("Tasty").small(),
+                                        );
+                                    }
+                                    if kr_positions_available {
+                                        ui.checkbox(
+                                            &mut self.show_kr_positions,
+                                            egui::RichText::new("Kraken").small(),
+                                        );
+                                    }
+                                });
+                                ui.add_space(4.0);
+                            }
                             let mut has_positions = false;
                             // DARWIN positions — show current chart symbol first, then others dimmed
                             {
                                 let positions = &self.bg.open_positions;
-                                if !positions.is_empty() && self.show_darwin_positions {
+                                if !positions.is_empty() && show_darwin_positions {
                                     has_positions = true;
                                     // PERF: rsplit avoids allocating Vec<&str> via split().collect().
                                     let active_sym: String = self
@@ -11306,7 +11341,7 @@ impl eframe::App for TyphooNApp {
                             // Live broker positions (from Alpaca or synced from LAN server via KV)
                             let has_live = (self.broker_connected
                                 || self.lan_sync_mode == "client")
-                                && self.show_alpaca_positions;
+                                && show_alpaca_positions;
                             if has_live && !self.live_positions.is_empty() {
                                 has_positions = true;
                                 let mut close_sym: Option<String> = None;
@@ -11383,7 +11418,7 @@ impl eframe::App for TyphooNApp {
                                 }
                             }
                             // tastytrade positions
-                            if self.show_tt_positions && !self.tt_positions.is_empty() {
+                            if show_tt_positions && !self.tt_positions.is_empty() {
                                 has_positions = true;
                                 let mut close_sym: Option<String> = None;
                                 let mut tt_action = SymbolAction::None;
@@ -11461,7 +11496,7 @@ impl eframe::App for TyphooNApp {
                                     self.deferred_symbol_action = tt_action;
                                 }
                             }
-                            if self.show_kr_positions && !self.kr_positions.is_empty() {
+                            if show_kr_positions && !self.kr_positions.is_empty() {
                                 has_positions = true;
                                 let mut close_sym: Option<String> = None;
                                 let mut kr_action = SymbolAction::None;
@@ -11561,7 +11596,7 @@ impl eframe::App for TyphooNApp {
                                 })
                                 .cloned()
                                 .collect();
-                            if self.show_kr_positions && !kraken_sellable_balances.is_empty() {
+                            if show_kr_positions && !kraken_sellable_balances.is_empty() {
                                 let mut sell_balance: Option<(String, f64)> = None;
                                 for (asset, qty) in kraken_sellable_balances {
                                     let display_asset = Self::kraken_display_asset(&asset);
@@ -11651,10 +11686,10 @@ impl eframe::App for TyphooNApp {
                         // ── Recent Fills Section ──────────────────────────────
                         let mut visible_recent_fills: Vec<(String, String, f64, f64, String)> =
                             Vec::new();
-                        if self.show_alpaca_positions {
+                        if self.alpaca_enabled && self.show_alpaca_positions {
                             visible_recent_fills.extend(self.recent_fills.iter().cloned());
                         }
-                        if self.show_kr_positions {
+                        if self.kraken_enabled && self.show_kr_positions {
                             visible_recent_fills.extend(self.kraken_trades.iter().take(100).map(|t| {
                                 let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(
                                     t.time as i64,
