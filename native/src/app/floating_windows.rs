@@ -4084,7 +4084,7 @@ impl TyphooNApp {
                             let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews { symbol: sym, limit: 200 });
                         }
                         if ui.add_enabled(!self.news_loading, egui::Button::new("Fetch All Sources").fill(BTN_BLUE))
-                            .on_hover_text("GDELT + Yahoo RSS + SEC EDGAR + Marketaux + Alpha Vantage + FMP").clicked() {
+                            .on_hover_text("GDELT + Yahoo RSS + Marketaux + Alpha Vantage + FMP").clicked() {
                             let sym = self.news_symbol_filter.trim().to_uppercase();
                             if sym.is_empty() {
                                 self.log.push_back(LogEntry::warn("News: enter a symbol"));
@@ -4163,7 +4163,7 @@ impl TyphooNApp {
                             ui.add(egui::TextEdit::singleline(&mut self.fmp_key).desired_width(180.0).password(true));
                             ui.label(egui::RichText::new("250/day — shared w/ transcripts").color(AXIS_TEXT).small());
                         });
-                        ui.label(egui::RichText::new("GDELT, Yahoo RSS, SEC EDGAR require no key.").color(AXIS_TEXT).small());
+                        ui.label(egui::RichText::new("GDELT and Yahoo RSS require no key.").color(AXIS_TEXT).small());
                     });
                     ui.separator();
 

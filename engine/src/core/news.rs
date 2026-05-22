@@ -3,7 +3,6 @@
 //! Sources (all free tier, most without API keys):
 //! - **GDELT 2.0 Doc API** — no key, global coverage, JSON (`https://api.gdeltproject.org/api/v2/doc/doc`)
 //! - **Yahoo Finance RSS** — no key, per-symbol (`https://feeds.finance.yahoo.com/rss/2.0/headline?s=SYM`)
-//! - **SEC EDGAR Atom** — no key, US issuer filings (`https://www.sec.gov/cgi-bin/browse-edgar?...`)
 //! - **Marketaux** — 100 req/day free, finance-focused, sentiment tags
 //! - **Alpha Vantage NEWS_SENTIMENT** — 25 req/day free, built-in sentiment + tickers
 //! - **FMP /v3/stock_news** — 250 req/day free, clean normalized format
@@ -24,7 +23,7 @@ use sha2::{Digest, Sha256};
 pub struct NewsArticle {
     pub url_hash: String, // SHA-256 hex of the normalized URL (PK)
     pub symbol: String,   // primary symbol this article is associated with (may be empty)
-    pub source: String, // "GDELT" | "YahooRSS" | "SEC" | "Marketaux" | "AlphaVantage" | "FMP" | "Finnhub" | "Alpaca"
+    pub source: String, // "GDELT" | "YahooRSS" | "Marketaux" | "AlphaVantage" | "FMP" | "Finnhub" | "Alpaca"
     pub provider: String, // original publisher name (e.g. "Reuters", "Bloomberg")
     pub headline: String,
     pub summary: String,
@@ -176,13 +175,14 @@ pub fn get_news_by_symbol(
         "SELECT url_hash, symbol, source, provider, headline, summary, url, published_at,
                 image_url, sentiment, sentiment_score, tickers_json, categories_json
          FROM research_news
+         WHERE source <> 'SEC'
          ORDER BY published_at DESC, updated_at DESC
          LIMIT ?1"
     } else {
         "SELECT url_hash, symbol, source, provider, headline, summary, url, published_at,
                 image_url, sentiment, sentiment_score, tickers_json, categories_json
          FROM research_news
-         WHERE symbol = ?2 OR tickers_json LIKE ?3
+         WHERE source <> 'SEC' AND (symbol = ?2 OR tickers_json LIKE ?3)
          ORDER BY published_at DESC, updated_at DESC
          LIMIT ?1"
     };
@@ -236,7 +236,7 @@ pub fn search_news(
                 n.image_url, n.sentiment, n.sentiment_score, n.tickers_json, n.categories_json
          FROM research_news n
          JOIN research_news_fts f ON f.url_hash = n.url_hash
-         WHERE research_news_fts MATCH ?1
+         WHERE n.source <> 'SEC' AND research_news_fts MATCH ?1
          ORDER BY n.published_at DESC
          LIMIT ?2"
     ).map_err(|e| format!("prepare search_news: {e}"))?;
@@ -906,17 +906,9 @@ pub async fn fetch_all_sources_for_symbol(
     }
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-    // SEC EDGAR Atom (no key, US only)
-    if is_us_symbol(&sym) {
-        match fetch_sec_edgar_rss(client, &sym).await {
-            Ok(v) => {
-                cb(&format!("news/sec {}: {} filings", sym, v.len()));
-                all_articles.extend(v);
-            }
-            Err(e) => cb(&format!("news/sec {} failed: {e}", sym)),
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    }
+    // SEC EDGAR filings stay in the dedicated SEC/insider/research tools, not
+    // the general News window. Keep this feed out of multi-source news so
+    // routine filings do not drown out actual market news.
 
     // Marketaux (100/day free)
     if !marketaux_key.is_empty() {
@@ -963,6 +955,7 @@ pub async fn fetch_all_sources_for_symbol(
 }
 
 /// Heuristic — treat alphabetic ticker ≤5 chars as US-listed (EDGAR eligible).
+#[cfg(test)]
 fn is_us_symbol(s: &str) -> bool {
     !s.is_empty() && s.len() <= 5 && s.chars().all(|c| c.is_ascii_alphabetic() || c == '.')
 }
@@ -1067,6 +1060,44 @@ mod tests {
 
         let miss = search_news(&conn, "zebra", 10).unwrap();
         assert_eq!(miss.len(), 0);
+    }
+
+    #[test]
+    fn cached_news_queries_hide_sec_filings() {
+        let conn = mem_conn();
+        let filing = NewsArticle {
+            symbol: "AAPL".into(),
+            source: "SEC".into(),
+            headline: "10-Q filed".into(),
+            summary: "Quarterly report".into(),
+            url: "https://sec.gov/aapl-10q".into(),
+            published_at: 200,
+            ..Default::default()
+        }
+        .with_hash();
+        let story = NewsArticle {
+            symbol: "AAPL".into(),
+            source: "YahooRSS".into(),
+            headline: "Apple rallies on product news".into(),
+            summary: "Market story".into(),
+            url: "https://example.com/aapl-news".into(),
+            published_at: 100,
+            ..Default::default()
+        }
+        .with_hash();
+        upsert_news(&conn, &filing).unwrap();
+        upsert_news(&conn, &story).unwrap();
+
+        let by_symbol = get_news_by_symbol(&conn, "AAPL", 10).unwrap();
+        assert_eq!(by_symbol.len(), 1);
+        assert_eq!(by_symbol[0].source, "YahooRSS");
+
+        let all = get_news_by_symbol(&conn, "", 10).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].source, "YahooRSS");
+
+        let filing_search = search_news(&conn, "Quarterly", 10).unwrap();
+        assert!(filing_search.is_empty());
     }
 
     #[test]

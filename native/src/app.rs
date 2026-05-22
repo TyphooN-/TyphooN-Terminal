@@ -8972,7 +8972,7 @@ enum BrokerCmd {
         text: String,
         agent_override: String,
     },
-    /// Fetch multi-source news for a symbol (GDELT + Yahoo RSS + SEC + Marketaux + AV + FMP),
+    /// Fetch multi-source news for a symbol (GDELT + Yahoo RSS + Marketaux + AV + FMP),
     /// cache results in SQLite, and return the cached set.
     FetchNewsMulti {
         symbol: String,
