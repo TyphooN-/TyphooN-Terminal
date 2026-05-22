@@ -1101,19 +1101,53 @@ impl TyphooNApp {
         }
     }
 
+    pub(super) fn alpaca_order_available(&self) -> bool {
+        self.alpaca_enabled && self.broker_connected
+    }
+
+    pub(super) fn tastytrade_order_available(&self) -> bool {
+        self.tastytrade_enabled && self.tt_connected
+    }
+
+    pub(super) fn kraken_order_available(&self) -> bool {
+        self.kraken_enabled && self.kraken_connected
+    }
+
+    pub(super) fn order_broker_available(&self, broker: OrderBroker) -> bool {
+        match broker {
+            OrderBroker::Alpaca => self.alpaca_order_available(),
+            OrderBroker::Tastytrade => self.tastytrade_order_available(),
+            OrderBroker::Kraken => self.kraken_order_available(),
+            OrderBroker::Both => self.alpaca_order_available() && self.tastytrade_order_available(),
+        }
+    }
+
+    pub(super) fn resolve_order_broker(&mut self) {
+        if self.order_broker_available(self.order_broker) {
+            return;
+        }
+
+        self.order_broker = if self.kraken_order_available() {
+            OrderBroker::Kraken
+        } else if self.alpaca_order_available() {
+            OrderBroker::Alpaca
+        } else if self.tastytrade_order_available() {
+            OrderBroker::Tastytrade
+        } else {
+            self.order_broker
+        };
+    }
+
     pub(super) fn selected_live_broker_targets(&self) -> (bool, bool, bool) {
-        let send_alpaca = self.alpaca_enabled
-            && self.broker_connected
+        let send_alpaca = self.alpaca_order_available()
             && matches!(self.order_broker, OrderBroker::Alpaca | OrderBroker::Both);
-        let send_tt = self.tastytrade_enabled
-            && self.tt_connected
+        let send_tt = self.tastytrade_order_available()
             && matches!(
                 self.order_broker,
                 OrderBroker::Tastytrade | OrderBroker::Both
             );
-        let send_kraken = self.kraken_enabled
-            && self.kraken_connected
-            && matches!(self.order_broker, OrderBroker::Kraken);
+        let send_kraken =
+            self.kraken_order_available() && matches!(self.order_broker, OrderBroker::Kraken);
         (send_alpaca, send_tt, send_kraken)
     }
 
@@ -1875,6 +1909,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn close_all_selected_brokers(&mut self) {
+        self.resolve_order_broker();
         let (send_alpaca, send_tt, send_kraken) = self.selected_live_broker_targets();
         if !send_alpaca && !send_tt && !send_kraken {
             self.log.push_back(LogEntry::warn(
@@ -1947,6 +1982,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn submit_quick_trade(&mut self) {
+        self.resolve_order_broker();
         if matches!(self.risk_mode, RiskMode::KrakenPro) {
             self.log
                 .push_back(LogEntry::warn("KrakenPro selected: use Buy/Sell controls."));

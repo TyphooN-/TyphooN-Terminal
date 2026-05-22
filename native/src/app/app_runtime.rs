@@ -10571,6 +10571,7 @@ impl eframe::App for TyphooNApp {
                                 ui.add_space(4.0);
                             }
                             let trading_enabled = self.lan_sync_mode != "client";
+                            self.resolve_order_broker();
                             ui.set_enabled(trading_enabled);
                             ui.add_space(8.0);
                             ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
@@ -10979,8 +10980,11 @@ impl eframe::App for TyphooNApp {
                                     }
                                 }
                             }
-                            // Broker target selector (only show when any broker connected)
-                            if self.broker_connected || self.tt_connected || self.kraken_connected {
+                            // Broker target selector (only show when any enabled broker can place orders)
+                            if self.alpaca_order_available()
+                                || self.tastytrade_order_available()
+                                || self.kraken_order_available()
+                            {
                                 ui.horizontal(|ui| {
                                     ui.label(
                                         egui::RichText::new("Broker").color(AXIS_TEXT).small(),
@@ -10989,28 +10993,30 @@ impl eframe::App for TyphooNApp {
                                         .selected_text(self.order_broker.label())
                                         .width(90.0)
                                         .show_ui(ui, |ui| {
-                                            if self.broker_connected {
+                                            if self.alpaca_order_available() {
                                                 ui.selectable_value(
                                                     &mut self.order_broker,
                                                     OrderBroker::Alpaca,
                                                     "Alpaca",
                                                 );
                                             }
-                                            if self.tt_connected {
+                                            if self.tastytrade_order_available() {
                                                 ui.selectable_value(
                                                     &mut self.order_broker,
                                                     OrderBroker::Tastytrade,
                                                     "tastytrade",
                                                 );
                                             }
-                                            if self.kraken_connected {
+                                            if self.kraken_order_available() {
                                                 ui.selectable_value(
                                                     &mut self.order_broker,
                                                     OrderBroker::Kraken,
                                                     "Kraken",
                                                 );
                                             }
-                                            if self.broker_connected && self.tt_connected {
+                                            if self.alpaca_order_available()
+                                                && self.tastytrade_order_available()
+                                            {
                                                 ui.selectable_value(
                                                     &mut self.order_broker,
                                                     OrderBroker::Both,

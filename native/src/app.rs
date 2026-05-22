@@ -29300,7 +29300,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             right_panel_order: RightPanelSectionId::DEFAULT_ORDER.to_vec(),
             dragging_right_panel_section: None,
             risk_mode: RiskMode::VaR,
-            order_broker: OrderBroker::Alpaca,
+            order_broker: OrderBroker::Kraken,
             sl_input: String::new(),
             tp_input: String::new(),
             trade_risk_pct_input: "0.5".to_string(),
