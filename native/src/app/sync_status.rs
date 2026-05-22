@@ -1,12 +1,18 @@
 use super::*;
 
 impl TyphooNApp {
+    pub(super) fn compute_bar_sync_rows(&self) -> Vec<SyncStatsRow> {
+        let mut rows = compute_bar_sync_stats(&self.bg.detailed_stats, &self.bg.bar_ts_cache);
+        self.add_expected_kraken_sync_rows(&mut rows);
+        sort_sync_stats_rows(&mut rows);
+        rows
+    }
+
     pub(super) fn render_sync_status_window(&mut self, ctx: &egui::Context) {
         if !self.show_sync_status {
             return;
         }
-        let mut rows = compute_bar_sync_stats(&self.bg.detailed_stats, &self.bg.bar_ts_cache);
-        self.add_expected_kraken_sync_rows(&mut rows);
+        let rows = self.compute_bar_sync_rows();
         let broker_totals = compute_bar_sync_broker_totals(&rows);
         let mut sync_save_after = false;
         let mut show_sync_status = self.show_sync_status;

@@ -132,6 +132,14 @@ pub(super) fn compute_bar_sync_stats(
         })
         .collect();
 
+    sort_sync_stats_rows(&mut rows);
+    rows
+}
+
+pub(super) fn sort_sync_stats_rows(rows: &mut [SyncStatsRow]) {
+    let tf_order = [
+        "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month",
+    ];
     rows.sort_by(|a, b| {
         let ai = tf_order
             .iter()
@@ -143,7 +151,6 @@ pub(super) fn compute_bar_sync_stats(
             .unwrap_or(usize::MAX);
         a.broker.cmp(&b.broker).then(ai.cmp(&bi))
     });
-    rows
 }
 
 /// Aggregate per-broker totals from a Vec<SyncStatsRow> for the compact

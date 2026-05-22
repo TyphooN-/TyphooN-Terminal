@@ -59325,8 +59325,7 @@ impl TyphooNApp {
                         });
                         // One-line bar-sync banner — per-broker % healthy with a
                         // `[Details]` button opening the full Sync Status window.
-                        let stats_rows =
-                            compute_bar_sync_stats(&self.bg.detailed_stats, &self.bg.bar_ts_cache);
+                        let stats_rows = self.compute_bar_sync_rows();
                         let totals = compute_bar_sync_broker_totals(&stats_rows);
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("Sync:").color(AXIS_TEXT).small().strong());
@@ -59340,7 +59339,7 @@ impl TyphooNApp {
                                 } else {
                                     egui::Color32::from_rgb(231, 76, 60)
                                 };
-                                ui.label(egui::RichText::new(format!("{} {:.0}%", broker, pct)).color(color).small().monospace());
+                                ui.label(egui::RichText::new(format!("{} {:.1}%", broker, pct)).color(color).small().monospace());
                                 ui.label(egui::RichText::new("|").color(AXIS_TEXT).small());
                             }
                             if ui.small_button(egui::RichText::new("Details").small()).clicked() {
