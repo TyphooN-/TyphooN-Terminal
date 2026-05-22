@@ -4040,6 +4040,22 @@ impl TyphooNApp {
             if self.news_symbol_filter.is_empty() {
                 self.news_symbol_filter = chart_symbol.clone();
             }
+            let news_scope_label = self.broker_scope_label().to_string();
+            let mut scoped_news_symbols: Vec<String> =
+                if let Some(set) = self.broker_scope_symbols() {
+                    set.into_iter().collect()
+                } else {
+                    self.bg
+                        .all_fundamentals
+                        .iter()
+                        .map(|f| f.symbol.clone())
+                        .collect()
+                };
+            scoped_news_symbols.sort();
+            scoped_news_symbols.dedup();
+            if scoped_news_symbols.is_empty() && !chart_symbol.trim().is_empty() {
+                scoped_news_symbols.push(chart_symbol.clone());
+            }
 
             let mut open = self.show_news;
             let mut open_url: Option<String> = None;
@@ -4078,17 +4094,34 @@ impl TyphooNApp {
                                 self.log.push_back(LogEntry::info(format!("News: fetching multi-source for {}...", sym)));
                             }
                         }
-                        if ui.add(egui::Button::new("Scrape All (MT5+Alpaca+TT)").fill(BTN_MG))
-                            .on_hover_text("Bulk news scrape across the entire configured universe — long running").clicked() {
-                            let _ = self.broker_tx.send(BrokerCmd::NewsScrapeAll {
-                                use_mt5: true,
-                                use_alpaca: true,
-                                use_tastytrade: true,
+                        let scrape_label = format!("Scrape Scope ({})", news_scope_label);
+                        let scrape_hover = format!(
+                            "Bulk news scrape for current top-bar scope: {} ({} symbol{})",
+                            news_scope_label,
+                            scoped_news_symbols.len(),
+                            if scoped_news_symbols.len() == 1 { "" } else { "s" }
+                        );
+                        if ui
+                            .add_enabled(
+                                !self.news_loading && !scoped_news_symbols.is_empty(),
+                                egui::Button::new(scrape_label).fill(BTN_MG),
+                            )
+                            .on_hover_text(scrape_hover)
+                            .clicked()
+                        {
+                            let symbols = scoped_news_symbols.clone();
+                            self.news_loading = true;
+                            let _ = self.broker_tx.send(BrokerCmd::NewsScrapeSymbols {
+                                symbols,
                                 marketaux_key: self.marketaux_key.clone(),
                                 alpha_vantage_key: self.alpha_vantage_key.clone(),
                                 fmp_key: self.fmp_key.clone(),
                             });
-                            self.log.push_back(LogEntry::info("News: bulk scrape across all MT5/Alpaca/TastyTrade symbols started"));
+                            self.log.push_back(LogEntry::info(format!(
+                                "News: scope scrape started for {} ({} symbols)",
+                                news_scope_label,
+                                scoped_news_symbols.len()
+                            )));
                         }
                         if self.news_loading {
                             ui.spinner();
