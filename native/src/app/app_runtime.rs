@@ -6974,6 +6974,22 @@ impl eframe::App for TyphooNApp {
                     self.news_loading = false;
                     let count = articles.len();
                     self.news_full_articles = articles;
+                    self.news_articles = self
+                        .news_full_articles
+                        .iter()
+                        .map(|a| {
+                            let dt =
+                                chrono::DateTime::<chrono::Utc>::from_timestamp(a.published_at, 0)
+                                    .map(|d| d.format("%Y-%m-%d").to_string())
+                                    .unwrap_or_else(|| "—".to_string());
+                            let source = if a.provider.is_empty() {
+                                a.source.clone()
+                            } else {
+                                a.provider.clone()
+                            };
+                            (a.headline.clone(), source, dt)
+                        })
+                        .collect();
                     // Clear selection if the selected index is now out of range.
                     if let Some(idx) = self.news_selected {
                         if idx >= self.news_full_articles.len() {
@@ -12750,9 +12766,9 @@ impl eframe::App for TyphooNApp {
                                 }
                                 RightPanelSectionId::News => {
 
-                        // ── News Section (Finnhub) ─────────────────────────
+                        // ── News Section ──────────────────────────────────
                         {
-                            let news_count = self.news_articles.len();
+                            let news_count = self.news_full_articles.len().max(self.news_articles.len());
                             let news_section = egui::CollapsingHeader::new(
                                 egui::RichText::new(format!("☰ News ({})", news_count))
                                     .strong()
@@ -12812,6 +12828,27 @@ impl eframe::App for TyphooNApp {
                                         );
                                     }
                                 });
+                                let right_news_rows: Vec<(String, String, String)> = if !self.news_full_articles.is_empty() {
+                                    self.news_full_articles
+                                        .iter()
+                                        .map(|a| {
+                                            let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(
+                                                a.published_at,
+                                                0,
+                                            )
+                                            .map(|d| d.format("%Y-%m-%d").to_string())
+                                            .unwrap_or_else(|| "—".to_string());
+                                            let source = if a.provider.is_empty() {
+                                                a.source.clone()
+                                            } else {
+                                                a.provider.clone()
+                                            };
+                                            (a.headline.clone(), source, dt)
+                                        })
+                                        .collect()
+                                } else {
+                                    self.news_articles.clone()
+                                };
                                 if news_count == 0 {
                                     ui.label(
                                         egui::RichText::new("No news loaded for the active symbol.")
@@ -12824,7 +12861,7 @@ impl eframe::App for TyphooNApp {
                                         .max_height(180.0)
                                         .id_salt("news_scroll_r")
                                         .show(ui, |ui| {
-                                            for (headline, source, dt) in &self.news_articles {
+                                            for (headline, source, dt) in &right_news_rows {
                                                 ui.horizontal(|ui| {
                                                     ui.spacing_mut().item_spacing.x = 4.0;
                                                     ui.label(
