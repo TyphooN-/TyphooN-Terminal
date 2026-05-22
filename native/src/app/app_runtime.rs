@@ -1653,6 +1653,8 @@ impl eframe::App for TyphooNApp {
                                 .trim_end_matches(".EQ")
                                 .to_string();
                             if chart_bare == symbol {
+                                chart.live_bid = ticker.bid;
+                                chart.live_ask = ticker.ask;
                                 if let Some(bar) = chart.bars.last_mut() {
                                     bar.close = last;
                                     bar.high = bar.high.max(last);
@@ -14058,11 +14060,11 @@ impl eframe::App for TyphooNApp {
                     let press_pos = pointer.press_origin().unwrap_or_default();
                     // Price-axis scaling is chart-only. Floating windows and side-panel
                     // widgets can overlap this x-range while resizing or dragging.
-                    if price_axis_rect.contains(press_pos) && !pointer_over_window {
+                    if price_axis_rect.contains(press_pos) && !hover_over_window {
                         // Start price-axis scaling drag (TradingView style)
                         chart.is_scaling_price = true;
                         chart.is_dragging = false;
-                    self.user_interacting = false;
+                        self.user_interacting = true;
                         chart.is_drawing_drag = false;
                         chart.scale_start_zoom = chart.price_zoom;
                         chart.scale_start_y = press_pos.y;

@@ -2462,6 +2462,127 @@ impl ChartState {
             })
     }
 
+    fn chart_timeframe_ms(&self) -> i64 {
+        (self.timeframe.minutes().max(1) as i64) * 60_000
+    }
+
+    fn aggregate_bars_to_timeframe(
+        raw: Vec<(i64, f64, f64, f64, f64, f64)>,
+        tf_ms: i64,
+    ) -> Vec<Bar> {
+        let mut aggregated: Vec<Bar> = Vec::new();
+        let mut current_bucket: Option<i64> = None;
+        for (ts, o, h, l, c, v) in raw.into_iter().filter(|(ts, o, h, l, c, _v)| {
+            *ts > 0
+                && *o > 0.0
+                && *h > 0.0
+                && *l > 0.0
+                && *c > 0.0
+                && o.is_finite()
+                && h.is_finite()
+                && l.is_finite()
+                && c.is_finite()
+                && *h >= *l
+        }) {
+            let bucket = ts / tf_ms * tf_ms;
+            if current_bucket != Some(bucket) {
+                aggregated.push(Bar {
+                    ts_ms: bucket,
+                    open: o,
+                    high: h,
+                    low: l,
+                    close: c,
+                    volume: v,
+                });
+                current_bucket = Some(bucket);
+            } else if let Some(bar) = aggregated.last_mut() {
+                bar.high = bar.high.max(h).max(c);
+                bar.low = bar.low.min(l).min(c);
+                bar.close = c;
+                bar.volume += v;
+            }
+        }
+        aggregated
+    }
+
+    fn rebuild_from_lower_timeframe_if_dislocated(
+        &mut self,
+        cache: &SqliteCache,
+        symbol: &str,
+    ) -> bool {
+        let Some(quote) = Self::latest_quote_bar_from_cache(cache, symbol) else {
+            return false;
+        };
+        if self.bars.is_empty() || quote.close <= 0.0 || !quote.close.is_finite() {
+            return false;
+        }
+        let Some(last_close) = self
+            .bars
+            .last()
+            .map(|bar| bar.close)
+            .filter(|p| *p > 0.0 && p.is_finite())
+        else {
+            return false;
+        };
+        let ratio = if last_close >= quote.close {
+            last_close / quote.close
+        } else {
+            quote.close / last_close
+        };
+        if ratio < 20.0 {
+            return false;
+        }
+
+        let target_tf_ms = self.chart_timeframe_ms();
+        let lower_tfs = [
+            ("1Min", 60_000_i64),
+            ("5Min", 5 * 60_000_i64),
+            ("15Min", 15 * 60_000_i64),
+            ("30Min", 30 * 60_000_i64),
+            ("1Hour", 60 * 60_000_i64),
+            ("4Hour", 4 * 60 * 60_000_i64),
+        ];
+        let source = if self.primary_source.is_empty() {
+            "kraken-equities"
+        } else {
+            self.primary_source
+        };
+        for (lower_tf, lower_ms) in lower_tfs {
+            if lower_ms >= target_tf_ms {
+                continue;
+            }
+            for key in chart_source_cache_keys(source, symbol, lower_tf) {
+                let Ok(Some(raw)) = cache.get_bars_raw(&key) else {
+                    continue;
+                };
+                let rebuilt = Self::aggregate_bars_to_timeframe(raw, target_tf_ms);
+                if rebuilt.len() < 2 {
+                    continue;
+                }
+                let Some(rebuilt_close) = rebuilt
+                    .last()
+                    .map(|bar| bar.close)
+                    .filter(|p| *p > 0.0 && p.is_finite())
+                else {
+                    continue;
+                };
+                let rebuilt_ratio = if rebuilt_close >= quote.close {
+                    rebuilt_close / quote.close
+                } else {
+                    quote.close / rebuilt_close
+                };
+                if rebuilt_ratio < 20.0 {
+                    self.bars = rebuilt;
+                    self.primary_source = source;
+                    self.primary_first_ts = self.bars.first().map(|bar| bar.ts_ms).unwrap_or(0);
+                    self.gap_fill_timestamps.clear();
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn apply_quote_cache_overlay(&mut self, cache: &SqliteCache, symbol: &str) -> bool {
         let Some(quote) = Self::latest_quote_bar_from_cache(cache, symbol) else {
             return false;
@@ -2471,12 +2592,21 @@ impl ChartState {
             self.primary_source = "kraken-equities";
             return true;
         }
-        let tf_ms = (self.timeframe.minutes().max(1) as i64) * 60_000;
+        let tf_ms = self.chart_timeframe_ms();
         let Some(last) = self.bars.last_mut() else {
             return false;
         };
         if quote.ts_ms < last.ts_ms {
-            return false;
+            // Quotes are still authoritative for the visible current price.  Do not let a
+            // stale HTF candle leave the chart at a different price than lower TFs/positions.
+            last.close = quote.close;
+            last.high = last.high.max(quote.high).max(quote.close);
+            last.low = if last.low > 0.0 {
+                last.low.min(quote.low).min(quote.close)
+            } else {
+                quote.low.min(quote.close)
+            };
+            return true;
         }
         if quote.ts_ms < last.ts_ms.saturating_add(tf_ms) {
             last.close = quote.close;
@@ -2852,6 +2982,7 @@ impl ChartState {
                 String::new()
             };
 
+            let ltf_rebuilt = self.rebuild_from_lower_timeframe_if_dislocated(cache, &sym);
             let quote_overlaid = self.apply_quote_cache_overlay(cache, &sym);
             let new_max_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
             self.view_offset = if old_bars_empty || old_view_distance_from_right <= 2 {
@@ -2873,6 +3004,8 @@ impl ChartState {
             };
             let gap_info = if gap_filled > 0 {
                 format!(" +{} gap-fill", gap_filled)
+            } else if ltf_rebuilt {
+                " +LTF rebuild +quote".to_string()
             } else if quote_overlaid {
                 " +quote".to_string()
             } else {
@@ -3189,6 +3322,7 @@ impl ChartState {
             }
         }
 
+        let ltf_rebuilt = self.rebuild_from_lower_timeframe_if_dislocated(cache, &bare_sym);
         let quote_overlaid = self.apply_quote_cache_overlay(cache, &bare_sym);
 
         if self.bars.is_empty() {
@@ -3210,7 +3344,13 @@ impl ChartState {
             } else {
                 String::new()
             };
-            let quote_info = if quote_overlaid { " +quote" } else { "" };
+            let quote_info = if ltf_rebuilt {
+                " +LTF rebuild +quote"
+            } else if quote_overlaid {
+                " +quote"
+            } else {
+                ""
+            };
             log.push_back(LogEntry::info(format!(
                 "Loaded {} bars for {} [{}]{}{}",
                 self.bars.len(),
