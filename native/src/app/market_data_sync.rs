@@ -1111,12 +1111,6 @@ impl TyphooNApp {
             db_path: cache_db_path(),
             backfill_complete,
         });
-        self.log.push_back(LogEntry::info(format!(
-            "Kraken sync queued {} {} ({} pending)",
-            symbol,
-            tf,
-            self.pending_kraken_fetches.len()
-        )));
         true
     }
 

@@ -1,5 +1,15 @@
 use super::*;
 
+fn is_routine_market_data_status(msg: &str) -> bool {
+    (msg.starts_with("Kraken ")
+        && (msg.contains(": fetching recent window...")
+            || msg.contains(": provider-window cache ")
+            || msg.contains(" delta since ")
+            || msg.contains(" already up to date")
+            || msg.contains(": no bars returned")))
+        || msg.starts_with("CryptoCompare backfill ")
+}
+
 // egui 0.34: Panel::show(ctx) deprecated in favor of show_inside(ui).
 // Full migration to ui() pattern is deferred while this runtime pass focuses on module boundaries.
 #[allow(deprecated)]
@@ -1090,7 +1100,11 @@ impl eframe::App for TyphooNApp {
                         let _ = self.broker_tx.send(BrokerCmd::GetActivities { limit: 100 });
                         let _ = self.broker_tx.send(BrokerCmd::GetMarketClock);
                     }
-                    self.log.push_back(LogEntry::info(s));
+                    if is_routine_market_data_status(&s) {
+                        tracing::debug!("{}", s);
+                    } else {
+                        self.log.push_back(LogEntry::info(s));
+                    }
                 }
                 BrokerMsg::KrakenTrades(mut trades) => {
                     if !self.kraken_enabled {
@@ -7246,18 +7260,20 @@ impl eframe::App for TyphooNApp {
                         "kraken-futures" => "Kraken Futures",
                         _ => source.as_str(),
                     };
-                    let log_msg = if should_reload {
-                        format!(
+                    if should_reload {
+                        self.log.push_back(LogEntry::info(format!(
                             "{} fetched {} bars for {} {} — queued active chart reload",
                             source_label, count, symbol, timeframe
-                        )
+                        )));
                     } else {
-                        format!(
+                        tracing::debug!(
                             "{} fetched {} bars for {} {}",
-                            source_label, count, symbol, timeframe
-                        )
-                    };
-                    self.log.push_back(LogEntry::info(log_msg));
+                            source_label,
+                            count,
+                            symbol,
+                            timeframe
+                        );
+                    }
                     let source_has_terminal_settlement = matches!(
                         source.as_str(),
                         "alpaca" | "kraken" | "kraken-futures" | "tastytrade"
