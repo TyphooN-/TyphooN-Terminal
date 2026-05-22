@@ -14545,6 +14545,53 @@ impl eframe::App for TyphooNApp {
             } else {
                 let (rect, resp) = ui.allocate_exact_size(available.size(), egui::Sense::click_and_drag());
 
+                // Give the visible price scale its own drag target. Relying only on the
+                // panel-level pointer checks is fragile because egui can mark the pointer
+                // as used by the chart response before the scale-drag state is advanced.
+                let price_axis_w = 70.0_f32;
+                let price_axis_rect = egui::Rect::from_min_max(
+                    egui::pos2(rect.right() - price_axis_w, rect.top()),
+                    rect.max,
+                );
+                let price_axis_resp = ui
+                    .interact(
+                        price_axis_rect,
+                        ui.id().with(("single_chart_price_axis_drag", self.active_tab)),
+                        egui::Sense::click_and_drag(),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::ResizeVertical);
+                if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                    if price_axis_resp.drag_started() {
+                        chart.is_scaling_price = true;
+                        chart.is_dragging = false;
+                        chart.is_drawing_drag = false;
+                        chart.scale_start_zoom = chart.price_zoom;
+                        chart.scale_start_y = price_axis_resp
+                            .interact_pointer_pos()
+                            .map(|pos| pos.y)
+                            .unwrap_or(chart.scale_start_y);
+                        self.user_interacting = true;
+                    }
+                    if price_axis_resp.dragged() {
+                        let dy = ctx.input(|i| i.pointer.delta().y);
+                        if dy.abs() > 0.0 {
+                            let zoom_delta = -dy as f64 * 0.003;
+                            chart.price_zoom =
+                                (chart.price_zoom * (1.0 + zoom_delta)).clamp(0.1, 20.0);
+                            chart.is_scaling_price = true;
+                            chart.is_dragging = false;
+                            self.user_interacting = true;
+                        }
+                    }
+                    if price_axis_resp.double_clicked() {
+                        chart.price_zoom = 1.0;
+                        chart.price_pan = 0.0;
+                    }
+                    if price_axis_resp.drag_stopped() {
+                        chart.is_scaling_price = false;
+                    }
+                }
+
                 // Rebuild trade overlay every 120 frames (~30s) or on first load
                 let fc = self.frame_count;
                 if let Some(c) = self.charts.get(self.active_tab) {
