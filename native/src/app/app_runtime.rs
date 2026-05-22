@@ -233,7 +233,7 @@ impl eframe::App for TyphooNApp {
         }
 
         if now_instant.duration_since(self.kraken_universe_last_schedule)
-            >= std::time::Duration::from_secs(60)
+            >= self.market_data_sync_interval()
             && self.cache_loaded
             && self.lan_sync_mode != "client"
             && (self.kraken_any_spot_scrape_enabled()
@@ -245,7 +245,7 @@ impl eframe::App for TyphooNApp {
         }
 
         if now_instant.duration_since(self.kraken_futures_universe_last_schedule)
-            >= std::time::Duration::from_secs(60)
+            >= self.market_data_sync_interval()
             && self.cache_loaded
             && self.lan_sync_mode != "client"
         {
@@ -254,7 +254,7 @@ impl eframe::App for TyphooNApp {
         }
 
         if now_instant.duration_since(self.tastytrade_universe_last_schedule)
-            >= std::time::Duration::from_secs(60)
+            >= self.market_data_sync_interval()
             && self.cache_loaded
             && self.lan_sync_mode != "client"
             && self.tt_connected
@@ -16295,7 +16295,7 @@ impl eframe::App for TyphooNApp {
             // though the DB isn't locked, it simply isn't there. Matches the
             // bid/ask refresh below which already guards with .exists().
             if now_instant.duration_since(self.mt5_bar_last_sync)
-                >= std::time::Duration::from_secs(60)
+                >= self.market_data_sync_interval()
             {
                 self.mt5_bar_last_sync = now_instant;
                 let now_utc = chrono::Utc::now();
@@ -16332,10 +16332,11 @@ impl eframe::App for TyphooNApp {
             // list). Runs 7 days/week — stocks don't trade on weekends but the
             // historical backfill can still progress.
             if now_instant.duration_since(self.alpaca_rotation_last_sync)
-                >= std::time::Duration::from_secs(60)
+                >= self.market_data_sync_interval()
             {
                 self.alpaca_rotation_last_sync = now_instant;
                 self.maybe_request_alpaca_asset_universe();
+                self.push_alpaca_sync_runtime_config();
                 let equity_syms = self.alpaca_equity_rotation_symbols();
                 self.schedule_alpaca_pairs(&equity_syms);
             }

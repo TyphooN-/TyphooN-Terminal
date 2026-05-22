@@ -1,6 +1,31 @@
 use super::*;
 
 impl TyphooNApp {
+    pub(super) fn full_tilt_sync_enabled(&self) -> bool {
+        match std::env::var("TYPHOON_SYNC_FULL_TILT") {
+            Ok(value) => {
+                let value = value.trim().to_ascii_lowercase();
+                if matches!(value.as_str(), "0" | "false" | "off" | "no" | "battery") {
+                    return false;
+                }
+                if matches!(value.as_str(), "1" | "true" | "on" | "yes" | "ac" | "full") {
+                    return true;
+                }
+            }
+            Err(_) => {}
+        }
+        super::auto_compact::on_ac_power()
+    }
+
+    pub(super) fn market_data_sync_interval(&self) -> std::time::Duration {
+        let secs = if self.full_tilt_sync_enabled() {
+            FULL_TILT_SYNC_INTERVAL_SECS
+        } else {
+            BALANCED_SYNC_INTERVAL_SECS
+        };
+        std::time::Duration::from_secs(secs)
+    }
+
     /// UX7: Lazily fetch 30 daily closes for a symbol from bar cache.
     /// Returns Arc for O(1) clones — called per-row per-frame in open scanners.
     /// MEM: Soft-capped at 2000 entries (≈2000 × 30 × 8 bytes = ~480KB).
@@ -793,9 +818,26 @@ impl TyphooNApp {
         if timeframes.is_empty() {
             return 0;
         }
-        let queue_window: usize = if self.user_interacting { 3 } else { 8 };
-        let batch_limit: usize = if self.user_interacting { 1 } else { 4 };
-        let foreground_slots = if self.user_interacting { 1 } else { 2 };
+        let full_tilt = self.full_tilt_sync_enabled();
+        let queue_window: usize = if self.user_interacting && !full_tilt {
+            3
+        } else if full_tilt {
+            KRAKEN_EQUITIES_FULL_TILT_QUEUE_WINDOW
+        } else {
+            8
+        };
+        let batch_limit: usize = if self.user_interacting && !full_tilt {
+            1
+        } else if full_tilt {
+            KRAKEN_EQUITIES_FULL_TILT_BATCH_SIZE
+        } else {
+            4
+        };
+        let foreground_slots = if self.user_interacting && !full_tilt {
+            1
+        } else {
+            4
+        };
         let available_slots = queue_window
             .saturating_sub(
                 self.pending_kraken_fetches
@@ -838,7 +880,13 @@ impl TyphooNApp {
             &pending_equities,
             available_slots,
             foreground_slots,
-            if self.user_interacting { 24 } else { 96 },
+            if self.user_interacting && !full_tilt {
+                24
+            } else if full_tilt {
+                KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT
+            } else {
+                96
+            },
             &mut cursor,
             chrono::Utc::now().timestamp(),
             kraken_sync_target_bars,
@@ -958,10 +1006,17 @@ impl TyphooNApp {
 
     pub(super) fn alpaca_sync_capacity(&self) -> AlpacaSyncCapacity {
         let mut capacity = alpaca_sync_capacity_for_rpm(self.alpaca_effective_historical_rpm());
-        if self.user_interacting {
+        if self.full_tilt_sync_enabled() {
+            capacity.fetch_permits = capacity.fetch_permits.max(ALPACA_FULL_TILT_FETCH_PERMITS);
+            capacity.queue_window = capacity.queue_window.max(ALPACA_FULL_TILT_QUEUE_WINDOW);
+            capacity.batch_size = capacity.batch_size.max(ALPACA_FULL_TILT_BATCH_SIZE);
+            capacity.foreground_reserve = capacity.foreground_reserve.max(8);
+        }
+        if self.user_interacting && !self.full_tilt_sync_enabled() {
             // Keep chart pan/zoom responsive during large historical syncs.  Do not
             // stop syncing entirely; just narrow new queue pressure while existing
-            // in-flight requests drain naturally.
+            // in-flight requests drain naturally. Full-tilt AC mode intentionally
+            // keeps pressure up when the user asked to spend the hardware.
             capacity.fetch_permits = capacity.fetch_permits.min(2);
             capacity.queue_window = capacity.queue_window.min(4);
             capacity.batch_size = capacity.batch_size.min(2);
@@ -1266,7 +1321,11 @@ impl TyphooNApp {
             &self.pending_alpaca_fetches,
             available_slots,
             capacity.foreground_reserve,
-            ALPACA_BACKGROUND_SCAN_LIMIT,
+            if self.full_tilt_sync_enabled() {
+                ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT
+            } else {
+                ALPACA_BACKGROUND_SCAN_LIMIT
+            },
             &mut cursor,
             now_s,
             alpaca_sync_target_bars,
@@ -1296,23 +1355,32 @@ impl TyphooNApp {
         if timeframes.is_empty() {
             return 0;
         }
-        let queue_window = if self.user_interacting {
+        let full_tilt = self.full_tilt_sync_enabled();
+        let queue_window = if self.user_interacting && !full_tilt {
             4
+        } else if full_tilt {
+            KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW
         } else {
             KRAKEN_SPOT_QUEUE_WINDOW
         };
-        let batch_limit = if self.user_interacting {
+        let batch_limit = if self.user_interacting && !full_tilt {
             batch_limit.min(2)
+        } else if full_tilt {
+            batch_limit.max(32)
         } else {
             batch_limit
         };
-        let foreground_slots = if self.user_interacting {
+        let foreground_slots = if self.user_interacting && !full_tilt {
             foreground_slots.min(1)
+        } else if full_tilt {
+            foreground_slots.max(8)
         } else {
             foreground_slots
         };
-        let scan_limit = if self.user_interacting {
+        let scan_limit = if self.user_interacting && !full_tilt {
             48
+        } else if full_tilt {
+            KRAKEN_SPOT_FULL_TILT_BACKGROUND_SCAN_LIMIT
         } else {
             KRAKEN_SPOT_BACKGROUND_SCAN_LIMIT
         };
@@ -1381,23 +1449,32 @@ impl TyphooNApp {
         if timeframes.is_empty() {
             return 0;
         }
-        let queue_window = if self.user_interacting {
+        let full_tilt = self.full_tilt_sync_enabled();
+        let queue_window = if self.user_interacting && !full_tilt {
             3
+        } else if full_tilt {
+            KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW
         } else {
             KRAKEN_FUTURES_QUEUE_WINDOW
         };
-        let batch_limit = if self.user_interacting {
+        let batch_limit = if self.user_interacting && !full_tilt {
             batch_limit.min(1)
+        } else if full_tilt {
+            batch_limit.max(24)
         } else {
             batch_limit
         };
-        let foreground_slots = if self.user_interacting {
+        let foreground_slots = if self.user_interacting && !full_tilt {
             foreground_slots.min(1)
+        } else if full_tilt {
+            foreground_slots.max(6)
         } else {
             foreground_slots
         };
-        let scan_limit = if self.user_interacting {
+        let scan_limit = if self.user_interacting && !full_tilt {
             32
+        } else if full_tilt {
+            KRAKEN_FUTURES_FULL_TILT_BACKGROUND_SCAN_LIMIT
         } else {
             KRAKEN_FUTURES_BACKGROUND_SCAN_LIMIT
         };
@@ -1469,17 +1546,22 @@ impl TyphooNApp {
         if timeframes.is_empty() {
             return 0;
         }
-        let queue_window = if self.user_interacting {
+        let full_tilt = self.full_tilt_sync_enabled();
+        let queue_window = if self.user_interacting && !full_tilt {
             3usize
+        } else if full_tilt {
+            TASTYTRADE_FULL_TILT_QUEUE_WINDOW
         } else {
             8usize
         };
-        let batch_limit = if self.user_interacting {
+        let batch_limit = if self.user_interacting && !full_tilt {
             1usize
+        } else if full_tilt {
+            TASTYTRADE_FULL_TILT_BATCH_SIZE
         } else {
             3usize
         };
-        let foreground_slots = 1usize;
+        let foreground_slots = if full_tilt { 4usize } else { 1usize };
         let available_slots = queue_window
             .saturating_sub(self.pending_tastytrade_fetches.len())
             .min(batch_limit);
@@ -1504,8 +1586,10 @@ impl TyphooNApp {
             .get("tastytrade")
             .unwrap_or(&empty_no_data_keys);
         let now_s = chrono::Utc::now().timestamp();
-        let scan_limit = if self.user_interacting {
+        let scan_limit = if self.user_interacting && !full_tilt {
             24
+        } else if full_tilt {
+            TASTYTRADE_FULL_TILT_BACKGROUND_SCAN_LIMIT
         } else {
             TASTYTRADE_BACKGROUND_SCAN_LIMIT
         };

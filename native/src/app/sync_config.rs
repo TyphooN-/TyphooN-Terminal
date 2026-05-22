@@ -11,6 +11,27 @@ pub(super) const KRAKEN_SPOT_BACKGROUND_SCAN_LIMIT: usize = 384;
 pub(super) const KRAKEN_FUTURES_BACKGROUND_SCAN_LIMIT: usize = 192;
 pub(super) const TASTYTRADE_BACKGROUND_SCAN_LIMIT: usize = 96;
 
+/// AC/desktop full-tilt mode keeps request pressure high enough to saturate API
+/// allowances and async worker capacity. It is still bounded: pending sets,
+/// provider rate limiters, no-data tombstones, and backfill-complete markers stay
+/// in force so we do not turn a large universe into duplicate request storms.
+pub(super) const FULL_TILT_SYNC_INTERVAL_SECS: u64 = 5;
+pub(super) const BALANCED_SYNC_INTERVAL_SECS: u64 = 60;
+pub(super) const ALPACA_FULL_TILT_QUEUE_WINDOW: usize = 96;
+pub(super) const ALPACA_FULL_TILT_BATCH_SIZE: usize = 72;
+pub(super) const ALPACA_FULL_TILT_FETCH_PERMITS: usize = 32;
+pub(super) const ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 4096;
+pub(super) const KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW: usize = 320;
+pub(super) const KRAKEN_SPOT_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 4096;
+pub(super) const KRAKEN_EQUITIES_FULL_TILT_QUEUE_WINDOW: usize = 192;
+pub(super) const KRAKEN_EQUITIES_FULL_TILT_BATCH_SIZE: usize = 96;
+pub(super) const KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 4096;
+pub(super) const KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW: usize = 192;
+pub(super) const KRAKEN_FUTURES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2048;
+pub(super) const TASTYTRADE_FULL_TILT_QUEUE_WINDOW: usize = 96;
+pub(super) const TASTYTRADE_FULL_TILT_BATCH_SIZE: usize = 48;
+pub(super) const TASTYTRADE_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2048;
+
 /// Largest `MAX_BARS` value that can safely cross the MT5 demand.txt / MQL5
 /// boundary. This is a provider-maximum sentinel, not a local history target:
 /// the terminal asks the EA for everything the broker server can provide, then
