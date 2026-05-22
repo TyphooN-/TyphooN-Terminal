@@ -8415,6 +8415,8 @@ impl eframe::App for TyphooNApp {
                 }
                 self.charts.push(new_chart);
                 self.active_tab = self.charts.len() - 1;
+                let sym = self.symbol_input.clone();
+                self.queue_open_symbol_sync_all_timeframes(&sym);
             }
             if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::W)) {
                 if self.charts.len() > 1 {
@@ -9233,49 +9235,58 @@ impl eframe::App for TyphooNApp {
                                 ));
                             }
                         }
-                        // From cache keys (all prefixes: mt5, kraken, alpaca, default, etc.)
-                        if let Some(ref cache) = self.cache {
-                            if let Ok(keys) = cache.all_keys() {
-                                for key in &keys {
-                                    // Skip BarCacheWriter metadata rows (__SYMBOLS__,
-                                    // __SPECS__:…, __SERVER__:…, __HEARTBEAT__:…) so
-                                    // their middle parts don't land as bogus symbol
-                                    // suggestions in the autocomplete list.
-                                    if key.starts_with("mt5:__") {
-                                        continue;
-                                    }
-                                    let parts: Vec<&str> = key.split(':').collect();
-                                    // Canonical 3-part key shape across providers:
-                                    //   "mt5:SOLUSD:1Day" → SOLUSD
-                                    //   "kraken:SOLUSD:1Day" → SOLUSD
-                                    //   "alpaca:SOL/USD:4Hour" → SOL/USD
-                                    // Fallback: bare "SYMBOL:TF" from legacy Alpaca paper arms.
-                                    let sym = if parts.len() >= 3 {
-                                        parts[parts.len() - 2].to_uppercase()
-                                    } else if parts.len() == 2 {
-                                        parts[0].to_uppercase()
-                                    } else {
-                                        continue;
-                                    };
-                                    // Normalize: remove slash for dedup (SOL/USD == SOLUSD)
-                                    let sym_norm = sym.replace('/', "");
-                                    let query_norm = query.replace('/', "");
-                                    if sym_norm.contains(&query_norm)
-                                        && !suggestions.iter().any(|(s, _, _)| {
-                                            s.replace('/', "").to_uppercase() == sym_norm
-                                        })
-                                    {
-                                        // Label crypto vs equity, always use no-slash form
-                                        let class = if sym_norm.ends_with("USD")
-                                            && !sym_norm.contains('.')
-                                            && sym_norm.len() <= 10
-                                        {
-                                            "crypto".to_string()
-                                        } else {
-                                            String::new()
-                                        };
-                                        suggestions.push((sym_norm, String::new(), class));
-                                    }
+                        // From already-known active/cached symbols. This avoids a synchronous
+                        // SQLite all_keys() scan on every keystroke.
+                        let query_norm = query.replace('/', "");
+                        for sym in &self.cached_active_symbols {
+                            let sym_norm = sym.replace('/', "").to_uppercase();
+                            if sym_norm.contains(&query_norm)
+                                && !suggestions
+                                    .iter()
+                                    .any(|(s, _, _)| s.replace('/', "").to_uppercase() == sym_norm)
+                            {
+                                let class = if sym_norm.ends_with("USD")
+                                    && !sym_norm.contains('.')
+                                    && sym_norm.len() <= 10
+                                {
+                                    "crypto".to_string()
+                                } else {
+                                    String::new()
+                                };
+                                suggestions.push((sym_norm, String::new(), class));
+                            }
+                        }
+
+                        // From enabled broker universes, even before bars are cached.
+                        // This is the light-mode path: symbol metadata resolves immediately,
+                        // and opening the chart queues on-demand bar sync.
+                        if self.kraken_enabled && self.kraken_scrape_xstocks {
+                            for sym in &self.kraken_equity_universe_symbols {
+                                if sym.contains(&query)
+                                    && !suggestions
+                                        .iter()
+                                        .any(|(s, _, _)| s.eq_ignore_ascii_case(sym))
+                                {
+                                    suggestions.push((
+                                        sym.clone(),
+                                        "Kraken Securities".to_string(),
+                                        "Kraken xStock".to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                        if self.tastytrade_enabled {
+                            for sym in &self.tastytrade_universe_symbols {
+                                if sym.contains(&query)
+                                    && !suggestions
+                                        .iter()
+                                        .any(|(s, _, _)| s.eq_ignore_ascii_case(sym))
+                                {
+                                    suggestions.push((
+                                        sym.clone(),
+                                        String::new(),
+                                        "tastytrade".to_string(),
+                                    ));
                                 }
                             }
                         }
@@ -9991,6 +10002,8 @@ impl eframe::App for TyphooNApp {
                         }
                         self.charts.push(new_chart);
                         self.active_tab = self.charts.len() - 1;
+                        let sym = self.symbol_input.clone();
+                        self.queue_open_symbol_sync_all_timeframes(&sym);
                     }
 
                     // Chart type indicator (right-aligned)
@@ -16644,6 +16657,33 @@ impl eframe::App for TyphooNApp {
         //   profiling/problem displays; unset/0 means native-refresh continuous
         //   repaint through vsync/GSYNC/FreeSync.
         self.maybe_incremental_session_save(ctx);
+
+        let update_ms = now_instant.elapsed().as_secs_f64() * 1000.0;
+        if update_ms > 16.7 {
+            self.perf_slow_frame_count = self.perf_slow_frame_count.saturating_add(1);
+        }
+        self.perf_max_update_ms = self.perf_max_update_ms.max(update_ms);
+        self.perf_broker_msgs_drained = self
+            .perf_broker_msgs_drained
+            .saturating_add(msgs_drained as u32);
+        if now_instant.duration_since(self.perf_last_report) >= std::time::Duration::from_secs(5) {
+            if self.perf_slow_frame_count > 0 || self.perf_broker_msgs_drained > 0 {
+                tracing::debug!(
+                    "frame perf: max_update_ms={:.2} slow_frames={} broker_msgs={} pending_fetches={} deferred_chart_loads={} log_entries={}",
+                    self.perf_max_update_ms,
+                    self.perf_slow_frame_count,
+                    self.perf_broker_msgs_drained,
+                    self.total_pending_market_data_fetches(),
+                    self.deferred_chart_loads.len(),
+                    self.log.len()
+                );
+            }
+            self.perf_last_report = now_instant;
+            self.perf_slow_frame_count = 0;
+            self.perf_max_update_ms = 0.0;
+            self.perf_broker_msgs_drained = 0;
+        }
+
         static IDLE_FPS_CAP: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
         let idle_fps_cap = *IDLE_FPS_CAP.get_or_init(|| {
             std::env::var("TYPHOON_IDLE_FPS")

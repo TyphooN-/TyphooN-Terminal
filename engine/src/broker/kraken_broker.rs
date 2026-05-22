@@ -666,8 +666,14 @@ impl KrakenBroker {
                         .or_else(|| item.get("short_name"))
                         .and_then(|v| v.as_str())
                         .map(str::to_string),
-                    tradable: item.get("tradable").and_then(|v| v.as_bool()).unwrap_or(true),
-                    status: item.get("status").and_then(|v| v.as_str()).map(str::to_string),
+                    tradable: item
+                        .get("tradable")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                    status: item
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
                     instrument_status: item
                         .get("instrument_status")
                         .and_then(|v| v.as_str())
@@ -777,7 +783,10 @@ impl KrakenBroker {
             high: parse("high"),
             low: parse("low"),
             previous_close: parse("prev_close"),
-            time_ms: result.get("time").and_then(parse_json_i64).unwrap_or_default(),
+            time_ms: result
+                .get("time")
+                .and_then(parse_json_i64)
+                .unwrap_or_default(),
             delayed: true,
         })
     }
@@ -852,10 +861,18 @@ impl KrakenBroker {
         let mut bars = Vec::with_capacity(rows.len());
         for row in rows {
             let time_s = row.get("time").and_then(parse_json_i64).unwrap_or_default();
-            let Some(open) = row.get("open").and_then(parse_json_number) else { continue; };
-            let Some(high) = row.get("high").and_then(parse_json_number) else { continue; };
-            let Some(low) = row.get("low").and_then(parse_json_number) else { continue; };
-            let Some(close) = row.get("close").and_then(parse_json_number) else { continue; };
+            let Some(open) = row.get("open").and_then(parse_json_number) else {
+                continue;
+            };
+            let Some(high) = row.get("high").and_then(parse_json_number) else {
+                continue;
+            };
+            let Some(low) = row.get("low").and_then(parse_json_number) else {
+                continue;
+            };
+            let Some(close) = row.get("close").and_then(parse_json_number) else {
+                continue;
+            };
             if time_s <= 0 || !(open > 0.0 && high > 0.0 && low > 0.0 && close > 0.0) {
                 continue;
             }

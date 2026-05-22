@@ -13403,6 +13403,10 @@ pub struct TyphooNApp {
     mt5_auto_bar_last_sync: std::time::Instant,
     mt5_self_heal_last: std::time::Instant,
     mt5_demand_last_flush: std::time::Instant,
+    perf_last_report: std::time::Instant,
+    perf_slow_frame_count: u32,
+    perf_max_update_ms: f64,
+    perf_broker_msgs_drained: u32,
 
     /// Screenshot requested via SCREENSHOT command (triggers ViewportCommand::Screenshot next frame).
     screenshot_requested: bool,
@@ -29150,6 +29154,10 @@ When the question touches recent news, sentiment, or prices, combine the researc
             mt5_auto_bar_last_sync: std::time::Instant::now() - std::time::Duration::from_secs(30),
             mt5_self_heal_last: std::time::Instant::now() - std::time::Duration::from_secs(30),
             mt5_demand_last_flush: std::time::Instant::now() - std::time::Duration::from_secs(1),
+            perf_last_report: std::time::Instant::now(),
+            perf_slow_frame_count: 0,
+            perf_max_update_ms: 0.0,
+            perf_broker_msgs_drained: 0,
             screenshot_requested: false,
             last_screenshot_path: None,
             screenshots_list: Vec::new(),

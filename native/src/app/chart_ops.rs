@@ -143,6 +143,77 @@ impl TyphooNApp {
                 .flatten()
         });
         self.reload_symbol_with_source(symbol, tf, source_override);
+        self.queue_open_symbol_sync_all_timeframes(symbol);
+    }
+
+    pub(super) fn queue_open_symbol_sync_all_timeframes(&mut self, symbol: &str) -> usize {
+        let symbol = symbol.trim();
+        if symbol.is_empty() {
+            return 0;
+        }
+        let source_override = self
+            .charts
+            .get(self.active_tab)
+            .and_then(|chart| chart.source_override.clone());
+        let timeframes = self.enabled_standard_sync_timeframes();
+        let mut queued = 0usize;
+        for tf in timeframes {
+            if self.queue_symbol_fetch_for_source(symbol, &tf, source_override.as_deref()) {
+                queued += 1;
+            }
+        }
+        queued
+    }
+
+    fn queue_symbol_fetch_for_source(
+        &mut self,
+        symbol: &str,
+        tf_key: &str,
+        source_override: Option<&str>,
+    ) -> bool {
+        if !self.sync_timeframe_enabled(tf_key) {
+            return false;
+        }
+        if let Some(source) = source_override.filter(|s| !s.trim().is_empty() && *s != "auto") {
+            let source_symbol = preferred_chart_symbol_for_source(source, symbol);
+            return match source {
+                "alpaca" => self.queue_alpaca_fetch(&source_symbol, tf_key),
+                "tastytrade" => self.queue_tastytrade_fetch(&source_symbol, tf_key),
+                "kraken" => self.queue_kraken_fetch(&source_symbol, tf_key),
+                "kraken-equities" => self.queue_kraken_equity_fetch(&source_symbol, tf_key),
+                "kraken-futures" => self.queue_kraken_futures_fetch(&source_symbol, tf_key),
+                _ => false,
+            };
+        }
+
+        let kraken_symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
+        if !kraken_symbol.is_empty()
+            && typhoon_engine::core::kraken::to_kraken_pair_lossy(&kraken_symbol).is_some()
+            && self.queue_kraken_fetch(&kraken_symbol, tf_key)
+        {
+            return true;
+        }
+        let bare = normalize_market_data_symbol(symbol)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        if self.kraken_enabled
+            && self.kraken_scrape_xstocks
+            && self
+                .kraken_equity_universe_symbols
+                .binary_search_by(|candidate| candidate.as_str().cmp(bare.as_str()))
+                .is_ok()
+            && self.queue_kraken_equity_fetch(&bare, tf_key)
+        {
+            return true;
+        }
+        if self.tt_connected
+            && self.tastytrade_has_symbol(symbol)
+            && self.queue_tastytrade_fetch(symbol, tf_key)
+        {
+            return true;
+        }
+        self.queue_alpaca_fetch(symbol, tf_key)
     }
 
     pub(super) fn reload_symbol_with_source(

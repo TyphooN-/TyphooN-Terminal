@@ -14795,6 +14795,8 @@ impl TyphooNApp {
                 }
                 self.charts.push(new_chart);
                 self.active_tab = self.charts.len() - 1;
+                let sym = self.symbol_input.clone();
+                self.queue_open_symbol_sync_all_timeframes(&sym);
             }
             "CLOSE_TAB" => {
                 if self.charts.len() > 1 {
@@ -14865,6 +14867,7 @@ impl TyphooNApp {
                             self.gpu_indicators = gpu;
                         }
                         self.charts.push(chart);
+                        self.queue_open_symbol_sync_all_timeframes(sym);
                     }
                     self.active_tab = self.charts.len().saturating_sub(1);
                     self.symbol_input = symbols.last().cloned().unwrap_or_default();
