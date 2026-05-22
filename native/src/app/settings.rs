@@ -97,6 +97,12 @@ impl TyphooNApp {
                             self.log.push_back(LogEntry::info("Alpaca disabled — stopped UI-side login/sync/position/order activity. Existing cache data was not deleted."));
                         }
                     }
+                    if ui.checkbox(&mut self.darwinex_enabled, "Enable Darwinex").on_hover_text("When off: hides Darwinex from the Scope cycle and disables Darwinex-scoped discovery. Stored/imported data is left untouched.").changed() {
+                        settings_save_after = true;
+                        if !self.darwinex_enabled && self.broker_scope == EventSource::Darwinex {
+                            self.broker_scope = EventSource::All;
+                        }
+                    }
                     let tt_before = self.tastytrade_enabled;
                     if ui.checkbox(&mut self.tastytrade_enabled, "Enable tastytrade").on_hover_text("When off: no manual/startup connection, positions/balances, or tastytrade bar sync. Stored data is left untouched.").changed() {
                         settings_save_after = true;

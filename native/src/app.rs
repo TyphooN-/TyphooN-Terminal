@@ -10562,6 +10562,7 @@ pub struct TyphooNApp {
     broker_secret: String,
     broker_paper: bool,
     alpaca_enabled: bool,
+    darwinex_enabled: bool,
 
     /// Broker connection fields (tastytrade).
     tt_username: String,
@@ -26846,6 +26847,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             broker_secret: String::new(),
             broker_paper: true,
             alpaca_enabled: true,
+            darwinex_enabled: true,
             tt_username: String::new(),
             tt_password: String::new(),
             tt_sandbox: false, // Default to Production (sandbox requires separate dev credentials)

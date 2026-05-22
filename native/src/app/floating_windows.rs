@@ -4057,12 +4057,17 @@ impl TyphooNApp {
                 scoped_news_symbols.push(chart_symbol.clone());
             }
 
+            let content_h = ctx.content_rect().height();
+            let news_default_h = (content_h * 0.58).clamp(420.0, 560.0);
+            let news_max_h = (content_h * 0.82).clamp(480.0, 760.0);
             let mut open = self.show_news;
             let mut open_url: Option<String> = None;
             egui::Window::new("News & Research")
                 .open(&mut open)
                 .resizable(true)
-                .default_size([920.0, 520.0])
+                .default_size([920.0, news_default_h])
+                .min_size([680.0, 320.0])
+                .max_size([1280.0, news_max_h])
                 .show(ctx, |ui| {
                     // ── Top bar: symbol filter + search + fetch controls ─────────
                     ui.horizontal(|ui| {
@@ -4168,10 +4173,11 @@ impl TyphooNApp {
                     } else {
                         let total = self.news_full_articles.len();
                         let avail = ui.available_size();
+                        let pane_h = avail.y.clamp(220.0, news_max_h - 150.0);
                         let list_w = (avail.x * 0.38).clamp(240.0, 420.0);
                         ui.horizontal(|ui| {
                             // ── Left: article list ──
-                            ui.allocate_ui_with_layout(egui::vec2(list_w, avail.y), egui::Layout::top_down(egui::Align::Min), |ui| {
+                            ui.allocate_ui_with_layout(egui::vec2(list_w, pane_h), egui::Layout::top_down(egui::Align::Min), |ui| {
                                 egui::ScrollArea::vertical()
                                     .id_salt("news_list_scroll")
                                     .auto_shrink([false, false])
@@ -4269,6 +4275,7 @@ impl TyphooNApp {
                                         egui::ScrollArea::vertical()
                                             .id_salt("news_body_scroll")
                                             .auto_shrink([false, false])
+                                            .max_height((pane_h - 110.0).max(120.0))
                                             .show(ui, |ui| {
                                                 if a.summary.is_empty() {
                                                     ui.label(egui::RichText::new("(No summary — click Open Source for the full article.)")

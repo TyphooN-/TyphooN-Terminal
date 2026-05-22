@@ -9088,7 +9088,7 @@ impl eframe::App for TyphooNApp {
                 );
                 // Broker scope indicator — click to cycle through scopes.
                 // Shows the current global filter so the trader always knows what
-                // data universe they're looking at (All / Alpaca / Darwinex / Tasty / Kraken).
+                // data universe they're looking at (All / enabled brokers / Darwinex).
                 ui.separator();
                 let (scope_lbl, scope_col) = match self.broker_scope {
                     EventSource::All => ("ALL", egui::Color32::from_rgb(140, 140, 160)),
@@ -9106,17 +9106,29 @@ impl eframe::App for TyphooNApp {
                 .fill(scope_col);
                 if ui
                     .add(scope_btn)
-                    .on_hover_text("Left-click: cycle scope. Right-click: open scope settings.")
+                    .on_hover_text("Left-click: cycle ALL, Darwinex, and enabled brokers. Right-click: open scope settings.")
                     .clicked()
                 {
-                    self.broker_scope = match self.broker_scope {
-                        EventSource::All => EventSource::Alpaca,
-                        EventSource::Alpaca => EventSource::Darwinex,
-                        EventSource::Darwinex => EventSource::Tasty,
-                        EventSource::Tasty => EventSource::Kraken,
-                        EventSource::Kraken => EventSource::Positions,
-                        EventSource::Positions => EventSource::All,
-                    };
+                    let mut scope_cycle = vec![EventSource::All];
+                    if self.alpaca_enabled {
+                        scope_cycle.push(EventSource::Alpaca);
+                    }
+                    // Darwinex is useful as a scope because we know its tradable asset universe.
+                    if self.darwinex_enabled {
+                        scope_cycle.push(EventSource::Darwinex);
+                    }
+                    if self.tastytrade_enabled {
+                        scope_cycle.push(EventSource::Tasty);
+                    }
+                    if self.kraken_enabled {
+                        scope_cycle.push(EventSource::Kraken);
+                    }
+                    let next_idx = scope_cycle
+                        .iter()
+                        .position(|scope| *scope == self.broker_scope)
+                        .map(|idx| (idx + 1) % scope_cycle.len())
+                        .unwrap_or(0);
+                    self.broker_scope = scope_cycle[next_idx];
                     // Sync fund_source toggles
                     match self.broker_scope {
                         EventSource::All => {

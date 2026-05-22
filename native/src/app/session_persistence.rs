@@ -272,6 +272,7 @@ impl TyphooNApp {
         serde_json::json!({
             "kraken_scrape_schema": 3,
             "alpaca_enabled": self.alpaca_enabled,
+            "darwinex_enabled": self.darwinex_enabled,
             "tastytrade_enabled": self.tastytrade_enabled,
             "kraken_enabled": self.kraken_enabled,
             "kraken_scrape_xstocks": self.kraken_scrape_xstocks,
@@ -311,6 +312,9 @@ impl TyphooNApp {
         let kraken_scrape_schema = value["kraken_scrape_schema"].as_u64().unwrap_or(1);
         if let Some(enabled) = value["alpaca_enabled"].as_bool() {
             self.alpaca_enabled = enabled;
+        }
+        if let Some(enabled) = value["darwinex_enabled"].as_bool() {
+            self.darwinex_enabled = enabled;
         }
         if let Some(enabled) = value["tastytrade_enabled"].as_bool() {
             self.tastytrade_enabled = enabled;
@@ -654,6 +658,7 @@ impl TyphooNApp {
             "hermes_provider": self.hermes_provider,
             // Credentials: keyring-only (secure OS storage). Session stores non-secret config.
             "alpaca_enabled": self.alpaca_enabled,
+            "darwinex_enabled": self.darwinex_enabled,
             "tastytrade_enabled": self.tastytrade_enabled,
             "kraken_enabled": self.kraken_enabled,
             "broker_paper": self.broker_paper,
@@ -3288,6 +3293,9 @@ impl TyphooNApp {
                 }
                 if let Some(enabled) = v["alpaca_enabled"].as_bool() {
                     self.alpaca_enabled = enabled;
+                }
+                if let Some(enabled) = v["darwinex_enabled"].as_bool() {
+                    self.darwinex_enabled = enabled;
                 }
                 if let Some(enabled) = v["tastytrade_enabled"].as_bool() {
                     self.tastytrade_enabled = enabled;
