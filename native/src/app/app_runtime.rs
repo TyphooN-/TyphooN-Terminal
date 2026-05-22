@@ -14612,18 +14612,29 @@ impl eframe::App for TyphooNApp {
                     rect.min,
                     egui::pos2(rect.right() - price_axis_w, rect.bottom()),
                 );
+                // Register the price-axis drag widget FIRST and with `Sense::drag()` so
+                // `dragged()` fires from the press frame onward — `click_and_drag` defers
+                // until egui decides the gesture is "decidedly dragging", which together
+                // with the chart-body widget below was eating slow TradingView-style
+                // scale flicks. A second click-only widget on the same rect (different
+                // id) keeps double-click reset working.
+                let price_axis_resp = ui
+                    .interact(
+                        price_axis_rect,
+                        ui.id().with(("single_chart_price_axis_drag", self.active_tab)),
+                        egui::Sense::drag(),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::ResizeVertical);
+                let price_axis_click_resp = ui.interact(
+                    price_axis_rect,
+                    ui.id().with(("single_chart_price_axis_click", self.active_tab)),
+                    egui::Sense::click(),
+                );
                 let resp = ui.interact(
                     chart_body_interact_rect,
                     ui.id().with(("single_chart_body_drag", self.active_tab)),
                     egui::Sense::click_and_drag(),
                 );
-                let price_axis_resp = ui
-                    .interact(
-                        price_axis_rect,
-                        ui.id().with(("single_chart_price_axis_drag", self.active_tab)),
-                        egui::Sense::click_and_drag(),
-                    )
-                    .on_hover_cursor(egui::CursorIcon::ResizeVertical);
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
                     if price_axis_resp.drag_started() {
                         chart.is_scaling_price = true;
@@ -14637,7 +14648,7 @@ impl eframe::App for TyphooNApp {
                         self.user_interacting = true;
                     }
                     if price_axis_resp.dragged() {
-                        let dy = ctx.input(|i| i.pointer.delta().y);
+                        let dy = price_axis_resp.drag_delta().y;
                         if dy.abs() > 0.0 {
                             let zoom_delta = -dy as f64 * 0.003;
                             chart.price_zoom =
@@ -14647,7 +14658,7 @@ impl eframe::App for TyphooNApp {
                             self.user_interacting = true;
                         }
                     }
-                    if price_axis_resp.double_clicked() {
+                    if price_axis_click_resp.double_clicked() {
                         chart.price_zoom = 1.0;
                         chart.price_pan = 0.0;
                     }
