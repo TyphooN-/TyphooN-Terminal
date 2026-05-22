@@ -814,6 +814,9 @@ impl TyphooNApp {
         if !self.kraken_enabled || symbols.is_empty() {
             return 0;
         }
+        if self.kraken_equities_sync_pause_until_ts > chrono::Utc::now().timestamp() {
+            return 0;
+        }
         let timeframes = self.enabled_standard_sync_timeframes();
         if timeframes.is_empty() {
             return 0;
@@ -836,7 +839,7 @@ impl TyphooNApp {
         let foreground_slots = if self.user_interacting && !full_tilt {
             1
         } else {
-            4
+            2
         };
         let available_slots = queue_window
             .saturating_sub(
@@ -1122,6 +1125,9 @@ impl TyphooNApp {
         if !self.kraken_enabled || !self.sync_timeframe_enabled(tf) {
             return false;
         }
+        if self.kraken_equities_sync_pause_until_ts > chrono::Utc::now().timestamp() {
+            return false;
+        }
         let symbol = normalize_market_data_symbol(symbol)
             .replace('/', "")
             .trim_end_matches(".EQ")
@@ -1143,10 +1149,22 @@ impl TyphooNApp {
             symbol: symbol.clone(),
             timeframe: tf.to_string(),
         });
-        self.log.push_back(LogEntry::info(format!(
-            "Kraken equities sync queued {} {}",
-            symbol, tf
-        )));
+        let chart_or_owned = self.charts.iter().any(|chart| {
+            normalize_market_data_symbol(&chart.symbol)
+                .replace('/', "")
+                .trim_end_matches(".EQ")
+                .eq_ignore_ascii_case(&symbol)
+        }) || self.kraken_balances.iter().any(|(asset, _)| {
+            Self::kraken_display_asset(asset)
+                .trim_end_matches(".EQ")
+                .eq_ignore_ascii_case(&symbol)
+        });
+        if chart_or_owned {
+            self.log.push_back(LogEntry::info(format!(
+                "Kraken equities sync queued {} {}",
+                symbol, tf
+            )));
+        }
         true
     }
 

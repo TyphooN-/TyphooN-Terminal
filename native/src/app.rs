@@ -8955,6 +8955,11 @@ enum BrokerMsg {
         timeframe: String,
         bars: Vec<typhoon_engine::broker::kraken_broker::KrakenEquityBar>,
     },
+    KrakenEquityHistoryError {
+        symbol: String,
+        timeframe: String,
+        error: String,
+    },
     KrakenEquityUniverse(Vec<typhoon_engine::broker::kraken_broker::KrakenEquityMarket>),
     SecScrapeResult(String),
     FilingContent(String), // fetched SEC filing document text
@@ -10780,6 +10785,8 @@ pub struct TyphooNApp {
     kraken_equity_universe_symbols: Vec<String>,
     kraken_equity_universe_requested: bool,
     kraken_equity_universe_retry_after_ts: i64,
+    kraken_equities_sync_pause_until_ts: i64,
+    kraken_equities_sync_pause_reason: String,
     /// Tastytrade-cached symbol set (uppercased, parsed from detailed_stats keys
     /// with the `tastytrade:` prefix). Rebuilt alongside cached_mt5_symbols so
     /// the Alpaca equity rotation can exclude anything tastytrade already has.
@@ -13518,6 +13525,8 @@ impl TyphooNApp {
                 Arc::new(tokio::sync::Mutex::new(None));
             let mut kraken_broker: Option<typhoon_engine::broker::kraken_broker::KrakenBroker> = None;
             let mut kraken_ws_broker: Option<typhoon_engine::broker::kraken_broker::KrakenBroker> = None;
+            let mut kraken_equity_history_next_at = std::time::Instant::now();
+            let mut kraken_equity_history_backoff_until: Option<std::time::Instant> = None;
             let importing_flag = importing_flag_broker;
             let lan_client = lan_client_broker;
             // Shared sender for forwarding requests to LAN sync WebSocket
@@ -24445,6 +24454,28 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                     }
                     BrokerCmd::KrakenFetchEquityHistory { symbol, timeframe } => {
+                        if let Some(until) = kraken_equity_history_backoff_until {
+                            if until > std::time::Instant::now() {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::KrakenEquityHistoryError {
+                                    symbol,
+                                    timeframe,
+                                    error: "Kraken equity history paused after HTTP 429".to_string(),
+                                });
+                                continue;
+                            }
+                            kraken_equity_history_backoff_until = None;
+                        }
+                        let now = std::time::Instant::now();
+                        if kraken_equity_history_next_at > now {
+                            tokio::time::sleep_until(tokio::time::Instant::from_std(
+                                kraken_equity_history_next_at,
+                            ))
+                            .await;
+                        }
+                        kraken_equity_history_next_at = std::time::Instant::now()
+                            + std::time::Duration::from_millis(
+                                KRAKEN_EQUITIES_HISTORY_MIN_INTERVAL_MS,
+                            );
                         let interval_minutes = match timeframe.as_str() {
                             "1Min" => 1,
                             "5Min" => 5,
@@ -24475,7 +24506,19 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 });
                             }
                             Err(e) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e));
+                                if e.contains("429") || e.contains("Too Many Requests") {
+                                    kraken_equity_history_backoff_until = Some(
+                                        std::time::Instant::now()
+                                            + std::time::Duration::from_secs(
+                                                KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS as u64,
+                                            ),
+                                    );
+                                }
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::KrakenEquityHistoryError {
+                                    symbol,
+                                    timeframe,
+                                    error: e,
+                                });
                             }
                         }
                     }
@@ -26832,6 +26875,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
             kraken_equity_universe_symbols: Vec::new(),
             kraken_equity_universe_requested: false,
             kraken_equity_universe_retry_after_ts: 0,
+            kraken_equities_sync_pause_until_ts: 0,
+            kraken_equities_sync_pause_reason: String::new(),
             cached_tastytrade_symbols: std::collections::HashSet::new(),
             cached_tastytrade_sync_state: std::collections::HashMap::new(),
             cached_tastytrade_sync_state_rev: None,

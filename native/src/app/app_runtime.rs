@@ -1717,6 +1717,39 @@ impl eframe::App for TyphooNApp {
                         )));
                     }
                 }
+                BrokerMsg::KrakenEquityHistoryError {
+                    symbol,
+                    timeframe,
+                    error,
+                } => {
+                    let symbol = symbol
+                        .replace('/', "")
+                        .trim_end_matches(".EQ")
+                        .to_ascii_uppercase();
+                    let timeframe = normalize_sync_timeframe_key(&timeframe)
+                        .unwrap_or(timeframe.as_str())
+                        .to_string();
+                    self.pending_kraken_fetches
+                        .retain(|key| key != &format!("equity:{}:{}", symbol, timeframe));
+                    if error.contains("No data") || error.contains("no data") {
+                        self.unresolvable_mark("kraken-equities", &symbol, &timeframe, &error);
+                        self.log.push_back(LogEntry::warn(format!(
+                            "Kraken equities: no bars for {} {}",
+                            symbol, timeframe
+                        )));
+                    } else if error.contains("429") || error.contains("Too Many Requests") {
+                        let now = chrono::Utc::now().timestamp();
+                        self.kraken_equities_sync_pause_until_ts =
+                            now + KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS;
+                        self.kraken_equities_sync_pause_reason = error.clone();
+                        self.log.push_back(LogEntry::warn(format!(
+                            "Kraken equities history rate-limited; pausing universe sync for {}s",
+                            KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS
+                        )));
+                    } else if !error.contains("paused after HTTP 429") {
+                        self.log.push_back(LogEntry::err(error));
+                    }
+                }
                 BrokerMsg::Quote(symbol, bid, ask, last) => {
                     self.log.push_back(LogEntry::info(format!(
                         "{}: bid {} ask {} last {}",
