@@ -17249,23 +17249,38 @@ impl TyphooNApp {
                 ));
             }
             "KRAKEN_TRADES" | "KRAKENTRADES" | "KRAKEN_HISTORY" => {
-                self.show_kraken_trade_history = true;
-                let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
-                self.log
-                    .push_back(LogEntry::info("Kraken: refreshing trade history"));
+                if !self.kraken_enabled {
+                    self.log
+                        .push_back(LogEntry::warn("Kraken is disabled in Settings"));
+                } else {
+                    self.show_kraken_trade_history = true;
+                    let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
+                    self.log
+                        .push_back(LogEntry::info("Kraken: refreshing trade history"));
+                }
             }
             "KRAKEN_ORDERS" | "KRAKENORDERS" | "KRAKEN_OPEN_ORDERS" => {
-                self.show_kraken_open_orders = true;
-                let _ = self.broker_tx.send(BrokerCmd::KrakenFetchOpenOrders);
-                self.log
-                    .push_back(LogEntry::info("Kraken: refreshing open orders"));
+                if !self.kraken_enabled {
+                    self.log
+                        .push_back(LogEntry::warn("Kraken is disabled in Settings"));
+                } else {
+                    self.show_kraken_open_orders = true;
+                    let _ = self.broker_tx.send(BrokerCmd::KrakenFetchOpenOrders);
+                    self.log
+                        .push_back(LogEntry::info("Kraken: refreshing open orders"));
+                }
             }
             "KRAKEN_FUTURES" | "KRAKENFUTURES" => {
-                let _ = self.broker_tx.send(BrokerCmd::KrakenFuturesGetInstruments);
-                self.kraken_futures_requested = true;
-                self.log.push_back(LogEntry::info(
-                    "Kraken Futures: loading public instrument universe",
-                ));
+                if !self.kraken_enabled {
+                    self.log
+                        .push_back(LogEntry::warn("Kraken is disabled in Settings"));
+                } else {
+                    let _ = self.broker_tx.send(BrokerCmd::KrakenFuturesGetInstruments);
+                    self.kraken_futures_requested = true;
+                    self.log.push_back(LogEntry::info(
+                        "Kraken Futures: loading public instrument universe",
+                    ));
+                }
             }
             "PREV_LEVELS" => self.show_prev_levels = !self.show_prev_levels,
             // Trading

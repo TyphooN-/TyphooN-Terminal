@@ -1110,14 +1110,18 @@ impl TyphooNApp {
     }
 
     pub(super) fn selected_live_broker_targets(&self) -> (bool, bool, bool) {
-        let send_alpaca = self.broker_connected
+        let send_alpaca = self.alpaca_enabled
+            && self.broker_connected
             && matches!(self.order_broker, OrderBroker::Alpaca | OrderBroker::Both);
-        let send_tt = self.tt_connected
+        let send_tt = self.tastytrade_enabled
+            && self.tt_connected
             && matches!(
                 self.order_broker,
                 OrderBroker::Tastytrade | OrderBroker::Both
             );
-        let send_kraken = self.kraken_connected && matches!(self.order_broker, OrderBroker::Kraken);
+        let send_kraken = self.kraken_enabled
+            && self.kraken_connected
+            && matches!(self.order_broker, OrderBroker::Kraken);
         (send_alpaca, send_tt, send_kraken)
     }
 

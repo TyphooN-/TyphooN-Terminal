@@ -133,6 +133,7 @@ impl eframe::App for TyphooNApp {
 
         if self.cache_loaded
             && self.lan_sync_mode != "client"
+            && self.kraken_enabled
             && self.kraken_any_spot_scrape_enabled()
             && self.kraken_pairs.is_empty()
             && !self.kraken_pairs_requested
@@ -142,6 +143,7 @@ impl eframe::App for TyphooNApp {
         }
         if self.cache_loaded
             && self.lan_sync_mode != "client"
+            && self.kraken_enabled
             && self.kraken_scrape_xstocks
             && self.kraken_equity_universe_symbols.is_empty()
             && !self.kraken_equity_universe_requested
@@ -152,6 +154,7 @@ impl eframe::App for TyphooNApp {
         }
         if self.cache_loaded
             && self.lan_sync_mode != "client"
+            && self.kraken_enabled
             && self.kraken_scrape_futures
             && self.kraken_futures_symbols.is_empty()
             && !self.kraken_futures_requested
@@ -160,6 +163,7 @@ impl eframe::App for TyphooNApp {
             self.kraken_futures_requested = true;
         }
         if self.cache_loaded
+            && self.tastytrade_enabled
             && self.tt_connected
             && !self.tastytrade_universe_requested
             && chrono::Utc::now().timestamp() >= self.tastytrade_universe_retry_after_ts
@@ -236,6 +240,7 @@ impl eframe::App for TyphooNApp {
             >= self.market_data_sync_interval()
             && self.cache_loaded
             && self.lan_sync_mode != "client"
+            && self.kraken_enabled
             && (self.kraken_any_spot_scrape_enabled()
                 || (self.kraken_scrape_xstocks && !self.kraken_equity_universe_symbols.is_empty()))
         {
@@ -248,6 +253,7 @@ impl eframe::App for TyphooNApp {
             >= self.market_data_sync_interval()
             && self.cache_loaded
             && self.lan_sync_mode != "client"
+            && self.kraken_enabled
         {
             self.kraken_futures_universe_last_schedule = now_instant;
             let _ = self.schedule_kraken_futures_universe_sectors();
@@ -257,6 +263,7 @@ impl eframe::App for TyphooNApp {
             >= self.market_data_sync_interval()
             && self.cache_loaded
             && self.lan_sync_mode != "client"
+            && self.tastytrade_enabled
             && self.tt_connected
         {
             self.tastytrade_universe_last_schedule = now_instant;
@@ -486,7 +493,8 @@ impl eframe::App for TyphooNApp {
             }
             // Auto-connect Alpaca if credentials are available and not a LAN client
             // (LAN clients get data from the server, no need for direct broker connection)
-            if !self.broker_api_key.is_empty()
+            if self.alpaca_enabled
+                && !self.broker_api_key.is_empty()
                 && !self.broker_secret.is_empty()
                 && !self.lan_client_enabled
             {
@@ -506,7 +514,10 @@ impl eframe::App for TyphooNApp {
                 )));
             }
             // Auto-connect Kraken if credentials are available
-            if !self.kraken_api_key.is_empty() && !self.kraken_api_secret.is_empty() {
+            if self.kraken_enabled
+                && !self.kraken_api_key.is_empty()
+                && !self.kraken_api_secret.is_empty()
+            {
                 let _ = self.broker_tx.send(BrokerCmd::KrakenConnect {
                     api_key: self.kraken_api_key.clone(),
                     api_secret: self.kraken_api_secret.clone(),
@@ -805,32 +816,39 @@ impl eframe::App for TyphooNApp {
             {
                 self.lan_client_last_reload = now_instant;
                 if let Some(ref cache) = self.cache {
-                    if let Ok(Some(json)) = cache.get_kv("broker:positions") {
-                        if let Ok(pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
-                            self.live_positions = pos;
+                    if self.alpaca_enabled {
+                        if let Ok(Some(json)) = cache.get_kv("broker:positions") {
+                            if let Ok(pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
+                                self.live_positions = pos;
+                            }
+                        }
+                        if let Ok(Some(json)) = cache.get_kv("broker:account") {
+                            if let Ok(acct) = serde_json::from_str::<AccountInfo>(&json) {
+                                self.live_account = Some(acct);
+                            }
+                        }
+                        if let Ok(Some(json)) = cache.get_kv("broker:orders") {
+                            if let Ok(orders) = serde_json::from_str::<Vec<OrderInfo>>(&json) {
+                                self.live_orders = orders;
+                            }
                         }
                     }
-                    if let Ok(Some(json)) = cache.get_kv("broker:tt_positions") {
-                        if let Ok(pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
-                            self.tt_positions = pos;
+                    if self.tastytrade_enabled {
+                        if let Ok(Some(json)) = cache.get_kv("broker:tt_positions") {
+                            if let Ok(pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
+                                self.tt_positions = pos;
+                            }
                         }
                     }
-                    if let Ok(Some(json)) = cache.get_kv("broker:kr_positions") {
-                        if let Ok(mut pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
-                            pos.retain(|p| {
-                                p.asset_class != "crypto_spot" && !p.asset_id.starts_with("spot:")
-                            });
-                            self.kr_positions = pos;
-                        }
-                    }
-                    if let Ok(Some(json)) = cache.get_kv("broker:account") {
-                        if let Ok(acct) = serde_json::from_str::<AccountInfo>(&json) {
-                            self.live_account = Some(acct);
-                        }
-                    }
-                    if let Ok(Some(json)) = cache.get_kv("broker:orders") {
-                        if let Ok(orders) = serde_json::from_str::<Vec<OrderInfo>>(&json) {
-                            self.live_orders = orders;
+                    if self.kraken_enabled {
+                        if let Ok(Some(json)) = cache.get_kv("broker:kr_positions") {
+                            if let Ok(mut pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
+                                pos.retain(|p| {
+                                    p.asset_class != "crypto_spot"
+                                        && !p.asset_id.starts_with("spot:")
+                                });
+                                self.kr_positions = pos;
+                            }
                         }
                     }
                     // Live quotes from server (update forming bars on LAN client)
@@ -1039,6 +1057,9 @@ impl eframe::App for TyphooNApp {
             match msg {
                 BrokerMsg::Connected(s) => {
                     if s.contains("Kraken") {
+                        if !self.kraken_enabled {
+                            continue;
+                        }
                         self.kraken_connected = true;
                         // REST is authoritative: load balances/positions/history/orders before
                         // relying on private WS deltas.
@@ -1049,6 +1070,9 @@ impl eframe::App for TyphooNApp {
                         // Start private WebSocket for real-time ownTrades / openOrders.
                         let _ = self.broker_tx.send(BrokerCmd::KrakenStartPrivateWs);
                     } else if s.contains("tastytrade") {
+                        if !self.tastytrade_enabled {
+                            continue;
+                        }
                         self.tt_connected = true;
                         self.tastytrade_universe_symbols.clear();
                         self.tastytrade_universe_requested = false;
@@ -1056,6 +1080,9 @@ impl eframe::App for TyphooNApp {
                         self.tastytrade_sync_pause_until_ts = 0;
                         self.tastytrade_sync_pause_reason.clear();
                     } else {
+                        if !self.alpaca_enabled {
+                            continue;
+                        }
                         self.broker_connected = true;
                         // Auto-fetch positions, orders, and recent fills (Alpaca)
                         let _ = self.broker_tx.send(BrokerCmd::GetPositions);
@@ -1066,6 +1093,9 @@ impl eframe::App for TyphooNApp {
                     self.log.push_back(LogEntry::info(s));
                 }
                 BrokerMsg::KrakenTrades(mut trades) => {
+                    if !self.kraken_enabled {
+                        continue;
+                    }
                     trades.sort_by(|a, b| {
                         b.time
                             .partial_cmp(&a.time)
@@ -1084,6 +1114,9 @@ impl eframe::App for TyphooNApp {
                     )));
                 }
                 BrokerMsg::KrakenLiveTrade(trade) => {
+                    if !self.kraken_enabled {
+                        continue;
+                    }
                     if self.insert_kraken_live_trade(trade) {
                         self.refresh_kraken_position_costs();
                         // ownTrades is the low-latency fill signal. Reconcile REST snapshots
@@ -1095,6 +1128,9 @@ impl eframe::App for TyphooNApp {
                     }
                 }
                 BrokerMsg::KrakenOpenOrders(orders) => {
+                    if !self.kraken_enabled {
+                        continue;
+                    }
                     for order in orders {
                         let terminal = matches!(
                             order.status.as_str(),
@@ -1127,7 +1163,7 @@ impl eframe::App for TyphooNApp {
                     } else {
                         self.log.push_back(LogEntry::info(text));
                     }
-                    if should_reconcile {
+                    if should_reconcile && self.kraken_enabled {
                         // A reconnect means a delta gap may exist. Pull REST snapshots so
                         // balances, cost basis, P/L, and open orders converge immediately.
                         let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
@@ -1206,6 +1242,9 @@ impl eframe::App for TyphooNApp {
                     self.unresolvable_mark(&broker, &symbol, &timeframe, &reason);
                 }
                 BrokerMsg::Account(acct) => {
+                    if !self.alpaca_enabled {
+                        continue;
+                    }
                     // Store to cache KV for LAN sync — dedup to avoid timestamp churn
                     if let Ok(json) = serde_json::to_string(&acct) {
                         self.put_kv_dedup("broker:account", &json);
@@ -1228,6 +1267,9 @@ impl eframe::App for TyphooNApp {
                     self.live_account = Some(acct);
                 }
                 BrokerMsg::Positions(pos) => {
+                    if !self.alpaca_enabled {
+                        continue;
+                    }
                     self.positions_last_update_ts = chrono::Utc::now().timestamp();
                     if let Ok(json) = serde_json::to_string(&pos) {
                         self.put_kv_dedup("broker:positions", &json);
@@ -1251,10 +1293,16 @@ impl eframe::App for TyphooNApp {
                     self.live_positions = pos;
                 }
                 BrokerMsg::AllAssets(assets) => {
+                    if !self.alpaca_enabled {
+                        continue;
+                    }
                     self.all_broker_assets = assets;
                     self.all_broker_assets_fetched = true;
                 }
                 BrokerMsg::RecentFills(fills) => {
+                    if !self.alpaca_enabled {
+                        continue;
+                    }
                     self.recent_fills = fills;
                     // Invalidate trade overlay cache so fills show immediately
                     for c in &mut self.charts {
@@ -1357,6 +1405,9 @@ impl eframe::App for TyphooNApp {
                     self.write_mt5_demand_txt();
                 }
                 BrokerMsg::TastytradePositions(pos) => {
+                    if !self.tastytrade_enabled {
+                        continue;
+                    }
                     self.positions_last_update_ts = chrono::Utc::now().timestamp();
                     let prev_symbols: std::collections::HashSet<String> = self
                         .tt_positions
@@ -1380,9 +1431,15 @@ impl eframe::App for TyphooNApp {
                     self.tt_positions = pos;
                 }
                 BrokerMsg::TastytradeBalances(bal) => {
+                    if !self.tastytrade_enabled {
+                        continue;
+                    }
                     self.tt_balances = Some(bal);
                 }
                 BrokerMsg::KrakenPositions(mut pos) => {
+                    if !self.kraken_enabled {
+                        continue;
+                    }
                     self.positions_last_update_ts = chrono::Utc::now().timestamp();
                     pos.retain(|p| {
                         p.asset_class != "crypto_spot" && !p.asset_id.starts_with("spot:")
@@ -1394,6 +1451,9 @@ impl eframe::App for TyphooNApp {
                     self.refresh_kraken_position_costs();
                 }
                 BrokerMsg::Orders(orders) => {
+                    if !self.alpaca_enabled {
+                        continue;
+                    }
                     self.orders_last_update_ts = chrono::Utc::now().timestamp();
                     if let Ok(json) = serde_json::to_string(&orders) {
                         self.put_kv_dedup("broker:orders", &json);
@@ -1435,11 +1495,12 @@ impl eframe::App for TyphooNApp {
                         || msg.contains("order")
                         || msg.contains("closed")
                         || msg.contains("cancelled");
-                    if is_trade && self.broker_connected {
+                    if is_trade && self.alpaca_enabled && self.broker_connected {
                         let _ = self.broker_tx.send(BrokerCmd::GetPositions);
                         let _ = self.broker_tx.send(BrokerCmd::GetOrders);
                     }
                     if is_trade
+                        && self.tastytrade_enabled
                         && self.tt_connected
                         && msg.to_ascii_lowercase().contains("tastytrade")
                     {
@@ -1447,6 +1508,7 @@ impl eframe::App for TyphooNApp {
                         let _ = self.broker_tx.send(BrokerCmd::TastytradeGetBalances);
                     }
                     if is_trade
+                        && self.kraken_enabled
                         && self.kraken_connected
                         && msg.to_ascii_lowercase().contains("kraken")
                     {
@@ -1506,6 +1568,9 @@ impl eframe::App for TyphooNApp {
                     self.news_articles = articles;
                 }
                 BrokerMsg::KrakenEquityUniverse(markets) => {
+                    if !self.kraken_enabled {
+                        continue;
+                    }
                     let mut symbols: Vec<String> = markets
                         .into_iter()
                         .filter(|market| {
@@ -1529,6 +1594,9 @@ impl eframe::App for TyphooNApp {
                     )));
                 }
                 BrokerMsg::KrakenEquityQuote(ticker) => {
+                    if !self.kraken_enabled {
+                        continue;
+                    }
                     let symbol = ticker.symbol.to_ascii_uppercase();
                     let last = ticker.price;
                     if last > 0.0 && last.is_finite() {
@@ -1855,6 +1923,9 @@ impl eframe::App for TyphooNApp {
                     self.crypto_top50 = data;
                 }
                 BrokerMsg::KrakenBalances(balances) => {
+                    if !self.kraken_enabled {
+                        continue;
+                    }
                     self.kraken_balances = balances;
                     let active_tf = self
                         .charts
@@ -7412,21 +7483,31 @@ impl eframe::App for TyphooNApp {
                 web_cmds_drained += 1;
                 match cmd {
                     typhoon_web_protocol::WebCmd::GetAccount => {
-                        let _ = self.broker_tx.send(BrokerCmd::GetAccount);
+                        if self.alpaca_enabled {
+                            let _ = self.broker_tx.send(BrokerCmd::GetAccount);
+                        }
                     }
                     typhoon_web_protocol::WebCmd::GetPositions => {
-                        let _ = self.broker_tx.send(BrokerCmd::GetPositions);
+                        if self.alpaca_enabled {
+                            let _ = self.broker_tx.send(BrokerCmd::GetPositions);
+                        }
                     }
                     typhoon_web_protocol::WebCmd::GetOrders => {
-                        let _ = self.broker_tx.send(BrokerCmd::GetOrders);
+                        if self.alpaca_enabled {
+                            let _ = self.broker_tx.send(BrokerCmd::GetOrders);
+                        }
                     }
                     typhoon_web_protocol::WebCmd::GetWatchlistQuotes { symbols } => {
-                        let _ = self
-                            .broker_tx
-                            .send(BrokerCmd::GetWatchlistQuotes { symbols });
+                        if self.alpaca_enabled {
+                            let _ = self
+                                .broker_tx
+                                .send(BrokerCmd::GetWatchlistQuotes { symbols });
+                        }
                     }
                     typhoon_web_protocol::WebCmd::GetMarketClock => {
-                        let _ = self.broker_tx.send(BrokerCmd::GetMarketClock);
+                        if self.alpaca_enabled {
+                            let _ = self.broker_tx.send(BrokerCmd::GetMarketClock);
+                        }
                     }
                     typhoon_web_protocol::WebCmd::GetBars { symbol, timeframe } => {
                         // Read bars directly from cache and broadcast
@@ -7483,7 +7564,12 @@ impl eframe::App for TyphooNApp {
                         let broker_key = broker.to_ascii_lowercase();
                         let reply = match broker_key.as_str() {
                             "alpaca" => {
-                                if !self.broker_connected {
+                                if !self.alpaca_enabled {
+                                    typhoon_web_protocol::WebMsg::OrderResult {
+                                        ok: false,
+                                        message: "Alpaca broker is disabled on host".into(),
+                                    }
+                                } else if !self.broker_connected {
                                     typhoon_web_protocol::WebMsg::OrderResult {
                                         ok: false,
                                         message: "Alpaca broker not connected on host".into(),
@@ -7557,7 +7643,12 @@ impl eframe::App for TyphooNApp {
                                 }
                             }
                             "kraken" => {
-                                if !self.kraken_connected {
+                                if !self.kraken_enabled {
+                                    typhoon_web_protocol::WebMsg::OrderResult {
+                                        ok: false,
+                                        message: "Kraken broker is disabled on host".into(),
+                                    }
+                                } else if !self.kraken_connected {
                                     typhoon_web_protocol::WebMsg::OrderResult {
                                         ok: false,
                                         message: "Kraken broker not connected on host".into(),
@@ -16192,6 +16283,7 @@ impl eframe::App for TyphooNApp {
         // and broker fills eventually converge back into the unified position view.
         if now_instant.duration_since(self.broker_positions_last_poll)
             >= std::time::Duration::from_secs(60)
+            && self.tastytrade_enabled
             && self.tt_connected
             && !self.lan_client_enabled
             && self.cache_loaded
@@ -16202,6 +16294,7 @@ impl eframe::App for TyphooNApp {
         }
         if now_instant.duration_since(self.kraken_positions_last_poll)
             >= std::time::Duration::from_secs(60)
+            && self.kraken_enabled
             && self.kraken_connected
             && !self.lan_client_enabled
             && self.cache_loaded
@@ -16216,6 +16309,7 @@ impl eframe::App for TyphooNApp {
         if now_instant.duration_since(self.watchlist_quotes_last_poll)
             >= std::time::Duration::from_secs(15)
             && !self.user_watchlist.is_empty()
+            && self.alpaca_enabled
             && self.broker_connected
             && !self.lan_client_enabled
             && self.cache_loaded
@@ -16335,10 +16429,12 @@ impl eframe::App for TyphooNApp {
                 >= self.market_data_sync_interval()
             {
                 self.alpaca_rotation_last_sync = now_instant;
-                self.maybe_request_alpaca_asset_universe();
-                self.push_alpaca_sync_runtime_config();
-                let equity_syms = self.alpaca_equity_rotation_symbols();
-                self.schedule_alpaca_pairs(&equity_syms);
+                if self.alpaca_enabled {
+                    self.maybe_request_alpaca_asset_universe();
+                    self.push_alpaca_sync_runtime_config();
+                    let equity_syms = self.alpaca_equity_rotation_symbols();
+                    self.schedule_alpaca_pairs(&equity_syms);
+                }
             }
 
             // MT5 live bid/ask refresh every ~30s — fast read of bid_ask table only (no bar sync).

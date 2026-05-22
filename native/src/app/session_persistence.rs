@@ -271,6 +271,9 @@ impl TyphooNApp {
     pub(super) fn build_sync_preferences_value(&self) -> serde_json::Value {
         serde_json::json!({
             "kraken_scrape_schema": 3,
+            "alpaca_enabled": self.alpaca_enabled,
+            "tastytrade_enabled": self.tastytrade_enabled,
+            "kraken_enabled": self.kraken_enabled,
             "kraken_scrape_xstocks": self.kraken_scrape_xstocks,
             "kraken_scrape_usd_crypto": self.kraken_scrape_usd_crypto,
             "kraken_scrape_fiat_crypto": self.kraken_scrape_fiat_crypto,
@@ -306,6 +309,15 @@ impl TyphooNApp {
 
     pub(super) fn apply_sync_preferences_value(&mut self, value: &serde_json::Value) {
         let kraken_scrape_schema = value["kraken_scrape_schema"].as_u64().unwrap_or(1);
+        if let Some(enabled) = value["alpaca_enabled"].as_bool() {
+            self.alpaca_enabled = enabled;
+        }
+        if let Some(enabled) = value["tastytrade_enabled"].as_bool() {
+            self.tastytrade_enabled = enabled;
+        }
+        if let Some(enabled) = value["kraken_enabled"].as_bool() {
+            self.kraken_enabled = enabled;
+        }
         if let Some(enabled) = value["kraken_scrape_xstocks"].as_bool() {
             self.kraken_scrape_xstocks = enabled;
         }
@@ -641,6 +653,9 @@ impl TyphooNApp {
             "hermes_model": self.hermes_model,
             "hermes_provider": self.hermes_provider,
             // Credentials: keyring-only (secure OS storage). Session stores non-secret config.
+            "alpaca_enabled": self.alpaca_enabled,
+            "tastytrade_enabled": self.tastytrade_enabled,
+            "kraken_enabled": self.kraken_enabled,
             "broker_paper": self.broker_paper,
             "tt_sandbox": self.tt_sandbox,
             "sl_enabled": self.sl_enabled,
@@ -3270,6 +3285,15 @@ impl TyphooNApp {
                     if let Some(tp) = v["tt_password"].as_str() {
                         self.tt_password = tp.to_string();
                     }
+                }
+                if let Some(enabled) = v["alpaca_enabled"].as_bool() {
+                    self.alpaca_enabled = enabled;
+                }
+                if let Some(enabled) = v["tastytrade_enabled"].as_bool() {
+                    self.tastytrade_enabled = enabled;
+                }
+                if let Some(enabled) = v["kraken_enabled"].as_bool() {
+                    self.kraken_enabled = enabled;
                 }
                 if let Some(ts) = v["tt_sandbox"].as_bool() {
                     self.tt_sandbox = ts;

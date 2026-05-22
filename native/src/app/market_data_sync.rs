@@ -722,7 +722,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn kraken_equity_sync_symbols(&self) -> Vec<String> {
-        if !self.kraken_scrape_xstocks {
+        if !self.kraken_enabled || !self.kraken_scrape_xstocks {
             return Vec::new();
         }
         let mut seen = std::collections::HashSet::new();
@@ -794,7 +794,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn schedule_kraken_universe_sectors(&mut self) -> usize {
-        if !self.kraken_any_spot_scrape_enabled() {
+        if !self.kraken_enabled || !self.kraken_any_spot_scrape_enabled() {
             return 0;
         }
         let sectors = self.kraken_sync_symbol_sectors();
@@ -811,7 +811,7 @@ impl TyphooNApp {
 
     pub(super) fn schedule_kraken_equities_universe(&mut self) -> usize {
         let symbols = self.kraken_equity_sync_symbols();
-        if symbols.is_empty() {
+        if !self.kraken_enabled || symbols.is_empty() {
             return 0;
         }
         let timeframes = self.enabled_standard_sync_timeframes();
@@ -902,7 +902,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn schedule_kraken_futures_universe_sectors(&mut self) -> usize {
-        if !self.kraken_scrape_futures {
+        if !self.kraken_enabled || !self.kraken_scrape_futures {
             return 0;
         }
         let sectors = self.kraken_futures_sync_symbol_sectors();
@@ -1026,7 +1026,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn push_alpaca_sync_runtime_config(&self) {
-        if !self.broker_connected {
+        if !self.alpaca_enabled || !self.broker_connected {
             return;
         }
         let capacity = self.alpaca_sync_capacity();
@@ -1040,7 +1040,7 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
         };
-        if !self.sync_timeframe_enabled(tf) {
+        if !self.alpaca_enabled || !self.sync_timeframe_enabled(tf) {
             return false;
         }
         let symbol = normalize_market_data_symbol(symbol).replace('/', "");
@@ -1079,7 +1079,7 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
         };
-        if !self.sync_timeframe_enabled(tf) {
+        if !self.kraken_enabled || !self.sync_timeframe_enabled(tf) {
             return false;
         }
         let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
@@ -1119,7 +1119,7 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
         };
-        if !self.sync_timeframe_enabled(tf) {
+        if !self.kraken_enabled || !self.sync_timeframe_enabled(tf) {
             return false;
         }
         let symbol = normalize_market_data_symbol(symbol)
@@ -1151,7 +1151,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn queue_kraken_futures_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
-        if !self.kraken_scrape_futures {
+        if !self.kraken_enabled || !self.kraken_scrape_futures {
             return false;
         }
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
@@ -1214,7 +1214,7 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
         };
-        if !self.sync_timeframe_enabled(tf) {
+        if !self.tastytrade_enabled || !self.sync_timeframe_enabled(tf) {
             return false;
         }
         let symbol = normalize_market_data_symbol(symbol);
@@ -1266,7 +1266,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn schedule_alpaca_pairs(&mut self, symbols: &[String]) -> usize {
-        if !self.broker_connected || symbols.is_empty() {
+        if !self.alpaca_enabled || !self.broker_connected || symbols.is_empty() {
             return 0;
         }
 
@@ -1348,7 +1348,7 @@ impl TyphooNApp {
         batch_limit: usize,
         foreground_slots: usize,
     ) -> usize {
-        if symbols.is_empty() {
+        if !self.kraken_enabled || symbols.is_empty() {
             return 0;
         }
         let timeframes = self.enabled_standard_sync_timeframes();
@@ -1442,7 +1442,7 @@ impl TyphooNApp {
         batch_limit: usize,
         foreground_slots: usize,
     ) -> usize {
-        if symbols.is_empty() {
+        if !self.kraken_enabled || symbols.is_empty() {
             return 0;
         }
         let timeframes = self.enabled_standard_sync_timeframes();
@@ -1530,7 +1530,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn schedule_tastytrade_symbols(&mut self, symbols: &[String]) -> usize {
-        if !self.tt_connected || symbols.is_empty() {
+        if !self.tastytrade_enabled || !self.tt_connected || symbols.is_empty() {
             return 0;
         }
         if chrono::Utc::now().timestamp() < self.tastytrade_sync_pause_until_ts {
@@ -1620,7 +1620,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn maybe_request_alpaca_asset_universe(&mut self) {
-        if !self.all_broker_assets_fetched && self.broker_connected {
+        if self.alpaca_enabled && !self.all_broker_assets_fetched && self.broker_connected {
             let _ = self.broker_tx.send(BrokerCmd::GetAllAssets);
             self.all_broker_assets_fetched = true;
         }

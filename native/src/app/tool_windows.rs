@@ -1,7 +1,11 @@
 use super::*;
 
 impl TyphooNApp {
-    pub(super) fn render_connect_window(&mut self, ctx: &egui::Context, settings_save_after: bool) {
+    pub(super) fn render_connect_window(
+        &mut self,
+        ctx: &egui::Context,
+        mut settings_save_after: bool,
+    ) {
         if !self.show_connect {
             return;
         }
@@ -38,12 +42,25 @@ impl TyphooNApp {
                         ui.end_row();
                     });
                 ui.add_space(5.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.checkbox(&mut self.alpaca_enabled, "Enable Alpaca").changed() {
+                        settings_save_after = true;
+                        if !self.alpaca_enabled {
+                            self.broker_connected = false;
+                            self.live_account = None;
+                            self.live_positions.clear();
+                            self.live_orders.clear();
+                            self.pending_alpaca_fetches.clear();
+                            self.log.push_back(LogEntry::info("Alpaca disabled — no login/sync/position/order activity. Cache data preserved."));
+                        }
+                    }
+                });
                 let connect_label = if self.broker_connected {
                     egui::RichText::new("Alpaca Connected").color(UP)
                 } else {
                     egui::RichText::new("Connect")
                 };
-                if ui.button(connect_label).clicked() && !self.broker_connected {
+                if ui.add_enabled(self.alpaca_enabled, egui::Button::new(connect_label)).clicked() && !self.broker_connected {
                     if self.broker_api_key.is_empty() || self.broker_secret.is_empty() {
                         self.log
                             .push_back(LogEntry::warn("Enter API key and secret"));
@@ -82,7 +99,17 @@ impl TyphooNApp {
                     ui.radio_value(&mut self.tt_sandbox, true, "Sandbox");
                     ui.radio_value(&mut self.tt_sandbox, false, "Production");
                 });
-                if ui.button("Connect tastytrade").clicked() {
+                if ui.checkbox(&mut self.tastytrade_enabled, "Enable tastytrade").changed() {
+                    settings_save_after = true;
+                    if !self.tastytrade_enabled {
+                        self.tt_connected = false;
+                        self.tt_positions.clear();
+                        self.tt_balances = None;
+                        self.pending_tastytrade_fetches.clear();
+                        self.log.push_back(LogEntry::info("tastytrade disabled — no broker activity. Cache data preserved."));
+                    }
+                }
+                if ui.add_enabled(self.tastytrade_enabled, egui::Button::new("Connect tastytrade")).clicked() {
                     if self.tt_username.is_empty() || self.tt_password.is_empty() {
                         self.log
                             .push_back(LogEntry::warn("Enter tastytrade username and password"));

@@ -83,13 +83,53 @@ impl TyphooNApp {
                     ui.end_row();
                 });
                 ui.add_space(4.0);
+                ui.label(egui::RichText::new("Broker modules").color(AXIS_TEXT).small().strong());
+                ui.horizontal_wrapped(|ui| {
+                    let alpaca_before = self.alpaca_enabled;
+                    if ui.checkbox(&mut self.alpaca_enabled, "Enable Alpaca").on_hover_text("When off: no startup login, no account/position/order requests, no Alpaca bar sync, and Alpaca order buttons stay inactive. Stored bar data is left untouched.").changed() {
+                        settings_save_after = true;
+                        if alpaca_before && !self.alpaca_enabled {
+                            self.broker_connected = false;
+                            self.live_account = None;
+                            self.live_positions.clear();
+                            self.live_orders.clear();
+                            self.pending_alpaca_fetches.clear();
+                            self.log.push_back(LogEntry::info("Alpaca disabled — stopped UI-side login/sync/position/order activity. Existing cache data was not deleted."));
+                        }
+                    }
+                    let tt_before = self.tastytrade_enabled;
+                    if ui.checkbox(&mut self.tastytrade_enabled, "Enable tastytrade").on_hover_text("When off: no manual/startup connection, positions/balances, or tastytrade bar sync. Stored data is left untouched.").changed() {
+                        settings_save_after = true;
+                        if tt_before && !self.tastytrade_enabled {
+                            self.tt_connected = false;
+                            self.tt_positions.clear();
+                            self.tt_balances = None;
+                            self.pending_tastytrade_fetches.clear();
+                            self.log.push_back(LogEntry::info("tastytrade disabled — stopped UI-side broker activity. Existing cache data was not deleted."));
+                        }
+                    }
+                    let kr_before = self.kraken_enabled;
+                    if ui.checkbox(&mut self.kraken_enabled, "Enable Kraken").on_hover_text("When off: no startup login, private REST/WS account sync, Kraken Spot/Equities/Futures bar sync, or Kraken order buttons. Stored data is left untouched.").changed() {
+                        settings_save_after = true;
+                        if kr_before && !self.kraken_enabled {
+                            self.kraken_connected = false;
+                            self.kr_positions.clear();
+                            self.kraken_balances.clear();
+                            self.kraken_open_orders.clear();
+                            self.pending_kraken_fetches.clear();
+                            self.pending_kraken_futures_fetches.clear();
+                            self.log.push_back(LogEntry::info("Kraken disabled — stopped UI-side login/sync/position/order activity. Existing cache data was not deleted."));
+                        }
+                    }
+                });
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     let connect_label = if self.broker_connected {
                         egui::RichText::new("Alpaca Connected").color(UP)
                     } else {
                         egui::RichText::new("Connect Alpaca")
                     };
-                    if ui.button(connect_label).clicked() && !self.broker_connected {
+                    if ui.add_enabled(self.alpaca_enabled, egui::Button::new(connect_label)).clicked() && !self.broker_connected {
                         if !self.broker_api_key.is_empty() && !self.broker_secret.is_empty() {
                             // Save all credentials to system keyring
                             if let Err(e) = keyring::store(keyring::keys::ALPACA_API_KEY, &self.broker_api_key) {
@@ -134,7 +174,7 @@ impl TyphooNApp {
                         } else {
                             egui::RichText::new("Connect tastytrade")
                         };
-                        if ui.button(tt_label).clicked() && !self.tt_connected {
+                        if ui.add_enabled(self.tastytrade_enabled, egui::Button::new(tt_label)).clicked() && !self.tt_connected {
                             if let Err(e) = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store tt_username failed: {}", e)));
                             }
@@ -162,7 +202,7 @@ impl TyphooNApp {
                         } else {
                             egui::RichText::new("Connect Kraken")
                         };
-                        if ui.button(kraken_label).clicked() && !self.kraken_connected {
+                        if ui.add_enabled(self.kraken_enabled, egui::Button::new(kraken_label)).clicked() && !self.kraken_connected {
                             if let Err(e) = keyring::store(keyring::keys::KRAKEN_API_KEY, &self.kraken_api_key) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store kraken_api_key failed: {}", e)));
                             }

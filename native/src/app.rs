@@ -10416,17 +10416,20 @@ pub struct TyphooNApp {
     broker_api_key: String,
     broker_secret: String,
     broker_paper: bool,
+    alpaca_enabled: bool,
 
     /// Broker connection fields (tastytrade).
     tt_username: String,
     tt_password: String,
     tt_sandbox: bool,
+    tastytrade_enabled: bool,
 
     /// Broker connection fields (Kraken).
     kraken_api_key: String,
     kraken_api_secret: String,
     kraken_ws_api_key: String,
     kraken_ws_api_secret: String,
+    kraken_enabled: bool,
     kraken_connected: bool,
     kraken_pairs_requested: bool,
     kraken_futures_requested: bool,
@@ -26606,9 +26609,11 @@ When the question touches recent news, sentiment, or prices, combine the researc
             broker_api_key: String::new(),
             broker_secret: String::new(),
             broker_paper: true,
+            alpaca_enabled: true,
             tt_username: String::new(),
             tt_password: String::new(),
             tt_sandbox: false, // Default to Production (sandbox requires separate dev credentials)
+            tastytrade_enabled: true,
             finnhub_key: String::new(),
             fred_key: String::new(),
             discord_webhook: String::new(),
@@ -28992,6 +28997,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             kraken_api_secret: String::new(),
             kraken_ws_api_key: String::new(),
             kraken_ws_api_secret: String::new(),
+            kraken_enabled: true,
             kraken_connected: false,
             kraken_pairs_requested: false,
             kraken_futures_requested: false,
