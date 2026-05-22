@@ -2386,7 +2386,7 @@ impl SqliteCache {
                 )
                 .unwrap_or(0) as usize;
             drop(stmt);
-            kv_entries = match conn.prepare("SELECT key, data FROM kv_store") {
+            kv_entries = match conn.prepare("SELECT key, value FROM kv_cache") {
                 Ok(mut kv_stmt) => kv_stmt
                     .query_map([], |row| {
                         Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
@@ -2475,7 +2475,7 @@ impl SqliteCache {
                 let _ = conn.execute_batch("BEGIN;");
                 for (key, data) in chunk {
                     let _ = conn.execute(
-                        "UPDATE kv_store SET data = ?1 WHERE key = ?2",
+                        "UPDATE kv_cache SET value = ?1 WHERE key = ?2",
                         params![data, key],
                     );
                 }
@@ -3385,6 +3385,31 @@ mod tests {
 
         let q2 = cache.drain_queue("q2").unwrap();
         assert_eq!(q2, vec!["two".to_string()]);
+    }
+
+    #[test]
+    fn compact_storage_recompresses_bar_and_kv_cache_tables() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let raw = "A".repeat(4096);
+        let compressed = zstd::encode_all(raw.as_bytes(), 3).unwrap();
+        {
+            let conn = cache.connection().unwrap();
+            conn.execute(
+                "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params!["kraken:BTCUSD:1Min", compressed, 1i64, 1i64, 3i64],
+            )
+            .unwrap();
+        }
+        cache.put_kv("broker:test", &raw).unwrap();
+
+        let (processed, _saved) = cache.compact_storage(22, None).unwrap();
+        assert_eq!(processed, 3);
+        assert_eq!(cache.count_uncompacted_bars(22).unwrap(), 0);
+        assert_eq!(
+            cache.get_kv("broker:test").unwrap().as_deref(),
+            Some(raw.as_str())
+        );
     }
 
     #[test]

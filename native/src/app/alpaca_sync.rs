@@ -223,6 +223,15 @@ pub(super) fn kraken_sync_target_bars(tf: &str) -> Option<u32> {
     }
 }
 
+pub(super) fn kraken_equities_sync_target_bars(tf: &str) -> Option<u32> {
+    // Kraken internal equities history returns the provider's available window.
+    // Many tokenized equities have short listing histories, so a fixed depth
+    // target makes valid caches look permanently under-filled and causes the
+    // scheduler to refetch the same WOK/TNDM windows every pass.
+    normalize_sync_timeframe_key(tf)?;
+    None
+}
+
 pub(super) fn kraken_futures_sync_target_bars(tf: &str) -> Option<u32> {
     normalize_sync_timeframe_key(tf).map(|_| u32::MAX)
 }
@@ -975,6 +984,49 @@ mod tests {
             .expect("recent override should remain indexed");
         assert_eq!(state.write_ts_s, now_s - 30);
         assert_eq!(state.last_bar_ts_s, now_s - 30);
+    }
+
+    #[test]
+    fn kraken_equities_short_provider_history_does_not_repeat_backfill() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec!["WOK".to_string()];
+        let timeframes = vec!["1Month".to_string(), "1Week".to_string()];
+        let state_map = HashMap::from([
+            (
+                ("WOK".to_string(), "1Month".to_string()),
+                SyncCacheState {
+                    last_bar_ts_s: now_s - 60,
+                    write_ts_s: now_s - 60,
+                    bar_count: 14,
+                },
+            ),
+            (
+                ("WOK".to_string(), "1Week".to_string()),
+                SyncCacheState {
+                    last_bar_ts_s: now_s - 60,
+                    write_ts_s: now_s - 60,
+                    bar_count: 63,
+                },
+            ),
+        ]);
+
+        let selected = select_alpaca_sync_candidates(
+            &symbols,
+            &timeframes,
+            &state_map,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            4,
+            now_s,
+            kraken_equities_sync_target_bars,
+        );
+
+        assert!(
+            selected.is_empty(),
+            "short but fresh Kraken equities histories are complete provider windows, not backfill gaps"
+        );
     }
 
     #[test]

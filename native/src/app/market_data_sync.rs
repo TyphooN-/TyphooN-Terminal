@@ -894,7 +894,7 @@ impl TyphooNApp {
             },
             &mut cursor,
             chrono::Utc::now().timestamp(),
-            kraken_sync_target_bars,
+            kraken_equities_sync_target_bars,
         );
         self.kraken_equities_sync_cursor = cursor;
         let mut dispatched = 0usize;
