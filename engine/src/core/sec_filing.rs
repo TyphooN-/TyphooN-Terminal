@@ -354,6 +354,32 @@ pub async fn scrape_filings_for_ticker(
     ticker: &str,
     cik: &str,
 ) -> Result<(usize, usize, usize), String> {
+    // O(1) scrape gate: if this ticker was scraped today, trust the local DB.
+    // SEC submissions are append-only for our purposes; repeated same-day pulls
+    // just waste quota and rebuild the same cache rows.
+    {
+        let db = db_path.to_path_buf();
+        let t = ticker.to_uppercase();
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        if tokio::task::spawn_blocking(move || -> Result<bool, String> {
+            let conn = open_conn(&db)?;
+            let last: Option<String> = conn
+                .query_row(
+                    "SELECT last_scrape_date FROM sec_scrape_index WHERE ticker = ?1",
+                    params![t],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| format!("SEC scrape index check failed: {e}"))?;
+            Ok(last.as_deref() == Some(today.as_str()))
+        })
+        .await
+        .map_err(|e| format!("spawn_blocking: {e}"))??
+        {
+            return Ok((0, 0, 0));
+        }
+    }
+
     // Step 1: Fetch submissions JSON (async)
     let url = format!("https://data.sec.gov/submissions/CIK{cik}.json");
     let resp = client
@@ -1362,9 +1388,12 @@ pub fn get_filing_content(conn: &Connection, accession: &str) -> Result<Option<S
 pub fn get_unfetched_filings(conn: &Connection, limit: usize) -> Result<Vec<SecFiling>, String> {
     // prepare_cached: called repeatedly by the content backfill worker.
     let mut stmt = conn.prepare_cached(
-        "SELECT id, ticker, form_type, accession_number, filing_date, url, company_name, importance_score, category, summary, insider_flag, created_at
-         FROM sec_filings WHERE accession_number NOT IN (SELECT accession_number FROM sec_filing_content)
-         ORDER BY filing_date DESC LIMIT ?1"
+        "SELECT f.id, f.ticker, f.form_type, f.accession_number, f.filing_date, f.url,
+                f.company_name, f.importance_score, f.category, f.summary, f.insider_flag, f.created_at
+         FROM sec_filings f
+         LEFT JOIN sec_filing_content c ON c.accession_number = f.accession_number
+         WHERE c.accession_number IS NULL
+         ORDER BY f.filing_date DESC LIMIT ?1"
     ).map_err(|e| format!("Prepare unfetched failed: {e}"))?;
 
     let rows = stmt

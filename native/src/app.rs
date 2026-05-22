@@ -24028,6 +24028,32 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         let msg_tx = broker_msg_tx_clone.clone();
                         let shared_cache_broker = shared_cache_broker.clone();
                         tokio::spawn(async move {
+                            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(conn) = cache.connection() {
+                                    if news::news_cache_is_fresh(&conn, &symbol, 30 * 60, 1)
+                                        .unwrap_or(false)
+                                    {
+                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
+                                            "news/{}: cached/fresh — skipped network",
+                                            symbol
+                                        )));
+                                        match news::get_news_by_symbol(&conn, &symbol, 200) {
+                                            Ok(list) => {
+                                                let _ = msg_tx.send(BrokerMsg::NewsArticlesLoaded {
+                                                    symbol: symbol.clone(),
+                                                    articles: list,
+                                                });
+                                            }
+                                            Err(e) => {
+                                                let _ = msg_tx.send(BrokerMsg::Error(format!(
+                                                    "News read: {e}"
+                                                )));
+                                            }
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
                             let client = match reqwest::Client::builder()
                                 .user_agent("Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1")
                                 .timeout(std::time::Duration::from_secs(25))
@@ -24064,8 +24090,10 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 };
                                 match news::upsert_news_batch(&conn, &articles) {
                                     Ok(n) => {
+                                        let cached = news::mark_news_scraped(&conn, &sym_for_db)
+                                            .unwrap_or(n);
                                         let _ = msg_tx_db.send(BrokerMsg::FundamentalsProgress(
-                                            format!("news/{}: {} cached", sym_for_db, n)));
+                                            format!("news/{}: {} cached", sym_for_db, cached)));
                                     }
                                     Err(e) => {
                                         let _ = msg_tx_db.send(BrokerMsg::Error(format!("News upsert: {e}")));
@@ -24166,6 +24194,13 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                         tickers.len(),
                                         tickers.join(", ")
                                     )));
+                                    let fresh_tickers = cache
+                                        .connection()
+                                        .ok()
+                                        .and_then(|conn| {
+                                            news::fresh_news_symbols(&conn, &tickers, 30 * 60, 1).ok()
+                                        })
+                                        .unwrap_or_default();
                                     let client = match reqwest::Client::builder()
                                         .user_agent(
                                             "Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1",
@@ -24185,6 +24220,18 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     let mut fail = 0usize;
                                     let total = tickers.len();
                                     for (i, ticker) in tickers.iter().enumerate() {
+                                        if fresh_tickers.contains(ticker) {
+                                            ok += 1;
+                                            let _ = msg_tx.send(
+                                                BrokerMsg::FundamentalsProgress(format!(
+                                                    "News {}: cached/fresh — skipped network ({}/{})",
+                                                    ticker,
+                                                    i + 1,
+                                                    total
+                                                )),
+                                            );
+                                            continue;
+                                        }
                                         let log_tx = msg_tx.clone();
                                         let cb = move |s: &str| {
                                             let _ = log_tx.send(BrokerMsg::FundamentalsProgress(
@@ -24205,13 +24252,15 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                 if let Ok(conn) = cache.connection() {
                                                     match news::upsert_news_batch(&conn, &articles) {
                                                         Ok(n) => {
+                                                            let cached = news::mark_news_scraped(&conn, ticker)
+                                                                .unwrap_or(n);
                                                             ok += 1;
                                                             let _ = msg_tx.send(
                                                                 BrokerMsg::FundamentalsProgress(
                                                                     format!(
                                                                         "News {}: {} cached ({}/{})",
                                                                         ticker,
-                                                                        n,
+                                                                        cached,
                                                                         i + 1,
                                                                         total
                                                                     ),
@@ -24312,6 +24361,13 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 tickers.sort();
                                 let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
                                     format!("News scrape: starting for {} symbols", tickers.len())));
+                                let fresh_tickers = cache
+                                    .connection()
+                                    .ok()
+                                    .and_then(|conn| {
+                                        news::fresh_news_symbols(&conn, &tickers, 30 * 60, 1).ok()
+                                    })
+                                    .unwrap_or_default();
                                 let client = match reqwest::Client::builder()
                                     .user_agent("Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1")
                                     .timeout(std::time::Duration::from_secs(25))
@@ -24322,6 +24378,12 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 let mut ok = 0usize;
                                 let mut fail = 0usize;
                                 for (i, ticker) in tickers.iter().enumerate() {
+                                    if fresh_tickers.contains(ticker) {
+                                        ok += 1;
+                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
+                                            format!("News {}: cached/fresh — skipped network ({}/{})", ticker, i + 1, tickers.len())));
+                                        continue;
+                                    }
                                     let log_tx = msg_tx.clone();
                                     let cb = move |s: &str| {
                                         let _ = log_tx.send(BrokerMsg::FundamentalsProgress(s.to_string()));
@@ -24335,9 +24397,11 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                             if let Ok(conn) = cache.connection() {
                                                 match news::upsert_news_batch(&conn, &articles) {
                                                     Ok(n) => {
+                                                        let cached = news::mark_news_scraped(&conn, ticker)
+                                                            .unwrap_or(n);
                                                         ok += 1;
                                                         let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
-                                                            format!("News {}: {} cached ({}/{})", ticker, n, i + 1, tickers.len())));
+                                                            format!("News {}: {} cached ({}/{})", ticker, cached, i + 1, tickers.len())));
                                                     }
                                                     Err(e) => {
                                                         fail += 1;

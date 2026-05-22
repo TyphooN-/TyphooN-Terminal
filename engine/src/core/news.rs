@@ -13,7 +13,7 @@
 //! The `research_news_fts` FTS5 virtual table mirrors headline + summary so the NEWS
 //! window can do keyword search across cached articles instantly.
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -84,6 +84,13 @@ pub fn create_news_tables(conn: &Connection) -> Result<(), String> {
             ON research_news(published_at DESC);
         CREATE INDEX IF NOT EXISTS idx_research_news_updated
             ON research_news(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_news_source_sym_ts
+            ON research_news(source, symbol, published_at DESC);
+        CREATE TABLE IF NOT EXISTS research_news_scrape_index (
+            symbol TEXT PRIMARY KEY,
+            last_scrape_at INTEGER NOT NULL DEFAULT 0,
+            article_count INTEGER NOT NULL DEFAULT 0
+        );
         CREATE VIRTUAL TABLE IF NOT EXISTS research_news_fts USING fts5(
             url_hash UNINDEXED,
             headline,
@@ -161,6 +168,108 @@ pub fn upsert_news_batch(conn: &Connection, articles: &[NewsArticle]) -> Result<
     }
     let _ = conn.execute_batch("COMMIT");
     Ok(count)
+}
+
+pub fn news_cache_is_fresh(
+    conn: &Connection,
+    symbol: &str,
+    max_age_secs: i64,
+    min_articles: usize,
+) -> Result<bool, String> {
+    let _ = create_news_tables(conn);
+    let sym = symbol.trim().to_uppercase();
+    if sym.is_empty() {
+        return Ok(false);
+    }
+    let now = now_ts();
+    let row: Option<(i64, i64)> = conn
+        .query_row(
+            "SELECT last_scrape_at, article_count FROM research_news_scrape_index WHERE symbol = ?1",
+            params![sym],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| format!("query news scrape index: {e}"))?;
+    let Some((last_scrape_at, article_count)) = row else {
+        return Ok(false);
+    };
+    Ok(last_scrape_at > 0
+        && now.saturating_sub(last_scrape_at) < max_age_secs
+        && article_count as usize >= min_articles)
+}
+
+pub fn mark_news_scraped(conn: &Connection, symbol: &str) -> Result<usize, String> {
+    let _ = create_news_tables(conn);
+    let sym = symbol.trim().to_uppercase();
+    if sym.is_empty() {
+        return Ok(0);
+    }
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM research_news WHERE source <> 'SEC' AND symbol = ?1",
+            params![sym],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    conn.execute(
+        "INSERT INTO research_news_scrape_index (symbol, last_scrape_at, article_count)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(symbol) DO UPDATE SET
+            last_scrape_at = excluded.last_scrape_at,
+            article_count = excluded.article_count",
+        params![sym, now_ts(), count],
+    )
+    .map_err(|e| format!("mark news scraped: {e}"))?;
+    Ok(count as usize)
+}
+
+pub fn fresh_news_symbols(
+    conn: &Connection,
+    symbols: &[String],
+    max_age_secs: i64,
+    min_articles: usize,
+) -> Result<std::collections::HashSet<String>, String> {
+    let _ = create_news_tables(conn);
+    let mut unique: Vec<String> = symbols
+        .iter()
+        .map(|s| s.trim().to_uppercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    unique.sort_unstable();
+    unique.dedup();
+    if unique.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+
+    let cutoff = now_ts().saturating_sub(max_age_secs);
+    let placeholders = std::iter::repeat("?")
+        .take(unique.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT symbol FROM research_news_scrape_index
+         WHERE last_scrape_at >= ?1 AND article_count >= ?2 AND symbol IN ({placeholders})"
+    );
+    let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(unique.len() + 2);
+    values.push(Box::new(cutoff));
+    values.push(Box::new(min_articles as i64));
+    for sym in unique {
+        values.push(Box::new(sym));
+    }
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|v| v.as_ref()).collect();
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("prepare fresh news symbols: {e}"))?;
+    let rows = stmt
+        .query_map(params_refs.as_slice(), |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query fresh news symbols: {e}"))?;
+    let mut out = std::collections::HashSet::new();
+    for row in rows {
+        if let Ok(sym) = row {
+            out.insert(sym);
+        }
+    }
+    Ok(out)
 }
 
 /// Fetch the most recent N cached articles for a symbol (empty symbol matches anything).
@@ -1098,6 +1207,29 @@ mod tests {
 
         let filing_search = search_news(&conn, "Quarterly", 10).unwrap();
         assert!(filing_search.is_empty());
+    }
+
+    #[test]
+    fn news_scrape_index_gates_repeated_fetches() {
+        let conn = mem_conn();
+        assert!(!news_cache_is_fresh(&conn, "AAPL", 30 * 60, 1).unwrap());
+
+        let article = NewsArticle {
+            symbol: "AAPL".into(),
+            source: "YahooRSS".into(),
+            headline: "Apple product news".into(),
+            url: "https://example.com/aapl-product".into(),
+            published_at: 1_700_000_000,
+            ..Default::default()
+        }
+        .with_hash();
+        upsert_news(&conn, &article).unwrap();
+        assert_eq!(mark_news_scraped(&conn, "AAPL").unwrap(), 1);
+        assert!(news_cache_is_fresh(&conn, "aapl", 30 * 60, 1).unwrap());
+        assert!(!news_cache_is_fresh(&conn, "aapl", 30 * 60, 2).unwrap());
+        let fresh = fresh_news_symbols(&conn, &["aapl".into(), "MSFT".into()], 30 * 60, 1).unwrap();
+        assert!(fresh.contains("AAPL"));
+        assert!(!fresh.contains("MSFT"));
     }
 
     #[test]
