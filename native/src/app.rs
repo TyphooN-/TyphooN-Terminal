@@ -10782,6 +10782,11 @@ pub struct TyphooNApp {
     /// Cached Kraken internal equities bar-state map keyed by normalized `(symbol, timeframe)`.
     cached_kraken_equities_sync_state: std::collections::HashMap<(String, String), SyncCacheState>,
     cached_kraken_equities_sync_state_rev: Option<u64>,
+    /// Cached Sync Status rows. The window is informational; recomputing the
+    /// whole broker/timeframe matrix on every repaint during full sync is pure
+    /// render-thread waste.
+    cached_bar_sync_rows: Vec<SyncStatsRow>,
+    cached_bar_sync_rows_last: std::time::Instant,
     /// Full tradable Kraken Securities/equities symbol universe from the internal public catalog.
     kraken_equity_universe_symbols: Vec<String>,
     kraken_equity_universe_requested: bool,
@@ -24504,6 +24509,49 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         };
                         match result {
                             Ok(bars) => {
+                                if !bars.is_empty() {
+                                    if let Some(cache) = shared_cache_broker
+                                        .read()
+                                        .ok()
+                                        .and_then(|g| g.clone())
+                                    {
+                                        let json_bars: Vec<_> = bars
+                                            .iter()
+                                            .filter_map(|bar| {
+                                                let ts = chrono::DateTime::from_timestamp_millis(
+                                                    bar.time_ms,
+                                                )?
+                                                .to_rfc3339();
+                                                Some(serde_json::json!({
+                                                    "timestamp": ts,
+                                                    "open": bar.open,
+                                                    "high": bar.high,
+                                                    "low": bar.low,
+                                                    "close": bar.close,
+                                                    "volume": bar.volume,
+                                                }))
+                                            })
+                                            .collect();
+                                        if let Ok(json) = serde_json::to_string(&json_bars) {
+                                            let cache_key = format!(
+                                                "kraken-equities:{}:{}",
+                                                symbol
+                                                    .replace('/', "")
+                                                    .trim_end_matches(".EQ")
+                                                    .to_ascii_uppercase(),
+                                                timeframe
+                                            );
+                                            if let Err(e) = cache.put_bars(&cache_key, &json) {
+                                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
+                                                    format!(
+                                                        "Kraken equities cache write failed for {} {}: {}",
+                                                        symbol, timeframe, e
+                                                    ),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
                                 let _ = broker_msg_tx_clone.send(BrokerMsg::KrakenEquityBars {
                                     symbol,
                                     timeframe,
@@ -26878,6 +26926,10 @@ When the question touches recent news, sentiment, or prices, combine the researc
             cached_kraken_futures_sync_state_rev: None,
             cached_kraken_equities_sync_state: std::collections::HashMap::new(),
             cached_kraken_equities_sync_state_rev: None,
+            cached_bar_sync_rows: Vec::new(),
+            cached_bar_sync_rows_last: std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(10))
+                .unwrap_or_else(std::time::Instant::now),
             kraken_equity_universe_symbols: Vec::new(),
             kraken_equity_universe_requested: false,
             kraken_equity_universe_retry_after_ts: 0,

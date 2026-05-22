@@ -1059,8 +1059,8 @@ impl eframe::App for TyphooNApp {
         // Cap drain per frame so a flood of messages can't stall the render thread.
         // Anything left over waits for next frame; we repaint immediately in that case.
         let mut msgs_drained = 0usize;
-        const BROKER_DRAIN_MAX: usize = 128;
-        while msgs_drained < BROKER_DRAIN_MAX
+        let broker_drain_max = if self.user_interacting { 24 } else { 64 };
+        while msgs_drained < broker_drain_max
             && let Ok(msg) = self.broker_rx.try_recv()
         {
             msgs_drained += 1;
@@ -1243,6 +1243,8 @@ impl eframe::App for TyphooNApp {
                             )));
                         }
                         // Don't log repeated auth failures
+                    } else if is_routine_market_data_status(&e) {
+                        tracing::debug!("{}", e);
                     } else {
                         self.log.push_back(LogEntry::err(e));
                     }
@@ -1555,6 +1557,8 @@ impl eframe::App for TyphooNApp {
                             dismissable: false,
                             dismissed: false,
                         });
+                    } else if is_routine_market_data_status(&msg) {
+                        tracing::debug!("{}", msg);
                     } else {
                         self.log.push_back(LogEntry::info(msg));
                     }
@@ -1660,15 +1664,25 @@ impl eframe::App for TyphooNApp {
                                 }
                             }
                         }
-                        self.refresh_kraken_position_costs();
-                        self.log.push_back(LogEntry::info(format!(
+                        let quote_updates_position = self.kr_positions.iter().any(|pos| {
+                            let pos_symbol = pos
+                                .symbol
+                                .replace('/', "")
+                                .trim_end_matches(".EQ")
+                                .to_ascii_uppercase();
+                            pos_symbol == symbol || pos.asset_id.ends_with(&symbol)
+                        });
+                        if quote_updates_position {
+                            self.refresh_kraken_position_costs();
+                        }
+                        tracing::debug!(
                             "Kraken equities: {} bid {} ask {} last {}{}",
                             symbol,
                             format_price(ticker.bid),
                             format_price(ticker.ask),
                             format_price(last),
                             if ticker.delayed { " (delayed)" } else { "" }
-                        )));
+                        );
                     }
                 }
                 BrokerMsg::KrakenEquityBars {
@@ -1692,43 +1706,20 @@ impl eframe::App for TyphooNApp {
                             &timeframe,
                             "Kraken internal equities history returned no bars",
                         );
-                        self.log.push_back(LogEntry::warn(format!(
-                            "Kraken equities: no bars for {} {}",
-                            symbol, timeframe
-                        )));
-                    } else if let Some(cache) = self.cache.as_ref() {
-                        let json_bars: Vec<_> = bars
-                            .iter()
-                            .filter_map(|bar| {
-                                let ts = chrono::DateTime::from_timestamp_millis(bar.time_ms)?
-                                    .to_rfc3339();
-                                Some(serde_json::json!({
-                                    "timestamp": ts,
-                                    "open": bar.open,
-                                    "high": bar.high,
-                                    "low": bar.low,
-                                    "close": bar.close,
-                                    "volume": bar.volume,
-                                }))
-                            })
-                            .collect();
-                        if let Ok(json) = serde_json::to_string(&json_bars) {
-                            let _ = cache
-                                .put_bars(&format!("kraken-equities:{symbol}:{timeframe}"), &json);
-                        }
+                        tracing::debug!("Kraken equities: no bars for {} {}", symbol, timeframe);
+                    } else {
                         self.note_cached_sync_success(
                             "kraken-equities",
                             &symbol,
                             &timeframe,
-                            json_bars.len(),
+                            bars.len(),
                         );
-                        self.refresh_kraken_position_costs();
-                        self.log.push_back(LogEntry::info(format!(
+                        tracing::debug!(
                             "Kraken equities: cached {} bars for {} {}",
                             bars.len(),
                             symbol,
                             timeframe
-                        )));
+                        );
                     }
                 }
                 BrokerMsg::KrakenEquityHistoryError {
@@ -1747,19 +1738,16 @@ impl eframe::App for TyphooNApp {
                         .retain(|key| key != &format!("equity:{}:{}", symbol, timeframe));
                     if error.contains("No data") || error.contains("no data") {
                         self.unresolvable_mark("kraken-equities", &symbol, &timeframe, &error);
-                        self.log.push_back(LogEntry::warn(format!(
-                            "Kraken equities: no bars for {} {}",
-                            symbol, timeframe
-                        )));
+                        tracing::debug!("Kraken equities: no bars for {} {}", symbol, timeframe);
                     } else if error.contains("429") || error.contains("Too Many Requests") {
                         let now = chrono::Utc::now().timestamp();
                         self.kraken_equities_sync_pause_until_ts =
                             now + KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS;
                         self.kraken_equities_sync_pause_reason = error.clone();
-                        self.log.push_back(LogEntry::warn(format!(
+                        tracing::debug!(
                             "Kraken equities history rate-limited; pausing universe sync for {}s",
                             KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS
-                        )));
+                        );
                     } else if !error.contains("paused after HTTP 429") {
                         self.log.push_back(LogEntry::err(error));
                     }
@@ -7517,7 +7505,7 @@ impl eframe::App for TyphooNApp {
         }
         // If we hit the drain cap there are more messages waiting — repaint
         // immediately to process the next batch rather than waiting on the idle tick.
-        if msgs_drained >= BROKER_DRAIN_MAX {
+        if msgs_drained >= broker_drain_max {
             ctx.request_repaint();
         }
 
@@ -11561,11 +11549,7 @@ impl eframe::App for TyphooNApp {
                                         let dir = if pos.side == "short" { -1.0 } else { 1.0 };
                                         (cur - avg) * pos.qty * dir
                                     });
-                                    let display_pl = if pos.unrealized_pl.abs() > f64::EPSILON {
-                                        pos.unrealized_pl
-                                    } else {
-                                        derived_unrealized_pl.unwrap_or(0.0)
-                                    };
+                                    let display_pl = derived_unrealized_pl.unwrap_or(pos.unrealized_pl);
                                     ui.horizontal_wrapped(|ui| {
                                         let (_, act) = symbol_label_with_menu(
                                             ui,

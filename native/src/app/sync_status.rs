@@ -1,11 +1,20 @@
 use super::*;
 
 impl TyphooNApp {
-    pub(super) fn compute_bar_sync_rows(&self) -> Vec<SyncStatsRow> {
+    pub(super) fn compute_bar_sync_rows(&mut self) -> Vec<SyncStatsRow> {
+        let now = std::time::Instant::now();
+        if !self.cached_bar_sync_rows.is_empty()
+            && now.duration_since(self.cached_bar_sync_rows_last)
+                < std::time::Duration::from_secs(1)
+        {
+            return self.cached_bar_sync_rows.clone();
+        }
         let mut rows = compute_bar_sync_stats(&self.bg.detailed_stats, &self.bg.bar_ts_cache);
         self.add_expected_kraken_sync_rows(&mut rows);
         sort_sync_stats_rows(&mut rows);
-        rows
+        self.cached_bar_sync_rows = rows;
+        self.cached_bar_sync_rows_last = now;
+        self.cached_bar_sync_rows.clone()
     }
 
     pub(super) fn render_sync_status_window(&mut self, ctx: &egui::Context) {
