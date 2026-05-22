@@ -9448,6 +9448,48 @@ impl eframe::App for TyphooNApp {
                     self.reload_symbol_with_source(&source_state.0, cur_tf, source_override);
                 }
 
+                let orderbook_symbol = bare_symbol_from_key(&source_state.0)
+                    .trim_end_matches(".EQ")
+                    .to_ascii_uppercase();
+                let orderbook_source_is_kraken = source_state.1.starts_with("kraken")
+                    || source_state
+                        .2
+                        .as_deref()
+                        .is_some_and(|source| source.starts_with("kraken"));
+                let orderbook_symbol_is_kraken_equity = self
+                    .kraken_equity_universe_symbols
+                    .iter()
+                    .any(|sym| sym.eq_ignore_ascii_case(&orderbook_symbol));
+                let orderbook_symbol_is_public_kraken =
+                    typhoon_engine::core::kraken::to_kraken_pair_lossy(&orderbook_symbol).is_some();
+                let show_kraken_l2 = self.kraken_enabled
+                    && !orderbook_symbol.is_empty()
+                    && (orderbook_source_is_kraken
+                        || orderbook_symbol_is_kraken_equity
+                        || orderbook_symbol_is_public_kraken);
+                if show_kraken_l2 {
+                    let is_streaming = self
+                        .kraken_orderbook_ws_symbol
+                        .eq_ignore_ascii_case(&orderbook_symbol);
+                    let label = if is_streaming { "L2 LIVE" } else { "L2" };
+                    let color = if is_streaming { ACCENT } else { AXIS_TEXT };
+                    if ui
+                        .small_button(egui::RichText::new(label).color(color).monospace())
+                        .on_hover_text("Open Kraken Level 2 DOM; starts live public order-book WebSocket for the active symbol")
+                        .clicked()
+                    {
+                        self.show_orderbook_window = true;
+                        if !is_streaming {
+                            self.orderbook_result.clear();
+                            self.kraken_orderbook_ws_symbol = orderbook_symbol.clone();
+                            let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
+                                symbol: orderbook_symbol.clone(),
+                                depth: 100,
+                            });
+                        }
+                    }
+                }
+
                 ui.separator();
 
                 // MTF toggle

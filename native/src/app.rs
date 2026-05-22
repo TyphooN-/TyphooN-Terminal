@@ -10716,6 +10716,7 @@ pub struct TyphooNApp {
     holders_result: String, // last fetched SEC EDGAR 13F JSON
     show_orderbook_window: bool,
     orderbook_result: String, // last fetched L2 orderbook JSON
+    kraken_orderbook_ws_symbol: String,
     market_clock_status: String,
     show_symbol_overlap: bool,
     show_correlation: bool,
@@ -26841,6 +26842,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             holders_result: String::new(),
             show_orderbook_window: false,
             orderbook_result: String::new(),
+            kraken_orderbook_ws_symbol: String::new(),
             market_clock_status: String::new(),
             show_symbol_overlap: false,
             show_correlation: false,
