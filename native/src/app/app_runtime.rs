@@ -14592,15 +14592,24 @@ impl eframe::App for TyphooNApp {
                     );
                 }
             } else {
-                let (rect, resp) = ui.allocate_exact_size(available.size(), egui::Sense::click_and_drag());
-
-                // Give the visible price scale its own drag target. Relying only on the
-                // panel-level pointer checks is fragile because egui can mark the pointer
-                // as used by the chart response before the scale-drag state is advanced.
+                // Allocate the visual chart area as hover-only, then create separate
+                // interaction targets for the chart body and the price axis. A full-rect
+                // click/drag response steals the pointer before the narrow price scale can
+                // own it, which regressed TradingView/MT5-style scale dragging.
+                let (rect, _chart_alloc_resp) = ui.allocate_exact_size(available.size(), egui::Sense::hover());
                 let price_axis_w = 70.0_f32;
                 let price_axis_rect = egui::Rect::from_min_max(
                     egui::pos2(rect.right() - price_axis_w, rect.top()),
                     rect.max,
+                );
+                let chart_body_interact_rect = egui::Rect::from_min_max(
+                    rect.min,
+                    egui::pos2(rect.right() - price_axis_w, rect.bottom()),
+                );
+                let resp = ui.interact(
+                    chart_body_interact_rect,
+                    ui.id().with(("single_chart_body_drag", self.active_tab)),
+                    egui::Sense::click_and_drag(),
                 );
                 let price_axis_resp = ui
                     .interact(
