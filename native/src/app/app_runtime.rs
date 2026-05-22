@@ -142,6 +142,16 @@ impl eframe::App for TyphooNApp {
         }
         if self.cache_loaded
             && self.lan_sync_mode != "client"
+            && self.kraken_scrape_xstocks
+            && self.kraken_equity_universe_symbols.is_empty()
+            && !self.kraken_equity_universe_requested
+            && chrono::Utc::now().timestamp() >= self.kraken_equity_universe_retry_after_ts
+        {
+            let _ = self.broker_tx.send(BrokerCmd::KrakenFetchEquityUniverse);
+            self.kraken_equity_universe_requested = true;
+        }
+        if self.cache_loaded
+            && self.lan_sync_mode != "client"
             && self.kraken_scrape_futures
             && self.kraken_futures_symbols.is_empty()
             && !self.kraken_futures_requested
@@ -226,10 +236,12 @@ impl eframe::App for TyphooNApp {
             >= std::time::Duration::from_secs(60)
             && self.cache_loaded
             && self.lan_sync_mode != "client"
-            && !self.kraken_pairs.is_empty()
+            && (self.kraken_any_spot_scrape_enabled()
+                || (self.kraken_scrape_xstocks && !self.kraken_equity_universe_symbols.is_empty()))
         {
             self.kraken_universe_last_schedule = now_instant;
             let _ = self.schedule_kraken_universe_sectors();
+            let _ = self.schedule_kraken_equities_universe();
         }
 
         if now_instant.duration_since(self.kraken_futures_universe_last_schedule)
@@ -1493,6 +1505,29 @@ impl eframe::App for TyphooNApp {
                     )));
                     self.news_articles = articles;
                 }
+                BrokerMsg::KrakenEquityUniverse(markets) => {
+                    let mut symbols: Vec<String> = markets
+                        .into_iter()
+                        .filter(|market| {
+                            market.tradable
+                                && market.status.as_deref().unwrap_or("active") != "disabled"
+                                && market.instrument_status.as_deref().unwrap_or("enabled")
+                                    != "disabled"
+                        })
+                        .map(|market| market.symbol.trim_end_matches(".EQ").to_ascii_uppercase())
+                        .filter(|symbol| !symbol.is_empty())
+                        .collect();
+                    symbols.sort();
+                    symbols.dedup();
+                    self.kraken_equity_universe_symbols = symbols;
+                    self.kraken_equity_universe_requested = true;
+                    self.kraken_equity_universe_retry_after_ts = 0;
+                    self.bg_rev = self.bg_rev.wrapping_add(1);
+                    self.log.push_back(LogEntry::info(format!(
+                        "Kraken equities universe loaded: {} tradable symbols",
+                        self.kraken_equity_universe_symbols.len()
+                    )));
+                }
                 BrokerMsg::KrakenEquityQuote(ticker) => {
                     let symbol = ticker.symbol.to_ascii_uppercase();
                     let last = ticker.price;
@@ -1599,6 +1634,12 @@ impl eframe::App for TyphooNApp {
                             let _ = cache
                                 .put_bars(&format!("kraken-equities:{symbol}:{timeframe}"), &json);
                         }
+                        self.note_cached_sync_success(
+                            "kraken-equities",
+                            &symbol,
+                            &timeframe,
+                            json_bars.len(),
+                        );
                         self.refresh_kraken_position_costs();
                         self.log.push_back(LogEntry::info(format!(
                             "Kraken equities: cached {} bars for {} {}",

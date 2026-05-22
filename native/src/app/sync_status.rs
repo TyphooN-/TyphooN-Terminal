@@ -5,7 +5,8 @@ impl TyphooNApp {
         if !self.show_sync_status {
             return;
         }
-        let rows = compute_bar_sync_stats(&self.bg.detailed_stats, &self.bg.bar_ts_cache);
+        let mut rows = compute_bar_sync_stats(&self.bg.detailed_stats, &self.bg.bar_ts_cache);
+        self.add_expected_kraken_sync_rows(&mut rows);
         let broker_totals = compute_bar_sync_broker_totals(&rows);
         let mut sync_save_after = false;
         let mut show_sync_status = self.show_sync_status;
@@ -82,6 +83,64 @@ impl TyphooNApp {
         self.show_sync_status = show_sync_status;
         if sync_save_after {
             self.save_session();
+        }
+    }
+
+    fn add_expected_kraken_sync_rows(&self, rows: &mut Vec<SyncStatsRow>) {
+        let timeframes = self.enabled_standard_sync_timeframes();
+        if timeframes.is_empty() {
+            return;
+        }
+        let existing: std::collections::HashSet<String> = self
+            .bg
+            .detailed_stats
+            .iter()
+            .map(|(key, _, _)| key.clone())
+            .collect();
+        let spot_symbols: Vec<String> = self
+            .kraken_sync_symbol_sectors()
+            .into_iter()
+            .flatten()
+            .collect();
+        let expected_sources = [
+            ("kraken", spot_symbols),
+            ("kraken-equities", self.kraken_equity_sync_symbols()),
+            ("kraken-futures", self.kraken_futures_sync_symbols()),
+        ];
+
+        for (source, symbols) in expected_sources {
+            for symbol in symbols {
+                for tf in &timeframes {
+                    let Some(tf) = normalize_sync_timeframe_key(tf) else {
+                        continue;
+                    };
+                    if existing.contains(&format!("{source}:{symbol}:{tf}")) {
+                        continue;
+                    }
+                    if let Some(row) = rows
+                        .iter_mut()
+                        .find(|row| row.broker == "Kraken" && row.tf == tf)
+                    {
+                        row.total += 1;
+                        row.empty += 1;
+                        row.pct_healthy = if row.total == 0 {
+                            0.0
+                        } else {
+                            (row.healthy as f32 / row.total as f32) * 100.0
+                        };
+                    } else {
+                        rows.push(SyncStatsRow {
+                            broker: "Kraken".to_string(),
+                            tf: tf.to_string(),
+                            total: 1,
+                            healthy: 0,
+                            stale: 0,
+                            empty: 1,
+                            pct_healthy: 0.0,
+                        });
+                    }
+                }
+            }
         }
     }
 }

@@ -48,7 +48,7 @@ pub(super) fn compute_bar_sync_stats(
             "mt5" => Some("MT5"),
             "alpaca" => Some("Alpaca"),
             "tastytrade" => Some("Tastytrade"),
-            "kraken" => Some("Kraken"),
+            "kraken" | "kraken-futures" | "kraken-equities" => Some("Kraken"),
             _ => None,
         }
     };

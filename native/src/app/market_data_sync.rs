@@ -460,6 +460,11 @@ impl TyphooNApp {
                     .insert((symbol.clone(), tf.to_string()), state);
                 self.cached_kraken_futures_sync_state_rev = Some(self.bg_rev);
             }
+            "kraken-equities" => {
+                self.cached_kraken_equities_sync_state
+                    .insert((symbol.clone(), tf.to_string()), state);
+                self.cached_kraken_equities_sync_state_rev = Some(self.bg_rev);
+            }
             "tastytrade" => {
                 self.cached_tastytrade_sync_state
                     .insert((symbol.clone(), tf.to_string()), state);
@@ -565,7 +570,7 @@ impl TyphooNApp {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn kraken_spot_sector_scrape_enabled_from_flags(
         sector: usize,
-        xstocks: bool,
+        _xstocks: bool,
         quote_usd: bool,
         quote_usdt: bool,
         quote_usdc: bool,
@@ -579,7 +584,7 @@ impl TyphooNApp {
         crypto_crosses: bool,
     ) -> bool {
         match sector {
-            0 => xstocks,
+            0 => false, // xStocks use Kraken's internal equities API, not public Spot OHLC.
             1 => quote_usd || quote_usdt || quote_usdc || quote_usdg,
             2 => {
                 quote_usd
@@ -691,6 +696,53 @@ impl TyphooNApp {
         out
     }
 
+    pub(super) fn kraken_equity_sync_symbols(&self) -> Vec<String> {
+        if !self.kraken_scrape_xstocks {
+            return Vec::new();
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        let mut push_symbol = |source: &str| {
+            let symbol = normalize_market_data_symbol(source)
+                .replace('/', "")
+                .trim_end_matches(".EQ")
+                .to_ascii_uppercase();
+            if !symbol.is_empty() && seen.insert(symbol.clone()) {
+                out.push(symbol);
+            }
+        };
+
+        for symbol in self.kraken_equity_universe_symbols.clone() {
+            push_symbol(&symbol);
+        }
+        // Fallback/augmentation while the full catalog is loading: include owned,
+        // charted, watched, and any symbols Kraken Spot exposes as xStock-looking pairs.
+        for (pair_name, display_name) in &self.kraken_pairs {
+            if let Some(symbol) = kraken_xstock_fundamental_symbol(pair_name, display_name) {
+                push_symbol(&symbol);
+            }
+        }
+        for (asset, qty) in &self.kraken_balances {
+            if qty.is_finite() && *qty > 0.0 && Self::kraken_display_asset(asset).ends_with(".EQ") {
+                push_symbol(&Self::kraken_display_asset(asset));
+            }
+        }
+        for chart in &self.charts {
+            let source = cache_source_from_key(&chart.symbol);
+            let bare = bare_symbol_from_key(&chart.symbol);
+            if source == "kraken-equities" || bare.to_ascii_uppercase().ends_with(".EQ") {
+                push_symbol(&bare);
+            }
+        }
+        for symbol in &self.user_watchlist {
+            if symbol.to_ascii_uppercase().ends_with(".EQ") {
+                push_symbol(symbol);
+            }
+        }
+        out.sort();
+        out
+    }
+
     pub(super) fn kraken_futures_symbol_sector(symbol: &str) -> usize {
         let symbol = typhoon_engine::core::kraken_futures::normalize_futures_symbol(symbol);
         if symbol.starts_with("PF_") {
@@ -728,6 +780,75 @@ impl TyphooNApp {
                 continue;
             }
             dispatched += self.schedule_kraken_pairs_with_budget(idx, sector, budget, 4);
+        }
+        dispatched
+    }
+
+    pub(super) fn schedule_kraken_equities_universe(&mut self) -> usize {
+        let symbols = self.kraken_equity_sync_symbols();
+        if symbols.is_empty() {
+            return 0;
+        }
+        let timeframes = self.enabled_standard_sync_timeframes();
+        if timeframes.is_empty() {
+            return 0;
+        }
+        let queue_window: usize = if self.user_interacting { 3 } else { 8 };
+        let batch_limit: usize = if self.user_interacting { 1 } else { 4 };
+        let foreground_slots = if self.user_interacting { 1 } else { 2 };
+        let available_slots = queue_window
+            .saturating_sub(
+                self.pending_kraken_fetches
+                    .iter()
+                    .filter(|key| key.starts_with("equity:"))
+                    .count(),
+            )
+            .min(batch_limit);
+        if available_slots == 0 {
+            return 0;
+        }
+        if self.cached_kraken_equities_sync_state_rev != Some(self.bg_rev) {
+            let previous = self.cached_kraken_equities_sync_state.clone();
+            let mut rebuilt = self.build_source_cache_state_map("kraken-equities:");
+            merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
+            self.cached_kraken_equities_sync_state = rebuilt;
+            self.cached_kraken_equities_sync_state_rev = Some(self.bg_rev);
+        }
+        self.ensure_unresolvable_fetch_key_index();
+        let focus_symbols = self.market_data_focus_symbols();
+        let empty_no_data_keys = std::collections::HashSet::new();
+        let no_data_keys = self
+            .unresolvable_fetch_keys_by_broker
+            .get("kraken-equities")
+            .unwrap_or(&empty_no_data_keys);
+        let empty_backfill = std::collections::HashMap::new();
+        let pending_equities: std::collections::HashSet<String> = self
+            .pending_kraken_fetches
+            .iter()
+            .filter_map(|key| key.strip_prefix("equity:").map(str::to_string))
+            .collect();
+        let mut cursor = self.kraken_equities_sync_cursor;
+        let candidates = select_alpaca_sync_workset_rotating(
+            &symbols,
+            &timeframes,
+            &self.cached_kraken_equities_sync_state,
+            &focus_symbols,
+            no_data_keys,
+            &empty_backfill,
+            &pending_equities,
+            available_slots,
+            foreground_slots,
+            if self.user_interacting { 24 } else { 96 },
+            &mut cursor,
+            chrono::Utc::now().timestamp(),
+            kraken_sync_target_bars,
+        );
+        self.kraken_equities_sync_cursor = cursor;
+        let mut dispatched = 0usize;
+        for candidate in candidates {
+            if self.queue_kraken_equity_fetch(&candidate.symbol, &candidate.timeframe) {
+                dispatched += 1;
+            }
         }
         dispatched
     }

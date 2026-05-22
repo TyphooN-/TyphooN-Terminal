@@ -526,6 +526,15 @@ pub struct KrakenEquityBar {
     pub volume: f64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KrakenEquityMarket {
+    pub symbol: String,
+    pub name: Option<String>,
+    pub tradable: bool,
+    pub status: Option<String>,
+    pub instrument_status: Option<String>,
+}
+
 fn parse_json_number(value: &serde_json::Value) -> Option<f64> {
     match value {
         serde_json::Value::String(s) => s.parse::<f64>().ok(),
@@ -574,6 +583,112 @@ impl KrakenBroker {
     /// Returns true if API credentials are configured.
     pub fn is_authenticated(&self) -> bool {
         !self.api_key.is_empty() && !self.api_secret.is_empty()
+    }
+
+    /// Fetch the full public Kraken Securities/equities universe from Kraken Pro's
+    /// internal market catalog. This endpoint is unauthenticated but needs the same
+    /// frontend headers Kraken Pro sends; without them iapi currently returns 404.
+    pub async fn get_equity_markets(&self) -> Result<Vec<KrakenEquityMarket>, String> {
+        const PAGE_SIZE: usize = 1000;
+        let mut page = 0usize;
+        let mut out = Vec::new();
+        loop {
+            let page_s = page.to_string();
+            let page_size_s = PAGE_SIZE.to_string();
+            let url = format!("{KRAKEN_INTERNAL_API_BASE_URL}/markets/all/equities");
+            let resp = self
+                .client
+                .get(&url)
+                .header("Accept", "application/json")
+                .header("Referer", "https://pro.kraken.com/app/")
+                .header("Origin", "https://pro.kraken.com")
+                .header("x-handler-environment", "stable")
+                .header("x-initiated-through", "@frontend/cts-core")
+                .query(&[
+                    ("delayed", "true"),
+                    ("tradable", "true"),
+                    ("page_size", page_size_s.as_str()),
+                    ("page", page_s.as_str()),
+                ])
+                .send()
+                .await
+                .map_err(|e| format!("Kraken equity catalog request failed: {e}"))?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(format!(
+                    "Kraken equity catalog request failed: HTTP {status}: {body}"
+                ));
+            }
+            let body: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| format!("Kraken equity catalog parse failed: {e}"))?;
+            if let Some(errors) = body.get("errors").and_then(|v| v.as_array()) {
+                if !errors.is_empty() {
+                    let msg = errors
+                        .iter()
+                        .map(|e| {
+                            e.get("msg")
+                                .or_else(|| e.get("type"))
+                                .or_else(|| e.get("error"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown Kraken equity catalog error")
+                                .to_string()
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(format!("Kraken equity catalog error: {msg}"));
+                }
+            }
+            let Some(result) = body.get("result") else {
+                break;
+            };
+            let data = result
+                .get("data")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| "Kraken equity catalog: missing result.data".to_string())?;
+            if data.is_empty() {
+                break;
+            }
+            for item in data {
+                let Some(symbol) = item.get("symbol").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let symbol = symbol.trim().trim_end_matches(".EQ").to_ascii_uppercase();
+                if symbol.is_empty() {
+                    continue;
+                }
+                out.push(KrakenEquityMarket {
+                    symbol,
+                    name: item
+                        .get("name")
+                        .or_else(|| item.get("short_name"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                    tradable: item.get("tradable").and_then(|v| v.as_bool()).unwrap_or(true),
+                    status: item.get("status").and_then(|v| v.as_str()).map(str::to_string),
+                    instrument_status: item
+                        .get("instrument_status")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                });
+            }
+            let total_results = result
+                .get("total_results")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(out.len() as u64) as usize;
+            if out.len() >= total_results || data.len() < PAGE_SIZE {
+                break;
+            }
+            page += 1;
+            if page > 100 {
+                return Err("Kraken equity catalog: pagination safety limit hit".to_string());
+            }
+        }
+        out.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+        out.dedup_by(|a, b| a.symbol == b.symbol);
+        Ok(out)
     }
 
     /// Fetch delayed Kraken Securities/equities quote data from Kraken Pro's

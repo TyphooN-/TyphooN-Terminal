@@ -8909,6 +8909,7 @@ enum BrokerCmd {
         symbol: String,
         timeframe: String,
     },
+    KrakenFetchEquityUniverse,
     KrakenStartPrivateWs,
     KrakenStartOrderbookWs {
         symbol: String,
@@ -8954,6 +8955,7 @@ enum BrokerMsg {
         timeframe: String,
         bars: Vec<typhoon_engine::broker::kraken_broker::KrakenEquityBar>,
     },
+    KrakenEquityUniverse(Vec<typhoon_engine::broker::kraken_broker::KrakenEquityMarket>),
     SecScrapeResult(String),
     FilingContent(String), // fetched SEC filing document text
     FinnhubNewsResult(Vec<(String, String, String)>),
@@ -10768,6 +10770,13 @@ pub struct TyphooNApp {
     /// Cached Kraken Futures bar-state map keyed by normalized `(symbol, timeframe)`.
     cached_kraken_futures_sync_state: std::collections::HashMap<(String, String), SyncCacheState>,
     cached_kraken_futures_sync_state_rev: Option<u64>,
+    /// Cached Kraken internal equities bar-state map keyed by normalized `(symbol, timeframe)`.
+    cached_kraken_equities_sync_state: std::collections::HashMap<(String, String), SyncCacheState>,
+    cached_kraken_equities_sync_state_rev: Option<u64>,
+    /// Full tradable Kraken Securities/equities symbol universe from the internal public catalog.
+    kraken_equity_universe_symbols: Vec<String>,
+    kraken_equity_universe_requested: bool,
+    kraken_equity_universe_retry_after_ts: i64,
     /// Tastytrade-cached symbol set (uppercased, parsed from detailed_stats keys
     /// with the `tastytrade:` prefix). Rebuilt alongside cached_mt5_symbols so
     /// the Alpaca equity rotation can exclude anything tastytrade already has.
@@ -10889,6 +10898,7 @@ pub struct TyphooNApp {
     /// fetch sets keep foreground/manual and background requests deduplicated.
     alpaca_sync_cursor: usize,
     kraken_spot_sync_cursors: [usize; 4],
+    kraken_equities_sync_cursor: usize,
     kraken_futures_sync_cursors: [usize; 4],
     tastytrade_sync_cursor: usize,
     /// Alpaca retry queue — persisted across restarts via cache KV at `alpaca:retry_queue`.
@@ -24466,6 +24476,25 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             }
                         }
                     }
+                    BrokerCmd::KrakenFetchEquityUniverse => {
+                        let result = if let Some(ref kb) = kraken_broker {
+                            kb.get_equity_markets().await
+                        } else {
+                            let kb = typhoon_engine::broker::kraken_broker::KrakenBroker::new(
+                                String::new(),
+                                String::new(),
+                            );
+                            kb.get_equity_markets().await
+                        };
+                        match result {
+                            Ok(markets) => {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::KrakenEquityUniverse(markets));
+                            }
+                            Err(e) => {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e));
+                            }
+                        }
+                    }
                     BrokerCmd::KrakenStartPrivateWs => {
                         let ws_client = kraken_ws_broker.as_ref().or(kraken_broker.as_ref());
                         if let Some(kb) = ws_client {
@@ -26793,6 +26822,11 @@ When the question touches recent news, sentiment, or prices, combine the researc
             cached_kraken_sync_state_rev: None,
             cached_kraken_futures_sync_state: std::collections::HashMap::new(),
             cached_kraken_futures_sync_state_rev: None,
+            cached_kraken_equities_sync_state: std::collections::HashMap::new(),
+            cached_kraken_equities_sync_state_rev: None,
+            kraken_equity_universe_symbols: Vec::new(),
+            kraken_equity_universe_requested: false,
+            kraken_equity_universe_retry_after_ts: 0,
             cached_tastytrade_symbols: std::collections::HashSet::new(),
             cached_tastytrade_sync_state: std::collections::HashMap::new(),
             cached_tastytrade_sync_state_rev: None,
@@ -26875,6 +26909,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             pending_tastytrade_fetches: std::collections::HashSet::new(),
             alpaca_sync_cursor: 0,
             kraken_spot_sync_cursors: [0; 4],
+            kraken_equities_sync_cursor: 0,
             kraken_futures_sync_cursors: [0; 4],
             tastytrade_sync_cursor: 0,
             alpaca_retry_queue: Vec::new(),
