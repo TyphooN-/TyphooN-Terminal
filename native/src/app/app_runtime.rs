@@ -11729,20 +11729,20 @@ impl eframe::App for TyphooNApp {
                                                 .strong(),
                                         );
                                         ui.label(
-                                            egui::RichText::new(format!("{qty:.8} {display_holding}"))
+                                            egui::RichText::new(format!("{qty:.2} {display_holding}"))
                                                 .small()
                                                 .monospace(),
                                         );
                                         if let Some(avg) = avg_price {
                                             ui.label(
-                                                egui::RichText::new(format!("avg {}", format_price(avg)))
+                                                egui::RichText::new(format!("avg {:.2}", avg))
                                                     .color(AXIS_TEXT)
                                                     .small(),
                                             );
                                         }
                                         if let Some(cur) = current_price {
                                             ui.label(
-                                                egui::RichText::new(format!("cur {}", format_price(cur)))
+                                                egui::RichText::new(format!("cur {:.2}", cur))
                                                     .color(AXIS_TEXT)
                                                     .small(),
                                             );
