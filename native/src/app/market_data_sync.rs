@@ -1307,12 +1307,7 @@ impl TyphooNApp {
     /// now would just hit the same cache slot before a new bar could exist.
     /// Uses ~half the TF period as the cooldown so we still refresh well within
     /// one bar's worth of time during market hours.
-    pub(super) fn is_fetch_on_cooldown(
-        &self,
-        source: &str,
-        symbol: &str,
-        timeframe: &str,
-    ) -> bool {
+    pub(super) fn is_fetch_on_cooldown(&self, source: &str, symbol: &str, timeframe: &str) -> bool {
         let Some(period_s) = sync_timeframe_period_secs(timeframe) else {
             return false;
         };

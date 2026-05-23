@@ -278,8 +278,8 @@ impl TastytradeBroker {
             ));
         }
 
-        let data: serde_json::Value = serde_json::from_str(&body)
-            .map_err(|e| format!("Parse accounts failed: {e}"))?;
+        let data: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| format!("Parse accounts failed: {e}"))?;
 
         let items = data["data"]["items"]
             .as_array()
