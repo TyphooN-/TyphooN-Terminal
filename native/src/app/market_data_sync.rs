@@ -648,13 +648,12 @@ impl TyphooNApp {
         if self.kraken_pairs.is_empty() {
             return true;
         }
+        // O(1) lookup against the pre-normalized set built when KrakenPairs arrives.
+        // The previous implementation called `normalize_pair_symbol` twice per element
+        // for every check, blowing up the sync-symbol audit on each tick.
         let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
-        self.kraken_pairs.iter().any(|(pair_name, display_name)| {
-            let pair_symbol = typhoon_engine::core::kraken::normalize_pair_symbol(pair_name);
-            let display_symbol = typhoon_engine::core::kraken::normalize_pair_symbol(display_name);
-            pair_symbol.eq_ignore_ascii_case(&symbol)
-                || display_symbol.eq_ignore_ascii_case(&symbol)
-        })
+        let key = symbol.to_ascii_uppercase();
+        self.kraken_pairs_normalized.contains(&key)
     }
 
     pub(super) fn kraken_sync_symbol_sectors(&self) -> Vec<Vec<String>> {

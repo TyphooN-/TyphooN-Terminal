@@ -2029,6 +2029,22 @@ impl eframe::App for TyphooNApp {
                     )));
                     self.kraken_pairs_requested = true;
                     self.kraken_pairs = pairs;
+                    self.kraken_pairs_normalized.clear();
+                    self.kraken_pairs_normalized
+                        .reserve(self.kraken_pairs.len() * 2);
+                    for (pair_name, display_name) in &self.kraken_pairs {
+                        let pair_norm =
+                            typhoon_engine::core::kraken::normalize_pair_symbol(pair_name);
+                        if !pair_norm.is_empty() {
+                            self.kraken_pairs_normalized.insert(pair_norm.to_ascii_uppercase());
+                        }
+                        let display_norm =
+                            typhoon_engine::core::kraken::normalize_pair_symbol(display_name);
+                        if !display_norm.is_empty() {
+                            self.kraken_pairs_normalized
+                                .insert(display_norm.to_ascii_uppercase());
+                        }
+                    }
                     self.refill_market_data_sync_slots();
                 }
                 BrokerMsg::KrakenFuturesInstruments(symbols) => {
@@ -14542,7 +14558,10 @@ impl eframe::App for TyphooNApp {
                     self.charts[vi].cached_trade_overlay = self.build_trade_overlay(&self.charts[vi]);
                     self.charts[vi].cached_trade_overlay_frame = fc;
                 }
-                let trade_ov = self.charts[vi].cached_trade_overlay.clone();
+                // Move the cached overlay out for the duration of this cell render — avoids
+                // a Vec<TradeMarker> clone (with String tickers) per cell per frame. We
+                // restore it once draw_chart returns, before the next cell iterates.
+                let trade_ov = std::mem::take(&mut self.charts[vi].cached_trade_overlay);
                 let chart = &mut self.charts[vi];
                 let idx = grid_pos;
                     let col = idx % cols;
@@ -14582,6 +14601,8 @@ impl eframe::App for TyphooNApp {
 
                     let painter = ui.painter_at(cell_rect);
                     draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &self.draw_mode);
+                    // Restore the cached overlay we moved out above.
+                    self.charts[vi].cached_trade_overlay = trade_ov;
 
                     // Border: green for focused, dim for others (WebKit: .mtf-grid-cell:hover outline)
                     let border_color = if is_focused {
@@ -14676,7 +14697,9 @@ impl eframe::App for TyphooNApp {
                         self.charts[self.active_tab].cached_trade_overlay_frame = fc;
                     }
                 }
-                let trade_ov = self.charts.get(self.active_tab).map(|c| c.cached_trade_overlay.clone()).unwrap_or_default();
+                // Trade overlay is moved into the chart-mutating block below and
+                // restored after draw_chart — same trick as the MTF grid above. Avoids
+                // cloning Vec<TradeMarker> (with String tickers) every frame.
 
                 // Replay mode: clamp view to only show replay_bar_idx bars
                 if self.replay_active {
@@ -14688,8 +14711,12 @@ impl eframe::App for TyphooNApp {
                 }
 
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                    // Take ownership of the cached overlay briefly so we don't clone its
+                    // String tickers every frame, then restore it.
+                    let trade_ov = std::mem::take(&mut chart.cached_trade_overlay);
                     let painter = ui.painter_at(rect);
                     draw_chart(&painter, chart, rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &self.draw_mode);
+                    chart.cached_trade_overlay = trade_ov;
 
                     // Replay overlay: show bar count and speed
                     if self.replay_active {

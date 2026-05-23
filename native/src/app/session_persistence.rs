@@ -26,15 +26,28 @@ impl TyphooNApp {
     }
 
     pub(super) fn normalized_right_panel_order(&mut self) -> Vec<RightPanelSectionId> {
+        // Track membership in a bitset (one bit per RightPanelSectionId variant) so
+        // the per-frame normalization is O(n) instead of O(n²) from chained
+        // `out.contains(&section)` scans.
         let mut out = Vec::with_capacity(RightPanelSectionId::DEFAULT_ORDER.len());
+        let mut seen: u64 = 0;
+        let bit = |s: RightPanelSectionId| 1u64 << (s as u32);
+        let default_mask: u64 = RightPanelSectionId::DEFAULT_ORDER
+            .iter()
+            .copied()
+            .fold(0u64, |m, s| m | bit(s));
         for section in self.right_panel_order.iter().copied() {
-            if RightPanelSectionId::DEFAULT_ORDER.contains(&section) && !out.contains(&section) {
+            let b = bit(section);
+            if default_mask & b != 0 && seen & b == 0 {
                 out.push(section);
+                seen |= b;
             }
         }
         for section in RightPanelSectionId::DEFAULT_ORDER {
-            if !out.contains(&section) {
+            let b = bit(section);
+            if seen & b == 0 {
                 out.push(section);
+                seen |= b;
             }
         }
         if out != self.right_panel_order {

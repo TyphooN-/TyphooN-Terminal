@@ -3305,20 +3305,27 @@ pub(super) fn draw_chart(
     }
 
     let use_log = chart.log_scale && price_min > 0.0; // log scale requires positive prices
+    // Precompute the log-axis constants once. price_to_y is called once per visible
+    // bar per indicator (~hundreds per frame), so hoisting the two `.ln()` calls out
+    // of the closure turns a per-call cost into a per-frame cost.
+    let log_max = if use_log { price_max.ln() } else { 0.0 };
+    let log_min = if use_log { price_min.ln() } else { 0.0 };
+    let log_range = log_max - log_min;
+    let log_range_degenerate = use_log && log_range.abs() < f64::EPSILON;
+    let linear_range = price_max - price_min;
+    let chart_top = chart_rect.top();
+    let chart_h = chart_rect.height();
     let price_to_y = |p: f64| -> f32 {
         let frac = if use_log {
-            let log_max = price_max.ln();
-            let log_min = price_min.ln();
-            let log_range = log_max - log_min;
-            if log_range.abs() < f64::EPSILON {
+            if log_range_degenerate {
                 0.5
             } else {
                 (log_max - p.max(0.001).ln()) / log_range
             }
         } else {
-            (price_max - p) / (price_max - price_min)
+            (price_max - p) / linear_range
         };
-        chart_rect.top() + frac as f32 * chart_rect.height()
+        chart_top + frac as f32 * chart_h
     };
 
     // ── bar width ────────────────────────────────────────────────────────────
@@ -4542,24 +4549,29 @@ pub(super) fn draw_chart(
         let fvg_bear = egui::Color32::from_rgba_premultiplied(220, 50, 50, 30);
         let fvg_bull_edge = egui::Color32::from_rgba_premultiplied(0, 180, 80, 80);
         let fvg_bear_edge = egui::Color32::from_rgba_premultiplied(220, 50, 50, 80);
-        for i in 1..bars.len().saturating_sub(1) {
+        // Suffix arrays make the "has this gap been filled?" lookup O(1).
+        // future_min_low[k] = min(bars[k..].low); future_max_high[k] = max(bars[k..].high).
+        // The previous code scanned bars[i+2..] for each FVG candidate (O(n²) per frame
+        // — pricey on dense charts and unnecessary when only the suffix extremes matter).
+        let n = bars.len();
+        let mut future_min_low: Vec<f64> = vec![f64::INFINITY; n + 1];
+        let mut future_max_high: Vec<f64> = vec![f64::NEG_INFINITY; n + 1];
+        for k in (0..n).rev() {
+            future_min_low[k] = future_min_low[k + 1].min(bars[k].low);
+            future_max_high[k] = future_max_high[k + 1].max(bars[k].high);
+        }
+        for i in 1..n.saturating_sub(1) {
             let prev = &bars[i - 1];
             let next = &bars[i + 1];
             let x_start = chart_rect.left() + ((i + 1) as f32 + 0.5) * bar_w;
             let x_end = chart_rect.right();
+            let scan_start = (i + 2).min(n);
             // Bullish FVG: bar[i+1].low > bar[i-1].high (gap up)
             if next.low > prev.high {
                 let gap_top = price_to_y(next.low);
                 let gap_bot = price_to_y(prev.high);
                 if gap_top <= chart_rect.bottom() && gap_bot >= chart_rect.top() {
-                    // Check if gap has been filled by subsequent bars
-                    let mut filled = false;
-                    for j in (i + 2)..bars.len() {
-                        if bars[j].low <= prev.high {
-                            filled = true;
-                            break;
-                        }
-                    }
+                    let filled = future_min_low[scan_start] <= prev.high;
                     if !filled {
                         painter.rect_filled(
                             egui::Rect::from_min_max(
@@ -4585,13 +4597,7 @@ pub(super) fn draw_chart(
                 let gap_top = price_to_y(prev.low);
                 let gap_bot = price_to_y(next.high);
                 if gap_top <= chart_rect.bottom() && gap_bot >= chart_rect.top() {
-                    let mut filled = false;
-                    for j in (i + 2)..bars.len() {
-                        if bars[j].high >= prev.low {
-                            filled = true;
-                            break;
-                        }
-                    }
+                    let filled = future_max_high[scan_start] >= prev.low;
                     if !filled {
                         painter.rect_filled(
                             egui::Rect::from_min_max(

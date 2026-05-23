@@ -10593,6 +10593,12 @@ pub struct TyphooNApp {
     kraken_cost_basis: std::collections::HashMap<String, KrakenCostBasis>,
     kraken_open_orders: Vec<typhoon_engine::broker::kraken_broker::KrakenOrder>,
     kraken_pairs: Vec<(String, String)>,
+    /// Normalized pair/display symbols cached as a set so
+    /// `kraken_spot_symbol_in_loaded_pairs` is O(1) — the previous linear
+    /// `kraken_pairs.iter().any(...)` ran `normalize_pair_symbol` (allocating)
+    /// twice per element on every sync-symbol audit, multiplying with O(n)
+    /// `kraken_spot_symbol_scrape_enabled` callers.
+    kraken_pairs_normalized: std::collections::HashSet<String>,
     kraken_futures_symbols: Vec<String>,
     /// Kraken public market-data scrape universe switches. These gate automated
     /// public OHLC/Futures scheduling so the scrape budget stays on instruments
@@ -29324,6 +29330,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             kraken_cost_basis: std::collections::HashMap::new(),
             kraken_open_orders: Vec::new(),
             kraken_pairs: Vec::new(),
+            kraken_pairs_normalized: std::collections::HashSet::new(),
             kraken_futures_symbols: Vec::new(),
             kraken_scrape_xstocks: true,
             kraken_scrape_usd_crypto: true,
