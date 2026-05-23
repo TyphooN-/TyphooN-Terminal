@@ -11594,10 +11594,24 @@ impl eframe::App for TyphooNApp {
                                 }
                             }
                             if show_kr_positions && !self.kr_positions.is_empty() {
-                                has_positions = true;
                                 let mut close_sym: Option<String> = None;
                                 let mut kr_action = SymbolAction::None;
                                 for pos in &self.kr_positions {
+                                    // Kraken's OpenPositions endpoint also reports spot/funded
+                                    // trades (leverage=1) whose underlying sits in the wallet.
+                                    // When the matching balance covers the full position qty,
+                                    // the spot row in the balances section is the real exposure
+                                    // — rendering this row too double-counts it (and the Close
+                                    // button would try to close a non-existent margin position).
+                                    if let Some((_, bal_qty)) =
+                                        self.kraken_spot_balance_for_pair(&pos.symbol)
+                                    {
+                                        let tol = (pos.qty.abs() * 0.01).max(1e-9);
+                                        if (bal_qty - pos.qty).abs() <= tol {
+                                            continue;
+                                        }
+                                    }
+                                    has_positions = true;
                                     let side_c = if pos.side == "long" { UP } else { DOWN };
                                     let side_label = if pos.side == "long" { "L" } else { "S" };
                                     let avg_entry = if pos.avg_entry_price > 0.0 {
@@ -11690,6 +11704,7 @@ impl eframe::App for TyphooNApp {
                                 .cloned()
                                 .collect();
                             if show_kr_positions && !kraken_sellable_balances.is_empty() {
+                                has_positions = true;
                                 let mut sell_balance: Option<(String, f64)> = None;
                                 for (asset, qty) in kraken_sellable_balances {
                                     let display_asset = Self::kraken_display_asset(&asset);
