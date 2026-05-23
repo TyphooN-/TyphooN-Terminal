@@ -21,48 +21,58 @@ impl TyphooNApp {
                 ui.heading("API Keys");
                 ui.separator();
                 egui::Grid::new("api_keys_settings").num_columns(2).spacing(egui::vec2(8.0, 4.0)).show(ui, |ui| {
-                    ui.label("Alpaca API Key:");
-                    ui.add(egui::TextEdit::singleline(&mut self.broker_api_key).desired_width(250.0).password(true));
-                    ui.end_row();
-                    ui.label("Alpaca Secret:");
-                    ui.add(egui::TextEdit::singleline(&mut self.broker_secret).desired_width(250.0).password(true));
-                    ui.end_row();
-                    ui.label("Alpaca Mode:");
-                    ui.horizontal(|ui| {
-                        ui.radio_value(&mut self.broker_paper, true, "Paper");
-                        ui.radio_value(&mut self.broker_paper, false, "Live");
-                    });
-                    ui.end_row();
+                    // Broker key rows are gated on the matching `<broker>_enabled` flag
+                    // so disabled brokers don't clutter Settings with credentials the
+                    // app won't use. Toggle the broker on under "Broker modules" below
+                    // to expose its fields.
+                    if self.alpaca_enabled {
+                        ui.label("Alpaca API Key:");
+                        ui.add(egui::TextEdit::singleline(&mut self.broker_api_key).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("Alpaca Secret:");
+                        ui.add(egui::TextEdit::singleline(&mut self.broker_secret).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("Alpaca Mode:");
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut self.broker_paper, true, "Paper");
+                            ui.radio_value(&mut self.broker_paper, false, "Live");
+                        });
+                        ui.end_row();
+                    }
                     ui.label("Finnhub API Key:");
                     ui.add(egui::TextEdit::singleline(&mut self.finnhub_key).desired_width(250.0).password(true));
                     ui.end_row();
                     ui.label("FRED API Key:");
                     ui.add(egui::TextEdit::singleline(&mut self.fred_key).desired_width(250.0).password(true));
                     ui.end_row();
-                    ui.label("tastytrade User:");
-                    ui.add(egui::TextEdit::singleline(&mut self.tt_username).desired_width(250.0));
-                    ui.end_row();
-                    ui.label("tastytrade Pass:");
-                    ui.add(egui::TextEdit::singleline(&mut self.tt_password).desired_width(250.0).password(true));
-                    ui.end_row();
-                    ui.label("tastytrade Mode:");
-                    ui.horizontal(|ui| {
-                        ui.radio_value(&mut self.tt_sandbox, true, "Sandbox");
-                        ui.radio_value(&mut self.tt_sandbox, false, "Production");
-                    });
-                    ui.end_row();
-                    ui.label("Kraken REST API Key:");
-                    ui.add(egui::TextEdit::singleline(&mut self.kraken_api_key).desired_width(250.0).password(true));
-                    ui.end_row();
-                    ui.label("Kraken REST API Secret:");
-                    ui.add(egui::TextEdit::singleline(&mut self.kraken_api_secret).desired_width(250.0).password(true));
-                    ui.end_row();
-                    ui.label("Kraken WS API Key:");
-                    ui.add(egui::TextEdit::singleline(&mut self.kraken_ws_api_key).desired_width(250.0).password(true));
-                    ui.end_row();
-                    ui.label("Kraken WS API Secret:");
-                    ui.add(egui::TextEdit::singleline(&mut self.kraken_ws_api_secret).desired_width(250.0).password(true));
-                    ui.end_row();
+                    if self.tastytrade_enabled {
+                        ui.label("tastytrade User:");
+                        ui.add(egui::TextEdit::singleline(&mut self.tt_username).desired_width(250.0));
+                        ui.end_row();
+                        ui.label("tastytrade Pass:");
+                        ui.add(egui::TextEdit::singleline(&mut self.tt_password).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("tastytrade Mode:");
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut self.tt_sandbox, true, "Sandbox");
+                            ui.radio_value(&mut self.tt_sandbox, false, "Production");
+                        });
+                        ui.end_row();
+                    }
+                    if self.kraken_enabled {
+                        ui.label("Kraken REST API Key:");
+                        ui.add(egui::TextEdit::singleline(&mut self.kraken_api_key).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("Kraken REST API Secret:");
+                        ui.add(egui::TextEdit::singleline(&mut self.kraken_api_secret).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("Kraken WS API Key:");
+                        ui.add(egui::TextEdit::singleline(&mut self.kraken_ws_api_key).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("Kraken WS API Secret:");
+                        ui.add(egui::TextEdit::singleline(&mut self.kraken_ws_api_secret).desired_width(250.0).password(true));
+                        ui.end_row();
+                    }
                     ui.label("Gemini API Key:");
                     ui.add(egui::TextEdit::singleline(&mut self.gemini_key).desired_width(250.0).password(true));
                     ui.end_row();
@@ -298,71 +308,79 @@ impl TyphooNApp {
                 if let Some((rows, kv, size)) = self.bg.cache_stats {
                     ui.label(format!("Bar entries: {}  |  KV entries: {}  |  DB size: {} KB", rows, kv, size / 1024));
                 }
-                let alpaca_status = if self.broker_connected { "Connected" } else { "Disconnected" };
-                let tt_status = if self.tt_connected { "Connected" } else { "Disconnected" };
-                let kraken_status = if self.kraken_connected { "Connected" } else { "Disconnected" };
-                ui.label(format!("Alpaca: REST API + WebSocket — {}", alpaca_status));
-                ui.label(format!("tastytrade: REST API — {}", tt_status));
-                ui.label(format!("Kraken: REST API + WebSocket — {}", kraken_status));
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new("Kraken automated scrape universes")
-                        .color(AXIS_TEXT)
-                        .small()
-                        .strong(),
-                );
-                let mut kraken_scrape_changed = false;
-                ui.horizontal_wrapped(|ui| {
-                    kraken_scrape_changed |= ui
-                        .checkbox(&mut self.kraken_scrape_xstocks, "xStocks / ETFs")
-                        .on_hover_text("Tokenized stocks and ETFs from Kraken Spot/xStocks.")
-                        .changed();
-                    kraken_scrape_changed |= ui
-                        .checkbox(&mut self.kraken_scrape_crypto_crosses, "Crypto crosses")
-                        .on_hover_text("Non-fiat crypto crosses such as ETH/BTC.")
-                        .changed();
-                    kraken_scrape_changed |= ui
-                        .checkbox(&mut self.kraken_scrape_futures, "Futures")
-                        .on_hover_text("Kraken Futures public instruments and candles.")
-                        .changed();
-                });
-                ui.label(egui::RichText::new("Global crypto/fiat quote filters").color(AXIS_TEXT).small());
-                ui.horizontal_wrapped(|ui| {
-                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_usd, "USD").changed();
-                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_usdt, "USDT").changed();
-                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_usdc, "USDC").changed();
-                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_usdg, "USDG").changed();
-                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_eur, "EUR").changed();
-                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_gbp, "GBP").changed();
-                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_cad, "CAD").changed();
-                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_aud, "AUD").changed();
-                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_jpy, "JPY").changed();
-                    kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_chf, "CHF").changed();
-                });
-                if kraken_scrape_changed {
-                    self.kraken_scrape_usd_crypto = self.crypto_fiat_quote_usd
-                        || self.crypto_fiat_quote_usdt
-                        || self.crypto_fiat_quote_usdc
-                        || self.crypto_fiat_quote_usdg;
-                    self.kraken_scrape_fiat_crypto = self.crypto_fiat_quote_eur
-                        || self.crypto_fiat_quote_gbp
-                        || self.crypto_fiat_quote_cad
-                        || self.crypto_fiat_quote_aud
-                        || self.crypto_fiat_quote_jpy
-                        || self.crypto_fiat_quote_chf;
-                    settings_save_after = true;
-                    self.pending_kraken_fetches.clear();
-                    if !self.kraken_scrape_futures {
-                        self.pending_kraken_futures_fetches.clear();
-                    }
+                if self.alpaca_enabled {
+                    let alpaca_status = if self.broker_connected { "Connected" } else { "Disconnected" };
+                    ui.label(format!("Alpaca: REST API + WebSocket — {}", alpaca_status));
                 }
-                ui.label(
-                    egui::RichText::new(
-                        "These category and quote filters control automated broker public scraping. Kraken uses them now; future crypto brokers should call the same quote filter instead of adding broker-specific assumptions.",
-                    )
-                    .color(AXIS_TEXT)
-                    .small(),
-                );
+                if self.tastytrade_enabled {
+                    let tt_status = if self.tt_connected { "Connected" } else { "Disconnected" };
+                    ui.label(format!("tastytrade: REST API — {}", tt_status));
+                }
+                if self.kraken_enabled {
+                    let kraken_status = if self.kraken_connected { "Connected" } else { "Disconnected" };
+                    ui.label(format!("Kraken: REST API + WebSocket — {}", kraken_status));
+                }
+                if self.kraken_enabled {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new("Kraken automated scrape universes")
+                            .color(AXIS_TEXT)
+                            .small()
+                            .strong(),
+                    );
+                    let mut kraken_scrape_changed = false;
+                    ui.horizontal_wrapped(|ui| {
+                        kraken_scrape_changed |= ui
+                            .checkbox(&mut self.kraken_scrape_xstocks, "xStocks / ETFs")
+                            .on_hover_text("Tokenized stocks and ETFs from Kraken Spot/xStocks.")
+                            .changed();
+                        kraken_scrape_changed |= ui
+                            .checkbox(&mut self.kraken_scrape_crypto_crosses, "Crypto crosses")
+                            .on_hover_text("Non-fiat crypto crosses such as ETH/BTC.")
+                            .changed();
+                        kraken_scrape_changed |= ui
+                            .checkbox(&mut self.kraken_scrape_futures, "Futures")
+                            .on_hover_text("Kraken Futures public instruments and candles.")
+                            .changed();
+                    });
+                    ui.label(egui::RichText::new("Global crypto/fiat quote filters").color(AXIS_TEXT).small());
+                    ui.horizontal_wrapped(|ui| {
+                        kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_usd, "USD").changed();
+                        kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_usdt, "USDT").changed();
+                        kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_usdc, "USDC").changed();
+                        kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_usdg, "USDG").changed();
+                        kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_eur, "EUR").changed();
+                        kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_gbp, "GBP").changed();
+                        kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_cad, "CAD").changed();
+                        kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_aud, "AUD").changed();
+                        kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_jpy, "JPY").changed();
+                        kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_chf, "CHF").changed();
+                    });
+                    if kraken_scrape_changed {
+                        self.kraken_scrape_usd_crypto = self.crypto_fiat_quote_usd
+                            || self.crypto_fiat_quote_usdt
+                            || self.crypto_fiat_quote_usdc
+                            || self.crypto_fiat_quote_usdg;
+                        self.kraken_scrape_fiat_crypto = self.crypto_fiat_quote_eur
+                            || self.crypto_fiat_quote_gbp
+                            || self.crypto_fiat_quote_cad
+                            || self.crypto_fiat_quote_aud
+                            || self.crypto_fiat_quote_jpy
+                            || self.crypto_fiat_quote_chf;
+                        settings_save_after = true;
+                        self.pending_kraken_fetches.clear();
+                        if !self.kraken_scrape_futures {
+                            self.pending_kraken_futures_fetches.clear();
+                        }
+                    }
+                    ui.label(
+                        egui::RichText::new(
+                            "These category and quote filters control automated broker public scraping. Kraken uses them now; future crypto brokers should call the same quote filter instead of adding broker-specific assumptions.",
+                        )
+                        .color(AXIS_TEXT)
+                        .small(),
+                    );
+                }
                 ui.label("Finnhub: News, Analyst, Insider Sentiment, Short Interest");
                 ui.label("SEC EDGAR: Filing scraper + Form 4 insider trades");
                 ui.add_space(6.0);
@@ -449,6 +467,7 @@ impl TyphooNApp {
                         .on_hover_text("Matches BarCacheWriter's 30s write cadence. Silent — no log spam.");
                 });
 
+                if self.darwinex_enabled {
                 ui.add_space(10.0);
                 ui.heading("Darwinex");
                 ui.separator();
@@ -561,6 +580,7 @@ impl TyphooNApp {
                     }
                 }
                 ui.label("Margin accounts: 100%");
+                } // end darwinex_enabled gate
 
                 ui.add_space(10.0);
                 ui.heading("Notifications");

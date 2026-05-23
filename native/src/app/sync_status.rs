@@ -32,7 +32,9 @@ impl TyphooNApp {
             .show(ctx, |ui| {
                 ui.label(egui::RichText::new("Bar sync % per broker / timeframe").color(AXIS_TEXT).small());
                 ui.label(egui::RichText::new("healthy = last bar within 24× TF period · stale beyond · empty = cached blob has no bars").color(AXIS_TEXT).small());
-                self.render_alpaca_sync_profile_controls(ui, &mut sync_save_after, "sync_status");
+                if self.alpaca_enabled {
+                    self.render_alpaca_sync_profile_controls(ui, &mut sync_save_after, "sync_status");
+                }
                 self.render_sync_timeframe_controls(ui, &mut sync_save_after);
                 ui.separator();
 
