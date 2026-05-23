@@ -4,11 +4,15 @@
 //! Separate from `core/kraken.rs` which handles public OHLCV data only.
 //! See ADR-072 for the full integration plan.
 
+mod equities;
 mod helpers;
 mod limiter;
 mod order_types;
 
+pub use self::equities::{KrakenEquityBar, KrakenEquityMarket, KrakenEquityTicker};
 pub use self::order_types::{KrakenConditionalClose, KrakenOrderRequest};
+
+use self::equities::{parse_json_i64, parse_json_number};
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use hmac::{Hmac, KeyInit, Mac};
@@ -29,57 +33,6 @@ type HmacSha512 = Hmac<Sha512>;
 
 const KRAKEN_BASE_URL: &str = "https://api.kraken.com";
 const KRAKEN_INTERNAL_API_BASE_URL: &str = "https://iapi.kraken.com/api/internal";
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct KrakenEquityTicker {
-    pub symbol: String,
-    pub bid: f64,
-    pub ask: f64,
-    pub price: f64,
-    pub volume: f64,
-    pub open: Option<f64>,
-    pub high: Option<f64>,
-    pub low: Option<f64>,
-    pub previous_close: Option<f64>,
-    pub time_ms: i64,
-    pub delayed: bool,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct KrakenEquityBar {
-    pub time_ms: i64,
-    pub open: f64,
-    pub high: f64,
-    pub low: f64,
-    pub close: f64,
-    pub volume: f64,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct KrakenEquityMarket {
-    pub symbol: String,
-    pub name: Option<String>,
-    pub tradable: bool,
-    pub status: Option<String>,
-    pub instrument_status: Option<String>,
-}
-
-fn parse_json_number(value: &serde_json::Value) -> Option<f64> {
-    match value {
-        serde_json::Value::String(s) => s.parse::<f64>().ok(),
-        serde_json::Value::Number(n) => n.as_f64(),
-        _ => None,
-    }
-    .filter(|v| v.is_finite())
-}
-
-fn parse_json_i64(value: &serde_json::Value) -> Option<i64> {
-    match value {
-        serde_json::Value::String(s) => s.parse::<i64>().ok(),
-        serde_json::Value::Number(n) => n.as_i64().or_else(|| n.as_u64().map(|v| v as i64)),
-        _ => None,
-    }
-}
 
 /// Kraken broker client with HMAC-SHA512 request signing.
 pub struct KrakenBroker {
