@@ -11733,16 +11733,23 @@ impl eframe::App for TyphooNApp {
                                                 .small()
                                                 .monospace(),
                                         );
+                                        let fmt_bal_price = |p: f64| -> String {
+                                            if p.abs() >= 1.0 {
+                                                format!("{:.2}", p)
+                                            } else {
+                                                format!("{:.4}", p)
+                                            }
+                                        };
                                         if let Some(avg) = avg_price {
                                             ui.label(
-                                                egui::RichText::new(format!("avg {:.2}", avg))
+                                                egui::RichText::new(format!("avg {}", fmt_bal_price(avg)))
                                                     .color(AXIS_TEXT)
                                                     .small(),
                                             );
                                         }
                                         if let Some(cur) = current_price {
                                             ui.label(
-                                                egui::RichText::new(format!("cur {:.2}", cur))
+                                                egui::RichText::new(format!("cur {}", fmt_bal_price(cur)))
                                                     .color(AXIS_TEXT)
                                                     .small(),
                                             );
@@ -14153,16 +14160,14 @@ impl eframe::App for TyphooNApp {
             for chart in &mut self.charts {
                 if pointer.primary_pressed() {
                     let press_pos = pointer.press_origin().unwrap_or_default();
-                    // Price-axis scaling is chart-only. Floating windows and side-panel
-                    // widgets can overlap this x-range while resizing or dragging.
-                    if price_axis_rect.contains(press_pos) && !hover_over_window {
-                        // Start price-axis scaling drag (TradingView style)
-                        chart.is_scaling_price = true;
-                        chart.is_dragging = false;
-                        self.user_interacting = true;
-                        chart.is_drawing_drag = false;
-                        chart.scale_start_zoom = chart.price_zoom;
-                        chart.scale_start_y = press_pos.y;
+                    // Price-axis scaling is handled by the dedicated widget below
+                    // (`single_chart_price_axis`). Don't double-handle the press here —
+                    // egui's hit-test on that widget already routes correctly even when
+                    // a floating window overlaps the right scale strip. We only need to
+                    // intercept the press so it doesn't fall through to the chart-pan
+                    // branch and start dragging the chart instead.
+                    if price_axis_rect.contains(press_pos) {
+                        // No-op: widget owns the scale gesture.
                     } else if available.contains(press_pos) && !pointer_over_window {
                         // Check if press is near SL or TP line (draggable)
                         let mut sl_tp_drag = false;
@@ -14302,15 +14307,8 @@ impl eframe::App for TyphooNApp {
                     }
                 }
 
-                // Price axis drag → vertical zoom (like TradingView)
-                if chart.is_scaling_price && drag_delta.y.abs() > 0.0 {
-                    // Drag up = zoom in (expand), drag down = zoom out (compress)
-                    // Drag up = expand (zoom in), drag down = squish (zoom out)
-                    // TradingView-style progressive scaling
-                    let sensitivity = 0.003;
-                    let zoom_delta = -drag_delta.y as f64 * sensitivity;
-                    chart.price_zoom = (chart.price_zoom * (1.0 + zoom_delta)).clamp(0.1, 20.0);
-                }
+                // Price axis drag → handled by the dedicated `single_chart_price_axis`
+                // widget below. Don't re-apply zoom here or every drag delta double-counts.
 
                 // Drawing drag — move selected drawing by delta
                 if chart.is_drawing_drag && (drag_delta.x.abs() > 0.0 || drag_delta.y.abs() > 0.0) {
@@ -14663,31 +14661,33 @@ impl eframe::App for TyphooNApp {
                     rect.min,
                     egui::pos2(rect.right() - price_axis_w, rect.bottom()),
                 );
-                // Register the price-axis drag widget FIRST and with `Sense::drag()` so
-                // `dragged()` fires from the press frame onward — `click_and_drag` defers
-                // until egui decides the gesture is "decidedly dragging", which together
-                // with the chart-body widget below was eating slow TradingView-style
-                // scale flicks. A second click-only widget on the same rect (different
-                // id) keeps double-click reset working.
+                // Single click_and_drag widget for the price axis. Previous attempts
+                // layered a Sense::drag widget and a Sense::click widget on the same
+                // rect — but later-registered widgets win egui's hit-test, so the click
+                // widget swallowed the press and the drag widget never saw the gesture.
+                // The original reason for splitting was that `dragged()` defers until
+                // egui decides the gesture is "decidedly dragging" (eats slow scale
+                // flicks). We sidestep that by reading drag movement from the raw
+                // pointer delta whenever `is_pointer_button_down_on()` is true, which
+                // fires from the press frame onward without any movement threshold.
+                // Egui's z-order still routes presses on overlapping floating windows
+                // to the window, so the old `pointer_over_window` guard is no longer
+                // needed for this widget.
                 let price_axis_resp = ui
                     .interact(
                         price_axis_rect,
-                        ui.id().with(("single_chart_price_axis_drag", self.active_tab)),
-                        egui::Sense::drag(),
+                        ui.id().with(("single_chart_price_axis", self.active_tab)),
+                        egui::Sense::click_and_drag(),
                     )
                     .on_hover_cursor(egui::CursorIcon::ResizeVertical);
-                let price_axis_click_resp = ui.interact(
-                    price_axis_rect,
-                    ui.id().with(("single_chart_price_axis_click", self.active_tab)),
-                    egui::Sense::click(),
-                );
                 let resp = ui.interact(
                     chart_body_interact_rect,
                     ui.id().with(("single_chart_body_drag", self.active_tab)),
                     egui::Sense::click_and_drag(),
                 );
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                    if price_axis_resp.drag_started() {
+                    let scale_press = price_axis_resp.is_pointer_button_down_on();
+                    if scale_press && !chart.is_scaling_price {
                         chart.is_scaling_price = true;
                         chart.is_dragging = false;
                         chart.is_drawing_drag = false;
@@ -14698,23 +14698,21 @@ impl eframe::App for TyphooNApp {
                             .unwrap_or(chart.scale_start_y);
                         self.user_interacting = true;
                     }
-                    if price_axis_resp.dragged() {
-                        let dy = price_axis_resp.drag_delta().y;
+                    if scale_press {
+                        let dy = ctx.input(|i| i.pointer.delta().y);
                         if dy.abs() > 0.0 {
                             let zoom_delta = -dy as f64 * 0.003;
                             chart.price_zoom =
                                 (chart.price_zoom * (1.0 + zoom_delta)).clamp(0.1, 20.0);
-                            chart.is_scaling_price = true;
                             chart.is_dragging = false;
                             self.user_interacting = true;
                         }
+                    } else if chart.is_scaling_price {
+                        chart.is_scaling_price = false;
                     }
-                    if price_axis_click_resp.double_clicked() {
+                    if price_axis_resp.double_clicked() {
                         chart.price_zoom = 1.0;
                         chart.price_pan = 0.0;
-                    }
-                    if price_axis_resp.drag_stopped() {
-                        chart.is_scaling_price = false;
                     }
                 }
 
