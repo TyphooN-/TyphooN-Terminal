@@ -59,6 +59,7 @@ mod style_scope;
 mod symbol_investigation;
 mod sync_config;
 mod sync_status;
+mod sync_workset;
 mod technical_analysis;
 mod tool_windows;
 mod trade_ops;
@@ -67,6 +68,7 @@ use self::alpaca_sync::*;
 use self::bar_sync::*;
 use self::broker_fetch::*;
 use self::sync_config::*;
+use self::sync_workset::*;
 use self::technical_analysis::*;
 
 // ─── colours ────────────────────────────────────────────────────────────────

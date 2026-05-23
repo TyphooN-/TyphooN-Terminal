@@ -1,5 +1,5 @@
 use super::BgDarwinData;
-use super::alpaca_sync::normalize_sync_timeframe_key;
+use super::sync_workset::normalize_sync_timeframe_key;
 
 /// Per-(broker,TF) bar-sync health snapshot for the Sync Status window + the
 /// compact Storage Manager banner. When Research / Backtest sync tallies land
