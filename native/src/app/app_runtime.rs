@@ -1122,7 +1122,7 @@ impl eframe::App for TyphooNApp {
                     self.rebuild_kraken_trade_indexes();
                     self.refresh_kraken_position_costs();
                     self.log.push_back(LogEntry::info(format!(
-                        "Kraken: loaded {} trades; cost basis for {} assets",
+                        "Kraken: loaded {} trades; cost basis for {} held assets",
                         self.kraken_trades.len(),
                         self.kraken_cost_basis.len()
                     )));
@@ -2051,7 +2051,8 @@ impl eframe::App for TyphooNApp {
                         let pair_norm =
                             typhoon_engine::core::kraken::normalize_pair_symbol(pair_name);
                         if !pair_norm.is_empty() {
-                            self.kraken_pairs_normalized.insert(pair_norm.to_ascii_uppercase());
+                            self.kraken_pairs_normalized
+                                .insert(pair_norm.to_ascii_uppercase());
                         }
                         let display_norm =
                             typhoon_engine::core::kraken::normalize_pair_symbol(display_name);
@@ -8941,14 +8942,6 @@ impl eframe::App for TyphooNApp {
                         self.submit_quick_trade();
                         ui.close();
                     }
-                    if ui.button("Close All").clicked() {
-                        self.close_all_selected_brokers();
-                        ui.close();
-                    }
-                    if ui.button("Close Partial").clicked() {
-                        self.close_partial_active_symbol();
-                        ui.close();
-                    }
                     ui.separator();
                     if ui.button("Set SL").clicked() {
                         self.apply_current_sl_to_positions();
@@ -11108,6 +11101,34 @@ impl eframe::App for TyphooNApp {
                                         });
                                         for snap in &account_snaps {
                                             let is_alpaca = snap.broker == "Alpaca";
+                                            let is_kraken = snap.broker == "Kraken";
+                                            let broker_pl = if is_kraken {
+                                                let mut total_pl = 0.0;
+                                                let mut total_basis = 0.0;
+                                                for (asset, qty) in self.kraken_balances.iter().filter(|(asset, qty)| {
+                                                    qty.is_finite()
+                                                        && *qty > 0.0
+                                                        && !Self::kraken_is_cash_balance_asset(asset)
+                                                }) {
+                                                    let pair = Self::kraken_spot_pair_for_balance_asset(asset);
+                                                    let avg = self.kraken_balance_avg_price(asset);
+                                                    let current = if Self::kraken_display_asset(asset).ends_with(".EQ") {
+                                                        self.latest_cached_equity_price_for_symbol(&pair)
+                                                    } else {
+                                                        self.latest_cached_price_for_symbol(&pair)
+                                                    };
+                                                    if let (Some(avg), Some(current)) = (avg, current) {
+                                                        total_pl += (current - avg) * qty;
+                                                        total_basis += avg.abs() * qty.abs();
+                                                    }
+                                                }
+                                                (total_basis > f64::EPSILON).then_some((
+                                                    total_pl,
+                                                    total_pl / total_basis * 100.0,
+                                                ))
+                                            } else {
+                                                active_pl
+                                            };
                                             let is_live = !is_alpaca || !self.broker_paper;
                                             let mode = if is_alpaca && self.broker_paper {
                                                 "Paper"
@@ -11125,7 +11146,7 @@ impl eframe::App for TyphooNApp {
                                                 .small()
                                                 .strong(),
                                             );
-                                            let (pl, pl_pct) = active_pl.unwrap_or((0.0, 0.0));
+                                            let (pl, pl_pct) = broker_pl.unwrap_or((0.0, 0.0));
                                             let pl_c = if pl >= 0.0 { UP } else { DOWN };
                                             ui.label(
                                                 egui::RichText::new(format!(
@@ -11717,8 +11738,16 @@ impl eframe::App for TyphooNApp {
                                                 .small()
                                                 .strong(),
                                         );
+                                        let qty_text = if qty.fract().abs() < 1e-9 {
+                                            format!("{qty:.0}")
+                                        } else {
+                                            format!("{qty:.8}")
+                                                .trim_end_matches('0')
+                                                .trim_end_matches('.')
+                                                .to_string()
+                                        };
                                         ui.label(
-                                            egui::RichText::new(format!("{qty:.2} {display_holding}"))
+                                            egui::RichText::new(format!("{qty_text} {display_holding}"))
                                                 .small()
                                                 .monospace(),
                                         );

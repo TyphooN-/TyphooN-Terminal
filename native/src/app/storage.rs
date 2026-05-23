@@ -1,5 +1,35 @@
 use super::*;
 
+fn sortable_header(
+    ui: &mut egui::Ui,
+    label: &str,
+    col: usize,
+    sort_col: &mut usize,
+    sort_asc: &mut bool,
+) {
+    let arrow = if *sort_col == col {
+        if *sort_asc { " ↑" } else { " ↓" }
+    } else {
+        ""
+    };
+    if ui
+        .add(egui::Button::new(
+            egui::RichText::new(format!("{label}{arrow}"))
+                .small()
+                .strong(),
+        ))
+        .on_hover_text("Sort by this column")
+        .clicked()
+    {
+        if *sort_col == col {
+            *sort_asc = !*sort_asc;
+        } else {
+            *sort_col = col;
+            *sort_asc = true;
+        }
+    }
+}
+
 impl TyphooNApp {
     pub(super) fn render_cache_stats_window(&mut self, ctx: &egui::Context) {
         if !self.show_cache_stats {
@@ -76,14 +106,60 @@ impl TyphooNApp {
                                 .striped(true)
                                 .num_columns(3)
                                 .show(ui, |ui| {
-                                    ui.strong("Key");
-                                    ui.strong("Bars");
-                                    ui.strong("Size");
+                                    sortable_header(
+                                        ui,
+                                        "Key",
+                                        0,
+                                        &mut self.cache_stats_sort_col,
+                                        &mut self.cache_stats_sort_asc,
+                                    );
+                                    sortable_header(
+                                        ui,
+                                        "Bars",
+                                        1,
+                                        &mut self.cache_stats_sort_col,
+                                        &mut self.cache_stats_sort_asc,
+                                    );
+                                    sortable_header(
+                                        ui,
+                                        "Size",
+                                        2,
+                                        &mut self.cache_stats_sort_col,
+                                        &mut self.cache_stats_sort_asc,
+                                    );
                                     ui.end_row();
-                                    for (key, count, _) in &self.bg.detailed_stats {
-                                        if key.contains(":__") {
-                                            continue;
+                                    let mut rows: Vec<_> = self
+                                        .bg
+                                        .detailed_stats
+                                        .iter()
+                                        .filter(|(key, _, _)| !key.contains(":__"))
+                                        .collect();
+                                    rows.sort_by(|a, b| {
+                                        let ord = match self.cache_stats_sort_col {
+                                            1 => a.1.cmp(&b.1),
+                                            2 => self
+                                                .bg
+                                                .cache_blob_sizes
+                                                .get(a.0.as_str())
+                                                .copied()
+                                                .unwrap_or(0)
+                                                .cmp(
+                                                    &self
+                                                        .bg
+                                                        .cache_blob_sizes
+                                                        .get(b.0.as_str())
+                                                        .copied()
+                                                        .unwrap_or(0),
+                                                ),
+                                            _ => a.0.cmp(&b.0),
+                                        };
+                                        if self.cache_stats_sort_asc {
+                                            ord
+                                        } else {
+                                            ord.reverse()
                                         }
+                                    });
+                                    for (key, count, _) in rows {
                                         let size_label = self
                                             .bg
                                             .cache_blob_sizes
@@ -360,13 +436,42 @@ impl TyphooNApp {
         // Own the filtered rows so the UI can mutate `self` later in the frame
         // without borrowing `self.bg.detailed_stats` across nested closures.
         let filter = self.storage_filter.to_uppercase();
-        let filtered: Vec<(String, i64, i64)> = self
+        let mut filtered: Vec<(String, i64, i64)> = self
             .bg
             .detailed_stats
             .iter()
             .filter(|(key, _, _)| filter.is_empty() || key.to_uppercase().contains(&filter))
             .map(|(key, count, ts)| (key.clone(), *count, *ts))
             .collect();
+        filtered.sort_by(|a, b| {
+            let size_a = self
+                .bg
+                .cache_blob_sizes
+                .get(a.0.as_str())
+                .copied()
+                .unwrap_or(0);
+            let size_b = self
+                .bg
+                .cache_blob_sizes
+                .get(b.0.as_str())
+                .copied()
+                .unwrap_or(0);
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let age_a = if a.2 > 0 { now_ms - a.2 } else { i64::MAX };
+            let age_b = if b.2 > 0 { now_ms - b.2 } else { i64::MAX };
+            let ord = match self.storage_sort_col {
+                1 => a.1.cmp(&b.1),
+                2 => size_a.cmp(&size_b),
+                3 | 4 => a.2.cmp(&b.2),
+                5 => age_a.cmp(&age_b),
+                _ => a.0.cmp(&b.0),
+            };
+            if self.storage_sort_asc {
+                ord
+            } else {
+                ord.reverse()
+            }
+        });
 
         let page_size = 200;
         let total = filtered.len();
@@ -513,32 +618,48 @@ impl TyphooNApp {
                     .num_columns(8)
                     .min_col_width(60.0)
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new("Key").color(AXIS_TEXT).small().strong());
-                        ui.label(
-                            egui::RichText::new("Bars")
-                                .color(AXIS_TEXT)
-                                .small()
-                                .strong(),
+                        sortable_header(
+                            ui,
+                            "Key",
+                            0,
+                            &mut self.storage_sort_col,
+                            &mut self.storage_sort_asc,
                         );
-                        ui.label(
-                            egui::RichText::new("Size")
-                                .color(AXIS_TEXT)
-                                .small()
-                                .strong(),
+                        sortable_header(
+                            ui,
+                            "Bars",
+                            1,
+                            &mut self.storage_sort_col,
+                            &mut self.storage_sort_asc,
                         );
-                        ui.label(
-                            egui::RichText::new("First Bar")
-                                .color(AXIS_TEXT)
-                                .small()
-                                .strong(),
+                        sortable_header(
+                            ui,
+                            "Size",
+                            2,
+                            &mut self.storage_sort_col,
+                            &mut self.storage_sort_asc,
                         );
-                        ui.label(
-                            egui::RichText::new("Last Bar")
-                                .color(AXIS_TEXT)
-                                .small()
-                                .strong(),
+                        sortable_header(
+                            ui,
+                            "First Bar",
+                            3,
+                            &mut self.storage_sort_col,
+                            &mut self.storage_sort_asc,
                         );
-                        ui.label(egui::RichText::new("Age").color(AXIS_TEXT).small().strong());
+                        sortable_header(
+                            ui,
+                            "Last Bar",
+                            4,
+                            &mut self.storage_sort_col,
+                            &mut self.storage_sort_asc,
+                        );
+                        sortable_header(
+                            ui,
+                            "Age",
+                            5,
+                            &mut self.storage_sort_col,
+                            &mut self.storage_sort_asc,
+                        );
                         ui.label(
                             egui::RichText::new("Status")
                                 .color(AXIS_TEXT)

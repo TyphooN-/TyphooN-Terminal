@@ -10828,7 +10828,8 @@ pub struct TyphooNApp {
     show_backtest: bool,
     show_screener: bool,
     screener_filter: String,
-    screener_sort_by_bars: bool,
+    screener_sort_col: usize,
+    screener_sort_asc: bool,
     show_symbols: bool,
     symbols_filter: String,
     symbols_expanded: std::collections::HashSet<String>,
@@ -11012,6 +11013,10 @@ pub struct TyphooNApp {
     storage_purge_broker_confirm: Option<String>,
     storage_purge_timeframe_confirm: bool,
     storage_page: usize,
+    storage_sort_col: usize,
+    storage_sort_asc: bool,
+    cache_stats_sort_col: usize,
+    cache_stats_sort_asc: bool,
     /// Canonical cache suffix selected for "delete this timeframe across all brokers".
     storage_delete_timeframe: String,
     /// Text buffer for the "new cache location" input in Storage Manager. Holds
@@ -11264,12 +11269,16 @@ pub struct TyphooNApp {
     show_ipo_calendar: bool,
     ipo_events: Vec<typhoon_engine::core::research::IpoEvent>,
     ipo_loading: bool,
+    ipo_sort_col: usize,
+    ipo_sort_asc: bool,
 
     /// EARNINGS command — historical actuals vs estimates.
     show_earnings_history: bool,
     earnings_history_symbol: String,
     earnings_history_rows: Vec<typhoon_engine::core::research::EarningRow>,
     earnings_history_loading: bool,
+    earnings_history_sort_col: usize,
+    earnings_history_sort_asc: bool,
 
     /// PEERS command — related tickers.
     show_peers: bool,
@@ -11288,6 +11297,8 @@ pub struct TyphooNApp {
     sentiment_symbol: String,
     sentiment_rows: Vec<typhoon_engine::core::research::SocialSentimentRow>,
     sentiment_loading: bool,
+    sentiment_sort_col: usize,
+    sentiment_sort_asc: bool,
 
     /// TRANSCRIPTS command — earnings call transcripts.
     show_transcripts: bool,
@@ -13577,6 +13588,8 @@ pub struct TyphooNApp {
     /// Artefact gallery: scanned list of on-disk screenshot files
     /// (path, mtime unix seconds, size bytes), sorted newest-first.
     screenshots_list: Vec<(std::path::PathBuf, i64, u64)>,
+    screenshots_sort_col: usize,
+    screenshots_sort_asc: bool,
     /// Wall-clock unix ts of last scan_screenshots() call; throttles
     /// redundant directory walks while the gallery window is open.
     screenshots_last_refresh: i64,
@@ -27081,7 +27094,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
             show_backtest: false,
             show_screener: false,
             screener_filter: String::new(),
-            screener_sort_by_bars: true,
+            screener_sort_col: 3,
+            screener_sort_asc: false,
             show_symbols: false,
             symbols_filter: String::new(),
             symbols_expanded: std::collections::HashSet::new(),
@@ -27217,6 +27231,10 @@ When the question touches recent news, sentiment, or prices, combine the researc
             storage_purge_broker_confirm: None,
             storage_purge_timeframe_confirm: false,
             storage_page: 0,
+            storage_sort_col: 4,
+            storage_sort_asc: false,
+            cache_stats_sort_col: 0,
+            cache_stats_sort_asc: true,
             storage_delete_timeframe: "1Min".to_string(),
             storage_cache_path_input: String::new(),
             storage_cache_move_result: None,
@@ -27385,10 +27403,14 @@ When the question touches recent news, sentiment, or prices, combine the researc
             show_ipo_calendar: false,
             ipo_events: Vec::new(),
             ipo_loading: false,
+            ipo_sort_col: 0,
+            ipo_sort_asc: true,
             show_earnings_history: false,
             earnings_history_symbol: String::new(),
             earnings_history_rows: Vec::new(),
             earnings_history_loading: false,
+            earnings_history_sort_col: 0,
+            earnings_history_sort_asc: false,
             show_peers: false,
             peers_symbol: String::new(),
             peers_list: Vec::new(),
@@ -27401,6 +27423,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
             sentiment_symbol: String::new(),
             sentiment_rows: Vec::new(),
             sentiment_loading: false,
+            sentiment_sort_col: 1,
+            sentiment_sort_asc: false,
             show_transcripts: false,
             transcripts_symbol: String::new(),
             transcripts_list: Vec::new(),
@@ -29442,6 +29466,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
             screenshot_requested: false,
             last_screenshot_path: None,
             screenshots_list: Vec::new(),
+            screenshots_sort_col: 2,
+            screenshots_sort_asc: false,
             screenshots_last_refresh: 0,
             show_screenshots_gallery: false,
         };

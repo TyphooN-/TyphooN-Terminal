@@ -1,5 +1,35 @@
 use super::*;
 
+fn sortable_header(
+    ui: &mut egui::Ui,
+    label: &str,
+    col: usize,
+    sort_col: &mut usize,
+    sort_asc: &mut bool,
+) {
+    let arrow = if *sort_col == col {
+        if *sort_asc { " ↑" } else { " ↓" }
+    } else {
+        ""
+    };
+    if ui
+        .add(egui::Button::new(
+            egui::RichText::new(format!("{label}{arrow}"))
+                .small()
+                .strong(),
+        ))
+        .on_hover_text("Sort by this column")
+        .clicked()
+    {
+        if *sort_col == col {
+            *sort_asc = !*sort_asc;
+        } else {
+            *sort_col = col;
+            *sort_asc = true;
+        }
+    }
+}
+
 impl TyphooNApp {
     pub(super) fn draw_floating_windows(&mut self, ctx: &egui::Context) {
         // Settings
@@ -2720,12 +2750,52 @@ impl TyphooNApp {
                                 .striped(true)
                                 .num_columns(4)
                                 .show(ui, |ui| {
-                                    ui.label(egui::RichText::new("File").strong().small());
-                                    ui.label(egui::RichText::new("Size").strong().small());
-                                    ui.label(egui::RichText::new("Taken").strong().small());
+                                    sortable_header(
+                                        ui,
+                                        "File",
+                                        0,
+                                        &mut self.screenshots_sort_col,
+                                        &mut self.screenshots_sort_asc,
+                                    );
+                                    sortable_header(
+                                        ui,
+                                        "Size",
+                                        1,
+                                        &mut self.screenshots_sort_col,
+                                        &mut self.screenshots_sort_asc,
+                                    );
+                                    sortable_header(
+                                        ui,
+                                        "Taken",
+                                        2,
+                                        &mut self.screenshots_sort_col,
+                                        &mut self.screenshots_sort_asc,
+                                    );
                                     ui.label("");
                                     ui.end_row();
-                                    let rows = self.screenshots_list.clone();
+                                    let mut rows = self.screenshots_list.clone();
+                                    rows.sort_by(|a, b| {
+                                        let ord = match self.screenshots_sort_col {
+                                            0 => {
+                                                a.0.file_name()
+                                                    .and_then(|s| s.to_str())
+                                                    .unwrap_or("")
+                                                    .cmp(
+                                                        b.0.file_name()
+                                                            .and_then(|s| s.to_str())
+                                                            .unwrap_or(""),
+                                                    )
+                                            }
+                                            1 => a.2.cmp(&b.2),
+                                            2 => a.1.cmp(&b.1),
+                                            _ => a.1.cmp(&b.1),
+                                        };
+                                        if self.screenshots_sort_asc {
+                                            ord
+                                        } else {
+                                            ord.reverse()
+                                        }
+                                    });
                                     for (path, mtime, size) in rows.iter() {
                                         let name = path
                                             .file_name()
@@ -3293,11 +3363,6 @@ impl TyphooNApp {
                         if ui.small_button("✕").clicked() {
                             self.screener_filter.clear();
                         }
-                        ui.add_space(10.0);
-                        ui.label("Sort:");
-                        if ui.small_button("↕ Bars").clicked() {
-                            self.screener_sort_by_bars = !self.screener_sort_by_bars;
-                        }
                     });
                     ui.separator();
                     let filt = self.screener_filter.to_lowercase();
@@ -3309,9 +3374,33 @@ impl TyphooNApp {
                         .filter(|(key, _, _)| !key.starts_with("mt5:__"))
                         .filter(|(key, _, _)| filt.is_empty() || key.to_lowercase().contains(&filt))
                         .collect();
-                    if self.screener_sort_by_bars {
-                        entries.sort_by(|a, b| b.1.cmp(&a.1));
-                    }
+                    entries.sort_by(|a, b| {
+                        let parse = |key: &String| -> (String, String, String) {
+                            let parts: Vec<&str> = key.splitn(3, ':').collect();
+                            match parts.as_slice() {
+                                [source, sym, tf] => {
+                                    ((*source).into(), (*sym).into(), (*tf).into())
+                                }
+                                [sym, tf] => ("mt5".into(), (*sym).into(), (*tf).into()),
+                                [sym] => ("mt5".into(), (*sym).into(), String::new()),
+                                _ => (String::new(), key.clone(), String::new()),
+                            }
+                        };
+                        let (a_src, a_sym, a_tf) = parse(&a.0);
+                        let (b_src, b_sym, b_tf) = parse(&b.0);
+                        let ord = match self.screener_sort_col {
+                            0 => a_src.cmp(&b_src).then_with(|| a_sym.cmp(&b_sym)),
+                            1 => a_sym.cmp(&b_sym).then_with(|| a_tf.cmp(&b_tf)),
+                            2 => a_tf.cmp(&b_tf).then_with(|| a_sym.cmp(&b_sym)),
+                            3 => a.1.cmp(&b.1).then_with(|| a_sym.cmp(&b_sym)),
+                            _ => a_sym.cmp(&b_sym),
+                        };
+                        if self.screener_sort_asc {
+                            ord
+                        } else {
+                            ord.reverse()
+                        }
+                    });
                     egui::ScrollArea::vertical()
                         .auto_shrink(false)
                         .max_height(360.0)
@@ -3321,10 +3410,34 @@ impl TyphooNApp {
                                 .num_columns(5)
                                 .min_col_width(60.0)
                                 .show(ui, |ui| {
-                                    ui.strong("Source");
-                                    ui.strong("Symbol");
-                                    ui.strong("TF");
-                                    ui.strong("Bars");
+                                    sortable_header(
+                                        ui,
+                                        "Source",
+                                        0,
+                                        &mut self.screener_sort_col,
+                                        &mut self.screener_sort_asc,
+                                    );
+                                    sortable_header(
+                                        ui,
+                                        "Symbol",
+                                        1,
+                                        &mut self.screener_sort_col,
+                                        &mut self.screener_sort_asc,
+                                    );
+                                    sortable_header(
+                                        ui,
+                                        "TF",
+                                        2,
+                                        &mut self.screener_sort_col,
+                                        &mut self.screener_sort_asc,
+                                    );
+                                    sortable_header(
+                                        ui,
+                                        "Bars",
+                                        3,
+                                        &mut self.screener_sort_col,
+                                        &mut self.screener_sort_asc,
+                                    );
                                     ui.strong("");
                                     ui.end_row();
                                     let mut load_key: Option<String> = None;
@@ -4643,17 +4756,84 @@ impl TyphooNApp {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
+                            let mut rows = self.ipo_events.clone();
+                            rows.sort_by(|a, b| {
+                                let ord = match self.ipo_sort_col {
+                                    0 => a.date.cmp(&b.date),
+                                    1 => a.symbol.cmp(&b.symbol),
+                                    2 => a.name.cmp(&b.name),
+                                    3 => a.exchange.cmp(&b.exchange),
+                                    4 => a.price_range.cmp(&b.price_range),
+                                    5 => a.shares.cmp(&b.shares),
+                                    6 => a.total_value.total_cmp(&b.total_value),
+                                    7 => a.status.cmp(&b.status),
+                                    _ => a.date.cmp(&b.date),
+                                };
+                                if self.ipo_sort_asc {
+                                    ord
+                                } else {
+                                    ord.reverse()
+                                }
+                            });
                             egui::Grid::new("ipo_grid").striped(true).show(ui, |ui| {
-                                ui.label(egui::RichText::new("Date").strong());
-                                ui.label(egui::RichText::new("Symbol").strong());
-                                ui.label(egui::RichText::new("Name").strong());
-                                ui.label(egui::RichText::new("Exchange").strong());
-                                ui.label(egui::RichText::new("Price Range").strong());
-                                ui.label(egui::RichText::new("Shares").strong());
-                                ui.label(egui::RichText::new("Total Value").strong());
-                                ui.label(egui::RichText::new("Status").strong());
+                                sortable_header(
+                                    ui,
+                                    "Date",
+                                    0,
+                                    &mut self.ipo_sort_col,
+                                    &mut self.ipo_sort_asc,
+                                );
+                                sortable_header(
+                                    ui,
+                                    "Symbol",
+                                    1,
+                                    &mut self.ipo_sort_col,
+                                    &mut self.ipo_sort_asc,
+                                );
+                                sortable_header(
+                                    ui,
+                                    "Name",
+                                    2,
+                                    &mut self.ipo_sort_col,
+                                    &mut self.ipo_sort_asc,
+                                );
+                                sortable_header(
+                                    ui,
+                                    "Exchange",
+                                    3,
+                                    &mut self.ipo_sort_col,
+                                    &mut self.ipo_sort_asc,
+                                );
+                                sortable_header(
+                                    ui,
+                                    "Price Range",
+                                    4,
+                                    &mut self.ipo_sort_col,
+                                    &mut self.ipo_sort_asc,
+                                );
+                                sortable_header(
+                                    ui,
+                                    "Shares",
+                                    5,
+                                    &mut self.ipo_sort_col,
+                                    &mut self.ipo_sort_asc,
+                                );
+                                sortable_header(
+                                    ui,
+                                    "Total Value",
+                                    6,
+                                    &mut self.ipo_sort_col,
+                                    &mut self.ipo_sort_asc,
+                                );
+                                sortable_header(
+                                    ui,
+                                    "Status",
+                                    7,
+                                    &mut self.ipo_sort_col,
+                                    &mut self.ipo_sort_asc,
+                                );
                                 ui.end_row();
-                                for e in self.ipo_events.iter() {
+                                for e in rows.iter() {
                                     ui.label(&e.date);
                                     ui.label(
                                         egui::RichText::new(&e.symbol)
@@ -4746,16 +4926,88 @@ impl TyphooNApp {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
+                            let mut rows = self.earnings_history_rows.clone();
+                            rows.sort_by(|a, b| {
+                                let ord = match self.earnings_history_sort_col {
+                                    0 => a.period.cmp(&b.period),
+                                    1 => a.quarter.cmp(&b.quarter),
+                                    2 => a.year.cmp(&b.year),
+                                    3 => a
+                                        .actual
+                                        .unwrap_or(f64::NEG_INFINITY)
+                                        .total_cmp(&b.actual.unwrap_or(f64::NEG_INFINITY)),
+                                    4 => a
+                                        .estimate
+                                        .unwrap_or(f64::NEG_INFINITY)
+                                        .total_cmp(&b.estimate.unwrap_or(f64::NEG_INFINITY)),
+                                    5 => a
+                                        .surprise
+                                        .unwrap_or(f64::NEG_INFINITY)
+                                        .total_cmp(&b.surprise.unwrap_or(f64::NEG_INFINITY)),
+                                    6 => a
+                                        .surprise_pct
+                                        .unwrap_or(f64::NEG_INFINITY)
+                                        .total_cmp(&b.surprise_pct.unwrap_or(f64::NEG_INFINITY)),
+                                    _ => a.period.cmp(&b.period),
+                                };
+                                if self.earnings_history_sort_asc {
+                                    ord
+                                } else {
+                                    ord.reverse()
+                                }
+                            });
                             egui::Grid::new("ern_grid").striped(true).show(ui, |ui| {
-                                ui.label(egui::RichText::new("Period").strong());
-                                ui.label(egui::RichText::new("Qtr").strong());
-                                ui.label(egui::RichText::new("Year").strong());
-                                ui.label(egui::RichText::new("Actual").strong());
-                                ui.label(egui::RichText::new("Estimate").strong());
-                                ui.label(egui::RichText::new("Surprise").strong());
-                                ui.label(egui::RichText::new("Surprise %").strong());
+                                sortable_header(
+                                    ui,
+                                    "Period",
+                                    0,
+                                    &mut self.earnings_history_sort_col,
+                                    &mut self.earnings_history_sort_asc,
+                                );
+                                sortable_header(
+                                    ui,
+                                    "Qtr",
+                                    1,
+                                    &mut self.earnings_history_sort_col,
+                                    &mut self.earnings_history_sort_asc,
+                                );
+                                sortable_header(
+                                    ui,
+                                    "Year",
+                                    2,
+                                    &mut self.earnings_history_sort_col,
+                                    &mut self.earnings_history_sort_asc,
+                                );
+                                sortable_header(
+                                    ui,
+                                    "Actual",
+                                    3,
+                                    &mut self.earnings_history_sort_col,
+                                    &mut self.earnings_history_sort_asc,
+                                );
+                                sortable_header(
+                                    ui,
+                                    "Estimate",
+                                    4,
+                                    &mut self.earnings_history_sort_col,
+                                    &mut self.earnings_history_sort_asc,
+                                );
+                                sortable_header(
+                                    ui,
+                                    "Surprise",
+                                    5,
+                                    &mut self.earnings_history_sort_col,
+                                    &mut self.earnings_history_sort_asc,
+                                );
+                                sortable_header(
+                                    ui,
+                                    "Surprise %",
+                                    6,
+                                    &mut self.earnings_history_sort_col,
+                                    &mut self.earnings_history_sort_asc,
+                                );
                                 ui.end_row();
-                                for r in self.earnings_history_rows.iter() {
+                                for r in rows.iter() {
                                     ui.label(&r.period);
                                     ui.label(
                                         r.quarter.map(|v| format!("Q{}", v)).unwrap_or_default(),
@@ -5036,17 +5288,70 @@ impl TyphooNApp {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
+                            let mut rows = self.sentiment_rows.clone();
+                            rows.sort_by(|a, b| {
+                                let ord = match self.sentiment_sort_col {
+                                    0 => a.source.cmp(&b.source),
+                                    1 => a.at_time.cmp(&b.at_time),
+                                    2 => a.mention.cmp(&b.mention),
+                                    3 => a.positive_mention.cmp(&b.positive_mention),
+                                    4 => a.negative_mention.cmp(&b.negative_mention),
+                                    5 => a.score.total_cmp(&b.score),
+                                    _ => a.at_time.cmp(&b.at_time),
+                                };
+                                if self.sentiment_sort_asc {
+                                    ord
+                                } else {
+                                    ord.reverse()
+                                }
+                            });
                             egui::Grid::new("sentiment_grid")
                                 .striped(true)
                                 .show(ui, |ui| {
-                                    ui.label(egui::RichText::new("Source").strong());
-                                    ui.label(egui::RichText::new("Time").strong());
-                                    ui.label(egui::RichText::new("Mentions").strong());
-                                    ui.label(egui::RichText::new("Pos").strong());
-                                    ui.label(egui::RichText::new("Neg").strong());
-                                    ui.label(egui::RichText::new("Score").strong());
+                                    sortable_header(
+                                        ui,
+                                        "Source",
+                                        0,
+                                        &mut self.sentiment_sort_col,
+                                        &mut self.sentiment_sort_asc,
+                                    );
+                                    sortable_header(
+                                        ui,
+                                        "Time",
+                                        1,
+                                        &mut self.sentiment_sort_col,
+                                        &mut self.sentiment_sort_asc,
+                                    );
+                                    sortable_header(
+                                        ui,
+                                        "Mentions",
+                                        2,
+                                        &mut self.sentiment_sort_col,
+                                        &mut self.sentiment_sort_asc,
+                                    );
+                                    sortable_header(
+                                        ui,
+                                        "Pos",
+                                        3,
+                                        &mut self.sentiment_sort_col,
+                                        &mut self.sentiment_sort_asc,
+                                    );
+                                    sortable_header(
+                                        ui,
+                                        "Neg",
+                                        4,
+                                        &mut self.sentiment_sort_col,
+                                        &mut self.sentiment_sort_asc,
+                                    );
+                                    sortable_header(
+                                        ui,
+                                        "Score",
+                                        5,
+                                        &mut self.sentiment_sort_col,
+                                        &mut self.sentiment_sort_asc,
+                                    );
                                     ui.end_row();
-                                    for r in self.sentiment_rows.iter() {
+                                    for r in rows.iter() {
                                         ui.label(&r.source);
                                         ui.label(&r.at_time);
                                         ui.label(format!("{}", r.mention));

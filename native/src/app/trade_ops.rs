@@ -1568,6 +1568,21 @@ impl TyphooNApp {
             }
         }
         by_base.retain(|_, basis| basis.qty > 0.0 && basis.cost > 0.0);
+
+        let held_assets: Vec<String> = self
+            .kraken_balances
+            .iter()
+            .filter(|(asset, balance)| *balance > 0.0 && !Self::kraken_is_cash_balance_asset(asset))
+            .map(|(asset, _)| Self::kraken_display_asset(asset))
+            .collect();
+        if !held_assets.is_empty() {
+            by_base.retain(|base, _| {
+                held_assets
+                    .iter()
+                    .any(|held| Self::kraken_asset_keys_match(base, held))
+            });
+        }
+
         self.kraken_cost_basis = by_base;
     }
 
