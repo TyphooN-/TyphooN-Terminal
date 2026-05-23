@@ -1496,7 +1496,10 @@ impl TyphooNApp {
     }
 
     pub(super) fn refresh_kraken_position_costs(&mut self) {
-        let updates: Vec<_> = self
+        // `updates` is built from `kr_positions` in order, so the previous code did
+        // an O(n²) `updates.iter().find` per position to re-pair them. Drop the
+        // symbol key entirely and zip the two slices in lockstep — same data, O(n).
+        let updates: Vec<(Option<f64>, Option<f64>)> = self
             .kr_positions
             .iter()
             .map(|pos| {
@@ -1511,27 +1514,23 @@ impl TyphooNApp {
                 } else {
                     self.latest_cached_price_for_symbol(&pos.symbol)
                 };
-                (pos.symbol.clone(), avg, current)
+                (avg, current)
             })
             .collect();
 
-        for pos in &mut self.kr_positions {
-            if let Some((_, avg, current)) =
-                updates.iter().find(|(symbol, _, _)| symbol == &pos.symbol)
-            {
-                if let Some(avg) = avg {
-                    pos.avg_entry_price = *avg;
-                }
-                if let Some(current) = current {
-                    pos.market_value = pos.qty * *current;
-                    let dir = if pos.side == "short" { -1.0 } else { 1.0 };
-                    let basis = if pos.avg_entry_price > 0.0 {
-                        pos.avg_entry_price
-                    } else {
-                        *current
-                    };
-                    pos.unrealized_pl = (*current - basis) * pos.qty * dir;
-                }
+        for (pos, (avg, current)) in self.kr_positions.iter_mut().zip(updates.into_iter()) {
+            if let Some(avg) = avg {
+                pos.avg_entry_price = avg;
+            }
+            if let Some(current) = current {
+                pos.market_value = pos.qty * current;
+                let dir = if pos.side == "short" { -1.0 } else { 1.0 };
+                let basis = if pos.avg_entry_price > 0.0 {
+                    pos.avg_entry_price
+                } else {
+                    current
+                };
+                pos.unrealized_pl = (current - basis) * pos.qty * dir;
             }
         }
     }
