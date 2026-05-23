@@ -11093,27 +11093,51 @@ impl eframe::App for TyphooNApp {
                                     // spill to the next line — but the L/P&L/chip group stays
                                     // together when there's space.
                                     ui.horizontal_wrapped(|ui| {
-                                        if let Some(pos) = active_pos {
-                                            let side_c = if pos.side == "long" { UP } else { DOWN };
-                                            let side_label =
-                                                if pos.side == "long" { "Long" } else { "Short" };
+                                        let active_pl = active_pos.map(|pos| {
+                                            let cost_basis = if pos.avg_entry_price > 0.0 {
+                                                pos.avg_entry_price.abs() * pos.qty.abs()
+                                            } else {
+                                                (pos.market_value - pos.unrealized_pl).abs()
+                                            };
+                                            let pl_pct = if cost_basis > f64::EPSILON {
+                                                pos.unrealized_pl / cost_basis * 100.0
+                                            } else {
+                                                0.0
+                                            };
+                                            (pos.unrealized_pl, pl_pct)
+                                        });
+                                        for snap in &account_snaps {
+                                            let is_alpaca = snap.broker == "Alpaca";
+                                            let is_live = !is_alpaca || !self.broker_paper;
+                                            let mode = if is_alpaca && self.broker_paper {
+                                                "Paper"
+                                            } else {
+                                                "Live"
+                                            };
+                                            let account_color =
+                                                if is_live { UP } else { egui::Color32::WHITE };
                                             ui.label(
                                                 egui::RichText::new(format!(
-                                                    "{} {:.2} lots",
-                                                    side_label, pos.qty
+                                                    "[ {} ({}) ] Equity: ${:.0}",
+                                                    snap.broker, mode, snap.equity
                                                 ))
-                                                .color(side_c)
+                                                .color(account_color)
+                                                .small()
                                                 .strong(),
                                             );
-                                            let pl_c =
-                                                if pos.unrealized_pl >= 0.0 { UP } else { DOWN };
+                                            let (pl, pl_pct) = active_pl.unwrap_or((0.0, 0.0));
+                                            let pl_c = if pl >= 0.0 { UP } else { DOWN };
                                             ui.label(
                                                 egui::RichText::new(format!(
-                                                    "P&L: ${:.2}",
-                                                    pos.unrealized_pl
+                                                    "P&L: ${:+.2} ({:+.2}%)",
+                                                    pl, pl_pct
                                                 ))
-                                                .color(pl_c),
+                                                .color(pl_c)
+                                                .small()
+                                                .strong(),
                                             );
+                                        }
+                                        if let Some(pos) = active_pos {
                                             if let Some(sl) = self.sl_price {
                                                 let sl_pl = (close - sl)
                                                     * pos.qty
@@ -11155,31 +11179,6 @@ impl eframe::App for TyphooNApp {
                                                         .small(),
                                                 );
                                             }
-                                        } else {
-                                            ui.label(
-                                                egui::RichText::new("No position")
-                                                    .color(AXIS_TEXT)
-                                                    .small(),
-                                            );
-                                        }
-                                        for snap in &account_snaps {
-                                            let is_alpaca = snap.broker == "Alpaca";
-                                            let is_live = !is_alpaca || !self.broker_paper;
-                                            let mode = if is_alpaca && self.broker_paper {
-                                                "Paper"
-                                            } else {
-                                                "Live"
-                                            };
-                                            let color = if is_live { UP } else { egui::Color32::WHITE };
-                                            ui.label(
-                                                egui::RichText::new(format!(
-                                                    "[{} ({}) ${:.0}]",
-                                                    snap.broker, mode, snap.equity
-                                                ))
-                                                .color(color)
-                                                .small()
-                                                .strong(),
-                                            );
                                         }
                                     });
                                 }
@@ -11434,7 +11433,7 @@ impl eframe::App for TyphooNApp {
                                 let mut lp_action = SymbolAction::None;
                                 for pos in &self.live_positions {
                                     let side_c = if pos.side == "long" { UP } else { DOWN };
-                                    let side_label = if pos.side == "long" { "L" } else { "S" };
+                                    let side_label = if pos.side == "long" { "Long" } else { "Short" };
                                     let current_price = if pos.qty.abs() > f64::EPSILON {
                                         Some(pos.market_value.abs() / pos.qty.abs())
                                     } else {
@@ -11510,7 +11509,7 @@ impl eframe::App for TyphooNApp {
                                 let mut tt_action = SymbolAction::None;
                                 for pos in &self.tt_positions {
                                     let side_c = if pos.side == "long" { UP } else { DOWN };
-                                    let side_label = if pos.side == "long" { "L" } else { "S" };
+                                    let side_label = if pos.side == "long" { "Long" } else { "Short" };
                                     let current_price = if pos.qty.abs() > f64::EPSILON {
                                         Some(pos.market_value.abs() / pos.qty.abs())
                                     } else {
@@ -11602,7 +11601,7 @@ impl eframe::App for TyphooNApp {
                                     }
                                     has_positions = true;
                                     let side_c = if pos.side == "long" { UP } else { DOWN };
-                                    let side_label = if pos.side == "long" { "L" } else { "S" };
+                                    let side_label = if pos.side == "long" { "Long" } else { "Short" };
                                     let avg_entry = if pos.avg_entry_price > 0.0 {
                                         Some(pos.avg_entry_price)
                                     } else {
@@ -11713,7 +11712,8 @@ impl eframe::App for TyphooNApp {
                                         .map(|(avg, cur)| ((cur - avg) * qty, (cur - avg) / avg * 100.0));
                                     ui.horizontal(|ui| {
                                         ui.label(
-                                            egui::RichText::new(format!("[Kraken] {display_holding}"))
+                                            egui::RichText::new(format!("[Kraken] Long {display_holding}"))
+                                                .color(UP)
                                                 .small()
                                                 .strong(),
                                         );
@@ -12672,13 +12672,6 @@ impl eframe::App for TyphooNApp {
                                             );
                                             ui.end_row();
                                         });
-                                    ui.label(
-                                        egui::RichText::new(
-                                            "Kraken sizing uses USD/stable cash balance for spot orders.",
-                                        )
-                                        .color(AXIS_TEXT)
-                                        .small(),
-                                    );
                                 } else {
                                     egui::Grid::new(format!("live_risk_grid_{idx}"))
                                         .striped(true)
@@ -12955,7 +12948,7 @@ impl eframe::App for TyphooNApp {
                                         );
                                     }
                                 });
-                                let right_news_rows: Vec<(String, String, String)> = if !self.news_full_articles.is_empty() {
+                                let right_news_rows: Vec<(String, String, String, String)> = if !self.news_full_articles.is_empty() {
                                     self.news_full_articles
                                         .iter()
                                         .map(|a| {
@@ -12970,11 +12963,29 @@ impl eframe::App for TyphooNApp {
                                             } else {
                                                 a.provider.clone()
                                             };
-                                            (a.headline.clone(), source, dt)
+                                            let mut tickers = Vec::new();
+                                            let primary = a.symbol.trim().to_uppercase();
+                                            if !primary.is_empty() {
+                                                tickers.push(primary);
+                                            }
+                                            for ticker in &a.tickers {
+                                                let ticker = ticker.trim().to_uppercase();
+                                                if !ticker.is_empty()
+                                                    && !tickers.iter().any(|t| t == &ticker)
+                                                {
+                                                    tickers.push(ticker);
+                                                }
+                                            }
+                                            (a.headline.clone(), source, dt, tickers.join(", "))
                                         })
                                         .collect()
                                 } else {
-                                    self.news_articles.clone()
+                                    self.news_articles
+                                        .iter()
+                                        .map(|(headline, source, dt)| {
+                                            (headline.clone(), source.clone(), dt.clone(), String::new())
+                                        })
+                                        .collect()
                                 };
                                 if news_count == 0 {
                                     ui.label(
@@ -12990,7 +13001,7 @@ impl eframe::App for TyphooNApp {
                                         .show(ui, |ui| {
                                             let have_full = !self.news_full_articles.is_empty();
                                             let mut open_idx: Option<usize> = None;
-                                            for (i, (headline, source, dt)) in
+                                            for (i, (headline, source, dt, tickers)) in
                                                 right_news_rows.iter().enumerate()
                                             {
                                                 let hl = headline.to_lowercase();
@@ -13063,6 +13074,15 @@ impl eframe::App for TyphooNApp {
                                                             ))
                                                             .small(),
                                                     );
+                                                    if !tickers.is_empty() {
+                                                        ui.label(
+                                                            egui::RichText::new(tickers)
+                                                                .color(egui::Color32::from_rgb(
+                                                                    180, 200, 140,
+                                                                ))
+                                                                .small(),
+                                                        );
+                                                    }
                                                 });
                                                 if resp.clicked() {
                                                     open_idx = Some(i);

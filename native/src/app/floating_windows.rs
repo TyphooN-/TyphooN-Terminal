@@ -4195,6 +4195,21 @@ impl TyphooNApp {
                                                 "bearish" => DOWN,
                                                 _ => egui::Color32::from_rgb(160, 160, 160),
                                             };
+                                            let mut associated_tickers = Vec::new();
+                                            let primary = a.symbol.trim().to_uppercase();
+                                            if !primary.is_empty() {
+                                                associated_tickers.push(primary);
+                                            }
+                                            for ticker in &a.tickers {
+                                                let ticker = ticker.trim().to_uppercase();
+                                                if !ticker.is_empty()
+                                                    && !associated_tickers
+                                                        .iter()
+                                                        .any(|t| t == &ticker)
+                                                {
+                                                    associated_tickers.push(ticker);
+                                                }
+                                            }
                                             let row = ui.group(|ui| {
                                                 ui.set_width(list_w - 20.0);
                                                 ui.vertical(|ui| {
@@ -4216,6 +4231,19 @@ impl TyphooNApp {
                                                     if !ts.is_empty() {
                                                         ui.label(egui::RichText::new(ts).color(AXIS_TEXT).small());
                                                     }
+                                                    if !associated_tickers.is_empty() {
+                                                        ui.horizontal_wrapped(|ui| {
+                                                            for ticker in &associated_tickers {
+                                                                ui.label(
+                                                                    egui::RichText::new(ticker)
+                                                                        .color(egui::Color32::from_rgb(
+                                                                            180, 200, 140,
+                                                                        ))
+                                                                        .small(),
+                                                                );
+                                                            }
+                                                        });
+                                                    }
                                                 });
                                             });
                                             if row.response.interact(egui::Sense::click()).clicked() {
@@ -4229,6 +4257,19 @@ impl TyphooNApp {
                             ui.vertical(|ui| {
                                 if let Some(idx) = self.news_selected {
                                     if let Some(a) = self.news_full_articles.get(idx) {
+                                        let mut associated_tickers = Vec::new();
+                                        let primary = a.symbol.trim().to_uppercase();
+                                        if !primary.is_empty() {
+                                            associated_tickers.push(primary);
+                                        }
+                                        for ticker in &a.tickers {
+                                            let ticker = ticker.trim().to_uppercase();
+                                            if !ticker.is_empty()
+                                                && !associated_tickers.iter().any(|t| t == &ticker)
+                                            {
+                                                associated_tickers.push(ticker);
+                                            }
+                                        }
                                         ui.label(egui::RichText::new(&a.headline).strong().size(16.0));
                                         ui.horizontal(|ui| {
                                             ui.label(egui::RichText::new(&a.source).color(egui::Color32::from_rgb(130, 170, 220)));
@@ -4255,10 +4296,10 @@ impl TyphooNApp {
                                             };
                                             ui.label(egui::RichText::new(score_text).color(sent_color));
                                         }
-                                        if !a.tickers.is_empty() {
+                                        if !associated_tickers.is_empty() {
                                             ui.horizontal_wrapped(|ui| {
                                                 ui.label(egui::RichText::new("Tickers:").color(AXIS_TEXT).small());
-                                                for t in &a.tickers {
+                                                for t in &associated_tickers {
                                                     ui.label(egui::RichText::new(t).color(egui::Color32::from_rgb(180, 200, 140)).small());
                                                 }
                                             });
