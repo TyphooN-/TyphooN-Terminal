@@ -11056,6 +11056,14 @@ pub struct TyphooNApp {
     pending_kraken_fetches: std::collections::HashSet<String>,
     pending_kraken_futures_fetches: std::collections::HashSet<String>,
     pending_tastytrade_fetches: std::collections::HashSet<String>,
+    /// Per-key cooldown for broker bar re-queues. The in-flight HashSet only
+    /// dedups while a fetch is pending; once it completes we'd previously
+    /// re-queue immediately on the next sync tick, which (during a closed
+    /// market) hit the same SYMBOL:TF every minute without producing new
+    /// bars. Keys are `{source}:{SYMBOL}:{TF}` and values are the unix-second
+    /// timestamp of the last queued fetch. A re-queue within ~half the TF
+    /// period is skipped.
+    fetch_last_queued_ts: std::collections::HashMap<String, i64>,
     /// Cursor-limited broad sync rotation. Each refill scans only a bounded slice
     /// of the broker universe in high-timeframe-first order, while the pending
     /// fetch sets keep foreground/manual and background requests deduplicated.
@@ -26303,10 +26311,16 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 let Some(acct) = tb.account_number().map(str::to_string) else {
                                     *tt_dx_token.lock().await = None;
                                     *tt_dx_backoff_until.lock().await = None;
-                                    tt_broker = None;
                                     let env = if sandbox { "sandbox" } else { "production" };
+                                    let detail = tb
+                                        .last_accounts_error()
+                                        .map(str::to_string)
+                                        .unwrap_or_else(|| {
+                                            "no accounts were returned by /customers/me/accounts".to_string()
+                                        });
+                                    tt_broker = None;
                                     let _ = msg_tx.send(BrokerMsg::Error(format!(
-                                        "tastytrade connection unavailable: {env} login authenticated, but no customer account was returned. Create/attach a customer account for this {env} user or switch credentials."
+                                        "tastytrade {env} login authenticated, but no trading account could be selected. Detail: {detail}. If you see a customer record but no account, attach a trading account to this {env} user on https://developer.tastytrade.com (sandbox) or your live account."
                                     )));
                                     continue;
                                 };
@@ -27226,6 +27240,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             pending_kraken_fetches: std::collections::HashSet::new(),
             pending_kraken_futures_fetches: std::collections::HashSet::new(),
             pending_tastytrade_fetches: std::collections::HashSet::new(),
+            fetch_last_queued_ts: std::collections::HashMap::new(),
             alpaca_sync_cursor: 0,
             kraken_spot_sync_cursors: [0; 4],
             kraken_equities_sync_cursor: 0,

@@ -67,6 +67,12 @@ pub struct TastytradeBroker {
     base_url: String,
     session_token: Option<String>,
     account_number: Option<String>,
+    // Last error from the post-login get_accounts() call, if any. login() returns
+    // Ok with the session token even when accounts can't be fetched (auth worked,
+    // but the customer record may have no trading accounts attached). The caller
+    // inspects this to build a useful error message instead of a generic "no
+    // customer account was returned".
+    last_accounts_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +162,7 @@ impl TastytradeBroker {
             base_url: base_url.to_string(),
             session_token: None,
             account_number: None,
+            last_accounts_error: None,
         }
     }
 
@@ -210,10 +217,22 @@ impl TastytradeBroker {
 
         self.session_token = Some(session_token.clone());
 
-        // Get accounts
-        if let Ok(accounts) = self.get_accounts().await {
-            if let Some(first) = accounts.first() {
-                self.account_number = Some(first.account_number.clone());
+        // Get accounts. Stash the error (if any) so the caller can include it in
+        // a user-facing message rather than just reporting "no customer account
+        // was returned" — which hid 401/404/empty-array distinctions and made
+        // sandbox setup debugging painful.
+        self.last_accounts_error = None;
+        match self.get_accounts().await {
+            Ok(accounts) => {
+                if let Some(first) = accounts.first() {
+                    self.account_number = Some(first.account_number.clone());
+                } else {
+                    self.last_accounts_error =
+                        Some("API returned 200 with an empty accounts list".to_string());
+                }
+            }
+            Err(e) => {
+                self.last_accounts_error = Some(e);
             }
         }
 
@@ -243,14 +262,28 @@ impl TastytradeBroker {
             .await
             .map_err(|e| format!("Get accounts failed: {e}"))?;
 
-        let data: serde_json::Value = resp
-            .json()
+        // Check HTTP status before parsing — silently parsing a 401/404 response
+        // hid the real reason a sandbox login appeared to succeed but produced
+        // no account_number.
+        let status = resp.status();
+        let body = resp
+            .text()
             .await
+            .map_err(|e| format!("Read accounts body failed: {e}"))?;
+        if !status.is_success() {
+            return Err(format!(
+                "tastytrade /customers/me/accounts returned {} — {}",
+                status,
+                body.chars().take(300).collect::<String>()
+            ));
+        }
+
+        let data: serde_json::Value = serde_json::from_str(&body)
             .map_err(|e| format!("Parse accounts failed: {e}"))?;
 
         let items = data["data"]["items"]
             .as_array()
-            .ok_or_else(|| "No accounts array".to_string())?;
+            .ok_or_else(|| "tastytrade accounts response missing data.items array".to_string())?;
 
         let mut accounts = Vec::new();
         for item in items {
@@ -886,6 +919,13 @@ impl TastytradeBroker {
     }
     pub fn account_number(&self) -> Option<&str> {
         self.account_number.as_deref()
+    }
+
+    /// Diagnostic from the post-login `get_accounts()` call. Populated when login
+    /// succeeded (session token issued) but no `account_number` could be picked,
+    /// so the caller can build an error that points at the real cause.
+    pub fn last_accounts_error(&self) -> Option<&str> {
+        self.last_accounts_error.as_deref()
     }
 }
 

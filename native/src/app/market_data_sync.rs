@@ -1065,11 +1065,15 @@ impl TyphooNApp {
         if !self.alpaca_backfill_complete_loaded {
             self.alpaca_backfill_complete_load();
         }
+        if self.is_fetch_on_cooldown("alpaca", &symbol, tf) {
+            return false;
+        }
         let fetch_key = alpaca_fetch_key(&symbol, tf);
         let backfill_complete = self.alpaca_backfill_complete_pairs.contains_key(&fetch_key);
         if !self.pending_alpaca_fetches.insert(fetch_key) {
             return false;
         }
+        self.mark_fetch_queued("alpaca", &symbol, tf);
         let _ = self.broker_tx.send(BrokerCmd::AlpacaFetchBars {
             symbol,
             timeframe: tf.to_string(),
@@ -1096,6 +1100,9 @@ impl TyphooNApp {
         if self.is_unresolvable_fetch_key("kraken", &symbol, tf) {
             return false;
         }
+        if self.is_fetch_on_cooldown("kraken", &symbol, tf) {
+            return false;
+        }
         if !self.kraken_backfill_complete_loaded {
             self.kraken_backfill_complete_load();
         }
@@ -1104,6 +1111,7 @@ impl TyphooNApp {
         if !self.pending_kraken_fetches.insert(fetch_key) {
             return false;
         }
+        self.mark_fetch_queued("kraken", &symbol, tf);
         let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
             symbol: symbol.clone(),
             timeframes: vec![tf.to_string()],
@@ -1133,6 +1141,14 @@ impl TyphooNApp {
         if self.is_unresolvable_fetch_key("kraken-equities", &symbol, tf) {
             return false;
         }
+        // Cooldown gate: after a completed fetch, don't re-queue the same
+        // SYMBOL:TF more often than half the TF period. Without this, the
+        // KrakenBalances tick (~every minute) re-queues WOK 30Min every
+        // minute even when the market is closed and the cached bars are
+        // already current.
+        if self.is_fetch_on_cooldown("kraken-equities", &symbol, tf) {
+            return false;
+        }
         let fetch_key = alpaca_fetch_key(&symbol, tf);
         if !self
             .pending_kraken_fetches
@@ -1140,6 +1156,7 @@ impl TyphooNApp {
         {
             return false;
         }
+        self.mark_fetch_queued("kraken-equities", &symbol, tf);
         let _ = self.broker_tx.send(BrokerCmd::KrakenFetchEquityHistory {
             symbol: symbol.clone(),
             timeframe: tf.to_string(),
@@ -1180,6 +1197,9 @@ impl TyphooNApp {
         if self.is_unresolvable_fetch_key("kraken-futures", &symbol, tf) {
             return false;
         }
+        if self.is_fetch_on_cooldown("kraken-futures", &symbol, tf) {
+            return false;
+        }
         if !self.kraken_futures_backfill_complete_loaded {
             self.kraken_futures_backfill_complete_load();
         }
@@ -1190,6 +1210,7 @@ impl TyphooNApp {
         if !self.pending_kraken_futures_fetches.insert(fetch_key) {
             return false;
         }
+        self.mark_fetch_queued("kraken-futures", &symbol, tf);
         let _ = self.broker_tx.send(BrokerCmd::KrakenFuturesBackfill {
             symbol: symbol.clone(),
             timeframes: vec![tf.to_string()],
@@ -1237,6 +1258,9 @@ impl TyphooNApp {
         if self.is_unresolvable_fetch_key("tastytrade", &symbol, tf) {
             return false;
         }
+        if self.is_fetch_on_cooldown("tastytrade", &symbol, tf) {
+            return false;
+        }
         if !self.tastytrade_backfill_complete_loaded {
             self.tastytrade_backfill_complete_load();
         }
@@ -1247,6 +1271,7 @@ impl TyphooNApp {
         if !self.pending_tastytrade_fetches.insert(fetch_key) {
             return false;
         }
+        self.mark_fetch_queued("tastytrade", &symbol, tf);
         let resolved_symbol = self.resolve_tastytrade_symbol(&symbol);
         let _ = self.broker_tx.send(BrokerCmd::TastyTradeFetchBars {
             symbol: resolved_symbol,
@@ -1276,6 +1301,34 @@ impl TyphooNApp {
             || self
                 .unresolvable_pairs
                 .contains_key(&unresolvable_pair_key(broker, symbol, timeframe))
+    }
+
+    /// True if this source/symbol/tf was queued recently enough that re-queueing
+    /// now would just hit the same cache slot before a new bar could exist.
+    /// Uses ~half the TF period as the cooldown so we still refresh well within
+    /// one bar's worth of time during market hours.
+    pub(super) fn is_fetch_on_cooldown(
+        &self,
+        source: &str,
+        symbol: &str,
+        timeframe: &str,
+    ) -> bool {
+        let Some(period_s) = sync_timeframe_period_secs(timeframe) else {
+            return false;
+        };
+        let key = format!("{}:{}:{}", source, symbol, timeframe);
+        let Some(last) = self.fetch_last_queued_ts.get(&key).copied() else {
+            return false;
+        };
+        let now_s = chrono::Utc::now().timestamp();
+        let cooldown = (period_s / 2).max(30);
+        now_s.saturating_sub(last) < cooldown
+    }
+
+    pub(super) fn mark_fetch_queued(&mut self, source: &str, symbol: &str, timeframe: &str) {
+        let key = format!("{}:{}:{}", source, symbol, timeframe);
+        self.fetch_last_queued_ts
+            .insert(key, chrono::Utc::now().timestamp());
     }
 
     pub(super) fn schedule_alpaca_pairs(&mut self, symbols: &[String]) -> usize {
