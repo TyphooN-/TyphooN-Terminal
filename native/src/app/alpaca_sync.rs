@@ -6,7 +6,6 @@
 
 use super::normalize_market_data_symbol;
 use super::sync_workset::{alpaca_sync_period_secs, normalize_sync_timeframe_key};
-use super::{KRAKEN_SPOT_MONTH_PROVIDER_WINDOW_BARS, KRAKEN_SPOT_PROVIDER_WINDOW_BARS};
 use std::collections::HashMap;
 
 pub(super) const ALPACA_DEFAULT_HISTORICAL_RPM: u32 = 200;
@@ -96,32 +95,9 @@ pub(super) fn alpaca_sync_target_bars(tf: &str) -> Option<u32> {
     normalize_sync_timeframe_key(tf).map(|_| u32::MAX)
 }
 
-// The following broker-specific target_bars functions are scheduled to move
-// out into per-broker sync modules in follow-up commits. They sit here in the
-// meantime so the workspace keeps building between splits.
-pub(super) fn kraken_sync_target_bars(tf: &str) -> Option<u32> {
-    match normalize_sync_timeframe_key(tf)? {
-        "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week" => {
-            Some(KRAKEN_SPOT_PROVIDER_WINDOW_BARS)
-        }
-        "1Month" => Some(KRAKEN_SPOT_MONTH_PROVIDER_WINDOW_BARS),
-        _ => None,
-    }
-}
-
-pub(super) fn kraken_equities_sync_target_bars(tf: &str) -> Option<u32> {
-    // Kraken internal equities history returns the provider's available window.
-    // Many tokenized equities have short listing histories, so a fixed depth
-    // target makes valid caches look permanently under-filled and causes the
-    // scheduler to refetch the same WOK/TNDM windows every pass.
-    normalize_sync_timeframe_key(tf)?;
-    None
-}
-
-pub(super) fn kraken_futures_sync_target_bars(tf: &str) -> Option<u32> {
-    normalize_sync_timeframe_key(tf).map(|_| u32::MAX)
-}
-
+// Tastytrade's target_bars function still lives here until the tastytrade_sync
+// module lands in the next commit; keeping it here keeps the tree building
+// between splits.
 pub(super) fn tastytrade_sync_target_bars(tf: &str) -> Option<u32> {
     normalize_sync_timeframe_key(tf).map(|_| u32::MAX)
 }
