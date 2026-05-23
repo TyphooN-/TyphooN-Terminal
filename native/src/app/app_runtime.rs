@@ -12687,6 +12687,20 @@ impl eframe::App for TyphooNApp {
                                         ui.end_row();
                                     });
                                 if snap.broker == "Kraken" {
+                                    // Equity/Balance/Buying Power above are the USD-equivalent
+                                    // total including open positions, so a wallet of mostly tokens
+                                    // can hide the fact that almost no actual USD is available to
+                                    // buy with. Show the deployable USD/stable cash separately.
+                                    let cash = self.kraken_quote_balance();
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "Cash (USD/stable): ${:.2}",
+                                            cash
+                                        ))
+                                        .color(AXIS_TEXT)
+                                        .small()
+                                        .strong(),
+                                    );
                                     ui.label(
                                         egui::RichText::new(
                                             "Kraken sizing uses USD/stable cash balance for spot orders.",
@@ -12837,12 +12851,25 @@ impl eframe::App for TyphooNApp {
                             .default_open(self.right_news_open || news_count > 0)
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    if !self.finnhub_key.is_empty() {
-                                        let button_label = if news_count == 0 {
-                                            "Fetch News"
-                                        } else {
-                                            "Fetch News"
-                                        };
+                                    // One Fetch News button for the right panel. When MTF Grid is
+                                    // active with multiple symbols, it kicks the multi-source
+                                    // dedup scrape (NewsScrapeSymbols); otherwise it falls back
+                                    // to the single-symbol Finnhub fetch for the active chart.
+                                    // Avoids the previous duplicate button in the MTF Grid section.
+                                    let mtf_symbols = if self.mtf_enabled {
+                                        self.mtf_grid_news_symbols()
+                                    } else {
+                                        Vec::new()
+                                    };
+                                    let use_mtf = mtf_symbols.len() > 1;
+                                    let button_label = if use_mtf {
+                                        format!("Fetch News ({} MTF)", mtf_symbols.len())
+                                    } else {
+                                        "Fetch News".to_string()
+                                    };
+                                    let have_finnhub = !self.finnhub_key.is_empty();
+                                    let can_fetch = use_mtf || have_finnhub;
+                                    if can_fetch {
                                         if ui
                                             .add_enabled(
                                                 !self.news_loading,
@@ -12852,29 +12879,51 @@ impl eframe::App for TyphooNApp {
                                                 .fill(BTN_BLUE)
                                                 .min_size(egui::vec2(80.0, 18.0)),
                                             )
+                                            .on_hover_text(if use_mtf {
+                                                "Fetch/cache multi-source news once per unique MTF Grid ticker"
+                                            } else {
+                                                "Fetch Finnhub news for the active symbol"
+                                            })
                                             .clicked()
                                         {
-                                            let sym = self
-                                                .charts
-                                                .get(self.active_tab)
-                                                .map(|c| {
-                                                    c.symbol
-                                                        .split(':')
-                                                        .rev()
-                                                        .nth(1)
-                                                        .or_else(|| c.symbol.split(':').last())
-                                                        .unwrap_or("AAPL")
-                                                        .to_string()
-                                                })
-                                                .unwrap_or_else(|| "AAPL".to_string());
-                                            self.news_loading = true;
-                                            let _ = self.broker_tx.send(BrokerCmd::FinnhubNews {
-                                                symbol: sym.clone(),
-                                                api_key: self.finnhub_key.clone(),
-                                            });
-                                            self.log.push_back(LogEntry::info(format!(
-                                                "Finnhub: fetching news for {sym}"
-                                            )));
+                                            if use_mtf {
+                                                let count = mtf_symbols.len();
+                                                let label = mtf_symbols.join(", ");
+                                                let _ = self.broker_tx.send(BrokerCmd::NewsScrapeSymbols {
+                                                    symbols: mtf_symbols,
+                                                    marketaux_key: self.marketaux_key.clone(),
+                                                    alpha_vantage_key: self.alpha_vantage_key.clone(),
+                                                    fmp_key: self.fmp_key.clone(),
+                                                });
+                                                self.news_loading = true;
+                                                self.show_news = true;
+                                                self.log.push_back(LogEntry::info(format!(
+                                                    "News: fetching {} deduped MTF Grid symbol(s): {}",
+                                                    count, label
+                                                )));
+                                            } else {
+                                                let sym = self
+                                                    .charts
+                                                    .get(self.active_tab)
+                                                    .map(|c| {
+                                                        c.symbol
+                                                            .split(':')
+                                                            .rev()
+                                                            .nth(1)
+                                                            .or_else(|| c.symbol.split(':').last())
+                                                            .unwrap_or("AAPL")
+                                                            .to_string()
+                                                    })
+                                                    .unwrap_or_else(|| "AAPL".to_string());
+                                                self.news_loading = true;
+                                                let _ = self.broker_tx.send(BrokerCmd::FinnhubNews {
+                                                    symbol: sym.clone(),
+                                                    api_key: self.finnhub_key.clone(),
+                                                });
+                                                self.log.push_back(LogEntry::info(format!(
+                                                    "Finnhub: fetching news for {sym}"
+                                                )));
+                                            }
                                         }
                                         if self.news_loading {
                                             ui.spinner();
@@ -12920,24 +12969,11 @@ impl eframe::App for TyphooNApp {
                                         .max_height(180.0)
                                         .id_salt("news_scroll_r")
                                         .show(ui, |ui| {
-                                            for (headline, source, dt) in &right_news_rows {
-                                                ui.horizontal(|ui| {
-                                                    ui.spacing_mut().item_spacing.x = 4.0;
-                                                    ui.label(
-                                                        egui::RichText::new(dt)
-                                                            .color(egui::Color32::from_rgb(
-                                                                80, 80, 95,
-                                                            ))
-                                                            .small(),
-                                                    );
-                                                    ui.label(
-                                                        egui::RichText::new(source)
-                                                            .color(egui::Color32::from_rgb(
-                                                                100, 100, 120,
-                                                            ))
-                                                            .small(),
-                                                    );
-                                                });
+                                            let have_full = !self.news_full_articles.is_empty();
+                                            let mut open_idx: Option<usize> = None;
+                                            for (i, (headline, source, dt)) in
+                                                right_news_rows.iter().enumerate()
+                                            {
                                                 let hl = headline.to_lowercase();
                                                 let bullish = [
                                                     "surge",
@@ -12967,12 +13003,60 @@ impl eframe::App for TyphooNApp {
                                                 } else {
                                                     egui::Color32::from_rgb(190, 190, 200)
                                                 };
-                                                ui.label(
-                                                    egui::RichText::new(headline)
-                                                        .color(hl_color)
-                                                        .small(),
-                                                );
+                                                // Wrap the row (meta line + headline) in a single
+                                                // frameless button so the whole article area is the
+                                                // click target. Opens the News floating window and
+                                                // focuses this article instead of letting drag turn
+                                                // into a text selection.
+                                                let resp = ui
+                                                    .scope(|ui| {
+                                                        ui.spacing_mut().button_padding =
+                                                            egui::vec2(2.0, 2.0);
+                                                        ui.add(
+                                                            egui::Button::new(
+                                                                egui::RichText::new(headline)
+                                                                    .color(hl_color)
+                                                                    .small(),
+                                                            )
+                                                            .frame(false)
+                                                            .fill(egui::Color32::TRANSPARENT)
+                                                            .wrap(),
+                                                        )
+                                                    })
+                                                    .inner
+                                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                                    .on_hover_text(
+                                                        "Open in News window",
+                                                    );
+                                                ui.horizontal(|ui| {
+                                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                                    ui.label(
+                                                        egui::RichText::new(dt)
+                                                            .color(egui::Color32::from_rgb(
+                                                                80, 80, 95,
+                                                            ))
+                                                            .small(),
+                                                    );
+                                                    ui.label(
+                                                        egui::RichText::new(source)
+                                                            .color(egui::Color32::from_rgb(
+                                                                100, 100, 120,
+                                                            ))
+                                                            .small(),
+                                                    );
+                                                });
+                                                if resp.clicked() {
+                                                    open_idx = Some(i);
+                                                }
                                                 ui.add_space(2.0);
+                                            }
+                                            if let Some(i) = open_idx {
+                                                if have_full
+                                                    && i < self.news_full_articles.len()
+                                                {
+                                                    self.news_selected = Some(i);
+                                                }
+                                                self.show_news = true;
                                             }
                                     });
                                 }
@@ -12999,44 +13083,20 @@ impl eframe::App for TyphooNApp {
                         .show(ui, |ui| {
                         let tf_labels = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"];
                         let ma_labels = ["SMA200", "KAMA", "Fisher"];
+                        // Symbol count only — the Fetch News button moved into the News
+                        // section header and now picks the multi-symbol path automatically
+                        // when MTF mode has >1 symbol, so we no longer render a second one
+                        // here.
                         let mtf_news_symbols = self.mtf_grid_news_symbols();
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "{} symbol{}",
-                                    mtf_news_symbols.len(),
-                                    if mtf_news_symbols.len() == 1 { "" } else { "s" }
-                                ))
-                                .color(AXIS_TEXT)
-                                .small(),
-                            );
-                            if ui
-                                .add_enabled(
-                                    !mtf_news_symbols.is_empty(),
-                                    egui::Button::new("Fetch News").fill(BTN_BLUE),
-                                )
-                                .on_hover_text(
-                                    "Fetch/cache multi-source news once per unique MTF Grid ticker",
-                                )
-                                .clicked()
-                            {
-                                let symbols = mtf_news_symbols.clone();
-                                let count = symbols.len();
-                                let label = symbols.join(", ");
-                                let _ = self.broker_tx.send(BrokerCmd::NewsScrapeSymbols {
-                                    symbols,
-                                    marketaux_key: self.marketaux_key.clone(),
-                                    alpha_vantage_key: self.alpha_vantage_key.clone(),
-                                    fmp_key: self.fmp_key.clone(),
-                                });
-                                self.news_loading = true;
-                                self.show_news = true;
-                                self.log.push_back(LogEntry::info(format!(
-                                    "News: fetching {} deduped MTF Grid symbol(s): {}",
-                                    count, label
-                                )));
-                            }
-                        });
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} symbol{}",
+                                mtf_news_symbols.len(),
+                                if mtf_news_symbols.len() == 1 { "" } else { "s" }
+                            ))
+                            .color(AXIS_TEXT)
+                            .small(),
+                        );
                         egui::Grid::new("mtf_ma_grid")
                             .spacing(egui::vec2(4.0, 2.0))
                             .show(ui, |ui| {
@@ -14614,13 +14674,45 @@ impl eframe::App for TyphooNApp {
                     let ptr_in_cell = !pointer_over_floating && ctx.input(|i| i.pointer.hover_pos().map(|p| cell_rect.contains(p)).unwrap_or(false));
                     let is_focused = self.mtf_focused == Some(vi);
 
-                    // Zoom when pointer is in this cell (no focus-click required)
-                    if ptr_in_cell {
+                    // Price-axis vertical scaling for this cell — same pattern as the
+                    // single-chart path so MTF grid cells also respond to dragging the
+                    // right scale strip.
+                    let cell_price_axis_w = 70.0_f32;
+                    let cell_price_axis_rect = egui::Rect::from_min_max(
+                        egui::pos2(cell_rect.right() - cell_price_axis_w, cell_rect.top()),
+                        cell_rect.max,
+                    );
+                    let cell_scale_resp = ui
+                        .interact(
+                            cell_price_axis_rect,
+                            ui.id().with(("mtf_cell_price_axis", vi)),
+                            egui::Sense::click_and_drag(),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::ResizeVertical);
+                    let scaling_this_cell = cell_scale_resp.is_pointer_button_down_on();
+                    if scaling_this_cell {
+                        let dy = ctx.input(|i| i.pointer.delta().y);
+                        if dy.abs() > 0.0 {
+                            let zoom_delta = -dy as f64 * 0.003;
+                            chart.price_zoom =
+                                (chart.price_zoom * (1.0 + zoom_delta)).clamp(0.1, 20.0);
+                        }
+                    }
+                    if cell_scale_resp.double_clicked() {
+                        chart.price_zoom = 1.0;
+                        chart.price_pan = 0.0;
+                    }
+
+                    // Zoom when pointer is in this cell (no focus-click required) — but
+                    // skip while the user is actively dragging the price scale so the
+                    // scroll-zoom and horizontal-pan don't fight the vertical scaling.
+                    if ptr_in_cell && !scaling_this_cell {
                         let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
                         if scroll != 0.0 {
                             Self::handle_zoom(chart, scroll);
                         }
-                        // Drag pan for this cell
+                        // Drag pan for this cell — guard against accidental triggers
+                        // when the press originated on the price axis strip.
                         let drag = ctx.input(|i| i.pointer.delta());
                         if ctx.input(|i| i.pointer.primary_down()) && drag.x.abs() > 0.5 {
                             Self::handle_pan_h(chart, drag.x, cell_rect.width());

@@ -155,6 +155,12 @@ impl TyphooNApp {
             } else {
                 response.rect.top()
             };
+            // Drop-target indicator only — don't commit the reorder until release.
+            // Calling `move_right_panel_section` every frame while dragging causes
+            // the dragged section to shift positions live, which moves the pointer
+            // off the target and then back on the next frame, oscillating until the
+            // user releases. The release branch above (where `!pointer_down`)
+            // already does the actual reorder once.
             ui.painter().line_segment(
                 [
                     egui::pos2(response.rect.left(), drop_y),
@@ -162,7 +168,6 @@ impl TyphooNApp {
                 ],
                 egui::Stroke::new(2.0, ACCENT),
             );
-            self.move_right_panel_section(dragged, section, after_target);
         }
     }
 
