@@ -5,7 +5,14 @@
 //!
 //! API docs: https://developer.tastytrade.com/
 
-use serde::{Deserialize, Serialize};
+mod types;
+
+pub use self::types::{
+    TastyAccount, TastyBalances, TastyExpiration, TastyGreeks, TastyMarketMetric, TastyOptionChain,
+    TastyOrder, TastyOrderLeg, TastyPosition, TastyQuote, TastySession, TastyStrike,
+};
+
+use self::types::parse_num;
 
 const API_BASE: &str = "https://api.tastyworks.com";
 const SANDBOX_BASE: &str = "https://api.cert.tastyworks.com";
@@ -73,81 +80,6 @@ pub struct TastytradeBroker {
     // inspects this to build a useful error message instead of a generic "no
     // customer account was returned".
     last_accounts_error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TastySession {
-    pub session_token: String,
-    pub remember_token: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TastyAccount {
-    pub account_number: String,
-    pub account_type: String,
-    pub nickname: Option<String>,
-    pub margin_or_cash: String,
-    pub is_closed: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TastyPosition {
-    pub symbol: String,
-    pub instrument_type: String, // "Equity", "Equity Option", "Future", etc.
-    pub quantity: f64,
-    pub quantity_direction: String, // "Long" or "Short"
-    pub close_price: f64,
-    pub average_open_price: f64,
-    pub mark_price: Option<f64>,
-    pub unrealized_pnl: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TastyOrder {
-    pub id: String,
-    pub order_type: String,
-    pub time_in_force: String,
-    pub status: String,
-    pub legs: Vec<TastyOrderLeg>,
-    pub price: Option<f64>,
-    pub size: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TastyOrderLeg {
-    pub instrument_type: String,
-    pub symbol: String,
-    pub action: String, // "Buy to Open", "Sell to Close", etc.
-    pub quantity: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TastyOptionChain {
-    pub underlying_symbol: String,
-    pub expirations: Vec<TastyExpiration>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TastyExpiration {
-    pub expiration_date: String,
-    pub strikes: Vec<TastyStrike>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TastyStrike {
-    pub strike_price: f64,
-    pub call_symbol: String,
-    pub put_symbol: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TastyGreeks {
-    pub delta: f64,
-    pub gamma: f64,
-    pub theta: f64,
-    pub vega: f64,
-    pub rho: f64,
-    pub implied_volatility: f64,
 }
 
 impl TastytradeBroker {
@@ -927,53 +859,6 @@ impl TastytradeBroker {
     pub fn last_accounts_error(&self) -> Option<&str> {
         self.last_accounts_error.as_deref()
     }
-}
-
-/// Quote snapshot from tastytrade REST API.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TastyQuote {
-    pub symbol: String,
-    pub bid: f64,
-    pub ask: f64,
-    pub last: f64,
-    pub open: f64,
-    pub high: f64,
-    pub low: f64,
-    pub close: f64,
-    pub prev_close: f64,
-    pub volume: i64,
-    pub bid_size: i64,
-    pub ask_size: i64,
-}
-
-/// Market metrics (IV, liquidity) from tastytrade REST API.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TastyMarketMetric {
-    pub symbol: String,
-    pub iv_index: f64,
-    pub iv_rank: f64,
-    pub iv_percentile: f64,
-    pub liquidity_rating: i32,
-    pub liquidity_rank: f64,
-    pub beta: f64,
-    pub earnings_date: Option<String>,
-}
-
-/// Account balances from tastytrade REST API.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TastyBalances {
-    pub cash_balance: f64,
-    pub net_liquidating_value: f64,
-    pub equity_buying_power: f64,
-    pub maintenance_requirement: f64,
-    pub pending_cash: f64,
-}
-
-/// Helper: parse number from tastytrade JSON (may be string or number).
-fn parse_num(v: &serde_json::Value) -> f64 {
-    v.as_f64()
-        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-        .unwrap_or(0.0)
 }
 
 #[cfg(test)]
