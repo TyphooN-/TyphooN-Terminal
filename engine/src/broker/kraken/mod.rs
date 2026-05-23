@@ -6,6 +6,9 @@
 
 mod helpers;
 mod limiter;
+mod order_types;
+
+pub use self::order_types::{KrakenConditionalClose, KrakenOrderRequest};
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use hmac::{Hmac, KeyInit, Mac};
@@ -17,9 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zeroize::Zeroizing;
 
 use self::helpers::{
-    encode_form_params, format_f64_param, is_supported_kraken_close_order_type,
-    is_supported_kraken_order_type, kraken_client, kraken_private_rest_counter_cost,
-    normalize_kraken_order_type, push_opt_param, requires_primary_price, requires_secondary_price,
+    encode_form_params, format_f64_param, kraken_client, kraken_private_rest_counter_cost,
     sanitize_api_error_body,
 };
 use self::limiter::{KRAKEN_PRIVATE_REST_MAX_ATTEMPTS, KrakenPrivateRestLimiter};
@@ -28,216 +29,6 @@ type HmacSha512 = Hmac<Sha512>;
 
 const KRAKEN_BASE_URL: &str = "https://api.kraken.com";
 const KRAKEN_INTERNAL_API_BASE_URL: &str = "https://iapi.kraken.com/api/internal";
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct KrakenConditionalClose {
-    pub order_type: String,
-    pub price: Option<String>,
-    pub price2: Option<String>,
-}
-
-impl KrakenConditionalClose {
-    pub fn new(order_type: impl Into<String>) -> Self {
-        Self {
-            order_type: order_type.into(),
-            price: None,
-            price2: None,
-        }
-    }
-}
-
-/// Full Kraken Spot REST AddOrder request.
-///
-/// This uses Kraken's REST/WebSocket v1 field names because REST AddOrder is a
-/// form endpoint: `type`, `ordertype`, `price`, `price2`, `oflags`, `starttm`,
-/// `expiretm`, `timeinforce`, and `close[...]`.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct KrakenOrderRequest {
-    pub pair: String,
-    pub side: String,
-    pub order_type: String,
-    pub volume: String,
-    pub price: Option<String>,
-    pub price2: Option<String>,
-    pub display_volume: Option<String>,
-    pub leverage: Option<String>,
-    pub margin: Option<bool>,
-    pub reduce_only: bool,
-    pub oflags: Vec<String>,
-    pub start_time: Option<String>,
-    pub expire_time: Option<String>,
-    pub deadline: Option<String>,
-    pub client_order_id: Option<String>,
-    pub userref: Option<String>,
-    pub sender_sub_id: Option<String>,
-    pub stp_type: Option<String>,
-    pub validate: bool,
-    pub time_in_force: Option<String>,
-    pub close: Option<KrakenConditionalClose>,
-    pub req_id: Option<i64>,
-}
-
-impl KrakenOrderRequest {
-    pub fn basic(
-        pair: impl Into<String>,
-        side: impl Into<String>,
-        order_type: impl Into<String>,
-        volume: f64,
-    ) -> Self {
-        Self {
-            pair: pair.into(),
-            side: side.into(),
-            order_type: order_type.into(),
-            volume: format_f64_param(volume),
-            ..Self::default()
-        }
-    }
-
-    pub fn with_price(mut self, price: f64) -> Self {
-        self.price = Some(format_f64_param(price));
-        self
-    }
-
-    pub fn with_price2(mut self, price2: f64) -> Self {
-        self.price2 = Some(format_f64_param(price2));
-        self
-    }
-
-    pub fn with_display_volume(mut self, display_volume: f64) -> Self {
-        self.display_volume = Some(format_f64_param(display_volume));
-        self
-    }
-
-    fn normalized_order_type(&self) -> String {
-        normalize_kraken_order_type(&self.order_type)
-    }
-
-    pub fn validate(&self) -> Result<(), String> {
-        if self.pair.trim().is_empty() {
-            return Err("Kraken order pair is required".to_string());
-        }
-        if !matches!(self.side.to_ascii_lowercase().as_str(), "buy" | "sell") {
-            return Err(format!("Unsupported Kraken order side: {}", self.side));
-        }
-        let order_type = self.normalized_order_type();
-        if !is_supported_kraken_order_type(&order_type) {
-            return Err(format!(
-                "Unsupported Kraken order type: {}",
-                self.order_type
-            ));
-        }
-        let volume = self
-            .volume
-            .parse::<f64>()
-            .map_err(|_| format!("Invalid Kraken order volume: {}", self.volume))?;
-        if !volume.is_finite() || (volume <= 0.0 && order_type != "settle-position") {
-            return Err(format!("Invalid Kraken order volume: {}", self.volume));
-        }
-        if order_type == "iceberg" && self.display_volume.as_deref().unwrap_or("").is_empty() {
-            return Err("Kraken iceberg order requires displayvol".to_string());
-        }
-        if requires_primary_price(&order_type) && self.price.as_deref().unwrap_or("").is_empty() {
-            return Err(format!("Kraken {order_type} order requires price"));
-        }
-        if requires_secondary_price(&order_type) && self.price2.as_deref().unwrap_or("").is_empty()
-        {
-            return Err(format!("Kraken {order_type} order requires price2"));
-        }
-        if self.client_order_id.is_some() && self.userref.is_some() {
-            return Err("Kraken cl_ord_id and userref are mutually exclusive".to_string());
-        }
-        if let Some(tif) = &self.time_in_force {
-            let tif = tif.to_ascii_uppercase();
-            if !matches!(tif.as_str(), "GTC" | "GTD" | "IOC") {
-                return Err(format!("Unsupported Kraken timeinforce: {tif}"));
-            }
-        }
-        if let Some(stp) = &self.stp_type {
-            if !matches!(
-                stp.to_ascii_lowercase().as_str(),
-                "cancel_newest" | "cancel_oldest" | "cancel_both"
-            ) {
-                return Err(format!("Unsupported Kraken stp_type: {stp}"));
-            }
-        }
-        if let Some(close) = &self.close {
-            let close_type = normalize_kraken_order_type(&close.order_type);
-            if !is_supported_kraken_close_order_type(&close_type) {
-                return Err(format!(
-                    "Unsupported Kraken conditional close order type: {}",
-                    close.order_type
-                ));
-            }
-            if requires_primary_price(&close_type)
-                && close.price.as_deref().unwrap_or("").is_empty()
-            {
-                return Err(format!("Kraken conditional {close_type} requires price"));
-            }
-            if requires_secondary_price(&close_type)
-                && close.price2.as_deref().unwrap_or("").is_empty()
-            {
-                return Err(format!("Kraken conditional {close_type} requires price2"));
-            }
-        }
-        Ok(())
-    }
-
-    fn to_params(&self) -> Vec<(String, String)> {
-        let mut params = vec![
-            ("pair".to_string(), self.pair.clone()),
-            ("type".to_string(), self.side.to_ascii_lowercase()),
-            ("ordertype".to_string(), self.rest_order_type()),
-            ("volume".to_string(), self.volume.clone()),
-        ];
-        push_opt_param(&mut params, "price", self.price.as_deref());
-        push_opt_param(&mut params, "price2", self.price2.as_deref());
-        push_opt_param(&mut params, "displayvol", self.display_volume.as_deref());
-        push_opt_param(&mut params, "leverage", self.leverage.as_deref());
-        if let Some(margin) = self.margin {
-            params.push(("margin".to_string(), margin.to_string()));
-        }
-        if self.reduce_only {
-            params.push(("reduce_only".to_string(), "true".to_string()));
-        }
-        if !self.oflags.is_empty() {
-            params.push(("oflags".to_string(), self.oflags.join(",")));
-        }
-        push_opt_param(&mut params, "starttm", self.start_time.as_deref());
-        push_opt_param(&mut params, "expiretm", self.expire_time.as_deref());
-        push_opt_param(&mut params, "deadline", self.deadline.as_deref());
-        push_opt_param(&mut params, "cl_ord_id", self.client_order_id.as_deref());
-        push_opt_param(&mut params, "userref", self.userref.as_deref());
-        push_opt_param(&mut params, "sender_sub_id", self.sender_sub_id.as_deref());
-        push_opt_param(&mut params, "stp_type", self.stp_type.as_deref());
-        if self.validate {
-            params.push(("validate".to_string(), "true".to_string()));
-        }
-        if let Some(tif) = &self.time_in_force {
-            params.push(("timeinforce".to_string(), tif.to_ascii_uppercase()));
-        }
-        if let Some(close) = &self.close {
-            params.push((
-                "close[ordertype]".to_string(),
-                normalize_kraken_order_type(&close.order_type),
-            ));
-            push_opt_param(&mut params, "close[price]", close.price.as_deref());
-            push_opt_param(&mut params, "close[price2]", close.price2.as_deref());
-        }
-        if let Some(req_id) = self.req_id {
-            params.push(("reqid".to_string(), req_id.to_string()));
-        }
-        params
-    }
-
-    fn rest_order_type(&self) -> String {
-        let order_type = self.normalized_order_type();
-        if order_type == "iceberg" {
-            "limit".to_string()
-        } else {
-            order_type
-        }
-    }
-}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct KrakenEquityTicker {
