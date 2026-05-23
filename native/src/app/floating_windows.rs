@@ -52985,7 +52985,10 @@ impl TyphooNApp {
                                                     if let Some(ref cache) = self.cache {
                                                         if let Ok(conn) = cache.connection() {
                                                             if let Ok(Some(text)) = sec_filing::get_filing_content(&conn, &f.accession_number) {
-                                                                self.sec_filing_content = text;
+                                                                // polish_filing_text also cleans up legacy
+                                                                // cached blobs stored by older builds that
+                                                                // left numeric HTML entities un-decoded.
+                                                                self.sec_filing_content = sec_filing::polish_filing_text(&text);
                                                                 self.sec_filing_loading = false;
                                                                 served_from_cache = true;
                                                             }

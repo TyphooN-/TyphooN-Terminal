@@ -1212,34 +1212,128 @@ pub fn strip_html_to_text(html: &str) -> String {
         .replace("</td>", " | ")
         .replace("</th>", " | ");
     text = text.replace("</li>", "\n").replace("<li>", "  - ");
-    // HTML entities
-    text = text
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">");
-    text = text
-        .replace("&nbsp;", " ")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&apos;", "'");
     // Strip remaining tags
-    let mut result = String::with_capacity(text.len());
+    let mut without_tags = String::with_capacity(text.len());
     let mut in_tag = false;
     for ch in text.chars() {
         match ch {
             '<' => in_tag = true,
             '>' => in_tag = false,
-            _ if !in_tag => result.push(ch),
+            _ if !in_tag => without_tags.push(ch),
             _ => {}
         }
     }
-    // Collapse whitespace
-    let lines: Vec<&str> = result
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .collect();
-    lines.join("\n")
+    // Entity decoding + line polish happens in a shared pass so cached
+    // legacy content (which went through an older, weaker decoder) can be
+    // cleaned up at read time too.
+    polish_filing_text(&without_tags)
+}
+
+/// Decode HTML entities and drop visual-noise lines from an already-stripped
+/// filing body. Safe to apply to both fresh strip_html_to_text output and
+/// cached `content_plain` blobs — the latter may still contain raw
+/// `&#160;` / `&#9744;` entities written by older builds that only handled
+/// the named-entity set.
+pub fn polish_filing_text(text: &str) -> String {
+    let decoded = decode_html_entities(text);
+    // Drop lines that are visually empty after entity decoding: tables
+    // serialised as `| | | |`, NBSP-only rows, or pure punctuation
+    // dividers that contribute nothing to the reader.
+    let mut out: Vec<&str> = Vec::with_capacity(decoded.lines().count());
+    for line in decoded.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if line_is_visually_empty(trimmed) {
+            continue;
+        }
+        out.push(trimmed);
+    }
+    out.join("\n")
+}
+
+/// Decode named and numeric HTML entities. Handles the legacy named set
+/// (`&amp;`, `&lt;`, `&gt;`, `&nbsp;`, `&quot;`, `&apos;`, `&#39;`) plus
+/// any numeric entity in decimal (`&#NNN;`) or hex (`&#xHH;` / `&#XHH;`)
+/// form. `&` outside an entity context is left alone. Returns the decoded
+/// string with the original byte width preserved when no entities are
+/// present.
+fn decode_html_entities(input: &str) -> String {
+    if !input.contains('&') {
+        return input.to_string();
+    }
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'&' {
+            // Multi-byte UTF-8 char — push the full char in one step.
+            let ch = input[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
+        // Look for the matching ';' within a small window. Real entities
+        // are at most ~8 chars including the leading '&' and trailing ';'.
+        let scan_end = (i + 12).min(bytes.len());
+        let semi = bytes[i..scan_end].iter().position(|&b| b == b';');
+        let Some(semi_off) = semi else {
+            out.push('&');
+            i += 1;
+            continue;
+        };
+        let entity = &input[i + 1..i + semi_off]; // between '&' and ';'
+        if let Some(decoded) = decode_entity_body(entity) {
+            out.push_str(&decoded);
+            i += semi_off + 1;
+        } else {
+            out.push('&');
+            i += 1;
+        }
+    }
+    out
+}
+
+fn decode_entity_body(body: &str) -> Option<String> {
+    if body.is_empty() {
+        return None;
+    }
+    if let Some(rest) = body.strip_prefix('#') {
+        let code = if let Some(hex) = rest.strip_prefix(|c: char| c == 'x' || c == 'X') {
+            u32::from_str_radix(hex, 16).ok()?
+        } else {
+            rest.parse::<u32>().ok()?
+        };
+        let ch = char::from_u32(code)?;
+        // NBSP normalises to a regular space so downstream "line is empty"
+        // checks behave intuitively.
+        return Some(if ch == '\u{a0}' {
+            " ".to_string()
+        } else {
+            ch.to_string()
+        });
+    }
+    Some(
+        match body {
+            "amp" => "&",
+            "lt" => "<",
+            "gt" => ">",
+            "quot" => "\"",
+            "apos" => "'",
+            "nbsp" => " ",
+            _ => return None,
+        }
+        .to_string(),
+    )
+}
+
+/// `true` if the line contributes nothing visual: only whitespace, pipes,
+/// stray punctuation, or runs of NBSP-equivalent characters that survived
+/// entity decoding via direct insertion.
+fn line_is_visually_empty(line: &str) -> bool {
+    line.chars()
+        .all(|c| c.is_whitespace() || c == '|' || c == '\u{a0}')
 }
 
 /// Store filing content (zstd-compressed) and index in FTS5.
@@ -2372,5 +2466,104 @@ mod tests {
         assert_eq!(filings[0].category, "ACTIVIST");
         assert_eq!(filings[0].importance_score, 70);
         assert!(!filings[0].insider_flag);
+    }
+
+    #[test]
+    fn decode_html_entities_handles_named_set() {
+        assert_eq!(
+            decode_html_entities("Tom &amp; Jerry &lt;love&gt; &quot;cheese&quot;"),
+            "Tom & Jerry <love> \"cheese\""
+        );
+        assert_eq!(decode_html_entities("don&apos;t"), "don't");
+        assert_eq!(decode_html_entities("a&nbsp;b"), "a b");
+    }
+
+    #[test]
+    fn decode_html_entities_handles_decimal_numeric() {
+        // NBSP via numeric form normalises to a regular space.
+        assert_eq!(decode_html_entities("a&#160;b"), "a b");
+        // Ballot box ☐ — was leaking through as raw `[&#9744;]` before the fix.
+        assert_eq!(decode_html_entities("[&#9744;]"), "[\u{2610}]");
+        // Apostrophe via &#39;
+        assert_eq!(decode_html_entities("Tom&#39;s"), "Tom's");
+    }
+
+    #[test]
+    fn decode_html_entities_handles_hex_numeric() {
+        assert_eq!(decode_html_entities("&#x2610;"), "\u{2610}");
+        assert_eq!(decode_html_entities("&#X2610;"), "\u{2610}");
+        assert_eq!(decode_html_entities("&#xa0;"), " ");
+    }
+
+    #[test]
+    fn decode_html_entities_leaves_unknown_entities_alone() {
+        // Unknown entity body: keep the literal `&` and let the rest fall
+        // through as text — losing data is worse than printing the
+        // unrecognised entity verbatim.
+        assert_eq!(decode_html_entities("&unknown;"), "&unknown;");
+        // Bare `&` with no following `;` within the lookahead window.
+        assert_eq!(decode_html_entities("a & b"), "a & b");
+        // Invalid numeric entity stays literal.
+        assert_eq!(decode_html_entities("&#notanumber;"), "&#notanumber;");
+    }
+
+    #[test]
+    fn decode_html_entities_preserves_multibyte_chars() {
+        assert_eq!(decode_html_entities("café &amp; thé"), "café & thé");
+        assert_eq!(decode_html_entities("日本語 &#160; テキスト"), "日本語   テキスト");
+    }
+
+    #[test]
+    fn polish_filing_text_strips_pipe_only_table_rows() {
+        let input = "Real content\n| | | |\n|  |  |\nMore content";
+        let polished = polish_filing_text(input);
+        assert_eq!(polished, "Real content\nMore content");
+    }
+
+    #[test]
+    fn polish_filing_text_strips_nbsp_only_lines() {
+        // `&#160;` decoded to spaces, leaving the line visually empty.
+        let input = "Section A\n&#160; &#160; &#160;\nSection B";
+        let polished = polish_filing_text(input);
+        assert_eq!(polished, "Section A\nSection B");
+    }
+
+    #[test]
+    fn polish_filing_text_decodes_entities_inside_real_content() {
+        let input = "Tom&#39;s [&#9744;] checkbox at AT&amp;T";
+        let polished = polish_filing_text(input);
+        assert_eq!(polished, "Tom's [\u{2610}] checkbox at AT&T");
+    }
+
+    #[test]
+    fn polish_filing_text_trims_per_line_whitespace() {
+        let input = "  leading spaces\nno spaces\n   ";
+        let polished = polish_filing_text(input);
+        assert_eq!(polished, "leading spaces\nno spaces");
+    }
+
+    #[test]
+    fn strip_html_to_text_decodes_numeric_entities_end_to_end() {
+        // Reproduce the rendered-output bug from the user-reported screenshot.
+        let html = r#"<p>Check this box: [&#9744;] before &#160; signing</p>"#;
+        let stripped = strip_html_to_text(html);
+        assert!(stripped.contains("\u{2610}"), "ballot box must be decoded");
+        assert!(!stripped.contains("&#"), "no raw numeric entities should remain");
+    }
+
+    #[test]
+    fn strip_html_to_text_filters_pipe_only_table_rows_from_real_filing_shape() {
+        // The 8-K table-of-checkboxes pattern that showed up in the
+        // screenshot: every row collapses to ` | | | | `.
+        let html = "<p>Header</p><table>\
+            <tr><td>&#160;</td><td>&#160;</td><td>&#160;</td><td>&#160;</td></tr>\
+            <tr><td>Real cell</td><td>&#160;</td><td>Other cell</td></tr>\
+            </table>";
+        let stripped = strip_html_to_text(html);
+        assert!(stripped.contains("Header"));
+        assert!(stripped.contains("Real cell"));
+        assert!(stripped.contains("Other cell"));
+        // The all-NBSP row must not show up as `| | | |`.
+        assert!(!stripped.lines().any(|l| l.trim().chars().all(|c| c == '|' || c.is_whitespace())));
     }
 }
