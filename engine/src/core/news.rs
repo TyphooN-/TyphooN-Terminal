@@ -16,6 +16,36 @@
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicI64, Ordering};
+
+// ── Rate-limit cooldown ───────────────────────────────────────────────────
+//
+// GDELT's free Doc API throttles aggressively and returns 429 with no
+// Retry-After header. Hitting it once during a bulk per-symbol scrape means
+// every subsequent ticker in the loop will also 429, spamming the log. When
+// we see a 429 we park GDELT for `RATE_LIMIT_COOLDOWN_SECS` and callers
+// short-circuit via `gdelt_in_cooldown()` instead of issuing the request.
+
+const RATE_LIMIT_COOLDOWN_SECS: i64 = 600;
+static GDELT_COOLDOWN_UNTIL: AtomicI64 = AtomicI64::new(0);
+
+fn now_secs() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+/// Seconds remaining on the GDELT 429 cooldown, or 0 if not throttled.
+pub fn gdelt_cooldown_remaining_secs() -> i64 {
+    (GDELT_COOLDOWN_UNTIL.load(Ordering::Relaxed) - now_secs()).max(0)
+}
+
+/// True while GDELT requests should be skipped after a 429.
+pub fn gdelt_in_cooldown() -> bool {
+    gdelt_cooldown_remaining_secs() > 0
+}
+
+fn trip_gdelt_cooldown() {
+    GDELT_COOLDOWN_UNTIL.store(now_secs() + RATE_LIMIT_COOLDOWN_SECS, Ordering::Relaxed);
+}
 
 // ── Data Type ─────────────────────────────────────────────────────────────
 
@@ -413,6 +443,10 @@ pub async fn fetch_gdelt_news(
     if query.trim().is_empty() {
         return Ok(vec![]);
     }
+    let remaining = gdelt_cooldown_remaining_secs();
+    if remaining > 0 {
+        return Err(format!("GDELT cooldown: {}s remaining", remaining));
+    }
     let url = "https://api.gdeltproject.org/api/v2/doc/doc";
     let resp = client
         .get(url)
@@ -429,6 +463,10 @@ pub async fn fetch_gdelt_news(
         .await
         .map_err(|e| format!("GDELT request failed: {e}"))?;
     if !resp.status().is_success() {
+        let code = resp.status().as_u16();
+        if code == 429 {
+            trip_gdelt_cooldown();
+        }
         return Err(format!("GDELT: HTTP {}", resp.status()));
     }
     let text = resp.text().await.map_err(|e| format!("GDELT read: {e}"))?;
@@ -995,15 +1033,26 @@ pub async fn fetch_all_sources_for_symbol(
 
     let mut all_articles: Vec<NewsArticle> = Vec::new();
 
-    // GDELT (no key)
-    match fetch_gdelt_news(client, &sym, 30).await {
-        Ok(v) => {
-            cb(&format!("news/gdelt {}: {} articles", sym, v.len()));
-            all_articles.extend(v);
+    // GDELT (no key) — skip silently while a prior 429 cooldown is active so
+    // bulk per-symbol loops don't generate one failure log per ticker.
+    if !gdelt_in_cooldown() {
+        match fetch_gdelt_news(client, &sym, 30).await {
+            Ok(v) => {
+                cb(&format!("news/gdelt {}: {} articles", sym, v.len()));
+                all_articles.extend(v);
+            }
+            Err(e) => {
+                cb(&format!("news/gdelt {} failed: {e}", sym));
+                if gdelt_in_cooldown() {
+                    cb(&format!(
+                        "news/gdelt: rate-limited, skipping for {}s",
+                        gdelt_cooldown_remaining_secs()
+                    ));
+                }
+            }
         }
-        Err(e) => cb(&format!("news/gdelt {} failed: {e}", sym)),
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     }
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     // Yahoo RSS (no key)
     match fetch_yahoo_rss(client, &sym).await {
