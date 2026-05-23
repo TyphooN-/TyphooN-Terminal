@@ -5,6 +5,7 @@
 //!
 //! API docs: https://developer.tastytrade.com/
 
+mod helpers;
 mod types;
 
 pub use self::types::{
@@ -12,60 +13,11 @@ pub use self::types::{
     TastyOrder, TastyOrderLeg, TastyPosition, TastyQuote, TastySession, TastyStrike,
 };
 
+use self::helpers::{format_equity_order_price, merge_market_data_universe_sources};
 use self::types::parse_num;
 
 const API_BASE: &str = "https://api.tastyworks.com";
 const SANDBOX_BASE: &str = "https://api.cert.tastyworks.com";
-
-fn merge_market_data_universe_sources(
-    watchlists: Result<Vec<String>, String>,
-    futures: Result<Vec<String>, String>,
-) -> Result<Vec<String>, String> {
-    let mut symbols = std::collections::BTreeSet::new();
-    let mut errors = Vec::new();
-
-    match watchlists {
-        Ok(items) => {
-            for symbol in items {
-                let symbol = symbol.trim().to_ascii_uppercase();
-                if !symbol.is_empty() {
-                    symbols.insert(symbol);
-                }
-            }
-        }
-        Err(e) => errors.push(format!("public watchlists: {e}")),
-    }
-
-    match futures {
-        Ok(items) => {
-            for symbol in items {
-                let symbol = symbol.trim().to_ascii_uppercase();
-                if !symbol.is_empty() {
-                    symbols.insert(symbol);
-                }
-            }
-        }
-        Err(e) => errors.push(format!("active futures: {e}")),
-    }
-
-    if !symbols.is_empty() {
-        Ok(symbols.into_iter().collect())
-    } else if errors.is_empty() {
-        Ok(Vec::new())
-    } else {
-        Err(errors.join(" | "))
-    }
-}
-
-fn format_equity_order_price(price: f64) -> String {
-    if price >= 1.0 {
-        format!("{:.2}", price)
-    } else if price >= 0.01 {
-        format!("{:.4}", price)
-    } else {
-        format!("{:.6}", price)
-    }
-}
 
 /// tastytrade broker client.
 #[derive(Clone)]
