@@ -32403,4 +32403,66 @@ mod tests {
         let ics = TyphooNApp::build_events_ics(&bad, EventSource::All, true, true, true);
         assert_eq!(ics.matches("BEGIN:VEVENT").count(), 0);
     }
+
+    #[test]
+    fn news_article_in_focus_empty_set_passes_everything() {
+        let focus = std::collections::HashSet::new();
+        assert!(TyphooNApp::news_article_in_focus(&focus, "AAPL", &[]));
+        assert!(TyphooNApp::news_article_in_focus(
+            &focus,
+            "",
+            &["random".into()]
+        ));
+    }
+
+    #[test]
+    fn news_article_in_focus_matches_primary_symbol() {
+        let focus = std::collections::HashSet::from(["AAPL".to_string()]);
+        assert!(TyphooNApp::news_article_in_focus(&focus, "AAPL", &[]));
+        assert!(TyphooNApp::news_article_in_focus(&focus, "aapl", &[]));
+        assert!(TyphooNApp::news_article_in_focus(&focus, " AAPL ", &[]));
+    }
+
+    #[test]
+    fn news_article_in_focus_matches_any_tagged_ticker() {
+        let focus = std::collections::HashSet::from(["TMO".to_string()]);
+        // Primary is unrelated, but tickers carry the match.
+        assert!(TyphooNApp::news_article_in_focus(
+            &focus,
+            "A",
+            &["XLV".into(), "TMO".into()]
+        ));
+    }
+
+    #[test]
+    fn news_article_in_focus_rejects_when_no_overlap() {
+        let focus = std::collections::HashSet::from(["AAPL".to_string(), "MSFT".to_string()]);
+        assert!(!TyphooNApp::news_article_in_focus(
+            &focus,
+            "TMO",
+            &["XLV".into(), "A".into()]
+        ));
+    }
+
+    #[test]
+    fn news_article_in_focus_handles_empty_primary_with_tagged_tickers() {
+        let focus = std::collections::HashSet::from(["BTC".to_string()]);
+        assert!(TyphooNApp::news_article_in_focus(
+            &focus,
+            "",
+            &["btc".into()]
+        ));
+    }
+
+    #[test]
+    fn news_article_in_focus_ignores_whitespace_only_primary() {
+        let focus = std::collections::HashSet::from(["AAPL".to_string()]);
+        // Whitespace-only primary uppercases to empty; tickers must carry it.
+        assert!(!TyphooNApp::news_article_in_focus(&focus, "   ", &[]));
+        assert!(TyphooNApp::news_article_in_focus(
+            &focus,
+            "   ",
+            &["AAPL".into()]
+        ));
+    }
 }

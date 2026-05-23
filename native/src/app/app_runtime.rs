@@ -12804,7 +12804,22 @@ impl eframe::App for TyphooNApp {
 
                         // ── News Section ──────────────────────────────────
                         {
-                            let news_count = self.news_full_articles.len().max(self.news_articles.len());
+                            // Use the focus-filtered count in the header so the navbar
+                            // tells the user how many articles their open charts /
+                            // watchlist / positions / orders / holdings actually match.
+                            // Falls back to total when news_full_articles is empty
+                            // (legacy 3-tuple news has no ticker tags to filter by).
+                            let news_count = if !self.news_full_articles.is_empty() {
+                                let focus = self.news_focus_symbols();
+                                self.news_full_articles
+                                    .iter()
+                                    .filter(|a| {
+                                        Self::news_article_in_focus(&focus, &a.symbol, &a.tickers)
+                                    })
+                                    .count()
+                            } else {
+                                self.news_articles.len()
+                            };
                             let news_section = egui::CollapsingHeader::new(
                                 egui::RichText::new(format!("☰ News ({})", news_count))
                                     .strong()
@@ -12916,9 +12931,15 @@ impl eframe::App for TyphooNApp {
                                         );
                                     }
                                 });
+                                // Build the O(n)-construct, O(1)-lookup focus set once so the
+                                // per-article filter below runs in constant time per row.
+                                let news_focus = self.news_focus_symbols();
                                 let right_news_rows: Vec<(String, String, String, String)> = if !self.news_full_articles.is_empty() {
                                     self.news_full_articles
                                         .iter()
+                                        .filter(|a| {
+                                            Self::news_article_in_focus(&news_focus, &a.symbol, &a.tickers)
+                                        })
                                         .map(|a| {
                                             let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(
                                                 a.published_at,
@@ -12948,6 +12969,8 @@ impl eframe::App for TyphooNApp {
                                         })
                                         .collect()
                                 } else {
+                                    // Legacy 3-tuple news has no ticker metadata, so the focus
+                                    // filter can't bite — show everything.
                                     self.news_articles
                                         .iter()
                                         .map(|(headline, source, dt)| {
@@ -12956,10 +12979,24 @@ impl eframe::App for TyphooNApp {
                                         .collect()
                                 };
                                 if news_count == 0 {
+                                    // Distinguish "no fetch yet" from "filter excluded
+                                    // everything" — the latter is easy to hit when the
+                                    // user has narrow focus and the news cache spans a
+                                    // wider universe.
+                                    let total_cached = self
+                                        .news_full_articles
+                                        .len()
+                                        .max(self.news_articles.len());
+                                    let message = if total_cached > 0 {
+                                        format!(
+                                            "{} cached articles, none match your open charts / watchlist / positions / orders / holdings.",
+                                            total_cached
+                                        )
+                                    } else {
+                                        "No news loaded for the active symbol.".to_string()
+                                    };
                                     ui.label(
-                                        egui::RichText::new("No news loaded for the active symbol.")
-                                            .color(AXIS_TEXT)
-                                            .small(),
+                                        egui::RichText::new(message).color(AXIS_TEXT).small(),
                                     );
                                 } else {
                                     egui::ScrollArea::vertical()

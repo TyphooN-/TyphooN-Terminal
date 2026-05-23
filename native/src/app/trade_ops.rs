@@ -730,6 +730,77 @@ impl TyphooNApp {
         syms
     }
 
+    /// Build the symbol set the navbar News section is allowed to surface.
+    ///
+    /// Drives the right-panel news filter: only articles whose primary
+    /// symbol or any tagged ticker hits this set are shown. Built once per
+    /// render (O(n) over the source collections) so per-article lookups
+    /// are O(1) via HashSet::contains. Returns an empty set if the user
+    /// has no open charts / positions / orders / holdings / watchlist —
+    /// callers treat that as "show everything" rather than "show nothing"
+    /// so a fresh app instance with no state attached still renders news.
+    pub(super) fn news_focus_symbols(&self) -> std::collections::HashSet<String> {
+        // Start from active_symbols(): open chart tabs + alpaca positions +
+        // tt positions + kraken positions + user watchlist (deduped).
+        let mut set: std::collections::HashSet<String> =
+            self.active_symbols().into_iter().collect();
+
+        // Open orders: live exposure that may not have a filled position yet.
+        for o in &self.live_orders {
+            let s = o.symbol.trim().to_ascii_uppercase();
+            if !s.is_empty() {
+                set.insert(s);
+            }
+        }
+        for o in &self.kraken_open_orders {
+            let s = o.pair.trim().to_ascii_uppercase();
+            if !s.is_empty() {
+                set.insert(s);
+            }
+        }
+
+        // Kraken balances: held assets that may not appear as positions
+        // (e.g. spot crypto with no open futures contract). Strip the
+        // .EQ suffix on tokenized equities so news tagged with the
+        // underlying symbol (TSLA vs TSLA.EQ) still matches.
+        for (asset, qty) in &self.kraken_balances {
+            if !qty.is_finite() || *qty <= 0.0 {
+                continue;
+            }
+            let display = Self::kraken_display_asset(asset);
+            if Self::kraken_is_cash_balance_asset(asset) {
+                // Fiat cash balances aren't news-worthy on their own.
+                continue;
+            }
+            let base = display.trim_end_matches(".EQ");
+            if !base.is_empty() {
+                set.insert(base.to_string());
+            }
+        }
+
+        set
+    }
+
+    /// O(1)-per-call check: does this article touch the user's focus set?
+    /// `focus.is_empty()` short-circuits to true so an empty focus means
+    /// "no filter" (see `news_focus_symbols` docs for the rationale).
+    pub(super) fn news_article_in_focus(
+        focus: &std::collections::HashSet<String>,
+        primary_symbol: &str,
+        tickers: &[String],
+    ) -> bool {
+        if focus.is_empty() {
+            return true;
+        }
+        let primary = primary_symbol.trim().to_ascii_uppercase();
+        if !primary.is_empty() && focus.contains(&primary) {
+            return true;
+        }
+        tickers
+            .iter()
+            .any(|t| focus.contains(&t.trim().to_ascii_uppercase()))
+    }
+
     pub(super) fn active_symbols_cache_key(&self) -> u64 {
         use std::hash::{Hash, Hasher};
 
