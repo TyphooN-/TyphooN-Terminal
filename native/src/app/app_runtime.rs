@@ -11069,19 +11069,31 @@ impl eframe::App for TyphooNApp {
                             if let Some(chart) = self.charts.get(self.active_tab) {
                                 if let Some(bar) = chart.bars.last() {
                                     let close = bar.close;
-                                    // Show current position info if any
-                                    let mut has_pos = false;
                                     let chart_symbol = chart.symbol.split(':').last().unwrap_or("");
-                                    let all_positions = self
+                                    let active_pos = self
                                         .live_positions
                                         .iter()
                                         .chain(self.tt_positions.iter())
-                                        .chain(self.kr_positions.iter());
-                                    for pos in all_positions {
-                                        if pos
-                                            .symbol
-                                            .contains(chart_symbol)
-                                        {
+                                        .chain(self.kr_positions.iter())
+                                        .find(|pos| pos.symbol.contains(chart_symbol));
+                                    let account_snaps: Vec<_> = self
+                                        .selected_trade_account_snapshots()
+                                        .into_iter()
+                                        .filter(|snap| match snap.broker {
+                                            "Alpaca" => self.show_alpaca_positions,
+                                            "tastytrade" | "Tastytrade" | "Tasty" => {
+                                                self.show_tt_positions
+                                            }
+                                            "Kraken" => self.show_kr_positions,
+                                            _ => true,
+                                        })
+                                        .collect();
+                                    // One row: position info first, broker chip(s) trailing.
+                                    // Wraps if it overflows the panel width, so SL/TP/RR can
+                                    // spill to the next line — but the L/P&L/chip group stays
+                                    // together when there's space.
+                                    ui.horizontal_wrapped(|ui| {
+                                        if let Some(pos) = active_pos {
                                             let side_c = if pos.side == "long" { UP } else { DOWN };
                                             let side_label =
                                                 if pos.side == "long" { "Long" } else { "Short" };
@@ -11102,8 +11114,6 @@ impl eframe::App for TyphooNApp {
                                                 ))
                                                 .color(pl_c),
                                             );
-
-                                            // SL/TP P&L if set
                                             if let Some(sl) = self.sl_price {
                                                 let sl_pl = (close - sl)
                                                     * pos.qty
@@ -11145,54 +11155,33 @@ impl eframe::App for TyphooNApp {
                                                         .small(),
                                                 );
                                             }
-                                            has_pos = true;
-                                            break;
+                                        } else {
+                                            ui.label(
+                                                egui::RichText::new("No position")
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                            );
                                         }
-                                    }
-                                    if !has_pos {
-                                        ui.label(
-                                            egui::RichText::new("No position")
-                                                .color(AXIS_TEXT)
-                                                .small(),
-                                        );
-                                    }
-
-                                    let account_snaps: Vec<_> = self
-                                        .selected_trade_account_snapshots()
-                                        .into_iter()
-                                        .filter(|snap| match snap.broker {
-                                            "Alpaca" => self.show_alpaca_positions,
-                                            "tastytrade" | "Tastytrade" | "Tasty" => {
-                                                self.show_tt_positions
-                                            }
-                                            "Kraken" => self.show_kr_positions,
-                                            _ => true,
-                                        })
-                                        .collect();
-                                    if !account_snaps.is_empty() {
-                                        ui.add_space(4.0);
-                                        ui.horizontal_wrapped(|ui| {
-                                            for snap in &account_snaps {
-                                                let is_alpaca = snap.broker == "Alpaca";
-                                                let is_live = !is_alpaca || !self.broker_paper;
-                                                let mode = if is_alpaca && self.broker_paper {
-                                                    "Paper"
-                                                } else {
-                                                    "Live"
-                                                };
-                                                let color = if is_live { UP } else { egui::Color32::WHITE };
-                                                ui.label(
-                                                    egui::RichText::new(format!(
-                                                        "[{} ({}) ${:.0}]",
-                                                        snap.broker, mode, snap.buying_power
-                                                    ))
-                                                    .color(color)
-                                                    .small()
-                                                    .strong(),
-                                                );
-                                            }
-                                        });
-                                    }
+                                        for snap in &account_snaps {
+                                            let is_alpaca = snap.broker == "Alpaca";
+                                            let is_live = !is_alpaca || !self.broker_paper;
+                                            let mode = if is_alpaca && self.broker_paper {
+                                                "Paper"
+                                            } else {
+                                                "Live"
+                                            };
+                                            let color = if is_live { UP } else { egui::Color32::WHITE };
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "[{} ({}) ${:.0}]",
+                                                    snap.broker, mode, snap.equity
+                                                ))
+                                                .color(color)
+                                                .small()
+                                                .strong(),
+                                            );
+                                        }
+                                    });
                                 }
                             }
                         });
@@ -12639,68 +12628,50 @@ impl eframe::App for TyphooNApp {
                                         .small()
                                         .strong(),
                                 );
-                                egui::Grid::new(format!("live_risk_grid_{idx}"))
-                                    .striped(true)
-                                    .num_columns(2)
-                                    .show(ui, |ui| {
-                                        ui.label(
-                                            egui::RichText::new("Equity").color(AXIS_TEXT).small(),
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(format!("${:.2}", snap.equity))
-                                                .small(),
-                                        );
-                                        ui.end_row();
-                                        ui.label(
-                                            egui::RichText::new("Balance").color(AXIS_TEXT).small(),
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(format!("${:.2}", snap.balance))
-                                                .small(),
-                                        );
-                                        ui.end_row();
-                                        ui.label(
-                                            egui::RichText::new("Buying Power")
-                                                .color(AXIS_TEXT)
-                                                .small(),
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(format!(
-                                                "${:.2}",
-                                                snap.buying_power
-                                            ))
-                                            .small(),
-                                        );
-                                        ui.end_row();
-                                        ui.label(
-                                            egui::RichText::new("Margin Used")
-                                                .color(AXIS_TEXT)
-                                                .small(),
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(format!(
-                                                "${:.2}",
-                                                snap.margin_used
-                                            ))
-                                            .small(),
-                                        );
-                                        ui.end_row();
-                                    });
+                                // Kraken has no margin (spot-only), so Buying Power and Margin
+                                // Used are meaningless duplicates of Equity / 0. Show a slim
+                                // Equity + Holdings + Cash layout instead so the user can see
+                                // total NAV, what's in tokens, and what's actually deployable.
                                 if snap.broker == "Kraken" {
-                                    // Equity/Balance/Buying Power above are the USD-equivalent
-                                    // total including open positions, so a wallet of mostly tokens
-                                    // can hide the fact that almost no actual USD is available to
-                                    // buy with. Show the deployable USD/stable cash separately.
                                     let cash = self.kraken_quote_balance();
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "Cash (USD/stable): ${:.2}",
-                                            cash
-                                        ))
-                                        .color(AXIS_TEXT)
-                                        .small()
-                                        .strong(),
-                                    );
+                                    let equity = snap.equity;
+                                    let holdings = (equity - cash).max(0.0);
+                                    egui::Grid::new(format!("live_risk_grid_{idx}"))
+                                        .striped(true)
+                                        .num_columns(2)
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new("Equity")
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!("${:.2}", equity))
+                                                    .small(),
+                                            );
+                                            ui.end_row();
+                                            ui.label(
+                                                egui::RichText::new("Holdings")
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!("${:.2}", holdings))
+                                                    .small(),
+                                            );
+                                            ui.end_row();
+                                            ui.label(
+                                                egui::RichText::new("Cash (USD/stable)")
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!("${:.2}", cash))
+                                                    .small()
+                                                    .strong(),
+                                            );
+                                            ui.end_row();
+                                        });
                                     ui.label(
                                         egui::RichText::new(
                                             "Kraken sizing uses USD/stable cash balance for spot orders.",
@@ -12708,6 +12679,54 @@ impl eframe::App for TyphooNApp {
                                         .color(AXIS_TEXT)
                                         .small(),
                                     );
+                                } else {
+                                    egui::Grid::new(format!("live_risk_grid_{idx}"))
+                                        .striped(true)
+                                        .num_columns(2)
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new("Equity").color(AXIS_TEXT).small(),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!("${:.2}", snap.equity))
+                                                    .small(),
+                                            );
+                                            ui.end_row();
+                                            ui.label(
+                                                egui::RichText::new("Balance").color(AXIS_TEXT).small(),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!("${:.2}", snap.balance))
+                                                    .small(),
+                                            );
+                                            ui.end_row();
+                                            ui.label(
+                                                egui::RichText::new("Buying Power")
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "${:.2}",
+                                                    snap.buying_power
+                                                ))
+                                                .small(),
+                                            );
+                                            ui.end_row();
+                                            ui.label(
+                                                egui::RichText::new("Margin Used")
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "${:.2}",
+                                                    snap.margin_used
+                                                ))
+                                                .small(),
+                                            );
+                                            ui.end_row();
+                                        });
                                 }
                                 ui.add_space(5.0);
                             }
