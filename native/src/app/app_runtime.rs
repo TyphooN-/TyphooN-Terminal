@@ -1369,13 +1369,19 @@ impl eframe::App for TyphooNApp {
                         };
                         sym_to_charts.entry(bare).or_default().push(ci);
                     }
+                    // Re-use one upper-cased buffer across quotes instead of allocating a
+                    // fresh `sym.to_uppercase()` String per quote. With high-frequency MT5
+                    // feeds this saves an allocation per quote per tick.
+                    let mut sym_upper_buf = String::with_capacity(32);
                     for (sym, bid, ask) in &quotes {
                         let mid = (bid + ask) / 2.0;
                         if mid <= 0.0 {
                             continue;
                         }
-                        let sym_upper = sym.to_uppercase();
-                        if let Some(indices) = sym_to_charts.get(&sym_upper) {
+                        sym_upper_buf.clear();
+                        sym_upper_buf.push_str(sym);
+                        sym_upper_buf.make_ascii_uppercase();
+                        if let Some(indices) = sym_to_charts.get(sym_upper_buf.as_str()) {
                             for &ci in indices {
                                 if let Some(bar) = self.charts[ci].bars.last_mut() {
                                     bar.close = mid;
@@ -1845,20 +1851,29 @@ impl eframe::App for TyphooNApp {
                         wl_sym_to_charts.entry(bare.clone()).or_default().push(ci);
                         wl_chart_bares.push(bare);
                     }
+                    // Reuse one normalized buffer for every row instead of allocating
+                    // `row.symbol.replace('/', "").to_uppercase()` per element.
+                    let mut row_sym_buf = String::with_capacity(32);
                     for row in &rows {
                         if row.last <= 0.0 {
                             continue;
                         }
-                        let row_sym = row.symbol.replace('/', "").to_uppercase();
+                        row_sym_buf.clear();
+                        for b in row.symbol.bytes() {
+                            if b != b'/' {
+                                row_sym_buf.push(b.to_ascii_uppercase() as char);
+                            }
+                        }
                         // Fast path: exact match via HashMap
                         let mut matched_indices: Vec<usize> = Vec::new();
-                        if let Some(indices) = wl_sym_to_charts.get(&row_sym) {
+                        if let Some(indices) = wl_sym_to_charts.get(row_sym_buf.as_str()) {
                             matched_indices.extend(indices);
                         }
                         // Slow path fallback: partial contains match (rare — only for symbols like "BTCUSD" matching "BTC")
                         for (ci, bare) in wl_chart_bares.iter().enumerate() {
                             if !matched_indices.contains(&ci)
-                                && (bare.contains(&row_sym) || row_sym.contains(bare.as_str()))
+                                && (bare.contains(row_sym_buf.as_str())
+                                    || row_sym_buf.contains(bare.as_str()))
                             {
                                 matched_indices.push(ci);
                             }

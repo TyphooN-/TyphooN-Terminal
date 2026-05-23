@@ -1,5 +1,23 @@
 use super::*;
 
+/// True iff `raw` becomes `target_upper` after stripping `'/'` and uppercasing
+/// (ASCII). Avoids the per-call `raw.replace('/', "").to_uppercase()` allocation
+/// that build_trade_overlay used to do once per scanned position.
+fn symbol_matches_no_alloc(raw: &str, target_upper: &str) -> bool {
+    let mut t = target_upper.bytes();
+    for byte in raw.bytes() {
+        if byte == b'/' {
+            continue;
+        }
+        let upper = byte.to_ascii_uppercase();
+        match t.next() {
+            Some(tb) if tb == upper => {}
+            _ => return false,
+        }
+    }
+    t.next().is_none()
+}
+
 impl TyphooNApp {
     pub(super) fn close_partial_active_symbol(&mut self) {
         let Some((symbol, _)) = self.active_trade_symbol_and_price() else {
@@ -661,7 +679,7 @@ impl TyphooNApp {
             for det in &self.bg.account_details {
                 // Check closed positions (have SL/TP)
                 for pos in &det.closed_positions {
-                    if pos.symbol.replace('/', "").to_uppercase() != bare_upper {
+                    if !symbol_matches_no_alloc(&pos.symbol, &bare_upper) {
                         continue;
                     }
                     let ticker = det.ticker.clone();
@@ -708,7 +726,7 @@ impl TyphooNApp {
                 }
                 // Check recent deals
                 for deal in &det.recent_deals {
-                    if deal.symbol.replace('/', "").to_uppercase() != bare_upper {
+                    if !symbol_matches_no_alloc(&deal.symbol, &bare_upper) {
                         continue;
                     }
                     if deal.direction.is_empty() {
@@ -736,7 +754,7 @@ impl TyphooNApp {
 
                 // Open position lines (entry, SL, TP)
                 for pos in &det.open_positions {
-                    if pos.symbol.replace('/', "").to_uppercase() != bare_upper {
+                    if !symbol_matches_no_alloc(&pos.symbol, &bare_upper) {
                         continue;
                     }
                     let is_buy = pos.side == "buy";
@@ -753,7 +771,7 @@ impl TyphooNApp {
         // Also check portfolio-level open positions (aggregated across all DARWINs)
         if self.show_darwin_positions {
             for pos in &self.bg.open_positions {
-                if pos.symbol.replace('/', "").to_uppercase() != bare_upper {
+                if !symbol_matches_no_alloc(&pos.symbol, &bare_upper) {
                     continue;
                 }
                 let is_buy = pos.side == "buy";
