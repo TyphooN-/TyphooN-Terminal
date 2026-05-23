@@ -4,6 +4,7 @@
 //! Separate from `core/kraken.rs` which handles public OHLCV data only.
 //! See ADR-072 for the full integration plan.
 
+mod helpers;
 mod limiter;
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
@@ -11,11 +12,16 @@ use hmac::{Hmac, KeyInit, Mac};
 use reqwest::Client;
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashMap;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zeroize::Zeroizing;
 
+use self::helpers::{
+    encode_form_params, format_f64_param, is_supported_kraken_close_order_type,
+    is_supported_kraken_order_type, kraken_client, kraken_private_rest_counter_cost,
+    normalize_kraken_order_type, push_opt_param, requires_primary_price, requires_secondary_price,
+    sanitize_api_error_body,
+};
 use self::limiter::{KRAKEN_PRIVATE_REST_MAX_ATTEMPTS, KrakenPrivateRestLimiter};
 
 type HmacSha512 = Hmac<Sha512>;
@@ -230,143 +236,6 @@ impl KrakenOrderRequest {
         } else {
             order_type
         }
-    }
-}
-
-/// Shared HTTP client for Kraken API requests (reuses TCP connections).
-fn kraken_client() -> &'static Client {
-    static CLIENT: OnceLock<Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .pool_max_idle_per_host(2)
-            .build()
-            .unwrap_or_else(|_| Client::new())
-    })
-}
-
-fn format_f64_param(value: f64) -> String {
-    if value.fract() == 0.0 {
-        format!("{value:.0}")
-    } else {
-        value.to_string()
-    }
-}
-
-fn push_opt_param(params: &mut Vec<(String, String)>, key: &str, value: Option<&str>) {
-    if let Some(value) = value {
-        if !value.is_empty() {
-            params.push((key.to_string(), value.to_string()));
-        }
-    }
-}
-
-fn normalize_kraken_order_type(order_type: &str) -> String {
-    order_type.trim().replace('_', "-").to_ascii_lowercase()
-}
-
-fn is_supported_kraken_order_type(order_type: &str) -> bool {
-    matches!(
-        order_type,
-        "market"
-            | "limit"
-            | "iceberg"
-            | "stop-loss"
-            | "stop-loss-limit"
-            | "take-profit"
-            | "take-profit-limit"
-            | "trailing-stop"
-            | "trailing-stop-limit"
-            | "settle-position"
-    )
-}
-
-fn is_supported_kraken_close_order_type(order_type: &str) -> bool {
-    matches!(
-        order_type,
-        "limit"
-            | "stop-loss"
-            | "stop-loss-limit"
-            | "take-profit"
-            | "take-profit-limit"
-            | "trailing-stop"
-            | "trailing-stop-limit"
-    )
-}
-
-fn requires_primary_price(order_type: &str) -> bool {
-    matches!(
-        order_type,
-        "limit"
-            | "iceberg"
-            | "stop-loss"
-            | "stop-loss-limit"
-            | "take-profit"
-            | "take-profit-limit"
-            | "trailing-stop"
-            | "trailing-stop-limit"
-    )
-}
-
-fn requires_secondary_price(order_type: &str) -> bool {
-    matches!(
-        order_type,
-        "stop-loss-limit" | "take-profit-limit" | "trailing-stop-limit"
-    )
-}
-
-fn encode_form_component(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for byte in input.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char)
-            }
-            b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
-
-fn encode_form_params(params: &[(String, String)]) -> String {
-    params
-        .iter()
-        .map(|(k, v)| format!("{}={}", encode_form_component(k), encode_form_component(v)))
-        .collect::<Vec<_>>()
-        .join("&")
-}
-
-fn sanitize_api_error_body(body: &str) -> String {
-    let mut clean = body.split_whitespace().collect::<Vec<_>>().join(" ");
-    if clean.len() > 512 {
-        clean.truncate(512);
-        clean.push('…');
-    }
-    clean
-}
-
-fn kraken_private_rest_counter_cost(path: &str) -> f64 {
-    let endpoint = path.rsplit('/').next().unwrap_or(path);
-    if matches!(
-        endpoint,
-        "AddOrder"
-            | "AddOrderBatch"
-            | "AmendOrder"
-            | "EditOrder"
-            | "CancelOrder"
-            | "CancelOrderBatch"
-            | "CancelAll"
-            | "CancelAllOrdersAfter"
-    ) {
-        0.0
-    } else if matches!(
-        endpoint,
-        "Ledgers" | "QueryLedgers" | "TradesHistory" | "QueryTrades" | "ClosedOrders"
-    ) {
-        4.0
-    } else {
-        1.0
     }
 }
 
