@@ -8,11 +8,17 @@ mod equities;
 mod helpers;
 mod limiter;
 mod order_types;
+mod public_book;
 
 pub use self::equities::{KrakenEquityBar, KrakenEquityMarket, KrakenEquityTicker};
 pub use self::order_types::{KrakenConditionalClose, KrakenOrderRequest};
 
 use self::equities::{parse_json_i64, parse_json_number};
+use self::public_book::{
+    apply_kraken_public_book_message, connect_kraken_public_book_once,
+    kraken_public_book_error_message, kraken_public_book_snapshot_json,
+    kraken_public_book_status_message,
+};
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use hmac::{Hmac, KeyInit, Mac};
@@ -2027,161 +2033,6 @@ impl KrakenBroker {
 
         Ok(rx)
     }
-}
-
-async fn connect_kraken_public_book_once(
-    ws_pair: &str,
-    depth: usize,
-) -> Result<
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
-    String,
-> {
-    let (mut ws_stream, _) = connect_async("wss://ws.kraken.com")
-        .await
-        .map_err(|e| format!("Kraken public WS connect failed: {e}"))?;
-    let sub = serde_json::json!({
-        "event": "subscribe",
-        "pair": [ws_pair],
-        "subscription": { "name": "book", "depth": depth }
-    });
-    ws_stream
-        .send(Message::Text(sub.to_string().into()))
-        .await
-        .map_err(|e| format!("Kraken public WS subscribe failed: {e}"))?;
-    Ok(ws_stream)
-}
-
-fn apply_kraken_public_book_message(
-    text: &str,
-    bids: &mut Vec<(f64, f64)>,
-    asks: &mut Vec<(f64, f64)>,
-    depth: usize,
-) -> bool {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
-        return false;
-    };
-    let Some(arr) = value.as_array() else {
-        return false;
-    };
-    if !arr
-        .iter()
-        .any(|v| v.as_str().is_some_and(|s| s.starts_with("book-")))
-    {
-        return false;
-    }
-    let mut changed = false;
-    for payload in arr.iter().filter_map(|v| v.as_object()) {
-        if let Some(levels) = payload.get("as").and_then(|v| v.as_array()) {
-            asks.clear();
-            apply_kraken_book_levels(asks, levels);
-            changed = true;
-        }
-        if let Some(levels) = payload.get("bs").and_then(|v| v.as_array()) {
-            bids.clear();
-            apply_kraken_book_levels(bids, levels);
-            changed = true;
-        }
-        if let Some(levels) = payload.get("a").and_then(|v| v.as_array()) {
-            apply_kraken_book_levels(asks, levels);
-            changed = true;
-        }
-        if let Some(levels) = payload.get("b").and_then(|v| v.as_array()) {
-            apply_kraken_book_levels(bids, levels);
-            changed = true;
-        }
-    }
-    if changed {
-        bids.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        asks.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        bids.truncate(depth);
-        asks.truncate(depth);
-    }
-    changed
-}
-
-fn apply_kraken_book_levels(side: &mut Vec<(f64, f64)>, levels: &[serde_json::Value]) {
-    for level in levels {
-        let Some(arr) = level.as_array() else {
-            continue;
-        };
-        let Some(price) = arr.first().and_then(kraken_json_f64) else {
-            continue;
-        };
-        let Some(size) = arr.get(1).and_then(kraken_json_f64) else {
-            continue;
-        };
-        if let Some(existing_idx) = side
-            .iter()
-            .position(|(existing_price, _)| (*existing_price - price).abs() <= f64::EPSILON)
-        {
-            if size <= 0.0 {
-                side.remove(existing_idx);
-            } else {
-                side[existing_idx] = (price, size);
-            }
-        } else if size > 0.0 {
-            side.push((price, size));
-        }
-    }
-}
-
-fn kraken_json_f64(value: &serde_json::Value) -> Option<f64> {
-    match value {
-        serde_json::Value::String(s) => s.parse::<f64>().ok(),
-        serde_json::Value::Number(n) => n.as_f64(),
-        _ => None,
-    }
-    .filter(|v| v.is_finite())
-}
-
-fn kraken_public_book_snapshot_json(
-    display_symbol: &str,
-    ws_pair: &str,
-    bids: &[(f64, f64)],
-    asks: &[(f64, f64)],
-) -> String {
-    let side_json = |levels: &[(f64, f64)]| -> Vec<serde_json::Value> {
-        levels
-            .iter()
-            .map(|(price, size)| serde_json::json!({ "price": price, "size": size }))
-            .collect()
-    };
-    serde_json::json!({
-        "source": "kraken_ws",
-        "symbol": display_symbol,
-        "ws_pair": ws_pair,
-        "timestamp": chrono::Utc::now().to_rfc3339(),
-        "bids": side_json(bids),
-        "asks": side_json(asks),
-    })
-    .to_string()
-}
-
-fn kraken_public_book_status_message(display_symbol: &str, ws_pair: &str, status: &str) -> String {
-    serde_json::json!({
-        "source": "kraken_ws",
-        "symbol": display_symbol,
-        "ws_pair": ws_pair,
-        "status": status,
-        "timestamp": chrono::Utc::now().to_rfc3339(),
-        "bids": [],
-        "asks": [],
-    })
-    .to_string()
-}
-
-fn kraken_public_book_error_message(display_symbol: &str, ws_pair: &str, error: &str) -> String {
-    serde_json::json!({
-        "source": "kraken_ws",
-        "symbol": display_symbol,
-        "ws_pair": ws_pair,
-        "status": "error",
-        "error": error,
-        "timestamp": chrono::Utc::now().to_rfc3339(),
-        "bids": [],
-        "asks": [],
-    })
-    .to_string()
 }
 
 fn kraken_ws_status_message(status: &str, message: impl Into<String>) -> String {
