@@ -7764,7 +7764,7 @@ impl eframe::App for TyphooNApp {
                                         _ => lower_type.as_str(),
                                     };
                                     let mut order =
-                                        typhoon_engine::broker::kraken_broker::KrakenOrderRequest::basic(
+                                        typhoon_engine::broker::kraken::KrakenOrderRequest::basic(
                                             symbol.clone(),
                                             lower_side.clone(),
                                             kraken_type,

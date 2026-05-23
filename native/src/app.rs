@@ -9041,7 +9041,7 @@ enum BrokerCmd {
         leverage: Option<String>,
     },
     KrakenPlaceOrderAdvanced {
-        order: typhoon_engine::broker::kraken_broker::KrakenOrderRequest,
+        order: typhoon_engine::broker::kraken::KrakenOrderRequest,
     },
     /// Cancel a Kraken order by transaction ID.
     KrakenCancelOrder {
@@ -9090,26 +9090,26 @@ enum BrokerMsg {
     Positions(Vec<PositionInfo>),
     Orders(Vec<OrderInfo>),
     OrderResult(String),
-    KrakenTrades(Vec<typhoon_engine::broker::kraken_broker::KrakenTrade>),
-    KrakenLiveTrade(typhoon_engine::broker::kraken_broker::KrakenTrade),
-    KrakenOpenOrders(Vec<typhoon_engine::broker::kraken_broker::KrakenOrder>),
+    KrakenTrades(Vec<typhoon_engine::broker::kraken::KrakenTrade>),
+    KrakenLiveTrade(typhoon_engine::broker::kraken::KrakenTrade),
+    KrakenOpenOrders(Vec<typhoon_engine::broker::kraken::KrakenOrder>),
     KrakenWsStatus {
         status: String,
         message: String,
     },
     KrakenOrderbookUpdate(String),
-    KrakenEquityQuote(typhoon_engine::broker::kraken_broker::KrakenEquityTicker),
+    KrakenEquityQuote(typhoon_engine::broker::kraken::KrakenEquityTicker),
     KrakenEquityBars {
         symbol: String,
         timeframe: String,
-        bars: Vec<typhoon_engine::broker::kraken_broker::KrakenEquityBar>,
+        bars: Vec<typhoon_engine::broker::kraken::KrakenEquityBar>,
     },
     KrakenEquityHistoryError {
         symbol: String,
         timeframe: String,
         error: String,
     },
-    KrakenEquityUniverse(Vec<typhoon_engine::broker::kraken_broker::KrakenEquityMarket>),
+    KrakenEquityUniverse(Vec<typhoon_engine::broker::kraken::KrakenEquityMarket>),
     SecScrapeResult(String),
     FilingContent(String), // fetched SEC filing document text
     FinnhubNewsResult(Vec<(String, String, String)>),
@@ -10597,10 +10597,10 @@ pub struct TyphooNApp {
     kraken_spot_sell_pct: f32,
     kraken_spot_buy_pct: f32,
     kraken_spot_buy_qty: f64,
-    kraken_trades: VecDeque<typhoon_engine::broker::kraken_broker::KrakenTrade>,
+    kraken_trades: VecDeque<typhoon_engine::broker::kraken::KrakenTrade>,
     kraken_trade_keys: std::collections::HashSet<String>,
     kraken_cost_basis: std::collections::HashMap<String, KrakenCostBasis>,
-    kraken_open_orders: Vec<typhoon_engine::broker::kraken_broker::KrakenOrder>,
+    kraken_open_orders: Vec<typhoon_engine::broker::kraken::KrakenOrder>,
     kraken_pairs: Vec<(String, String)>,
     /// Normalized pair/display symbols cached as a set so
     /// `kraken_spot_symbol_in_loaded_pairs` is O(1) — the previous linear
@@ -13712,8 +13712,8 @@ impl TyphooNApp {
             > = Arc::new(tokio::sync::Mutex::new(None));
             let tt_dx_backoff_until: Arc<tokio::sync::Mutex<Option<std::time::Instant>>> =
                 Arc::new(tokio::sync::Mutex::new(None));
-            let mut kraken_broker: Option<typhoon_engine::broker::kraken_broker::KrakenBroker> = None;
-            let mut kraken_ws_broker: Option<typhoon_engine::broker::kraken_broker::KrakenBroker> = None;
+            let mut kraken_broker: Option<typhoon_engine::broker::kraken::KrakenBroker> = None;
+            let mut kraken_ws_broker: Option<typhoon_engine::broker::kraken::KrakenBroker> = None;
             let mut kraken_equity_history_next_at = std::time::Instant::now();
             let mut kraken_equity_history_backoff_until: Option<std::time::Instant> = None;
             let importing_flag = importing_flag_broker;
@@ -14280,7 +14280,7 @@ impl TyphooNApp {
                             let kraken_result = if let Some(ref kb) = kraken_broker {
                                 kb.get_orderbook_snapshot(&symbol, 100).await
                             } else {
-                                let kb = typhoon_engine::broker::kraken_broker::KrakenBroker::new(
+                                let kb = typhoon_engine::broker::kraken::KrakenBroker::new(
                                     String::new(),
                                     String::new(),
                                 );
@@ -24489,7 +24489,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         ws_api_key,
                         ws_api_secret,
                     } => {
-                        use typhoon_engine::broker::kraken_broker::KrakenBroker;
+                        use typhoon_engine::broker::kraken::KrakenBroker;
                         let msg_tx = broker_msg_tx_clone.clone();
                         let rest_ready =
                             !api_key.trim().is_empty() && !api_secret.trim().is_empty();
@@ -24712,7 +24712,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         let result = if let Some(ref kb) = kraken_broker {
                             kb.get_equity_ticker(&symbol).await
                         } else {
-                            let kb = typhoon_engine::broker::kraken_broker::KrakenBroker::new(
+                            let kb = typhoon_engine::broker::kraken::KrakenBroker::new(
                                 String::new(),
                                 String::new(),
                             );
@@ -24765,7 +24765,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         let result = if let Some(ref kb) = kraken_broker {
                             kb.get_equity_history(&symbol, interval_minutes, None).await
                         } else {
-                            let kb = typhoon_engine::broker::kraken_broker::KrakenBroker::new(
+                            let kb = typhoon_engine::broker::kraken::KrakenBroker::new(
                                 String::new(),
                                 String::new(),
                             );
@@ -24843,7 +24843,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         let result = if let Some(ref kb) = kraken_broker {
                             kb.get_equity_markets().await
                         } else {
-                            let kb = typhoon_engine::broker::kraken_broker::KrakenBroker::new(
+                            let kb = typhoon_engine::broker::kraken::KrakenBroker::new(
                                 String::new(),
                                 String::new(),
                             );
@@ -24872,7 +24872,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                 if parsed.get("event").and_then(|v| v.as_str()) == Some("heartbeat") {
                                                     continue;
                                                 }
-                                                let trades = typhoon_engine::broker::kraken_broker::parse_own_trades_messages(&parsed);
+                                                let trades = typhoon_engine::broker::kraken::parse_own_trades_messages(&parsed);
                                                 if !trades.is_empty() {
                                                     for trade in trades {
                                                         let _ = value.send(BrokerMsg::KrakenLiveTrade(trade));
@@ -24908,7 +24908,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                     let _ = value.send(BrokerMsg::KrakenWsStatus { status, message });
                                                     continue;
                                                 }
-                                                let orders = typhoon_engine::broker::kraken_broker::parse_open_orders_message(&parsed);
+                                                let orders = typhoon_engine::broker::kraken::parse_open_orders_message(&parsed);
                                                 if !orders.is_empty() {
                                                     let _ = value.send(BrokerMsg::KrakenOpenOrders(orders));
                                                     continue;
@@ -24930,7 +24930,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         let stream_result = if let Some(ref kb) = kraken_broker {
                             kb.start_public_orderbook_ws(&symbol, depth).await
                         } else {
-                            let kb = typhoon_engine::broker::kraken_broker::KrakenBroker::new(
+                            let kb = typhoon_engine::broker::kraken::KrakenBroker::new(
                                 String::new(),
                                 String::new(),
                             );
@@ -24981,7 +24981,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         let kb = if let Some(ref kb) = kraken_broker {
                             kb.get_tradeable_pairs().await
                         } else {
-                            let tmp = typhoon_engine::broker::kraken_broker::KrakenBroker::new(String::new(), String::new());
+                            let tmp = typhoon_engine::broker::kraken::KrakenBroker::new(String::new(), String::new());
                             tmp.get_tradeable_pairs().await
                         };
                         match kb {
@@ -25176,7 +25176,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let pairs_result = if let Some(ref kb) = kraken_broker {
                                 kb.get_tradeable_pairs().await
                             } else {
-                                let tmp = typhoon_engine::broker::kraken_broker::KrakenBroker::new(
+                                let tmp = typhoon_engine::broker::kraken::KrakenBroker::new(
                                     String::new(),
                                     String::new(),
                                 );

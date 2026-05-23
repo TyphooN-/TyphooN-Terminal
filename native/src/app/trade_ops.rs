@@ -1446,7 +1446,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn kraken_trade_key(
-        trade: &typhoon_engine::broker::kraken_broker::KrakenTrade,
+        trade: &typhoon_engine::broker::kraken::KrakenTrade,
     ) -> String {
         if !trade.trade_id.is_empty() {
             trade.trade_id.clone()
@@ -1468,7 +1468,7 @@ impl TyphooNApp {
 
     pub(super) fn insert_kraken_live_trade(
         &mut self,
-        trade: typhoon_engine::broker::kraken_broker::KrakenTrade,
+        trade: typhoon_engine::broker::kraken::KrakenTrade,
     ) -> bool {
         let key = Self::kraken_trade_key(&trade);
         if !self.kraken_trade_keys.insert(key) {

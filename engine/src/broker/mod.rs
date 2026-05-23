@@ -1,6 +1,6 @@
 pub mod alpaca;
 pub mod dxlink;
-pub mod kraken_broker;
+pub mod kraken;
 pub mod tastytrade;
 
 use alpaca::{AccountInfo, AssetInfo, Bar, OrderInfo, OrderResult, PositionInfo};
