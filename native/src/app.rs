@@ -93,7 +93,6 @@ const MACD_SIG_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 48); // #f
 const BTN_GREEN: egui::Color32 = egui::Color32::from_rgb(10, 95, 56); // .btn-action: #0a5f38
 const BTN_GREEN_TEXT: egui::Color32 = egui::Color32::from_rgb(136, 255, 136); // #8f8
 const BTN_MG: egui::Color32 = egui::Color32::from_rgb(58, 58, 0); // .btn-mg: #3a3a00
-const BTN_MG_TEXT: egui::Color32 = egui::Color32::from_rgb(255, 255, 136); // #ff8
 const BTN_BLUE: egui::Color32 = egui::Color32::from_rgb(15, 52, 96); // .btn-lines: #0f3460
 const BTN_BLUE_TEXT: egui::Color32 = egui::Color32::from_rgb(136, 204, 255); // #8cf
 const BTN_RED: egui::Color32 = egui::Color32::from_rgb(90, 26, 26); // .btn-danger: #5a1a1a
@@ -650,8 +649,6 @@ enum PaletteContext {
     Global,
     /// Right-clicked on chart area
     Chart,
-    /// Right-clicked on a position row
-    Position,
     /// Right-clicked on a watchlist row
     Watchlist,
     /// Right-clicked on a DARWIN row

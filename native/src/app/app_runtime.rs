@@ -10687,60 +10687,8 @@ impl eframe::App for TyphooNApp {
                                     self.clear_trade_lines();
                                 }
                             });
-                            // Row 3: Open MG (.btn-mg) | Close All (.btn-danger)
+                            // Row 3: Set SL | Set TP (.btn-lines)
                             ui.horizontal(|ui| {
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            egui::RichText::new("Open MG")
-                                                .color(BTN_MG_TEXT)
-                                                .small()
-                                                .strong(),
-                                        )
-                                        .fill(BTN_MG)
-                                        .min_size(btn_size),
-                                    )
-                                    .on_hover_text("Open Martingale grid order")
-                                    .clicked()
-                                {
-                                    self.log.push_back(LogEntry::info(
-                                        "Martingale: connect broker first",
-                                    ));
-                                }
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            egui::RichText::new("Close All")
-                                                .color(BTN_RED_TEXT)
-                                                .small()
-                                                .strong(),
-                                        )
-                                        .fill(BTN_RED)
-                                        .min_size(btn_size),
-                                    )
-                                    .clicked()
-                                {
-                                    self.close_all_selected_brokers();
-                                }
-                            });
-                            // Row 4: Close Partial (.btn-danger) | Set SL (.btn-lines)
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            egui::RichText::new("Close Partial")
-                                                .color(BTN_RED_TEXT)
-                                                .small()
-                                                .strong(),
-                                        )
-                                        .fill(BTN_RED)
-                                        .min_size(btn_size),
-                                    )
-                                    .on_hover_text("Close a percentage of open position")
-                                    .clicked()
-                                {
-                                    self.close_partial_active_symbol();
-                                }
                                 if ui
                                     .add(
                                         egui::Button::new(
@@ -10756,9 +10704,6 @@ impl eframe::App for TyphooNApp {
                                 {
                                     self.apply_current_sl_to_positions();
                                 }
-                            });
-                            // Row 5: Set TP (.btn-lines)
-                            ui.horizontal(|ui| {
                                 if ui
                                     .add(
                                         egui::Button::new(
@@ -10773,22 +10718,6 @@ impl eframe::App for TyphooNApp {
                                     .clicked()
                                 {
                                     self.apply_current_tp_to_positions();
-                                }
-                            });
-                            // ADR-094: Position context palette
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            egui::RichText::new("Commands…").small().strong(),
-                                        )
-                                        .min_size(btn_size),
-                                    )
-                                    .clicked()
-                                {
-                                    self.palette_context = PaletteContext::Position;
-                                    self.command_open = true;
-                                    self.command_input.clear();
                                 }
                             });
                             ui.add_space(6.0);
@@ -11888,28 +11817,25 @@ impl eframe::App for TyphooNApp {
                                 RightPanelSectionId::Orders => {
 
                         // ── Orders Section ────────────────────────────────────
-                        let ord_count = if self.show_alpaca_positions {
-                            self.live_orders.len()
-                        } else {
-                            0
-                        };
-                        let (ord_stale_lbl, ord_stale_col) =
-                            self.staleness_badge(self.orders_last_update_ts);
-                        let ord_header = format!("☰ Orders ({})  •  {}", ord_count, ord_stale_lbl);
-                        let orders_section = egui::CollapsingHeader::new(
-                            egui::RichText::new(ord_header)
-                                .strong()
-                                .small()
-                                .color(ord_stale_col),
-                        )
-                        .id_salt("orders_section")
-                        .default_open(self.right_orders_open)
-                        .show(ui, |ui| {
-                            ui.add_space(4.0);
-                            if (self.broker_connected || self.lan_sync_mode == "client")
-                                && self.show_alpaca_positions
-                                && !self.live_orders.is_empty()
-                            {
+                        let alpaca_live = self.show_alpaca_positions
+                            && (self.broker_connected || self.lan_sync_mode == "client")
+                            && !self.live_orders.is_empty();
+                        if alpaca_live {
+                            let ord_count = self.live_orders.len();
+                            let (ord_stale_lbl, ord_stale_col) =
+                                self.staleness_badge(self.orders_last_update_ts);
+                            let ord_header =
+                                format!("☰ Orders ({})  •  {}", ord_count, ord_stale_lbl);
+                            let orders_section = egui::CollapsingHeader::new(
+                                egui::RichText::new(ord_header)
+                                    .strong()
+                                    .small()
+                                    .color(ord_stale_col),
+                            )
+                            .id_salt("orders_section")
+                            .default_open(self.right_orders_open)
+                            .show(ui, |ui| {
+                                ui.add_space(4.0);
                                 let mut cancel_id: Option<String> = None;
                                 let mut lo_action = SymbolAction::None;
                                 for order in &self.live_orders {
@@ -11959,22 +11885,14 @@ impl eframe::App for TyphooNApp {
                                 if !matches!(lo_action, SymbolAction::None) {
                                     self.deferred_symbol_action = lo_action;
                                 }
-                            } else {
-                                let msg = if self.broker_connected || self.lan_sync_mode == "client"
-                                {
-                                    "No open orders."
-                                } else {
-                                    "Connect broker for live orders."
-                                };
-                                ui.label(egui::RichText::new(msg).color(AXIS_TEXT).small());
-                            }
-                        });
-                        self.right_orders_open = orders_section.fully_open();
-                        self.handle_right_panel_section_drag(
-                            ui,
-                            RightPanelSectionId::Orders,
-                            &orders_section.header_response,
-                        );
+                            });
+                            self.right_orders_open = orders_section.fully_open();
+                            self.handle_right_panel_section_drag(
+                                ui,
+                                RightPanelSectionId::Orders,
+                                &orders_section.header_response,
+                            );
+                        }
                                 }
                                 RightPanelSectionId::Watchlist => {
 
@@ -16087,17 +16005,6 @@ impl eframe::App for TyphooNApp {
                     "REPLAY",
                     "VOLUME_PROFILE",
                     "VWAP",
-                ]),
-                PaletteContext::Position => Some(&[
-                    "CLOSE_ALL",
-                    "CLOSE_PARTIAL",
-                    "SET_SL",
-                    "SET_TP",
-                    "OPEN_MG",
-                    "EQUITY",
-                    "TRADESTATS",
-                    "PROFILE",
-                    "RISK_CALC",
                 ]),
                 PaletteContext::Watchlist => Some(&[
                     "SEARCH",
