@@ -1288,7 +1288,6 @@ impl AlpacaBroker {
     // ── Finnhub News (secondary source, free API key) ──────────────
 
     pub async fn get_finnhub_news(
-        &self,
         symbol: &str,
         finnhub_key: &str,
     ) -> Result<Vec<serde_json::Value>, String> {

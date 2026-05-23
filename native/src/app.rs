@@ -13894,21 +13894,20 @@ impl TyphooNApp {
                     }
                     // scrape_filings_for_ticker is called internally by scrape_all_portfolio_symbols
                     BrokerCmd::FinnhubNews { symbol, api_key } => {
-                        if let Some(ref b) = broker {
-                            match b.get_finnhub_news(&symbol, &api_key).await {
-                                Ok(articles) => {
-                                    let results: Vec<(String, String, String)> = articles.iter().filter_map(|a| {
-                                        let headline = a["headline"].as_str()?.to_string();
-                                        let source = a["source"].as_str().unwrap_or("Unknown").to_string();
-                                        let dt = a["datetime"].as_str().unwrap_or("").to_string();
-                                        Some((headline, source, dt))
-                                    }).collect();
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::FinnhubNewsResult(results));
-                                }
-                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Finnhub: {}", e))); }
+                        // Finnhub has its own API + key — no dependency on Alpaca state, so don't
+                        // gate it on the Alpaca broker being connected. Users on Kraken-only setups
+                        // would otherwise see "Connect broker first" even with a valid Finnhub key.
+                        match typhoon_engine::broker::alpaca::AlpacaBroker::get_finnhub_news(&symbol, &api_key).await {
+                            Ok(articles) => {
+                                let results: Vec<(String, String, String)> = articles.iter().filter_map(|a| {
+                                    let headline = a["headline"].as_str()?.to_string();
+                                    let source = a["source"].as_str().unwrap_or("Unknown").to_string();
+                                    let dt = a["datetime"].as_str().unwrap_or("").to_string();
+                                    Some((headline, source, dt))
+                                }).collect();
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::FinnhubNewsResult(results));
                             }
-                        } else {
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Connect broker first for Finnhub news".into()));
+                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Finnhub: {}", e))); }
                         }
                     }
                     BrokerCmd::GetQuote { symbol } => {
