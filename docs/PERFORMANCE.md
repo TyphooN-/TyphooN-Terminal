@@ -42,6 +42,14 @@ WebSocket trade streams build 1-minute OHLCV bars in-process. Completed bars use
 3. **Pre-computed indicators** — computed once on load, cached in ChartState
 4. **Vulkan backend** — wgpu selects Vulkan on Linux (NVIDIA), Metal on macOS
 5. **No garbage collection** — Rust ownership model, no GC pauses
+6. **Per-frame O(1) discipline** — per-frame paths (`update()`, `draw_chart()`,
+   panel render closures) avoid allocations proportional to dataset size:
+   invariant work is hoisted out of inner closures, suffix arrays replace
+   per-candidate scans (e.g. FVG fill check), pre-normalized HashSets
+   replace linear `iter().any` audits (Kraken pairs lookup), index-aligned
+   data is paired by `zip()` not by key search, fixed-cardinality enums use
+   bitset membership, and per-frame `trade_overlay` borrows use
+   `std::mem::take` + restore instead of `Clone`. See ADR-213.
 
 ### GPU DarwinIA Scan
 

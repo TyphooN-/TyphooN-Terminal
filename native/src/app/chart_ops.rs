@@ -893,12 +893,17 @@ impl TyphooNApp {
         let all_broker_positions = alpaca_iter.chain(tt_iter).chain(kr_iter);
         // `bare_upper` is already computed once at the top of this function;
         // recomputing it inside the loop allocated a new String per broker position.
+        // Short-circuit on a no-alloc equality check before paying for the substring
+        // form — most positions match exactly, and only the rare crypto-style
+        // `BTCUSD` vs `BTC` case actually needs the normalized String.
         for pos in all_broker_positions {
-            let pos_sym = pos.symbol.replace('/', "").to_uppercase();
-            if pos_sym != bare_upper
-                && !pos_sym.contains(&bare_upper)
-                && !bare_upper.contains(&pos_sym)
-            {
+            let keep = if symbol_matches_no_alloc(&pos.symbol, &bare_upper) {
+                true
+            } else {
+                let pos_sym = pos.symbol.replace('/', "").to_uppercase();
+                pos_sym.contains(&bare_upper) || bare_upper.contains(&pos_sym)
+            };
+            if !keep {
                 continue;
             }
             let is_buy = pos.side == "long";
