@@ -95,13 +95,6 @@ pub(super) fn alpaca_sync_target_bars(tf: &str) -> Option<u32> {
     normalize_sync_timeframe_key(tf).map(|_| u32::MAX)
 }
 
-// Tastytrade's target_bars function still lives here until the tastytrade_sync
-// module lands in the next commit; keeping it here keeps the tree building
-// between splits.
-pub(super) fn tastytrade_sync_target_bars(tf: &str) -> Option<u32> {
-    normalize_sync_timeframe_key(tf).map(|_| u32::MAX)
-}
-
 pub(super) fn alpaca_incremental_fetch_limit_at(
     now_s: i64,
     timeframe: &str,

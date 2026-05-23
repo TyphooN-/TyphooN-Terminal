@@ -61,6 +61,7 @@ mod symbol_investigation;
 mod sync_config;
 mod sync_status;
 mod sync_workset;
+mod tastytrade_sync;
 mod technical_analysis;
 mod tool_windows;
 mod trade_ops;
@@ -71,6 +72,7 @@ use self::broker_fetch::*;
 use self::kraken_sync::*;
 use self::sync_config::*;
 use self::sync_workset::*;
+use self::tastytrade_sync::*;
 use self::technical_analysis::*;
 
 // ─── colours ────────────────────────────────────────────────────────────────
