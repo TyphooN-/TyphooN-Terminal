@@ -4,6 +4,8 @@
 //! Separate from `core/kraken.rs` which handles public OHLCV data only.
 //! See ADR-072 for the full integration plan.
 
+mod limiter;
+
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use hmac::{Hmac, KeyInit, Mac};
 use reqwest::Client;
@@ -12,147 +14,14 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
 use zeroize::Zeroizing;
+
+use self::limiter::{KRAKEN_PRIVATE_REST_MAX_ATTEMPTS, KrakenPrivateRestLimiter};
 
 type HmacSha512 = Hmac<Sha512>;
 
 const KRAKEN_BASE_URL: &str = "https://api.kraken.com";
 const KRAKEN_INTERNAL_API_BASE_URL: &str = "https://iapi.kraken.com/api/internal";
-const KRAKEN_PRIVATE_REST_MAX_COUNTER: f64 = 20.0;
-const KRAKEN_PRIVATE_REST_DECAY_PER_SEC: f64 = 0.5;
-const KRAKEN_PRIVATE_REST_BASE_COOLDOWN: Duration = Duration::from_secs(5);
-const KRAKEN_PRIVATE_REST_MAX_COOLDOWN: Duration = Duration::from_secs(60);
-const KRAKEN_PRIVATE_REST_MAX_ATTEMPTS: usize = 3;
-
-#[derive(Debug)]
-struct KrakenPrivateRestLimiter {
-    state: Mutex<KrakenPrivateRestState>,
-}
-
-#[derive(Debug)]
-struct KrakenPrivateRestState {
-    counter: f64,
-    last_decay: Instant,
-    cooldown_until: Option<Instant>,
-    cooldown: Duration,
-}
-
-impl KrakenPrivateRestLimiter {
-    fn new() -> Self {
-        Self {
-            state: Mutex::new(KrakenPrivateRestState {
-                counter: 0.0,
-                last_decay: Instant::now(),
-                cooldown_until: None,
-                cooldown: Duration::ZERO,
-            }),
-        }
-    }
-
-    async fn wait(&self, cost: f64) {
-        if cost <= 0.0 {
-            return;
-        }
-
-        loop {
-            let wait = {
-                let now = Instant::now();
-                let mut state = self.state.lock().await;
-                state.decay(now);
-
-                let cooldown_wait = if let Some(cooldown_until) = state.cooldown_until {
-                    if cooldown_until > now {
-                        Some(cooldown_until.saturating_duration_since(now))
-                    } else {
-                        state.cooldown_until = None;
-                        state.cooldown = Duration::ZERO;
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(wait) = cooldown_wait {
-                    Some(wait)
-                } else if state.counter + cost <= KRAKEN_PRIVATE_REST_MAX_COUNTER {
-                    state.counter += cost;
-                    None
-                } else {
-                    let excess = (state.counter + cost) - KRAKEN_PRIVATE_REST_MAX_COUNTER;
-                    Some(Duration::from_secs_f64(
-                        (excess / KRAKEN_PRIVATE_REST_DECAY_PER_SEC).max(0.25),
-                    ))
-                }
-            };
-
-            if let Some(wait) = wait {
-                if !wait.is_zero() {
-                    tokio::time::sleep(wait).await;
-                }
-                continue;
-            }
-            return;
-        }
-    }
-
-    async fn record_rate_limited(&self, message: &str) -> Duration {
-        let explicit_wait = crate::core::kraken::kraken_throttled_wait(message).map(|wait| {
-            if wait.is_zero() {
-                KRAKEN_PRIVATE_REST_BASE_COOLDOWN
-            } else {
-                wait.min(KRAKEN_PRIVATE_REST_MAX_COOLDOWN)
-            }
-        });
-        let now = Instant::now();
-        let mut state = self.state.lock().await;
-        state.decay(now);
-        let wait = if let Some(wait) = explicit_wait {
-            wait
-        } else if state.cooldown_until.is_some_and(|until| until > now) {
-            state
-                .cooldown
-                .max(KRAKEN_PRIVATE_REST_BASE_COOLDOWN)
-                .saturating_mul(2)
-                .min(KRAKEN_PRIVATE_REST_MAX_COOLDOWN)
-        } else {
-            KRAKEN_PRIVATE_REST_BASE_COOLDOWN
-        };
-        state.cooldown = wait;
-        let cooldown_until = now + wait;
-        state.cooldown_until = Some(
-            state
-                .cooldown_until
-                .map(|existing| existing.max(cooldown_until))
-                .unwrap_or(cooldown_until),
-        );
-        wait
-    }
-
-    async fn record_success(&self) {
-        let now = Instant::now();
-        let mut state = self.state.lock().await;
-        state.decay(now);
-        if state
-            .cooldown_until
-            .is_some_and(|cooldown_until| cooldown_until <= now)
-        {
-            state.cooldown_until = None;
-            state.cooldown = Duration::ZERO;
-        }
-    }
-}
-
-impl KrakenPrivateRestState {
-    fn decay(&mut self, now: Instant) {
-        let elapsed = now.saturating_duration_since(self.last_decay);
-        if !elapsed.is_zero() {
-            self.counter =
-                (self.counter - elapsed.as_secs_f64() * KRAKEN_PRIVATE_REST_DECAY_PER_SEC).max(0.0);
-            self.last_decay = now;
-        }
-    }
-}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct KrakenConditionalClose {
