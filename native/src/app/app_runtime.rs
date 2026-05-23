@@ -406,6 +406,7 @@ impl eframe::App for TyphooNApp {
                     (keyring::keys::PERPLEXITY_KEY, "perplexity_key"),
                     (keyring::keys::MATRIX_ACCESS_TOKEN, "matrix_access_token"),
                     (keyring::keys::MATRIX_USER_ID, "matrix_user_id"),
+                    (keyring::keys::CRYPTOPANIC_KEY, "cryptopanic_key"),
                 ];
                 let mut loaded_values: Vec<(String, String)> = Vec::new();
                 for (kr_key, _label) in &cred_keys {
@@ -484,6 +485,9 @@ impl eframe::App for TyphooNApp {
                         }
                         k if k == keyring::keys::MATRIX_USER_ID => {
                             self.matrix_user_id = val.clone()
+                        }
+                        k if k == keyring::keys::CRYPTOPANIC_KEY => {
+                            self.cryptopanic_key = val.clone()
                         }
                         _ => {}
                     }
@@ -12853,6 +12857,8 @@ impl eframe::App for TyphooNApp {
                                                     marketaux_key: self.marketaux_key.clone(),
                                                     alpha_vantage_key: self.alpha_vantage_key.clone(),
                                                     fmp_key: self.fmp_key.clone(),
+                                                    finnhub_key: self.finnhub_key.clone(),
+                                                    cryptopanic_key: self.cryptopanic_key.clone(),
                                                 });
                                                 self.news_loading = true;
                                                 self.show_news = true;
@@ -12875,13 +12881,28 @@ impl eframe::App for TyphooNApp {
                                                     })
                                                     .unwrap_or_else(|| "AAPL".to_string());
                                                 self.news_loading = true;
-                                                let _ = self.broker_tx.send(BrokerCmd::FinnhubNews {
-                                                    symbol: sym.clone(),
-                                                    api_key: self.finnhub_key.clone(),
-                                                });
-                                                self.log.push_back(LogEntry::info(format!(
-                                                    "Finnhub: fetching news for {sym}"
-                                                )));
+                                                if typhoon_engine::core::news::is_crypto_symbol(&sym) {
+                                                    let _ = self.broker_tx.send(BrokerCmd::FetchNewsMulti {
+                                                        symbol: sym.clone(),
+                                                        marketaux_key: self.marketaux_key.clone(),
+                                                        alpha_vantage_key: self.alpha_vantage_key.clone(),
+                                                        fmp_key: self.fmp_key.clone(),
+                                                        finnhub_key: self.finnhub_key.clone(),
+                                                        cryptopanic_key: self.cryptopanic_key.clone(),
+                                                    });
+                                                    self.show_news = true;
+                                                    self.log.push_back(LogEntry::info(format!(
+                                                        "News: fetching crypto multi-source for {sym}"
+                                                    )));
+                                                } else {
+                                                    let _ = self.broker_tx.send(BrokerCmd::FinnhubNews {
+                                                        symbol: sym.clone(),
+                                                        api_key: self.finnhub_key.clone(),
+                                                    });
+                                                    self.log.push_back(LogEntry::info(format!(
+                                                        "Finnhub: fetching news for {sym}"
+                                                    )));
+                                                }
                                             }
                                         }
                                         if self.news_loading {
@@ -16241,6 +16262,7 @@ impl eframe::App for TyphooNApp {
                 (keyring::keys::FRED_KEY, &self.fred_key),
                 (keyring::keys::TT_USERNAME, &self.tt_username),
                 (keyring::keys::TT_PASSWORD, &self.tt_password),
+                (keyring::keys::CRYPTOPANIC_KEY, &self.cryptopanic_key),
             ]
             .iter()
             .filter(|(_, v)| !v.is_empty())

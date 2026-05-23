@@ -1,11 +1,22 @@
 //! News ingest — multi-source aggregation with SQLite cache and FTS5 search.
 //!
 //! Sources (all free tier, most without API keys):
+//!
+//! **Equities & general:**
 //! - **GDELT 2.0 Doc API** — no key, global coverage, JSON (`https://api.gdeltproject.org/api/v2/doc/doc`)
 //! - **Yahoo Finance RSS** — no key, per-symbol (`https://feeds.finance.yahoo.com/rss/2.0/headline?s=SYM`)
 //! - **Marketaux** — 100 req/day free, finance-focused, sentiment tags
 //! - **Alpha Vantage NEWS_SENTIMENT** — 25 req/day free, built-in sentiment + tickers
 //! - **FMP /v3/stock_news** — 250 req/day free, clean normalized format
+//! - **Finnhub /company-news** — 60 req/min free, per-symbol equities
+//!
+//! **Crypto-native:**
+//! - **CryptoPanic** — free public tier, per-currency filtering
+//! - **CoinDesk RSS** — no key, general feed filtered by base ticker mention
+//! - **Finnhub /news?category=crypto** — free with same key as equities, general crypto feed filtered by base
+//!
+//! `fetch_all_sources_for_symbol` auto-routes between the equity and crypto sets
+//! using [`is_crypto_symbol`].
 //!
 //! All fetchers normalize into `NewsArticle` and upsert into `research_news` keyed by
 //! SHA-256 of the canonical URL so the same story from two sources collapses to one row.
@@ -1009,9 +1020,349 @@ fn strip_html(s: &str) -> String {
     decode_entities(&out).trim().to_string()
 }
 
+// ── Crypto symbol detection ───────────────────────────────────────────────
+//
+// Crypto-native news sources (CryptoPanic, CoinDesk, Finnhub `/news?category=crypto`)
+// expect base tickers like "BTC" rather than the trading-pair form ("BTC/USD",
+// "BTCUSD", "BTC-USD") that users may type. `crypto_base_for_symbol` peels off
+// the quote currency and validates against a curated allowlist; anything not on
+// the list is treated as a non-crypto symbol so the equity router runs instead.
+
+/// Curated allowlist of crypto base tickers. Used to disambiguate concatenated
+/// symbols like "BTCUSD" from equity tickers, and to filter general-feed crypto
+/// news (CoinDesk RSS, Finnhub crypto) by base mention.
+const CRYPTO_BASES: &[&str] = &[
+    "BTC", "ETH", "SOL", "ADA", "DOT", "DOGE", "MATIC", "POL", "AVAX", "LINK",
+    "UNI", "XRP", "LTC", "BCH", "ATOM", "ALGO", "NEAR", "FTM", "HBAR", "VET",
+    "SAND", "MANA", "SHIB", "TRX", "ETC", "XLM", "USDT", "USDC", "DAI", "WBTC",
+    "FIL", "ICP", "APT", "ARB", "OP", "INJ", "TIA", "SEI", "STX", "RNDR",
+    "PYTH", "FET", "TAO", "PEPE", "BONK", "WIF", "FLOKI", "JUP", "STRK", "ENA",
+    "ONDO", "SUI", "TON", "MKR", "GRT", "AAVE", "CRV", "SNX", "COMP", "LDO",
+    "RUNE", "KAS", "QNT", "XMR", "ZEC", "DASH", "EOS", "NEO", "BAT", "ENJ",
+    "CHZ", "CAKE", "GALA", "AXS", "FLOW", "ROSE", "1INCH", "YFI", "BAL", "ZRX",
+    "KSM", "WAVES", "DCR", "OMG", "REN", "STORJ", "ANKR", "CELO", "NMR", "RLC",
+    "BAND", "REP", "KAVA", "BNT", "OXT", "GNO", "POLY", "LRC", "NU", "PAXG",
+    "KNC", "REQ", "WLD",
+];
+
+/// Quote currencies recognised when parsing trading-pair symbols.
+const CRYPTO_QUOTES: &[&str] = &[
+    "USD", "USDT", "USDC", "DAI", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD",
+    "BTC", "ETH", "XBT",
+];
+
+/// Map a base ticker to the full asset name for keyword filtering of general
+/// feeds (CoinDesk RSS, Finnhub crypto category). Only the top names with
+/// distinctive titles are listed; bases not in this map are filtered by the
+/// ticker alone, which is generally fine for shorter names appearing in headlines.
+fn crypto_full_name(base: &str) -> Option<&'static str> {
+    match base {
+        "BTC" | "WBTC" | "XBT" => Some("Bitcoin"),
+        "ETH" => Some("Ethereum"),
+        "SOL" => Some("Solana"),
+        "ADA" => Some("Cardano"),
+        "DOT" => Some("Polkadot"),
+        "DOGE" => Some("Dogecoin"),
+        "MATIC" | "POL" => Some("Polygon"),
+        "AVAX" => Some("Avalanche"),
+        "LINK" => Some("Chainlink"),
+        "UNI" => Some("Uniswap"),
+        "XRP" => Some("Ripple"),
+        "LTC" => Some("Litecoin"),
+        "BCH" => Some("Bitcoin Cash"),
+        "ATOM" => Some("Cosmos"),
+        "ALGO" => Some("Algorand"),
+        "FTM" => Some("Fantom"),
+        "HBAR" => Some("Hedera"),
+        "SAND" => Some("Sandbox"),
+        "MANA" => Some("Decentraland"),
+        "SHIB" => Some("Shiba Inu"),
+        "TRX" => Some("TRON"),
+        "ETC" => Some("Ethereum Classic"),
+        "XLM" => Some("Stellar"),
+        "USDT" => Some("Tether"),
+        "USDC" => Some("USD Coin"),
+        "FIL" => Some("Filecoin"),
+        "ICP" => Some("Internet Computer"),
+        "APT" => Some("Aptos"),
+        "ARB" => Some("Arbitrum"),
+        "OP" => Some("Optimism"),
+        "INJ" => Some("Injective"),
+        "TIA" => Some("Celestia"),
+        "PYTH" => Some("Pyth"),
+        "TAO" => Some("Bittensor"),
+        "WLD" => Some("Worldcoin"),
+        "JUP" => Some("Jupiter"),
+        "STRK" => Some("Starknet"),
+        "ONDO" => Some("Ondo"),
+        "SUI" => Some("Sui"),
+        "TON" => Some("Toncoin"),
+        "MKR" => Some("Maker"),
+        "GRT" => Some("The Graph"),
+        "AAVE" => Some("Aave"),
+        "LDO" => Some("Lido"),
+        "RUNE" => Some("THORChain"),
+        "KAS" => Some("Kaspa"),
+        "QNT" => Some("Quant"),
+        "XMR" => Some("Monero"),
+        _ => None,
+    }
+}
+
+/// True if `symbol` looks like a crypto pair (BTC/USD, BTCUSD, BTC-USD, BTC).
+pub fn is_crypto_symbol(symbol: &str) -> bool {
+    crypto_base_for_symbol(symbol).is_some()
+}
+
+/// Peel a crypto base ticker out of `symbol`. Recognises:
+/// - explicit pair separators: `BTC/USD`, `BTC-USD`
+/// - concatenated pairs:       `BTCUSD`, `BTCUSDT`
+/// - bare bases:               `BTC`
+///
+/// Returns `None` if the result isn't in [`CRYPTO_BASES`], so equity tickers
+/// like `XOM` (oil) or `BTU` (Peabody) aren't misclassified.
+pub fn crypto_base_for_symbol(symbol: &str) -> Option<String> {
+    let s = symbol.trim().to_uppercase();
+    if s.is_empty() {
+        return None;
+    }
+    // Explicit separators first.
+    for sep in ['/', '-', ':'] {
+        if let Some((left, right)) = s.split_once(sep) {
+            if CRYPTO_BASES.contains(&left) && CRYPTO_QUOTES.contains(&right) {
+                return Some(left.to_string());
+            }
+        }
+    }
+    // Bare base, e.g. user typed "BTC".
+    if CRYPTO_BASES.contains(&s.as_str()) {
+        return Some(s);
+    }
+    // Concatenated form — peel off the longest matching quote suffix.
+    for quote in CRYPTO_QUOTES {
+        if let Some(base) = s.strip_suffix(quote) {
+            if CRYPTO_BASES.contains(&base) {
+                return Some(base.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// True when `headline` or `summary` mentions either the base ticker or the
+/// asset's full name. Used to filter general-feed crypto news to articles
+/// actually about the requested coin.
+fn article_mentions_crypto(headline: &str, summary: &str, base: &str) -> bool {
+    let hay = format!("{} {}", headline, summary);
+    let hay_upper = hay.to_uppercase();
+    if hay_upper.contains(base) {
+        return true;
+    }
+    if let Some(name) = crypto_full_name(base) {
+        if hay_upper.contains(&name.to_uppercase()) {
+            return true;
+        }
+    }
+    false
+}
+
+// ── Crypto-native fetchers ────────────────────────────────────────────────
+
+/// CryptoPanic — public free tier, per-currency filtering.
+/// See https://cryptopanic.com/developers/api/ — `auth_token` + `currencies=BTC,ETH`.
+pub async fn fetch_cryptopanic_news(
+    client: &reqwest::Client,
+    symbol: &str,
+    token: &str,
+) -> Result<Vec<NewsArticle>, String> {
+    if token.is_empty() {
+        return Err("CryptoPanic auth token required".into());
+    }
+    let Some(base) = crypto_base_for_symbol(symbol) else {
+        return Ok(vec![]);
+    };
+    let resp = client
+        .get("https://cryptopanic.com/api/v1/posts/")
+        .query(&[
+            ("auth_token", token),
+            ("currencies", base.as_str()),
+            ("public", "true"),
+            ("kind", "news"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("CryptoPanic request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("CryptoPanic: HTTP {}", resp.status()));
+    }
+    let v: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("CryptoPanic parse: {e}"))?;
+    let mut out = Vec::new();
+    if let Some(arr) = v["results"].as_array() {
+        for e in arr {
+            let url = e["url"].as_str().unwrap_or("").to_string();
+            if url.is_empty() {
+                continue;
+            }
+            let published_at = parse_iso_ts(e["published_at"].as_str().unwrap_or(""));
+            let mut tickers = Vec::new();
+            if let Some(cs) = e["currencies"].as_array() {
+                for c in cs {
+                    if let Some(code) = c["code"].as_str() {
+                        tickers.push(code.to_uppercase());
+                    }
+                }
+            }
+            let votes_pos = e["votes"]["positive"].as_i64().unwrap_or(0);
+            let votes_neg = e["votes"]["negative"].as_i64().unwrap_or(0);
+            let sentiment_score = match (votes_pos, votes_neg) {
+                (p, n) if p + n == 0 => 0.0,
+                (p, n) => (p - n) as f64 / (p + n) as f64,
+            };
+            let sentiment = if sentiment_score > 0.15 {
+                "bullish"
+            } else if sentiment_score < -0.15 {
+                "bearish"
+            } else {
+                "neutral"
+            };
+            let art = NewsArticle {
+                symbol: base.clone(),
+                source: "CryptoPanic".into(),
+                provider: e["source"]["title"].as_str().unwrap_or("").to_string(),
+                headline: e["title"].as_str().unwrap_or("").to_string(),
+                summary: String::new(),
+                url: url.clone(),
+                published_at,
+                image_url: String::new(),
+                sentiment: sentiment.into(),
+                sentiment_score,
+                tickers,
+                ..Default::default()
+            }
+            .with_hash();
+            out.push(art);
+        }
+    }
+    Ok(out)
+}
+
+/// CoinDesk RSS — general crypto news, no key. Filtered to articles mentioning
+/// the requested base ticker or its full name.
+pub async fn fetch_coindesk_rss(
+    client: &reqwest::Client,
+    symbol: &str,
+) -> Result<Vec<NewsArticle>, String> {
+    let Some(base) = crypto_base_for_symbol(symbol) else {
+        return Ok(vec![]);
+    };
+    let resp = client
+        .get("https://www.coindesk.com/arc/outboundfeeds/rss/")
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1",
+        )
+        .send()
+        .await
+        .map_err(|e| format!("CoinDesk RSS request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("CoinDesk RSS: HTTP {}", resp.status()));
+    }
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("CoinDesk RSS read: {e}"))?;
+    let all = parse_rss_items(&body, &base, "CoinDesk");
+    let filtered: Vec<NewsArticle> = all
+        .into_iter()
+        .filter(|a| article_mentions_crypto(&a.headline, &a.summary, &base))
+        .collect();
+    Ok(filtered)
+}
+
+/// Finnhub general crypto feed — same key as `/company-news`, no symbol param.
+/// Filtered to articles mentioning the requested base.
+pub async fn fetch_finnhub_crypto_news(
+    client: &reqwest::Client,
+    symbol: &str,
+    token: &str,
+) -> Result<Vec<NewsArticle>, String> {
+    if token.is_empty() {
+        return Err("Finnhub key required".into());
+    }
+    let Some(base) = crypto_base_for_symbol(symbol) else {
+        return Ok(vec![]);
+    };
+    let resp = client
+        .get("https://finnhub.io/api/v1/news")
+        .query(&[("category", "crypto"), ("token", token)])
+        .send()
+        .await
+        .map_err(|e| format!("Finnhub crypto request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Finnhub crypto: HTTP {}", resp.status()));
+    }
+    let arr: Vec<serde_json::Value> = resp
+        .json()
+        .await
+        .map_err(|e| format!("Finnhub crypto parse: {e}"))?;
+    let mut out = Vec::new();
+    for e in arr {
+        let url = e["url"].as_str().unwrap_or("").to_string();
+        if url.is_empty() {
+            continue;
+        }
+        let headline = e["headline"].as_str().unwrap_or("").to_string();
+        let summary = e["summary"].as_str().unwrap_or("").to_string();
+        if !article_mentions_crypto(&headline, &summary, &base) {
+            continue;
+        }
+        let related = e["related"].as_str().unwrap_or("");
+        let tickers: Vec<String> = related
+            .split(',')
+            .filter_map(|s| {
+                let t = s.trim().to_uppercase();
+                if t.is_empty() { None } else { Some(t) }
+            })
+            .collect();
+        let art = NewsArticle {
+            symbol: base.clone(),
+            source: "Finnhub".into(),
+            provider: e["source"].as_str().unwrap_or("").to_string(),
+            headline,
+            summary,
+            url: url.clone(),
+            published_at: e["datetime"].as_i64().unwrap_or(0),
+            image_url: e["image"].as_str().unwrap_or("").to_string(),
+            tickers,
+            ..Default::default()
+        }
+        .with_hash();
+        out.push(art);
+    }
+    Ok(out)
+}
+
 // ── Bulk scrape helper ────────────────────────────────────────────────────
 
-/// Fetch news for a symbol from all configured sources.
+/// Optional API keys for the news aggregation pipeline. All fields default to
+/// the empty string; sources whose keys are blank are skipped silently.
+#[derive(Clone, Default, Debug)]
+pub struct NewsApiKeys {
+    pub marketaux: String,
+    pub alpha_vantage: String,
+    pub fmp: String,
+    pub finnhub: String,
+    pub cryptopanic: String,
+}
+
+/// Fetch news for a symbol from all configured sources. Routes between equity
+/// and crypto-native source sets via [`is_crypto_symbol`]; equity sources are
+/// not called for crypto pairs because they return nothing and waste rate-limit
+/// budget.
+///
 /// Sources without keys are skipped silently. Rate-limits with sleeps between calls.
 ///
 /// This function is pure-async with no SQLite dependency — callers must upsert
@@ -1021,9 +1372,7 @@ fn strip_html(s: &str) -> String {
 pub async fn fetch_all_sources_for_symbol(
     client: &reqwest::Client,
     symbol: &str,
-    marketaux_key: &str,
-    alpha_vantage_key: &str,
-    fmp_key: &str,
+    keys: &NewsApiKeys,
     mut cb: impl FnMut(&str),
 ) -> Result<Vec<NewsArticle>, String> {
     let sym = symbol.to_uppercase();
@@ -1033,16 +1382,25 @@ pub async fn fetch_all_sources_for_symbol(
 
     let mut all_articles: Vec<NewsArticle> = Vec::new();
 
-    // GDELT (no key) — skip silently while a prior 429 cooldown is active so
-    // bulk per-symbol loops don't generate one failure log per ticker.
+    // GDELT (no key) — common to both flows. Skip silently while a prior 429
+    // cooldown is active so bulk per-symbol loops don't generate one failure
+    // log per ticker. For crypto, query by the asset's full name when known
+    // so headlines about "Bitcoin" surface even when the ticker isn't quoted.
     if !gdelt_in_cooldown() {
-        match fetch_gdelt_news(client, &sym, 30).await {
+        let gdelt_query = crypto_base_for_symbol(&sym)
+            .and_then(|b| crypto_full_name(&b).map(|s| s.to_string()))
+            .unwrap_or_else(|| sym.clone());
+        match fetch_gdelt_news(client, &gdelt_query, 30).await {
             Ok(v) => {
-                cb(&format!("news/gdelt {}: {} articles", sym, v.len()));
+                cb(&format!(
+                    "news/gdelt {}: {} articles",
+                    gdelt_query,
+                    v.len()
+                ));
                 all_articles.extend(v);
             }
             Err(e) => {
-                cb(&format!("news/gdelt {} failed: {e}", sym));
+                cb(&format!("news/gdelt {} failed: {e}", gdelt_query));
                 if gdelt_in_cooldown() {
                     cb(&format!(
                         "news/gdelt: rate-limited, skipping for {}s",
@@ -1054,54 +1412,107 @@ pub async fn fetch_all_sources_for_symbol(
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     }
 
-    // Yahoo RSS (no key)
-    match fetch_yahoo_rss(client, &sym).await {
-        Ok(v) => {
-            cb(&format!("news/yahoo_rss {}: {} articles", sym, v.len()));
-            all_articles.extend(v);
+    if is_crypto_symbol(&sym) {
+        // ── Crypto-native sources ─────────────────────────────────────────
+        // Yahoo also serves crypto via `BTC-USD`-style symbols. Re-format the
+        // base so it actually returns results instead of the dead `BTCUSD`.
+        if let Some(base) = crypto_base_for_symbol(&sym) {
+            let yahoo_sym = format!("{}-USD", base);
+            match fetch_yahoo_rss(client, &yahoo_sym).await {
+                Ok(v) => {
+                    cb(&format!(
+                        "news/yahoo_rss {}: {} articles",
+                        yahoo_sym,
+                        v.len()
+                    ));
+                    all_articles.extend(v);
+                }
+                Err(e) => cb(&format!("news/yahoo_rss {} failed: {e}", yahoo_sym)),
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
-        Err(e) => cb(&format!("news/yahoo_rss {} failed: {e}", sym)),
-    }
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-    // SEC EDGAR filings stay in the dedicated SEC/insider/research tools, not
-    // the general News window. Keep this feed out of multi-source news so
-    // routine filings do not drown out actual market news.
+        if !keys.cryptopanic.is_empty() {
+            match fetch_cryptopanic_news(client, &sym, &keys.cryptopanic).await {
+                Ok(v) => {
+                    cb(&format!("news/cryptopanic {}: {} articles", sym, v.len()));
+                    all_articles.extend(v);
+                }
+                Err(e) => cb(&format!("news/cryptopanic {} failed: {e}", sym)),
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
 
-    // Marketaux (100/day free)
-    if !marketaux_key.is_empty() {
-        match fetch_marketaux_news(client, &sym, marketaux_key).await {
+        match fetch_coindesk_rss(client, &sym).await {
             Ok(v) => {
-                cb(&format!("news/marketaux {}: {} articles", sym, v.len()));
+                cb(&format!("news/coindesk {}: {} articles", sym, v.len()));
                 all_articles.extend(v);
             }
-            Err(e) => cb(&format!("news/marketaux {} failed: {e}", sym)),
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
-    }
-
-    // Alpha Vantage (25/day free)
-    if !alpha_vantage_key.is_empty() {
-        match fetch_alpha_vantage_news(client, &sym, alpha_vantage_key).await {
-            Ok(v) => {
-                cb(&format!("news/alpha_vantage {}: {} articles", sym, v.len()));
-                all_articles.extend(v);
-            }
-            Err(e) => cb(&format!("news/alpha_vantage {} failed: {e}", sym)),
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
-    }
-
-    // FMP (250/day free)
-    if !fmp_key.is_empty() {
-        match fetch_fmp_news(client, &sym, fmp_key).await {
-            Ok(v) => {
-                cb(&format!("news/fmp {}: {} articles", sym, v.len()));
-                all_articles.extend(v);
-            }
-            Err(e) => cb(&format!("news/fmp {} failed: {e}", sym)),
+            Err(e) => cb(&format!("news/coindesk {} failed: {e}", sym)),
         }
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        if !keys.finnhub.is_empty() {
+            match fetch_finnhub_crypto_news(client, &sym, &keys.finnhub).await {
+                Ok(v) => {
+                    cb(&format!(
+                        "news/finnhub_crypto {}: {} articles",
+                        sym,
+                        v.len()
+                    ));
+                    all_articles.extend(v);
+                }
+                Err(e) => cb(&format!("news/finnhub_crypto {} failed: {e}", sym)),
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+    } else {
+        // ── Equity / general sources ──────────────────────────────────────
+        match fetch_yahoo_rss(client, &sym).await {
+            Ok(v) => {
+                cb(&format!("news/yahoo_rss {}: {} articles", sym, v.len()));
+                all_articles.extend(v);
+            }
+            Err(e) => cb(&format!("news/yahoo_rss {} failed: {e}", sym)),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // SEC EDGAR filings stay in the dedicated SEC/insider/research tools, not
+        // the general News window. Keep this feed out of multi-source news so
+        // routine filings do not drown out actual market news.
+
+        if !keys.marketaux.is_empty() {
+            match fetch_marketaux_news(client, &sym, &keys.marketaux).await {
+                Ok(v) => {
+                    cb(&format!("news/marketaux {}: {} articles", sym, v.len()));
+                    all_articles.extend(v);
+                }
+                Err(e) => cb(&format!("news/marketaux {} failed: {e}", sym)),
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        }
+
+        if !keys.alpha_vantage.is_empty() {
+            match fetch_alpha_vantage_news(client, &sym, &keys.alpha_vantage).await {
+                Ok(v) => {
+                    cb(&format!("news/alpha_vantage {}: {} articles", sym, v.len()));
+                    all_articles.extend(v);
+                }
+                Err(e) => cb(&format!("news/alpha_vantage {} failed: {e}", sym)),
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        }
+
+        if !keys.fmp.is_empty() {
+            match fetch_fmp_news(client, &sym, &keys.fmp).await {
+                Ok(v) => {
+                    cb(&format!("news/fmp {}: {} articles", sym, v.len()));
+                    all_articles.extend(v);
+                }
+                Err(e) => cb(&format!("news/fmp {} failed: {e}", sym)),
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
     }
 
     cb(&format!(
@@ -1384,6 +1795,36 @@ mod tests {
         assert!(!is_us_symbol(""));
         assert!(!is_us_symbol("EURUSD"));
         assert!(!is_us_symbol("BTC/USD"));
+    }
+
+    #[test]
+    fn crypto_base_for_symbol_recognises_pair_forms() {
+        assert_eq!(crypto_base_for_symbol("BTC/USD").as_deref(), Some("BTC"));
+        assert_eq!(crypto_base_for_symbol("eth-usd").as_deref(), Some("ETH"));
+        assert_eq!(crypto_base_for_symbol("SOLUSDT").as_deref(), Some("SOL"));
+        assert_eq!(crypto_base_for_symbol("BTC").as_deref(), Some("BTC"));
+        // lowercase still works
+        assert_eq!(crypto_base_for_symbol("doge/usd").as_deref(), Some("DOGE"));
+    }
+
+    #[test]
+    fn crypto_base_for_symbol_rejects_equities() {
+        // Equity tickers that happen to overlap a coin format must not match.
+        assert!(crypto_base_for_symbol("AAPL").is_none());
+        assert!(crypto_base_for_symbol("SPY").is_none());
+        assert!(crypto_base_for_symbol("BRK.A").is_none());
+        assert!(crypto_base_for_symbol("").is_none());
+    }
+
+    #[test]
+    fn article_mentions_crypto_matches_ticker_or_name() {
+        assert!(article_mentions_crypto("BTC pumps 5%", "", "BTC"));
+        assert!(article_mentions_crypto(
+            "Bitcoin hits new ATH",
+            "spot inflows surge",
+            "BTC"
+        ));
+        assert!(!article_mentions_crypto("Apple beats earnings", "", "BTC"));
     }
 
     #[test]

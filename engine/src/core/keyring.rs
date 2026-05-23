@@ -104,6 +104,7 @@ pub mod keys {
     pub const FMP_KEY: &str = "fmp_api_key";
     pub const MARKETAUX_KEY: &str = "marketaux_api_key";
     pub const ALPHA_VANTAGE_KEY: &str = "alpha_vantage_api_key";
+    pub const CRYPTOPANIC_KEY: &str = "cryptopanic_api_key";
 }
 
 #[cfg(test)]

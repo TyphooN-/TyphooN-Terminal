@@ -1833,6 +1833,10 @@ impl TyphooNApp {
                 keyring::keys::KRAKEN_WS_API_SECRET.into(),
                 self.kraken_ws_api_secret.clone(),
             ),
+            (
+                keyring::keys::CRYPTOPANIC_KEY.into(),
+                self.cryptopanic_key.clone(),
+            ),
         ];
         let cache_clone = self.cache.clone();
         let rt_handle = self.rt_handle.clone();

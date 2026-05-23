@@ -45,6 +45,9 @@ impl TyphooNApp {
                     ui.label("FRED API Key:");
                     ui.add(egui::TextEdit::singleline(&mut self.fred_key).desired_width(250.0).password(true));
                     ui.end_row();
+                    ui.label("CryptoPanic Token:");
+                    ui.add(egui::TextEdit::singleline(&mut self.cryptopanic_key).desired_width(250.0).password(true).hint_text("free at cryptopanic.com → API"));
+                    ui.end_row();
                     if self.tastytrade_enabled {
                         ui.label("tastytrade User:");
                         ui.add(egui::TextEdit::singleline(&mut self.tt_username).desired_width(250.0));
@@ -157,6 +160,11 @@ impl TyphooNApp {
                             if !self.finnhub_key.is_empty() {
                                 if let Err(e) = keyring::store(keyring::keys::FINNHUB_KEY, &self.finnhub_key) {
                                     self.log.push_back(LogEntry::warn(format!("Keyring store finnhub_key failed: {}", e)));
+                                }
+                            }
+                            if !self.cryptopanic_key.is_empty() {
+                                if let Err(e) = keyring::store(keyring::keys::CRYPTOPANIC_KEY, &self.cryptopanic_key) {
+                                    self.log.push_back(LogEntry::warn(format!("Keyring store cryptopanic_key failed: {}", e)));
                                 }
                             }
                             if !self.fred_key.is_empty() {

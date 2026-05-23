@@ -4197,7 +4197,7 @@ impl TyphooNApp {
                             let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews { symbol: sym, limit: 200 });
                         }
                         if ui.add_enabled(!self.news_loading, egui::Button::new("Fetch All Sources").fill(BTN_BLUE))
-                            .on_hover_text("GDELT + Yahoo RSS + Marketaux + Alpha Vantage + FMP").clicked() {
+                            .on_hover_text("Equities: GDELT + Yahoo RSS + Marketaux + Alpha Vantage + FMP. Crypto: GDELT + Yahoo + CryptoPanic + CoinDesk RSS + Finnhub crypto").clicked() {
                             let sym = self.news_symbol_filter.trim().to_uppercase();
                             if sym.is_empty() {
                                 self.log.push_back(LogEntry::warn("News: enter a symbol"));
@@ -4208,6 +4208,8 @@ impl TyphooNApp {
                                     marketaux_key: self.marketaux_key.clone(),
                                     alpha_vantage_key: self.alpha_vantage_key.clone(),
                                     fmp_key: self.fmp_key.clone(),
+                                    finnhub_key: self.finnhub_key.clone(),
+                                    cryptopanic_key: self.cryptopanic_key.clone(),
                                 });
                                 self.log.push_back(LogEntry::info(format!("News: fetching multi-source for {}...", sym)));
                             }
@@ -4234,6 +4236,8 @@ impl TyphooNApp {
                                 marketaux_key: self.marketaux_key.clone(),
                                 alpha_vantage_key: self.alpha_vantage_key.clone(),
                                 fmp_key: self.fmp_key.clone(),
+                                finnhub_key: self.finnhub_key.clone(),
+                                cryptopanic_key: self.cryptopanic_key.clone(),
                             });
                             self.log.push_back(LogEntry::info(format!(
                                 "News: scope scrape started for {} ({} symbols)",

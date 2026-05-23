@@ -8969,13 +8969,15 @@ enum BrokerCmd {
         text: String,
         agent_override: String,
     },
-    /// Fetch multi-source news for a symbol (GDELT + Yahoo RSS + Marketaux + AV + FMP),
-    /// cache results in SQLite, and return the cached set.
+    /// Fetch multi-source news for a symbol, cache in SQLite, return cached set.
+    /// Routes equity vs crypto sources internally via `news::is_crypto_symbol`.
     FetchNewsMulti {
         symbol: String,
         marketaux_key: String,
         alpha_vantage_key: String,
         fmp_key: String,
+        finnhub_key: String,
+        cryptopanic_key: String,
     },
     /// Read cached news for a symbol from SQLite without fetching.
     LoadCachedNews {
@@ -8996,6 +8998,8 @@ enum BrokerCmd {
         marketaux_key: String,
         alpha_vantage_key: String,
         fmp_key: String,
+        finnhub_key: String,
+        cryptopanic_key: String,
     },
     /// Scrape news for an explicit, already-normalized symbol set. Used by MTF Grid
     /// so multiple timeframe cells for the same ticker fetch once.
@@ -9004,6 +9008,8 @@ enum BrokerCmd {
         marketaux_key: String,
         alpha_vantage_key: String,
         fmp_key: String,
+        finnhub_key: String,
+        cryptopanic_key: String,
     },
     /// Connect to Kraken crypto exchange.
     KrakenConnect {
@@ -10741,6 +10747,8 @@ pub struct TyphooNApp {
     alpha_vantage_key: String,
     /// User-entered FMP API key (free tier 250/day, also used for transcripts).
     fmp_key: String,
+    /// User-entered CryptoPanic API token (free public tier, per-currency filter).
+    cryptopanic_key: String,
 
     /// SL/TP planning lines (visual, pre-broker).
     sl_price: Option<f64>,
@@ -24046,7 +24054,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::IngestResearchResult { per_symbol_added: per_symbol, errors });
                         });
                     }
-                    BrokerCmd::FetchNewsMulti { symbol, marketaux_key, alpha_vantage_key, fmp_key } => {
+                    BrokerCmd::FetchNewsMulti { symbol, marketaux_key, alpha_vantage_key, fmp_key, finnhub_key, cryptopanic_key } => {
                         use typhoon_engine::core::news;
                         let msg_tx = broker_msg_tx_clone.clone();
                         let shared_cache_broker = shared_cache_broker.clone();
@@ -24088,9 +24096,16 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let cb = move |s: &str| {
                                 let _ = tx_log.send(BrokerMsg::FundamentalsProgress(s.to_string()));
                             };
+                            let news_keys = news::NewsApiKeys {
+                                marketaux: marketaux_key,
+                                alpha_vantage: alpha_vantage_key,
+                                fmp: fmp_key,
+                                finnhub: finnhub_key,
+                                cryptopanic: cryptopanic_key,
+                            };
                             let articles = match news::fetch_all_sources_for_symbol(
                                 &client, &symbol,
-                                &marketaux_key, &alpha_vantage_key, &fmp_key,
+                                &news_keys,
                                 cb,
                             ).await {
                                 Ok(v) => v,
@@ -24173,6 +24188,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         marketaux_key,
                         alpha_vantage_key,
                         fmp_key,
+                        finnhub_key,
+                        cryptopanic_key,
                     } => {
                         let msg_tx = broker_msg_tx_clone.clone();
                         let shared_cache_broker = shared_cache_broker.clone();
@@ -24239,6 +24256,13 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                             return;
                                         }
                                     };
+                                    let news_keys = news::NewsApiKeys {
+                                        marketaux: marketaux_key,
+                                        alpha_vantage: alpha_vantage_key,
+                                        fmp: fmp_key,
+                                        finnhub: finnhub_key,
+                                        cryptopanic: cryptopanic_key,
+                                    };
                                     let mut ok = 0usize;
                                     let mut fail = 0usize;
                                     let total = tickers.len();
@@ -24264,9 +24288,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                         match news::fetch_all_sources_for_symbol(
                                             &client,
                                             ticker,
-                                            &marketaux_key,
-                                            &alpha_vantage_key,
-                                            &fmp_key,
+                                            &news_keys,
                                             cb,
                                         )
                                         .await
@@ -24334,6 +24356,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     BrokerCmd::NewsScrapeAll {
                         use_mt5, use_alpaca, use_tastytrade,
                         marketaux_key, alpha_vantage_key, fmp_key,
+                        finnhub_key, cryptopanic_key,
                     } => {
                         // Gather broker-side tickers before spawning thread.
                         let mut extra_tickers: Vec<String> = Vec::new();
@@ -24398,6 +24421,13 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     Ok(c) => c,
                                     Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("News client: {e}"))); return; }
                                 };
+                                let news_keys = news::NewsApiKeys {
+                                    marketaux: marketaux_key,
+                                    alpha_vantage: alpha_vantage_key,
+                                    fmp: fmp_key,
+                                    finnhub: finnhub_key,
+                                    cryptopanic: cryptopanic_key,
+                                };
                                 let mut ok = 0usize;
                                 let mut fail = 0usize;
                                 for (i, ticker) in tickers.iter().enumerate() {
@@ -24413,7 +24443,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     };
                                     match news::fetch_all_sources_for_symbol(
                                         &client, ticker,
-                                        &marketaux_key, &alpha_vantage_key, &fmp_key,
+                                        &news_keys,
                                         cb,
                                     ).await {
                                         Ok(articles) => {
@@ -27034,6 +27064,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             marketaux_key: String::new(),
             alpha_vantage_key: String::new(),
             fmp_key: String::new(),
+            cryptopanic_key: String::new(),
             sl_price: None,
             tp_price: None,
             dragging_sl: false,
