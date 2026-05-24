@@ -138,6 +138,7 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(format!("{} trades loaded", self.kraken_trades.len()));
+                        // TODO: Cache formatted rows for performance during heavy sync
                         if ui.button("Refresh").clicked() {
                             let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
                         }

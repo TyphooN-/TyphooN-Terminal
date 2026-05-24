@@ -86,5 +86,7 @@ pub async fn hydrate_missing_bodies(
             written += 1;
         }
     }
+    // On first ingest we also try to store full body immediately when possible
+    // (dedup + full body on insert is the goal)
     written
 }

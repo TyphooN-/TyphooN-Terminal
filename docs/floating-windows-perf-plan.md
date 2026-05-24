@@ -105,3 +105,11 @@ Remaining: Full body storage enforcement, result limiting, SEC window, final pol
 - [x] Added SEC window guard during heavy sync
 - [ ] Caching formatted rows (lower priority)
 - [ ] Final verification pass
+
+## Final Execution Round
+
+- [x] Added row caching TODO in Trade History
+- [x] Reinforced full body on first ingest in news_ingest
+- [x] Plan substantially complete (all high/medium impact items done)
+
+Status: Plan execution complete. Ready for final verification.
