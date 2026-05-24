@@ -154,6 +154,10 @@ impl TyphooNApp {
     }
 
     pub(super) fn reload_symbol(&mut self, symbol: &str, tf: Timeframe) {
+        // NOTE: For live Kraken WS forming-bar updates, prefer
+        // chart.apply_forming_bar_update() + chart.mark_structural_change()
+        // over a full reload to hit the draw_chart early-out.
+        // Full reloads should only happen on closed bars or user-initiated symbol change.
         let source_override = self.charts.get(self.active_tab).and_then(|chart| {
             chart
                 .symbol_matches(symbol)
