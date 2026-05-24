@@ -65,3 +65,15 @@ Make **all floating windows** perform well during heavy bar sync and active char
 5. Final verification and push.
 
 Status: In progress — combing complete, plan created.
+
+## Execution Log (2026-05-24)
+
+- [x] Core heavy_sync awareness added to draw_floating_windows
+- [x] News window early-out + deduplication started
+- [x] Kraken Trade History early-out added
+- [x] Strategy window placeholder added
+- [ ] Full article body storage on ingest (partially addressed via existing hydrator)
+- [ ] Result limiting (comment added)
+- [ ] Other windows (Symbol Investigation, SEC) still need audit
+
+Status: Significant progress. Continuing aggressive execution.
