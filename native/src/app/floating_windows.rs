@@ -4210,6 +4210,9 @@ impl TyphooNApp {
                         }
                         if ui.add_enabled(!self.news_loading, egui::Button::new("Fetch All Sources").fill(BTN_BLUE))
                             .on_hover_text("Equities: GDELT + Yahoo RSS + Marketaux + Alpha Vantage + FMP. Crypto: GDELT + Yahoo + CryptoPanic + CoinDesk RSS + Finnhub crypto").clicked() {
+                                if self.heavy_sync_in_progress {
+                                    return; // Skip heavy news rendering during sync
+                                }
                             let sym = self.news_symbol_filter.trim().to_uppercase();
                             if sym.is_empty() {
                                 self.log.push_back(LogEntry::warn("News: enter a symbol"));
