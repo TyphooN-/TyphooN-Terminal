@@ -113,6 +113,12 @@ impl TyphooNApp {
             // TODO: draw a lightweight "sync in progress" placeholder instead
         }
         // ── Kraken Trade History Window ─────────────────────────────────────
+        if self.heavy_sync_in_progress && self.show_kraken_trade_history {
+            // Skip heavy trade list rendering during sync
+            if ui.button("Trade History (sync in progress)").clicked() {
+                self.show_kraken_trade_history = false;
+            }
+        }
         if self.show_kraken_trade_history {
             egui::Window::new("Kraken Trade History")
                 .open(&mut self.show_kraken_trade_history)
