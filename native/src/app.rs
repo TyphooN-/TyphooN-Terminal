@@ -2019,6 +2019,8 @@ struct ChartState {
     forming_bar_dirty: bool,
     /// Timestamp of the right-most bar (used for fast-path decisions).
     last_visible_bar_ts: i64,
+    last_rendered_gen: u64,
+    last_rendered_bar_ts: i64,
 }
 
 /// Extract the bare symbol from a cache key. Accepts canonical 3-part
@@ -2426,6 +2428,8 @@ impl ChartState {
             visible_bars_gen: 0,
             forming_bar_dirty: false,
             last_visible_bar_ts: 0,
+            last_rendered_gen: 0,
+            last_rendered_bar_ts: 0,
         }
     }
 
