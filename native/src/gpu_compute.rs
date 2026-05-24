@@ -151,6 +151,9 @@ impl GpuCompute {
     /// Compute SMA on GPU for a bar range (reuses uploaded OHLC buffer).
     /// Delegates to the existing dispatch_indicator_pub path so it actually
     /// produces results instead of always falling back to CPU.
+    ///
+    /// Future optimization: support incremental forming-bar uploads
+    /// instead of full re-upload on every tick.
     pub fn compute_sma_gpu(
         &self,
         period: u32,

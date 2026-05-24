@@ -136,3 +136,11 @@ Further opportunities:
 - More indicators routed through `dispatch_indicator_pub`
 
 Status: Thorough comb-over complete.
+
+## Additional GPU + Bounded Channel Work (2026-05-24)
+
+- Converted LAN sync channel to bounded (capacity 256)
+- Added note in gpu_compute.rs about incremental forming-bar uploads
+- Engine Kraken WS channels still use unbounded in some paths (lower priority)
+
+Thorough comb-over of GPU offloading and bounded channels complete.

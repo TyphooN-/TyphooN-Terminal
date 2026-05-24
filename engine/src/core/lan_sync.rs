@@ -5377,7 +5377,8 @@ impl LanSyncClient {
         tracing::info!("LAN sync: connected to {url}, authenticated");
 
         // Channel for sending remote requests from broker task → LAN sync WebSocket
-        let (remote_tx, remote_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        // Bounded channel for LAN sync messages
+        let (remote_tx, remote_rx) = tokio::sync::mpsc::channel::<String>(256);
 
         let status_clone = status.clone();
         let task = tokio::spawn(async move {
