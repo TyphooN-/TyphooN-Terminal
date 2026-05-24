@@ -11059,6 +11059,7 @@ pub struct TyphooNApp {
     kraken_equity_universe_retry_after_ts: i64,
     kraken_equities_sync_pause_until_ts: i64,
     kraken_equities_sync_pause_reason: String,
+    heavy_sync_in_progress: bool,
     /// Tastytrade-cached symbol set (uppercased, parsed from detailed_stats keys
     /// with the `tastytrade:` prefix). Rebuilt alongside cached_mt5_symbols so
     /// the Alpaca equity rotation can exclude anything tastytrade already has.
@@ -27043,6 +27044,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             auto_compact_last_input_at: std::time::Instant::now(),
             auto_compact_next_check_at: std::time::Instant::now()
                 + std::time::Duration::from_secs(60),
+            heavy_sync_in_progress: false,
             enabled_sync_timeframes: default_sync_timeframe_set(),
             alpaca_historical_rpm_hint: 0,
             alpaca_historical_rpm_observed: 0,
