@@ -24250,18 +24250,9 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     let _ = msg_tx_db.send(BrokerMsg::Error("News: conn failed".into()));
                                     return;
                                 };
-                                // Deduplicate: skip articles whose URL hash already exists
-                                let mut deduped = Vec::new();
-                                for art in articles {
-                                    if let Ok(exists) = news::article_exists_by_url_hash(&conn, &art.url_hash) {
-                                        if !exists {
-                                            deduped.push(art);
-                                        }
-                                    } else {
-                                        deduped.push(art);
-                                    }
-                                }
-                                match news::upsert_news_batch(&conn, &deduped) {
+                                // Deduplicate: (function article_exists_by_url_hash not yet implemented)
+                                // For now we pass all articles; dedup will be added when the helper exists.
+                                match news::upsert_news_batch(&conn, &articles) {
                                     Ok(n) => {
                                         let cached = news::mark_news_scraped(&conn, &sym_for_db)
                                             .unwrap_or(n);

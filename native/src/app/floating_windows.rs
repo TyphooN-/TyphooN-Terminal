@@ -112,7 +112,11 @@ impl TyphooNApp {
         };
 
         if should_render_heavy {
-            self.render_connect_window(ctx, settings_save_after);
+            if let Some(after) = settings_save_after {
+                self.render_connect_window(ctx, Some(after));
+            } else {
+                self.render_connect_window(ctx, None);
+            }
         }
         if should_render_heavy {
             self.render_indicators_window(ctx);
@@ -120,7 +124,7 @@ impl TyphooNApp {
         self.render_kraken_spot_sell_dialog(ctx);
 
         // News window is a known heavy renderer — skip during heavy sync
-        if self.heavy_sync_in_progress && self.show_news_research {
+        if self.heavy_sync_in_progress {
             // TODO: draw a lightweight "sync in progress" placeholder instead
         }
         // ── Kraken Trade History Window ─────────────────────────────────────
