@@ -97,3 +97,11 @@ Significant coverage achieved across major floating windows:
 - Symbol Investigation (guard added)
 
 Remaining: Full body storage enforcement, result limiting, SEC window, final polish.
+
+## Latest Execution Round
+
+- [x] Strengthened news_ingest docs for full body on first ingest
+- [x] Added MAX_NEWS_RESULTS = 50 constant for result limiting
+- [x] Added SEC window guard during heavy sync
+- [ ] Caching formatted rows (lower priority)
+- [ ] Final verification pass

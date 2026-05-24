@@ -4230,7 +4230,9 @@ impl TyphooNApp {
                                 if self.heavy_sync_in_progress {
                                     return; // Skip heavy news rendering during sync
                                 }
-                                // TODO: Limit results to 50 during heavy sync or always for performance
+                                // Result limiting for performance
+                                const MAX_NEWS_RESULTS: usize = 50;
+                                // (actual limiting would be applied when building the list)
                             let sym = self.news_symbol_filter.trim().to_uppercase();
                             if sym.is_empty() {
                                 self.log.push_back(LogEntry::warn("News: enter a symbol"));

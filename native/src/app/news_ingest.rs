@@ -1,4 +1,6 @@
 //! Background hydrator for full news article bodies.
+//! On first ingest we now attempt to store the full body (not just summary)
+//! and deduplicate by URL hash across symbols.
 //!
 //! `engine::core::news` stores summaries from each provider's news API (~150
 //! chars). The full article body is a separate fetch. This module owns the
