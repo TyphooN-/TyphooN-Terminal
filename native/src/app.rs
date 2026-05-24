@@ -50,6 +50,7 @@ mod command_palette;
 mod darwin_universe;
 mod export_nav;
 mod floating_windows;
+mod kraken_ohlc_ws;
 mod kraken_sync;
 mod market_data_sync;
 mod session_persistence;
@@ -9060,6 +9061,13 @@ enum BrokerCmd {
     },
     KrakenFetchEquityUniverse,
     KrakenStartPrivateWs,
+    /// Start the Kraken WS v2 OHLC streamers (one task per interval,
+    /// 1Min/5Min/15Min/30Min/1Hour/4Hour/1Day/1Week). Subscribes to the
+    /// provided pairs across every interval and merges live bar updates
+    /// into the existing `kraken:SYMBOL:TF` cache keys.
+    KrakenStartOhlcStreamers {
+        pairs: Vec<String>,
+    },
     KrakenStartOrderbookWs {
         symbol: String,
         depth: usize,
@@ -9098,6 +9106,19 @@ enum BrokerMsg {
         message: String,
     },
     KrakenOrderbookUpdate(String),
+    /// Bars just committed to cache by the Kraken WS OHLC pipeline.
+    /// Each entry is `(typhoon_symbol, tf_label, last_bar_ts_ms)` so the
+    /// REST scheduler can mark the (symbol, tf) WS-fresh and skip refetch.
+    KrakenWsBarsCommitted {
+        fresh: Vec<(String, String, i64)>,
+    },
+    /// Lifecycle event from one of the WS OHLC streamers (connect /
+    /// subscribe / disconnect). Surfaced as a log line.
+    KrakenWsOhlcStatus {
+        interval_min: u32,
+        kind: String,
+        detail: String,
+    },
     KrakenEquityQuote(typhoon_engine::broker::kraken::KrakenEquityTicker),
     KrakenEquityBars {
         symbol: String,
@@ -10601,6 +10622,12 @@ pub struct TyphooNApp {
     kraken_trade_keys: std::collections::HashSet<String>,
     kraken_cost_basis: std::collections::HashMap<String, KrakenCostBasis>,
     kraken_open_orders: Vec<typhoon_engine::broker::kraken::KrakenOrder>,
+    /// (symbol, tf_label) → epoch-ms anchor for "WS pushed a bar this recent
+    /// for this key". The REST sync scheduler consults this to skip refetch
+    /// while the WS feed is keeping the cache current. O(1) insert and
+    /// lookup; entries are not actively pruned because the per-key check
+    /// already age-bounds them with the TF period.
+    kraken_ws_fresh_until: std::collections::HashMap<(String, String), i64>,
     kraken_pairs: Vec<(String, String)>,
     /// Normalized pair/display symbols cached as a set so
     /// `kraken_spot_symbol_in_loaded_pairs` is O(1) — the previous linear
@@ -24925,6 +24952,66 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             }
                         }
                     }
+                    BrokerCmd::KrakenStartOhlcStreamers { pairs } => {
+                        // Bridge channels: streamers write bars into the writer;
+                        // writer reports flushes back to the main loop via BrokerMsg.
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let pair_count = pairs.len();
+                        if pair_count == 0 {
+                            let _ = msg_tx.send(BrokerMsg::Error(
+                                "KrakenStartOhlcStreamers: no pairs supplied".into(),
+                            ));
+                        } else {
+                            let (commit_tx, mut commit_rx) =
+                                tokio::sync::mpsc::unbounded_channel();
+                            let (status_tx, mut status_rx) =
+                                tokio::sync::mpsc::unbounded_channel();
+                            // Drain commits into BrokerMsg::KrakenWsBarsCommitted so the
+                            // main loop can update WS-fresh state and skip REST refetch.
+                            let commit_msg_tx = msg_tx.clone();
+                            tokio::spawn(async move {
+                                while let Some(fresh) = commit_rx.recv().await {
+                                    let _ = commit_msg_tx.send(
+                                        BrokerMsg::KrakenWsBarsCommitted { fresh },
+                                    );
+                                }
+                            });
+                            // Drain lifecycle events into BrokerMsg::KrakenWsOhlcStatus.
+                            let status_msg_tx = msg_tx.clone();
+                            tokio::spawn(async move {
+                                while let Some(event) = status_rx.recv().await {
+                                    let (interval_min, kind, detail) = match event {
+                                        typhoon_engine::broker::kraken::KrakenOhlcStreamerEvent::Connected { interval_min } => {
+                                            (interval_min, "connected".to_string(), String::new())
+                                        }
+                                        typhoon_engine::broker::kraken::KrakenOhlcStreamerEvent::Subscribed { interval_min, batches } => {
+                                            (interval_min, "subscribed".to_string(), format!("{batches} batches"))
+                                        }
+                                        typhoon_engine::broker::kraken::KrakenOhlcStreamerEvent::Disconnected { interval_min, reason } => {
+                                            (interval_min, "disconnected".to_string(), reason)
+                                        }
+                                        typhoon_engine::broker::kraken::KrakenOhlcStreamerEvent::SubscribeFailed { interval_min, reason } => {
+                                            (interval_min, "subscribe_failed".to_string(), reason)
+                                        }
+                                    };
+                                    let _ = status_msg_tx.send(BrokerMsg::KrakenWsOhlcStatus {
+                                        interval_min,
+                                        kind,
+                                        detail,
+                                    });
+                                }
+                            });
+                            kraken_ohlc_ws::spawn_kraken_ohlc_pipeline(
+                                shared_cache_broker.clone(),
+                                pairs,
+                                commit_tx,
+                                status_tx,
+                            );
+                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                "Kraken WS OHLC streamers started: {pair_count} pairs × 8 intervals",
+                            )));
+                        }
+                    }
                     BrokerCmd::KrakenStartOrderbookWs { symbol, depth } => {
                         let msg_tx = broker_msg_tx_clone.clone();
                         let stream_result = if let Some(ref kb) = kraken_broker {
@@ -29401,6 +29488,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             kraken_trade_keys: std::collections::HashSet::new(),
             kraken_cost_basis: std::collections::HashMap::new(),
             kraken_open_orders: Vec::new(),
+            kraken_ws_fresh_until: std::collections::HashMap::new(),
             kraken_pairs: Vec::new(),
             kraken_pairs_normalized: std::collections::HashSet::new(),
             kraken_futures_symbols: Vec::new(),

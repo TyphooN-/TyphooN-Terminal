@@ -221,6 +221,54 @@ fn parse_rfc3339_to_ms(s: &str) -> Option<i64> {
         .map(|dt| dt.with_timezone(&chrono::Utc).timestamp_millis())
 }
 
+/// Map the Kraken WS interval (minutes) to TyphooN's cache timeframe
+/// label. Returns `None` for any interval the cache doesn't store —
+/// currently every WS-served interval has a matching cache key, so this
+/// is essentially a total function over [`KRAKEN_WS_OHLC_INTERVALS_MIN`],
+/// but a deliberate `None` for unknowns keeps the writer side honest if
+/// Kraken ever ships new intervals.
+pub fn kraken_ws_interval_to_tf_label(interval_min: u32) -> Option<&'static str> {
+    match interval_min {
+        1 => Some("1Min"),
+        5 => Some("5Min"),
+        15 => Some("15Min"),
+        30 => Some("30Min"),
+        60 => Some("1Hour"),
+        240 => Some("4Hour"),
+        1440 => Some("1Day"),
+        10080 => Some("1Week"),
+        _ => None,
+    }
+}
+
+/// Convert a Kraken WS bar into the canonical JSON shape the cache stores
+/// for every broker. The fields match what [`crate::core::cache::SqliteCache::merge_bars`]
+/// looks for (`timestamp` as RFC-3339 + numeric OHLCV), so writes from the
+/// WS path are indistinguishable from REST-fetched bars on read.
+pub fn kraken_ws_bar_to_json(bar: &KrakenWsOhlcBar) -> serde_json::Value {
+    let ts_rfc3339 = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        bar.interval_begin_ms,
+    )
+    .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+    .unwrap_or_default();
+    serde_json::json!({
+        "timestamp": ts_rfc3339,
+        "open": bar.open,
+        "high": bar.high,
+        "low": bar.low,
+        "close": bar.close,
+        "volume": bar.volume,
+    })
+}
+
+/// Normalise a Kraken WS pair like `"BTC/USD"` or `"XBT/USD"` to TyphooN's
+/// flat cache form (`"BTCUSD"`). Strips the slash and runs the existing
+/// pair-symbol normaliser so XBT → BTC and DOGE handling stay consistent
+/// with the REST cache keys.
+pub fn kraken_ws_symbol_to_cache_key(ws_symbol: &str) -> String {
+    crate::core::kraken::normalize_pair_symbol(ws_symbol).replace('/', "")
+}
+
 /// Lightweight predicate for "this looks like a subscribe ACK". Used by the
 /// connection driver to log subscription failures without trying to mine
 /// channel data out of them.
@@ -677,5 +725,61 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), fut)
             .await
             .expect("streamer must exit on empty pair list without dialing");
+    }
+
+    #[test]
+    fn kraken_ws_interval_to_tf_label_covers_every_served_interval() {
+        for &interval in KRAKEN_WS_OHLC_INTERVALS_MIN {
+            assert!(
+                kraken_ws_interval_to_tf_label(interval).is_some(),
+                "interval {interval} from KRAKEN_WS_OHLC_INTERVALS_MIN must map"
+            );
+        }
+        assert_eq!(kraken_ws_interval_to_tf_label(1), Some("1Min"));
+        assert_eq!(kraken_ws_interval_to_tf_label(1440), Some("1Day"));
+        assert_eq!(kraken_ws_interval_to_tf_label(10080), Some("1Week"));
+        // Unknown interval (e.g. monthly via 21600) returns None — Kraken WS
+        // doesn't serve it, so the writer must not invent a cache key.
+        assert!(kraken_ws_interval_to_tf_label(21600).is_none());
+        assert!(kraken_ws_interval_to_tf_label(0).is_none());
+    }
+
+    #[test]
+    fn kraken_ws_bar_to_json_matches_cache_shape() {
+        let bar = KrakenWsOhlcBar {
+            symbol: "BTC/USD".into(),
+            interval_min: 60,
+            interval_begin_ms: 1_700_000_000_000,
+            open: 50_000.0,
+            high: 50_100.0,
+            low: 49_900.0,
+            close: 50_050.0,
+            volume: 1.5,
+            vwap: Some(50_025.0),
+            trades: 25,
+            is_snapshot: true,
+        };
+        let json = kraken_ws_bar_to_json(&bar);
+        assert_eq!(json["open"], 50_000.0);
+        assert_eq!(json["high"], 50_100.0);
+        assert_eq!(json["low"], 49_900.0);
+        assert_eq!(json["close"], 50_050.0);
+        assert_eq!(json["volume"], 1.5);
+        // Cache merger keys by RFC-3339 timestamp — must round-trip through
+        // chrono parse without losing the bar.
+        let ts = json["timestamp"].as_str().expect("timestamp string");
+        let parsed = chrono::DateTime::parse_from_rfc3339(ts).expect("parseable");
+        assert_eq!(parsed.timestamp_millis(), 1_700_000_000_000);
+    }
+
+    #[test]
+    fn kraken_ws_symbol_to_cache_key_drops_slash_and_normalises_xbt() {
+        // XBT (Kraken's legacy BTC code) folds into BTC via the existing
+        // pair normaliser so WS-written keys collide with REST-written keys.
+        assert_eq!(kraken_ws_symbol_to_cache_key("XBT/USD"), "BTCUSD");
+        assert_eq!(kraken_ws_symbol_to_cache_key("BTC/USD"), "BTCUSD");
+        assert_eq!(kraken_ws_symbol_to_cache_key("ETH/USD"), "ETHUSD");
+        // Already-flat form passes through.
+        assert_eq!(kraken_ws_symbol_to_cache_key("ETHUSD"), "ETHUSD");
     }
 }

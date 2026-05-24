@@ -1199,6 +1199,36 @@ impl eframe::App for TyphooNApp {
                             .push_back(LogEntry::info("Kraken orderbook WS: live depth streaming"));
                     }
                 }
+                BrokerMsg::KrakenWsBarsCommitted { fresh } => {
+                    // Mark each (symbol, tf) WS-fresh so the REST scheduler skips
+                    // refetch while the WS feed is keeping the cache current.
+                    // O(n) over the flush batch; per-key insert is O(1).
+                    let now_ms = chrono::Utc::now().timestamp_millis();
+                    for (symbol, tf, last_bar_ts_ms) in fresh {
+                        self.kraken_ws_fresh_until
+                            .insert((symbol, tf), now_ms.max(last_bar_ts_ms));
+                    }
+                }
+                BrokerMsg::KrakenWsOhlcStatus {
+                    interval_min,
+                    kind,
+                    detail,
+                } => {
+                    let tf = typhoon_engine::broker::kraken::kraken_ws_interval_to_tf_label(
+                        interval_min,
+                    )
+                    .unwrap_or("?");
+                    let msg = if detail.is_empty() {
+                        format!("Kraken WS OHLC {tf}: {kind}")
+                    } else {
+                        format!("Kraken WS OHLC {tf}: {kind} — {detail}")
+                    };
+                    if matches!(kind.as_str(), "disconnected" | "subscribe_failed") {
+                        self.log.push_back(LogEntry::warn(msg));
+                    } else {
+                        self.log.push_back(LogEntry::info(msg));
+                    }
+                }
                 BrokerMsg::Error(e) => {
                     let now = chrono::Utc::now().timestamp();
                     // Compact pass failed — clear in_progress so the gate can retry next window.
