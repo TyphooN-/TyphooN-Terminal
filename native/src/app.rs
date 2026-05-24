@@ -3419,12 +3419,6 @@ impl ChartState {
     }
 
     fn compute_indicators_gpu(&mut self, gpu: Option<&mut gpu_compute::GpuCompute>) {
-        // During heavy sync, only compute for the active chart to keep UI responsive
-        if self.heavy_sync_in_progress {
-            // For now we still allow it (caller decides), but we can add stricter
-            // filtering later. The main throttle happens in the render loop.
-        }
-
         let n = self.bars.len();
 
         // Forming-bar fast path: only update the last value of indicators
@@ -11065,9 +11059,6 @@ pub struct TyphooNApp {
     kraken_equity_universe_retry_after_ts: i64,
     kraken_equities_sync_pause_until_ts: i64,
     kraken_equities_sync_pause_reason: String,
-    /// When true, the app is doing heavy historical bar sync.
-    /// Used to throttle indicator computation, GPU uploads, and repaint rate.
-    heavy_sync_in_progress: bool,
     /// Tastytrade-cached symbol set (uppercased, parsed from detailed_stats keys
     /// with the `tastytrade:` prefix). Rebuilt alongside cached_mt5_symbols so
     /// the Alpaca equity rotation can exclude anything tastytrade already has.

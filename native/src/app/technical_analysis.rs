@@ -3126,10 +3126,8 @@ pub(super) fn draw_chart(
     draw_mode: &DrawMode,
 ) {
     // MAX PERFORMANCE: During heavy sync, bail as early as possible.
-    // Only allow drawing if this is a forming-bar update (which is O(1)).
-    if chart.heavy_sync_in_progress && !chart.forming_bar_dirty {
-        return;
-    }
+    // (The heavy_sync_in_progress check is done in the caller in app_runtime.rs
+    // because the flag lives on TyphooNApp, not ChartState.)
 
     // ── Performance early-out for live Kraken WS updates ───────────────────
     // Fast path: if nothing changed since last render, skip everything.
