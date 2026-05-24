@@ -157,3 +157,12 @@ Next steps:
 - Increase concurrent fetch workers for M1/M5
 - Add Yahoo price fallback + always show source in watchlist
 - Add unit tests for price fallback chain
+
+## Yahoo Price Fallback Implementation (2026-05-24)
+
+- Added `fetch_yahoo_last_price` using Yahoo Finance chart API
+- Added `fetch_last_price_with_fallback` chain (Yahoo first)
+- Added unit test placeholder
+- Always show source requirement noted
+
+Next: Wire into watchlist rendering + show source + age

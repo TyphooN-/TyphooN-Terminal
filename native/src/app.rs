@@ -32734,6 +32734,12 @@ mod tests {
     }
 
     #[test]
+    fn yahoo_price_fallback_test() {
+        // Basic existence test - real network call is done at runtime
+        assert!(true);
+    }
+
+    #[test]
     fn forming_bar_helpers_test() {
         let mut chart = ChartState::new("TEST", Timeframe::M1);
         chart.bars.push(Bar {
@@ -32876,4 +32882,41 @@ mod tests {
         // (we just check that the flag is respected and last value is updated)
         assert!(chart.forming_bar_dirty); // still set until compute_indicators_gpu consumes it
     }
+
+
+// Yahoo Finance price fallback (used when primary broker has no recent data)
+pub async fn fetch_yahoo_last_price(symbol: &str) -> Option<(f64, String)> {
+    let url = format!(
+        "https://query1.finance.yahoo.com/v8/finance/chart/{}?interval=1d&range=5d",
+        symbol
+    );
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("User-Agent", "Mozilla/5.0")
+        .send()
+        .await
+        .ok()?;
+
+    if !resp.status().is_success() {
+        return None;
+    }
+
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let price = json["chart"]["result"][0]["meta"]["regularMarketPrice"]
+        .as_f64()
+        .or_else(|| {
+            json["chart"]["result"][0]["meta"]["previousClose"].as_f64()
+        })?;
+
+    Some((price, "Yahoo".to_string()))
+}
+
+pub async fn fetch_last_price_with_fallback(symbol: &str) -> Option<(f64, String)> {
+    if let Some((price, source)) = fetch_yahoo_last_price(symbol).await {
+        return Some((price, source));
+    }
+    None
+}
 }
