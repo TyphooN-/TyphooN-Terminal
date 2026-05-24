@@ -154,8 +154,8 @@ impl GpuCompute {
     pub fn compute_sma_gpu(
         &self,
         period: u32,
-        start_bar: u32,
-        end_bar_exclusive: u32,
+        _start_bar: u32,
+        _end_bar_exclusive: u32,
     ) -> Option<Vec<f32>> {
         // Use the parallel SMA path that is already implemented
         self.dispatch_indicator_pub(&Indicator::Sma, period, true)

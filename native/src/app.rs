@@ -3424,18 +3424,15 @@ impl ChartState {
         // point between our WS fast-path and the GPU compute path.
         if self.forming_bar_dirty && n > 1 {
             if let Some(last) = self.bars.last() {
-                let last_close = last.close as f32;
+                let _last_close = last.close as f32;
                 // For SMA200 / SMA100 we can do a cheap rolling update
-                if let Some(last_sma200) = self.sma200.last_mut() {
-                    // Simple approximation for forming bar (real impl would use proper rolling formula)
-                    if let Some(prev) = self.sma200.get(n - 2).copied().flatten() {
-                        *last_sma200 = Some((prev * (self.sma_slow_period as f64 - 1.0) + last.close) / self.sma_slow_period as f64);
-                    }
+                let prev200 = self.sma200.get(n - 2).copied().flatten();
+                if let (Some(last_sma200), Some(prev)) = (self.sma200.last_mut(), prev200) {
+                    *last_sma200 = Some((prev * (self.sma_slow_period as f64 - 1.0) + last.close) / self.sma_slow_period as f64);
                 }
-                if let Some(last_sma100) = self.sma100.last_mut() {
-                    if let Some(prev) = self.sma100.get(n - 2).copied().flatten() {
-                        *last_sma100 = Some((prev * (self.sma_fast_period as f64 - 1.0) + last.close) / self.sma_fast_period as f64);
-                    }
+                let prev100 = self.sma100.get(n - 2).copied().flatten();
+                if let (Some(last_sma100), Some(prev)) = (self.sma100.last_mut(), prev100) {
+                    *last_sma100 = Some((prev * (self.sma_fast_period as f64 - 1.0) + last.close) / self.sma_fast_period as f64);
                 }
             }
             self.forming_bar_dirty = false; // consumed
