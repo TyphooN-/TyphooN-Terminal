@@ -149,18 +149,16 @@ fn anchored_vwap_read_window(
 
 impl GpuCompute {
     /// Compute SMA on GPU for a bar range (reuses uploaded OHLC buffer).
-    /// This is the template for moving more indicators off the CPU path.
+    /// Delegates to the existing dispatch_indicator_pub path so it actually
+    /// produces results instead of always falling back to CPU.
     pub fn compute_sma_gpu(
         &self,
         period: u32,
         start_bar: u32,
         end_bar_exclusive: u32,
     ) -> Option<Vec<f32>> {
-        // Placeholder — real implementation would dispatch a WGSL SMA shader
-        // using the same buffer reuse pattern as compute_anchored_vwap.
-        // For now returns None so callers fall back to CPU.
-        let _ = (period, start_bar, end_bar_exclusive);
-        None
+        // Use the parallel SMA path that is already implemented
+        self.dispatch_indicator_pub(&Indicator::Sma, period, true)
     }
 
     /// Compute Anchored VWAP for a bar range on the already-uploaded chart buffers.
