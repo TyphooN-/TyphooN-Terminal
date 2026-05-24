@@ -18,7 +18,7 @@ pub use self::ohlc_ws::{
     build_subscribe_frames, build_unsubscribe_frame, compute_reconnect_backoff,
     is_heartbeat_or_status, is_subscribe_ack, kraken_ws_bar_to_json,
     kraken_ws_interval_to_tf_label, kraken_ws_symbol_to_cache_key, parse_ohlc_message,
-    run_ohlc_streamer,
+    run_ohlc_streamer, ws_bar_is_closed,
 };
 pub use self::order_types::{KrakenConditionalClose, KrakenOrderRequest};
 pub use self::private_ws::{

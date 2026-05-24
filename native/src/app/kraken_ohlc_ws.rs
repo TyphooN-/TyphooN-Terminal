@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 use typhoon_engine::broker::kraken::{
     KRAKEN_WS_OHLC_INTERVALS_MIN, KrakenOhlcStreamerEvent, KrakenWsOhlcBar,
     kraken_ws_bar_to_json, kraken_ws_interval_to_tf_label, kraken_ws_symbol_to_cache_key,
-    run_ohlc_streamer,
+    run_ohlc_streamer, ws_bar_is_closed,
 };
 use typhoon_engine::core::cache::SqliteCache;
 
@@ -189,6 +189,94 @@ mod tests {
         let symbols = build_kraken_ws_subscribe_symbols(&pairs);
         assert!(symbols.iter().all(|s| s.contains('/')));
     }
+
+    fn mk_bar(interval_min: u32, interval_begin_ms: i64) -> KrakenWsOhlcBar {
+        KrakenWsOhlcBar {
+            symbol: "BTC/USD".into(),
+            interval_min,
+            interval_begin_ms,
+            open: 100.0,
+            high: 101.0,
+            low: 99.0,
+            close: 100.5,
+            volume: 1.0,
+            vwap: None,
+            trades: 1,
+            is_snapshot: false,
+        }
+    }
+
+    #[test]
+    fn partition_closed_bars_keeps_open_bars_in_remaining() {
+        let now_ms = 1_700_000_300_000;
+        let mut buffer = HashMap::new();
+        // 1Min bar whose bucket runs to now+30s → still open.
+        buffer.insert(("BTCUSD".into(), 1, now_ms - 30_000), mk_bar(1, now_ms - 30_000));
+        let (to_flush, remaining) = partition_closed_bars(buffer, now_ms);
+        assert!(to_flush.is_empty(), "open bar must not be flushed");
+        assert_eq!(remaining.len(), 1, "open bar must stay buffered for next tick");
+    }
+
+    #[test]
+    fn partition_closed_bars_flushes_bars_past_bucket_end() {
+        let now_ms = 1_700_000_300_000;
+        let mut buffer = HashMap::new();
+        // 1Min bar whose bucket ended one minute ago → closed.
+        let begin = now_ms - 120_000;
+        buffer.insert(("BTCUSD".into(), 1, begin), mk_bar(1, begin));
+        let (to_flush, remaining) = partition_closed_bars(buffer, now_ms);
+        assert_eq!(to_flush.len(), 1, "closed bar must flush");
+        assert!(remaining.is_empty(), "closed bar must leave the buffer");
+    }
+
+    #[test]
+    fn partition_closed_bars_mixed_buffer_splits_by_close_state() {
+        let now_ms = 1_700_000_300_000;
+        let mut buffer = HashMap::new();
+        // Closed 1Min from two minutes ago.
+        let closed_begin = now_ms - 120_000;
+        buffer.insert(("BTCUSD".into(), 1, closed_begin), mk_bar(1, closed_begin));
+        // Open 5Min: bucket runs to now + 4 minutes.
+        let open_begin = now_ms - 60_000;
+        buffer.insert(("ETHUSD".into(), 5, open_begin), mk_bar(5, open_begin));
+        // Open 1Day: bucket started 12 hours ago, 12 hours remaining.
+        let open_day_begin = now_ms - 12 * 3_600_000;
+        buffer.insert(
+            ("SOLUSD".into(), 1440, open_day_begin),
+            mk_bar(1440, open_day_begin),
+        );
+        let (to_flush, remaining) = partition_closed_bars(buffer, now_ms);
+        assert_eq!(to_flush.len(), 1, "only the closed 1Min should flush");
+        assert!(to_flush.contains_key(&("BTCUSD".to_string(), 1, closed_begin)));
+        assert_eq!(remaining.len(), 2, "both open bars stay buffered");
+        assert!(remaining.contains_key(&("ETHUSD".to_string(), 5, open_begin)));
+        assert!(remaining.contains_key(&("SOLUSD".to_string(), 1440, open_day_begin)));
+    }
+
+    #[test]
+    fn partition_closed_bars_empty_buffer_returns_two_empty_maps() {
+        let (to_flush, remaining) = partition_closed_bars(HashMap::new(), 1_700_000_000_000);
+        assert!(to_flush.is_empty());
+        assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn partition_closed_bars_snapshot_historical_bars_all_flush() {
+        // Snapshot delivery from Kraken brings closed historical bars (the last
+        // ~720 bars of the chosen interval). Every one should flush on the first
+        // tick so the WS-fresh anchor is established and REST can stop scheduling
+        // these (symbol, tf) pairs immediately.
+        let now_ms = 1_700_000_000_000;
+        let mut buffer = HashMap::new();
+        for i in 1..=10 {
+            // Ten consecutive closed 1Min bars ending 1..=10 minutes ago.
+            let begin = now_ms - (i as i64) * 60_000;
+            buffer.insert(("BTCUSD".into(), 1, begin), mk_bar(1, begin));
+        }
+        let (to_flush, remaining) = partition_closed_bars(buffer, now_ms);
+        assert_eq!(to_flush.len(), 10);
+        assert!(remaining.is_empty());
+    }
 }
 
 /// Coalesce-and-flush cadence for the WS bar writer. Picked so an active
@@ -243,6 +331,19 @@ pub(super) fn spawn_kraken_ohlc_pipeline(
 
 /// Drain the merged bar channel, buffer by (symbol, interval, bucket),
 /// flush every [`WS_BAR_FLUSH_INTERVAL`]. Exits when the channel closes.
+///
+/// Only **closed** bars are flushed to the cache — open in-progress buckets
+/// stay buffered (last-write-wins) until their interval rolls over. This is
+/// the load-bearing perf fix for the UI lag the WS feed introduced: an
+/// active 1Min pair gets dozens of per-tick updates to the same open bucket,
+/// and persisting each one runs [`SqliteCache::merge_bars`] which decompresses
+/// the full history, re-sorts, re-serialises, and **re-zstd-22-compresses**
+/// the entire blob. With ~1500 pairs × 8 intervals that saturated every CPU
+/// core and starved egui's render thread. Deferring to bar close drops the
+/// steady-state write rate by ~60× (1 merge per closed bar per pair rather
+/// than per WS tick) while preserving the freshness semantic the REST
+/// scheduler relies on — `kraken_ws_fresh_until` still gets updated for each
+/// (symbol, tf) on close, which is exactly when staleness checks care.
 async fn run_ws_bar_writer(
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
     mut bar_rx: mpsc::UnboundedReceiver<KrakenWsOhlcBar>,
@@ -279,15 +380,40 @@ async fn run_ws_bar_writer(
                 if buffer.is_empty() {
                     continue;
                 }
-                let to_flush = std::mem::take(&mut buffer);
-                flush_ws_bars(&shared_cache, &commit_tx, to_flush).await;
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let (to_flush, remaining) =
+                    partition_closed_bars(std::mem::take(&mut buffer), now_ms);
+                buffer = remaining;
+                if !to_flush.is_empty() {
+                    flush_ws_bars(&shared_cache, &commit_tx, to_flush).await;
+                }
             }
         }
     }
-    // Final drain on shutdown.
+    // Final drain on shutdown: flush everything regardless of close state.
+    // We're going down, so persisting the latest known value of an open bar
+    // is strictly better than dropping it on the floor.
     if !buffer.is_empty() {
         flush_ws_bars(&shared_cache, &commit_tx, std::mem::take(&mut buffer)).await;
     }
+}
+
+/// Split the writer buffer into (closed-bars-to-flush, still-open-bars-to-keep).
+/// A bar is "closed" once its bucket end is at or before `now_ms`; open bars
+/// stay in the buffer so the next tick's update can supersede them (last-write
+/// -wins) and only the eventual final close value reaches the cache.
+fn partition_closed_bars(
+    buffer: HashMap<(String, u32, i64), KrakenWsOhlcBar>,
+    now_ms: i64,
+) -> (
+    HashMap<(String, u32, i64), KrakenWsOhlcBar>,
+    HashMap<(String, u32, i64), KrakenWsOhlcBar>,
+) {
+    buffer
+        .into_iter()
+        .partition(|((_, interval_min, interval_begin_ms), _)| {
+            ws_bar_is_closed(*interval_min, *interval_begin_ms, now_ms)
+        })
 }
 
 /// Group buffered bars by `(typhoon_symbol, tf_label)`, merge each group

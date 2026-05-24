@@ -221,6 +221,24 @@ fn parse_rfc3339_to_ms(s: &str) -> Option<i64> {
         .map(|dt| dt.with_timezone(&chrono::Utc).timestamp_millis())
 }
 
+/// `true` once the bar's bucket has ended in wall-clock terms — i.e.
+/// `interval_begin_ms + interval_min * 60s <= now_ms`. The WS pipeline
+/// uses this to gate cache writes: only closed bars are persisted, so the
+/// open bar's per-tick rewrites of the same bucket no longer trigger a
+/// full-history zstd-22 re-pack of the (symbol, tf) blob in
+/// [`crate::core::cache::SqliteCache::merge_bars`]. With a 1Min snapshot
+/// stream pushing dozens of in-progress updates per pair, this drops the
+/// steady-state cache-write volume by ~60× and is the load-bearing fix
+/// for the UI lag the WS feed introduced.
+///
+/// Saturating arithmetic so a clock-skewed or maliciously-old bar can't
+/// overflow into the future and look "still open" forever.
+pub fn ws_bar_is_closed(interval_min: u32, interval_begin_ms: i64, now_ms: i64) -> bool {
+    let span_ms = (interval_min as i64).saturating_mul(60_000);
+    let end_ms = interval_begin_ms.saturating_add(span_ms);
+    end_ms <= now_ms
+}
+
 /// Map the Kraken WS interval (minutes) to TyphooN's cache timeframe
 /// label. Returns `None` for any interval the cache doesn't store —
 /// currently every WS-served interval has a matching cache key, so this
@@ -770,6 +788,61 @@ mod tests {
         let ts = json["timestamp"].as_str().expect("timestamp string");
         let parsed = chrono::DateTime::parse_from_rfc3339(ts).expect("parseable");
         assert_eq!(parsed.timestamp_millis(), 1_700_000_000_000);
+    }
+
+    #[test]
+    fn ws_bar_is_closed_returns_false_while_bucket_is_open() {
+        // 1Min bar starting at 10:00:00; now is 10:00:30 → bucket runs to 10:01:00, still open.
+        let begin = 1_700_000_000_000;
+        let now = begin + 30_000;
+        assert!(!ws_bar_is_closed(1, begin, now));
+    }
+
+    #[test]
+    fn ws_bar_is_closed_returns_true_at_or_after_bucket_end() {
+        let begin = 1_700_000_000_000;
+        // Exactly at the closing instant: bucket end is inclusive of "closed" so a
+        // bar whose interval has just rolled is flushable.
+        assert!(ws_bar_is_closed(1, begin, begin + 60_000));
+        assert!(ws_bar_is_closed(1, begin, begin + 60_000 + 1));
+    }
+
+    #[test]
+    fn ws_bar_is_closed_scales_with_interval_minutes() {
+        let begin = 1_700_000_000_000;
+        // 5Min bar: still open at +4min, closed at +5min.
+        assert!(!ws_bar_is_closed(5, begin, begin + 4 * 60_000));
+        assert!(ws_bar_is_closed(5, begin, begin + 5 * 60_000));
+        // 1Day bar: still open at +23h, closed at +24h.
+        assert!(!ws_bar_is_closed(1440, begin, begin + 23 * 3_600_000));
+        assert!(ws_bar_is_closed(1440, begin, begin + 24 * 3_600_000));
+    }
+
+    #[test]
+    fn ws_bar_is_closed_snapshot_historical_bars_always_flushable() {
+        // Snapshot delivery brings closed historical bars whose interval_begin is
+        // far in the past relative to now. Every served interval should report
+        // them as closed so the first flush persists the backfill.
+        let now = 1_700_000_000_000;
+        for &interval_min in KRAKEN_WS_OHLC_INTERVALS_MIN {
+            // Place the bar two full periods in the past.
+            let begin = now - (interval_min as i64) * 60_000 * 2;
+            assert!(
+                ws_bar_is_closed(interval_min, begin, now),
+                "interval {interval_min} historical bar must be reported closed",
+            );
+        }
+    }
+
+    #[test]
+    fn ws_bar_is_closed_handles_future_begin_without_overflow() {
+        // Defensive: clock skew or a malformed feed could push interval_begin into
+        // the future. Must not overflow and must report not-closed.
+        let now = 1_700_000_000_000;
+        assert!(!ws_bar_is_closed(1, now + 10 * 60_000, now));
+        // Absurd extremes saturate to a sane "still open" answer rather than
+        // wrapping around to a phantom past close.
+        assert!(!ws_bar_is_closed(u32::MAX, i64::MAX, now));
     }
 
     #[test]
