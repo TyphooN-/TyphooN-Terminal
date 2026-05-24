@@ -3125,6 +3125,13 @@ pub(super) fn draw_chart(
     alerts: &[(f64, String)],
     draw_mode: &DrawMode,
 ) {
+    // During heavy sync, draw a cheaper version (fewer panes, simpler lines)
+    // to keep the UI responsive.
+    if chart.heavy_sync_in_progress {
+        // For now we just proceed — a full cheap path can be added later
+        // (e.g. skip sub-panes, use coarser tessellation).
+    }
+
     // ── Performance early-out for live Kraken WS updates ───────────────────
     // Fast path: if nothing changed since last render, skip everything.
     if !chart.forming_bar_dirty

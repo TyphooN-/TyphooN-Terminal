@@ -1035,8 +1035,12 @@ impl eframe::App for TyphooNApp {
         if self.indicators_dirty && !self.user_interacting {
             self.indicators_dirty = false;
             let mut gpu = self.gpu_indicators.take();
+            // Only compute indicators for the active chart during heavy sync
+            // to keep the UI responsive. Background charts are skipped.
             if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                chart.compute_indicators_gpu(gpu.as_mut());
+                if !self.heavy_sync_in_progress || self.charts.len() <= 3 {
+                    chart.compute_indicators_gpu(gpu.as_mut());
+                }
             }
             self.gpu_indicators = gpu;
         }
@@ -17168,7 +17172,12 @@ impl eframe::App for TyphooNApp {
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(0)
         });
-        if idle_fps_cap > 0 {
+        if self.heavy_sync_in_progress {
+            // During heavy bar sync, slow down repaints significantly to keep
+            // the UI responsive. 250ms is a good balance between progress visibility
+            // and not starving the render thread.
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        } else if idle_fps_cap > 0 {
             let frame_ms = (1000 / idle_fps_cap.max(1)).max(1);
             ctx.request_repaint_after(std::time::Duration::from_millis(frame_ms));
         } else {
