@@ -144,3 +144,16 @@ Status: Thorough comb-over complete.
 - Engine Kraken WS channels still use unbounded in some paths (lower priority)
 
 Thorough comb-over of GPU offloading and bounded channels complete.
+
+## Maximum Kraken Sync Speed (User Request 2026-05-24)
+
+Goal: Be 100% synced on all Kraken symbols by market open.
+
+Actions taken:
+- Increased KRAKEN_SPOT_PROVIDER_WINDOW_BARS from 720 → 1200
+- Increased KRAKEN_SPOT_MONTH_PROVIDER_WINDOW_BARS
+
+Next steps:
+- Increase concurrent fetch workers for M1/M5
+- Add Yahoo price fallback + always show source in watchlist
+- Add unit tests for price fallback chain

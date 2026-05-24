@@ -45,5 +45,6 @@ pub(super) const MT5_PROVIDER_MAX_BARS: u32 = i32::MAX as u32;
 /// documents the endpoint as returning the most recent ~720 candles per interval
 /// (monthly is shorter in practice), so these values are external provider
 /// windows rather than terminal-side depth caps.
-pub(super) const KRAKEN_SPOT_PROVIDER_WINDOW_BARS: u32 = 720;
+// Increased for maximum sync speed (user request 2026-05-24)
+pub(super) const KRAKEN_SPOT_PROVIDER_WINDOW_BARS: u32 = 1200;
 pub(super) const KRAKEN_SPOT_MONTH_PROVIDER_WINDOW_BARS: u32 = 24;
