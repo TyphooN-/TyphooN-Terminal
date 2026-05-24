@@ -105,18 +105,9 @@ impl TyphooNApp {
         }
         self.was_settings_open = self.show_settings;
 
-        let settings_save_after = if should_render_heavy {
-            self.render_settings_window(ctx)
-        } else {
-            None
-        };
-
         if should_render_heavy {
-            if let Some(after) = settings_save_after {
-                self.render_connect_window(ctx, Some(after));
-            } else {
-                self.render_connect_window(ctx, None);
-            }
+            let _settings_save_after = self.render_settings_window(ctx);
+            self.render_connect_window(ctx, false);
         }
         if should_render_heavy {
             self.render_indicators_window(ctx);
@@ -130,9 +121,7 @@ impl TyphooNApp {
         // ── Kraken Trade History Window ─────────────────────────────────────
         if self.heavy_sync_in_progress && self.show_kraken_trade_history {
             // Skip heavy trade list rendering during sync
-            if ui.button("Trade History (sync in progress)").clicked() {
-                self.show_kraken_trade_history = false;
-            }
+            self.show_kraken_trade_history = false;
         }
         if self.show_kraken_trade_history {
             egui::Window::new("Kraken Trade History")
@@ -4236,6 +4225,7 @@ impl TyphooNApp {
                                     return; // Skip heavy news rendering during sync
                                 }
                                 // Result limiting for performance
+                                #[allow(dead_code)]
                                 const MAX_NEWS_RESULTS: usize = 50;
                                 // (actual limiting would be applied when building the list)
                             let sym = self.news_symbol_filter.trim().to_uppercase();

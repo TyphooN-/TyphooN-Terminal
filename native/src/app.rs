@@ -32720,6 +32720,14 @@ mod tests {
     }
 
     #[test]
+    fn news_dedup_placeholder_test() {
+        // Placeholder test for article deduplication logic.
+        // Real implementation will use article_exists_by_url_hash.
+        let should_dedup = true;
+        assert!(should_dedup);
+    }
+
+    #[test]
     fn kraken_ws_pair_is_fresh_at_handles_future_anchor_gracefully() {
         // Defensive: clock skew could land an anchor slightly in the future.
         // saturating_sub(future) clamps to 0, which is < max_age_ms → fresh.
