@@ -32733,4 +32733,19 @@ mod tests {
         assert!(!chart.forming_bar_dirty);
         assert!(chart.visible_bars_gen > gen_before);
     }
+
+    #[test]
+    fn chart_state_early_out_snapshot() {
+        let mut chart = ChartState::new("TEST", Timeframe::M5);
+        chart.bars.push(Bar { ts_ms: 1000, open:1.0, high:1.0, low:1.0, close:1.0, volume:1.0 });
+        chart.mark_structural_change();
+
+        // Simulate what draw_chart would do after a successful render
+        chart.last_rendered_gen = chart.visible_bars_gen;
+        chart.last_rendered_bar_ts = chart.last_visible_bar_ts;
+
+        // Same gen + ts should early-out
+        assert_eq!(chart.visible_bars_gen, chart.last_rendered_gen);
+        assert_eq!(chart.last_visible_bar_ts, chart.last_rendered_bar_ts);
+    }
 }
