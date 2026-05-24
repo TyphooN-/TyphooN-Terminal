@@ -32,6 +32,9 @@ fn sortable_header(
 
 impl TyphooNApp {
     pub(super) fn draw_floating_windows(&mut self, ctx: &egui::Context) {
+        // Shared helper: returns true if we should do heavy rendering
+        let should_render_heavy = !self.heavy_sync_in_progress;
+
         // During heavy bar sync, skip expensive window work to keep UI responsive.
         // Only essential windows (or light versions) are allowed.
         if self.heavy_sync_in_progress {
@@ -102,10 +105,18 @@ impl TyphooNApp {
         }
         self.was_settings_open = self.show_settings;
 
-        let settings_save_after = self.render_settings_window(ctx);
+        let settings_save_after = if should_render_heavy {
+            self.render_settings_window(ctx)
+        } else {
+            None
+        };
 
-        self.render_connect_window(ctx, settings_save_after);
-        self.render_indicators_window(ctx);
+        if should_render_heavy {
+            self.render_connect_window(ctx, settings_save_after);
+        }
+        if should_render_heavy {
+            self.render_indicators_window(ctx);
+        }
         self.render_kraken_spot_sell_dialog(ctx);
 
         // News window is a known heavy renderer — skip during heavy sync
@@ -4219,6 +4230,7 @@ impl TyphooNApp {
                                 if self.heavy_sync_in_progress {
                                     return; // Skip heavy news rendering during sync
                                 }
+                                // TODO: Limit results to 50 during heavy sync or always for performance
                             let sym = self.news_symbol_filter.trim().to_uppercase();
                             if sym.is_empty() {
                                 self.log.push_back(LogEntry::warn("News: enter a symbol"));
