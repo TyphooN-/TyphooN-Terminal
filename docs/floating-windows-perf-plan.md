@@ -77,3 +77,23 @@ Status: In progress — combing complete, plan created.
 - [ ] Other windows (Symbol Investigation, SEC) still need audit
 
 Status: Significant progress. Continuing aggressive execution.
+
+## More Execution (continued)
+
+- [x] Added `should_render_heavy` helper in draw_floating_windows
+- [x] Gated Indicators, Settings, Connect windows
+- [x] Gated Kraken Trade History
+- [ ] Symbol Investigation window audit (next)
+- [ ] SEC window audit
+- [ ] Result limiting implementation (beyond comment)
+
+## Status Update
+
+Significant coverage achieved across major floating windows:
+- News (dedup + early-out)
+- Trade History
+- Indicators / Settings / Connect
+- Strategy windows
+- Symbol Investigation (guard added)
+
+Remaining: Full body storage enforcement, result limiting, SEC window, final polish.
