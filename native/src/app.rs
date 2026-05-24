@@ -3459,6 +3459,10 @@ impl ChartState {
                 }
                 gpu.upload_bars_full(&opens, &closes, &highs, &lows, &volumes);
 
+                // Update snapshot so the draw_chart early-out works correctly after GPU path
+                self.last_rendered_gen = self.visible_bars_gen;
+                self.last_rendered_bar_ts = self.last_visible_bar_ts;
+
                 // SMA — parallel GPU
                 let sma_slow = self.sma_slow_period;
                 let sma_fast = self.sma_fast_period;
