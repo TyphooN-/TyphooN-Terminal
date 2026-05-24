@@ -7,11 +7,16 @@
 mod equities;
 mod helpers;
 mod limiter;
+mod ohlc_ws;
 mod order_types;
 mod private_ws;
 mod public_book;
 
 pub use self::equities::{KrakenEquityBar, KrakenEquityMarket, KrakenEquityTicker};
+pub use self::ohlc_ws::{
+    KRAKEN_WS_OHLC_INTERVALS_MIN, KRAKEN_WS_V2_URL, KrakenWsOhlcBar, build_subscribe_frames,
+    build_unsubscribe_frame, is_heartbeat_or_status, is_subscribe_ack, parse_ohlc_message,
+};
 pub use self::order_types::{KrakenConditionalClose, KrakenOrderRequest};
 pub use self::private_ws::{
     KrakenOrder, KrakenPrivateWs, KrakenTrade, parse_open_orders_message,
