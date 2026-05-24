@@ -355,10 +355,10 @@ impl TyphooNApp {
                         let ws_resp = ui
                             .checkbox(
                                 &mut self.kraken_ws_ohlc_enabled,
-                                "Stream bars via WebSocket (1Min/5Min/15Min/30Min)",
+                                "Stream bars via WebSocket (recommended, on by default)",
                             )
                             .on_hover_text(
-                                "Kraken WS v2 OHLC channel pushes bar updates as ticks land — the only way to keep low timeframes healthy across the full Kraken universe (REST's ~55 req/min budget can't refresh 13k pairs × 1Min in 24 minutes). REST keeps doing cold-start historical backfill and high-TF refresh. One TCP connection per interval (8 total) is opened when this is on.",
+                                "Kraken WS v2 OHLC channel pushes bar updates as ticks land — the only way to keep low timeframes healthy across the full Kraken universe (REST's ~55 req/min budget can't refresh 13k pairs × 1Min in 24 minutes). The channel is on Kraken's public WS endpoint (no API key needed) and is strictly better than REST alone for low timeframes. REST keeps doing cold-start historical backfill and high-TF refresh. One TCP connection per interval (8 total) is opened when this is on. Turn off only if you need to suppress the connections for testing or footprint.",
                             );
                         if ws_resp.changed() {
                             settings_save_after = true;

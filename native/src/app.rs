@@ -10647,8 +10647,11 @@ pub struct TyphooNApp {
     /// Stream Kraken bar updates via WS v2 in addition to the REST scheduler.
     /// Subscribes to every spot pair across 1Min/5Min/15Min/30Min/1Hour/4Hour/
     /// 1Day/1Week so low-timeframe bars stay current without burning REST
-    /// budget. Off by default until the user opts in; toggle persisted via
-    /// settings serde so reconnect on next launch is automatic.
+    /// budget. On by default whenever Kraken is enabled — the OHLC channel
+    /// is on Kraken's public WS endpoint (no auth needed) and is strictly
+    /// better than REST alone for the low timeframes that REST can't keep
+    /// up with. Toggle persists across sessions; flip it off only if you
+    /// need to suppress the 8 TCP connections for testing or footprint.
     kraken_ws_ohlc_enabled: bool,
     /// Set once the WS OHLC pipeline has been kicked off this session so we
     /// don't re-spawn streamers if the broker thread emits more lifecycle
@@ -29507,7 +29510,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             kraken_scrape_fiat_crypto: false,
             kraken_scrape_crypto_crosses: false,
             kraken_scrape_futures: false,
-            kraken_ws_ohlc_enabled: false,
+            kraken_ws_ohlc_enabled: true,
             kraken_ws_ohlc_started: false,
             crypto_fiat_quote_usd: true,
             crypto_fiat_quote_usdt: true,
