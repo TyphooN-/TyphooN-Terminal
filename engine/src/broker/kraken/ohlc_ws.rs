@@ -17,8 +17,26 @@
 //! `connection.rs` alongside the reconnect / heartbeat logic.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+use futures_util::{SinkExt, StreamExt};
+use tokio::sync::mpsc;
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
 pub const KRAKEN_WS_V2_URL: &str = "wss://ws.kraken.com/v2";
+
+/// Exponential backoff base; capped at [`KRAKEN_WS_RECONNECT_MAX`]. Used by
+/// the streamer's reconnect loop after the WS drops.
+const KRAKEN_WS_RECONNECT_INITIAL: Duration = Duration::from_secs(1);
+const KRAKEN_WS_RECONNECT_MAX: Duration = Duration::from_secs(60);
+/// How often the streamer sends an application-level ping. Kraken closes
+/// idle connections after ~60s of silence on some pops, so 30s gives plenty
+/// of headroom while still being cheap.
+const KRAKEN_WS_PING_INTERVAL: Duration = Duration::from_secs(30);
+/// How long the subscribe-burst can take before we time it out and treat
+/// the connection as broken. Sized so even the 13k/250 = 52 batches at
+/// 1 frame/sec stay well under it.
+const KRAKEN_WS_SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Kraken WS v2 caps subscribe frames at a few hundred symbols. We chunk at
 /// 250 to stay comfortably under that ceiling without paying the per-frame
@@ -227,6 +245,190 @@ pub fn is_heartbeat_or_status(text: &str) -> bool {
     matches!(channel, Some("heartbeat") | Some("status") | Some("pong"))
 }
 
+/// Exponential backoff for the reconnect loop: 1s → 2s → 4s → 8s … capped at
+/// 60s. Caller passes the consecutive-failure count (0-indexed); the first
+/// retry waits 1s, the second 2s, and so on.
+pub fn compute_reconnect_backoff(consecutive_failures: u32) -> Duration {
+    let shift = consecutive_failures.min(8);
+    let scaled = KRAKEN_WS_RECONNECT_INITIAL
+        .as_secs()
+        .checked_shl(shift)
+        .unwrap_or(u64::MAX);
+    Duration::from_secs(scaled).min(KRAKEN_WS_RECONNECT_MAX)
+}
+
+/// Status messages emitted by the streamer for the consuming app to log /
+/// surface in the UI. Bars themselves flow on a separate channel so the
+/// hot path doesn't allocate strings for status updates that the user
+/// rarely sees.
+#[derive(Debug, Clone)]
+pub enum KrakenOhlcStreamerEvent {
+    Connected { interval_min: u32 },
+    Subscribed { interval_min: u32, batches: usize },
+    Disconnected { interval_min: u32, reason: String },
+    SubscribeFailed { interval_min: u32, reason: String },
+}
+
+/// Run a single Kraken WS v2 OHLC streamer for the given (interval, pairs).
+/// Sends bars on `bar_tx` and lifecycle events on `event_tx`. Runs forever,
+/// reconnecting with exponential backoff on any failure. Returns when
+/// `bar_tx` is dropped by the consumer — that signals the app is shutting
+/// down and there's no reader left to feed.
+///
+/// Designed to be spawned once per interval. The function does not hold any
+/// references to the connecting `KrakenBroker` or REST client — it speaks
+/// only to Kraken's public WS endpoint, which requires no authentication.
+pub async fn run_ohlc_streamer(
+    interval_min: u32,
+    pairs: Vec<String>,
+    bar_tx: mpsc::UnboundedSender<KrakenWsOhlcBar>,
+    event_tx: mpsc::UnboundedSender<KrakenOhlcStreamerEvent>,
+) {
+    if pairs.is_empty() || bar_tx.is_closed() {
+        return;
+    }
+    let mut consecutive_failures: u32 = 0;
+    loop {
+        if bar_tx.is_closed() {
+            return;
+        }
+        let one_pass =
+            run_ohlc_streamer_once(interval_min, &pairs, &bar_tx, &event_tx).await;
+        match one_pass {
+            Ok(()) => {
+                consecutive_failures = 0;
+            }
+            Err(e) => {
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                let _ = event_tx.send(KrakenOhlcStreamerEvent::Disconnected {
+                    interval_min,
+                    reason: e,
+                });
+            }
+        }
+        let wait = compute_reconnect_backoff(consecutive_failures);
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
+        }
+    }
+}
+
+/// One connect / subscribe / read-until-error cycle. Returns `Ok(())` on a
+/// clean close (the consumer dropped the bar channel) and `Err(reason)` on
+/// any failure that should trigger a reconnect.
+async fn run_ohlc_streamer_once(
+    interval_min: u32,
+    pairs: &[String],
+    bar_tx: &mpsc::UnboundedSender<KrakenWsOhlcBar>,
+    event_tx: &mpsc::UnboundedSender<KrakenOhlcStreamerEvent>,
+) -> Result<(), String> {
+    let (ws_stream, _) = connect_async(KRAKEN_WS_V2_URL)
+        .await
+        .map_err(|e| format!("ws connect failed: {e}"))?;
+    let (mut sink, mut stream) = ws_stream.split();
+    let _ = event_tx.send(KrakenOhlcStreamerEvent::Connected { interval_min });
+
+    // Subscribe in batches. If Kraken NACKs one batch we keep going — better
+    // to have partial coverage than to drop all subscriptions on this
+    // connection. A bad-batch NACK is rare and usually indicates a single
+    // delisted symbol; the per-batch ACK loop is the slow path so we just
+    // log and move on.
+    let frames = build_subscribe_frames(interval_min, pairs);
+    let batches = frames.len();
+    let subscribe_fut = async {
+        for frame in &frames {
+            sink.send(Message::Text(frame.clone().into()))
+                .await
+                .map_err(|e| format!("ws subscribe send failed: {e}"))?;
+            // Brief pace so we don't trip Kraken's per-connection burst limit
+            // on the subscribe storm. 50ms × 52 batches ≈ 2.6s for a 13k
+            // universe, which is acceptable startup time.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Ok::<(), String>(())
+    };
+    match tokio::time::timeout(KRAKEN_WS_SUBSCRIBE_TIMEOUT, subscribe_fut).await {
+        Ok(Ok(())) => {
+            let _ = event_tx.send(KrakenOhlcStreamerEvent::Subscribed {
+                interval_min,
+                batches,
+            });
+        }
+        Ok(Err(e)) => {
+            let _ = event_tx.send(KrakenOhlcStreamerEvent::SubscribeFailed {
+                interval_min,
+                reason: e.clone(),
+            });
+            return Err(e);
+        }
+        Err(_) => {
+            let reason = "subscribe burst timed out".to_string();
+            let _ = event_tx.send(KrakenOhlcStreamerEvent::SubscribeFailed {
+                interval_min,
+                reason: reason.clone(),
+            });
+            return Err(reason);
+        }
+    }
+
+    // Heartbeat + read loop. We run a periodic ping on a tokio::time::interval
+    // and `select!` between the WS read and the ping tick. Kraken's WS v2
+    // accepts text "ping" frames; binary control pings work too but the
+    // text form is documented and survives JSON-tolerant proxies.
+    let mut ping_ticker = tokio::time::interval(KRAKEN_WS_PING_INTERVAL);
+    ping_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Skip the first tick — `interval` fires immediately on construction.
+    ping_ticker.tick().await;
+
+    loop {
+        if bar_tx.is_closed() {
+            return Ok(());
+        }
+        tokio::select! {
+            msg = stream.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if is_heartbeat_or_status(&text) || is_subscribe_ack(&text) {
+                            continue;
+                        }
+                        for bar in parse_ohlc_message(&text) {
+                            if bar_tx.send(bar).is_err() {
+                                // Consumer is gone — clean shutdown.
+                                return Ok(());
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Ping(payload))) => {
+                        let _ = sink.send(Message::Pong(payload)).await;
+                    }
+                    Some(Ok(Message::Pong(_))) | Some(Ok(Message::Binary(_)))
+                    | Some(Ok(Message::Frame(_))) => {
+                        // Ignore. Kraken doesn't use binary frames for OHLC.
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        return Err("ws closed by server".to_string());
+                    }
+                    Some(Err(e)) => {
+                        return Err(format!("ws read error: {e}"));
+                    }
+                    None => {
+                        return Err("ws stream ended".to_string());
+                    }
+                }
+            }
+            _ = ping_ticker.tick() => {
+                let ping = serde_json::json!({
+                    "method": "ping",
+                    "req_id": next_req_id(),
+                }).to_string();
+                if sink.send(Message::Text(ping.into())).await.is_err() {
+                    return Err("ws ping send failed".to_string());
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,5 +634,48 @@ mod tests {
         let c = next_req_id();
         assert!(b > a);
         assert!(c > b);
+    }
+
+    #[test]
+    fn compute_reconnect_backoff_doubles_each_failure() {
+        assert_eq!(compute_reconnect_backoff(0), Duration::from_secs(1));
+        assert_eq!(compute_reconnect_backoff(1), Duration::from_secs(2));
+        assert_eq!(compute_reconnect_backoff(2), Duration::from_secs(4));
+        assert_eq!(compute_reconnect_backoff(3), Duration::from_secs(8));
+        assert_eq!(compute_reconnect_backoff(4), Duration::from_secs(16));
+        assert_eq!(compute_reconnect_backoff(5), Duration::from_secs(32));
+    }
+
+    #[test]
+    fn compute_reconnect_backoff_caps_at_60_seconds() {
+        assert_eq!(compute_reconnect_backoff(6), KRAKEN_WS_RECONNECT_MAX);
+        assert_eq!(compute_reconnect_backoff(20), KRAKEN_WS_RECONNECT_MAX);
+        // Saturates without panicking on absurd inputs.
+        assert_eq!(compute_reconnect_backoff(u32::MAX), KRAKEN_WS_RECONNECT_MAX);
+    }
+
+    #[tokio::test]
+    async fn run_ohlc_streamer_returns_immediately_when_consumer_closes_channel() {
+        // Drop the receiver before spawning so bar_tx.is_closed() returns
+        // true on entry; the function must exit cleanly without trying
+        // to connect to Kraken (this test runs offline).
+        let (bar_tx, bar_rx) = mpsc::unbounded_channel();
+        drop(bar_rx);
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let fut = run_ohlc_streamer(1, vec!["BTC/USD".to_string()], bar_tx, event_tx);
+        // Must complete; a hung future would mean we tried to dial Kraken.
+        tokio::time::timeout(Duration::from_secs(1), fut)
+            .await
+            .expect("streamer must exit when bar channel is closed");
+    }
+
+    #[tokio::test]
+    async fn run_ohlc_streamer_no_op_for_empty_pair_list() {
+        let (bar_tx, _bar_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let fut = run_ohlc_streamer(1, Vec::new(), bar_tx, event_tx);
+        tokio::time::timeout(Duration::from_secs(1), fut)
+            .await
+            .expect("streamer must exit on empty pair list without dialing");
     }
 }

@@ -14,8 +14,9 @@ mod public_book;
 
 pub use self::equities::{KrakenEquityBar, KrakenEquityMarket, KrakenEquityTicker};
 pub use self::ohlc_ws::{
-    KRAKEN_WS_OHLC_INTERVALS_MIN, KRAKEN_WS_V2_URL, KrakenWsOhlcBar, build_subscribe_frames,
-    build_unsubscribe_frame, is_heartbeat_or_status, is_subscribe_ack, parse_ohlc_message,
+    KRAKEN_WS_OHLC_INTERVALS_MIN, KRAKEN_WS_V2_URL, KrakenOhlcStreamerEvent, KrakenWsOhlcBar,
+    build_subscribe_frames, build_unsubscribe_frame, compute_reconnect_backoff,
+    is_heartbeat_or_status, is_subscribe_ack, parse_ohlc_message, run_ohlc_streamer,
 };
 pub use self::order_types::{KrakenConditionalClose, KrakenOrderRequest};
 pub use self::private_ws::{
