@@ -1083,6 +1083,39 @@ impl TyphooNApp {
         true
     }
 
+    /// `true` if the Kraken WS OHLC pipeline pushed a bar for this
+    /// (symbol, tf) within the last `TF_period × 24` — the same staleness
+    /// rule the Sync Status window uses. O(1): one HashMap lookup + a
+    /// constant-time arithmetic check.
+    ///
+    /// Note we don't actively prune `kraken_ws_fresh_until`; entries age
+    /// out naturally because the inner predicate compares against `now_ms`
+    /// every call. A long-running session with churning WS subscriptions
+    /// will accumulate stale entries proportional to the number of
+    /// (symbol, tf) tuples Kraken has ever served us — bounded by the
+    /// universe size (≈ 100k), and a single i64 per entry.
+    pub(super) fn kraken_ws_pair_is_fresh(&self, symbol: &str, tf: &str) -> bool {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        Self::kraken_ws_pair_is_fresh_at(&self.kraken_ws_fresh_until, symbol, tf, now_ms)
+    }
+
+    pub(super) fn kraken_ws_pair_is_fresh_at(
+        fresh_map: &std::collections::HashMap<(String, String), i64>,
+        symbol: &str,
+        tf: &str,
+        now_ms: i64,
+    ) -> bool {
+        let Some(period_s) = sync_timeframe_period_secs(tf) else {
+            return false;
+        };
+        let key = (symbol.to_string(), tf.to_string());
+        let Some(&fresh_anchor_ms) = fresh_map.get(&key) else {
+            return false;
+        };
+        let max_age_ms = period_s.saturating_mul(1000).saturating_mul(24);
+        now_ms.saturating_sub(fresh_anchor_ms) < max_age_ms
+    }
+
     pub(super) fn queue_kraken_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
@@ -1101,6 +1134,14 @@ impl TyphooNApp {
             return false;
         }
         if self.is_fetch_on_cooldown("kraken", &symbol, tf) {
+            return false;
+        }
+        // O(1) WS-fresh skip: if the Kraken WS OHLC pipeline pushed a bar
+        // for this (symbol, tf) recently enough that REST refetch can't
+        // produce anything newer, drop the REST request entirely. This is
+        // the whole point of the WS feed for low timeframes — keep REST's
+        // ~55 req/min budget on the high-TF backfill where it still wins.
+        if self.kraken_ws_pair_is_fresh(&symbol, tf) {
             return false;
         }
         if !self.kraken_backfill_complete_loaded {

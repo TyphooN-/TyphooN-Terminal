@@ -32553,4 +32553,81 @@ mod tests {
             &["AAPL".into()]
         ));
     }
+
+    #[test]
+    fn kraken_ws_pair_is_fresh_at_returns_false_for_missing_entry() {
+        let map = std::collections::HashMap::new();
+        assert!(!TyphooNApp::kraken_ws_pair_is_fresh_at(
+            &map, "BTCUSD", "1Min", 0
+        ));
+    }
+
+    #[test]
+    fn kraken_ws_pair_is_fresh_at_returns_false_for_unknown_timeframe() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(("BTCUSD".to_string(), "BOGUS".to_string()), 1_700_000_000_000);
+        assert!(!TyphooNApp::kraken_ws_pair_is_fresh_at(
+            &map,
+            "BTCUSD",
+            "BOGUS",
+            1_700_000_000_000
+        ));
+    }
+
+    #[test]
+    fn kraken_ws_pair_is_fresh_at_passes_within_tf_x24_window() {
+        // 1Min × 24 = 1440s = 1,440,000ms. Anchor at now-1,000,000ms (16.6min ago)
+        // is still within the freshness window.
+        let now_ms = 1_700_000_000_000i64;
+        let anchor_ms = now_ms - 1_000_000;
+        let mut map = std::collections::HashMap::new();
+        map.insert(("BTCUSD".to_string(), "1Min".to_string()), anchor_ms);
+        assert!(TyphooNApp::kraken_ws_pair_is_fresh_at(
+            &map, "BTCUSD", "1Min", now_ms
+        ));
+    }
+
+    #[test]
+    fn kraken_ws_pair_is_fresh_at_rejects_anchor_outside_window() {
+        // 1Min × 24 = 1440s. Anchor at now-2000s (33 min) is past the window.
+        let now_ms = 1_700_000_000_000i64;
+        let anchor_ms = now_ms - 2_000_000;
+        let mut map = std::collections::HashMap::new();
+        map.insert(("BTCUSD".to_string(), "1Min".to_string()), anchor_ms);
+        assert!(!TyphooNApp::kraken_ws_pair_is_fresh_at(
+            &map, "BTCUSD", "1Min", now_ms
+        ));
+    }
+
+    #[test]
+    fn kraken_ws_pair_is_fresh_at_scales_with_timeframe_period() {
+        // 1Day × 24 = 24 days. Anchor at now - 20 days should still be fresh.
+        let day_ms = 86_400_000i64;
+        let now_ms = 1_700_000_000_000i64;
+        let anchor_ms = now_ms - 20 * day_ms;
+        let mut map = std::collections::HashMap::new();
+        map.insert(("BTCUSD".to_string(), "1Day".to_string()), anchor_ms);
+        assert!(TyphooNApp::kraken_ws_pair_is_fresh_at(
+            &map, "BTCUSD", "1Day", now_ms
+        ));
+        // But 25 days ago is past the window.
+        let stale_anchor = now_ms - 25 * day_ms;
+        map.insert(("BTCUSD".to_string(), "1Day".to_string()), stale_anchor);
+        assert!(!TyphooNApp::kraken_ws_pair_is_fresh_at(
+            &map, "BTCUSD", "1Day", now_ms
+        ));
+    }
+
+    #[test]
+    fn kraken_ws_pair_is_fresh_at_handles_future_anchor_gracefully() {
+        // Defensive: clock skew could land an anchor slightly in the future.
+        // saturating_sub(future) clamps to 0, which is < max_age_ms → fresh.
+        let now_ms = 1_700_000_000_000i64;
+        let future_anchor = now_ms + 60_000;
+        let mut map = std::collections::HashMap::new();
+        map.insert(("BTCUSD".to_string(), "1Min".to_string()), future_anchor);
+        assert!(TyphooNApp::kraken_ws_pair_is_fresh_at(
+            &map, "BTCUSD", "1Min", now_ms
+        ));
+    }
 }
