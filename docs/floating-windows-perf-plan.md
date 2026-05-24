@@ -121,3 +121,18 @@ Status: Plan execution complete. Ready for final verification.
 - Consider bounded channels for WS drain in future if unbounded mpsc becomes bottleneck
 
 Status: Comprehensive O(1) and async review complete for current scope.
+
+## GPU Offloading & Bounded Channels Review (2026-05-24)
+
+**Bounded Channels Applied:**
+- Main broker channels: capacity 1024 / 2048
+- Kraken WS bar channel: capacity 512
+
+**GPU Offloading:**
+- `compute_sma_gpu` now called from `compute_indicators_gpu` for SMA200
+
+Further opportunities:
+- Incremental bar uploads for forming bars (instead of full `upload_bars_full`)
+- More indicators routed through `dispatch_indicator_pub`
+
+Status: Thorough comb-over complete.

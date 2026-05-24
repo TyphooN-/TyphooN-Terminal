@@ -3465,7 +3465,10 @@ impl ChartState {
                 // SMA — parallel GPU
                 let sma_slow = self.sma_slow_period;
                 let sma_fast = self.sma_fast_period;
-                if let Some(data) =
+                // Prefer dedicated compute_sma_gpu when available
+                if let Some(data) = gpu.compute_sma_gpu(sma_slow, 0, self.bars.len() as u32) {
+                    self.sma200 = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                } else if let Some(data) =
                     gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Sma, sma_slow, true)
                 {
                     self.sma200 = data
@@ -13804,8 +13807,9 @@ impl TyphooNApp {
         let watchlist_rows: Vec<WatchlistRow> = Vec::new();
 
         // Create async broker channels
-        let (broker_tx, _broker_cmd_rx) = mpsc::unbounded_channel::<BrokerCmd>();
-        let (broker_msg_tx, broker_rx) = mpsc::unbounded_channel::<BrokerMsg>();
+        // Bounded channels for backpressure (critical for Kraken WS + heavy sync)
+        let (broker_tx, _broker_cmd_rx) = mpsc::channel::<BrokerCmd>(1024);
+        let (broker_msg_tx, broker_rx) = mpsc::channel::<BrokerMsg>(2048);
 
         // Flag: true while DARWIN XLSX import is running — background thread skips DB queries
         let importing_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

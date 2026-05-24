@@ -316,7 +316,8 @@ pub(super) fn spawn_kraken_ohlc_pipeline(
     if pairs.is_empty() {
         return;
     }
-    let (bar_tx, bar_rx) = mpsc::unbounded_channel::<KrakenWsOhlcBar>();
+    // Bounded channel prevents unbounded memory growth during fast WS ticks
+    let (bar_tx, bar_rx) = mpsc::channel::<KrakenWsOhlcBar>(512);
     for &interval_min in KRAKEN_WS_OHLC_INTERVALS_MIN {
         let pairs = pairs.clone();
         let bar_tx = bar_tx.clone();
