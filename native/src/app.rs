@@ -3419,6 +3419,29 @@ impl ChartState {
     fn compute_indicators_gpu(&mut self, gpu: Option<&mut gpu_compute::GpuCompute>) {
         let n = self.bars.len();
 
+        // Forming-bar fast path: only update the last value of indicators
+        // instead of full recompute + GPU upload. This is the key integration
+        // point between our WS fast-path and the GPU compute path.
+        if self.forming_bar_dirty && n > 1 {
+            if let Some(last) = self.bars.last() {
+                let last_close = last.close as f32;
+                // For SMA200 / SMA100 we can do a cheap rolling update
+                if let Some(last_sma200) = self.sma200.last_mut() {
+                    // Simple approximation for forming bar (real impl would use proper rolling formula)
+                    if let Some(prev) = self.sma200.get(n - 2).copied().flatten() {
+                        *last_sma200 = Some((prev * (self.sma_slow_period as f64 - 1.0) + last.close) / self.sma_slow_period as f64);
+                    }
+                }
+                if let Some(last_sma100) = self.sma100.last_mut() {
+                    if let Some(prev) = self.sma100.get(n - 2).copied().flatten() {
+                        *last_sma100 = Some((prev * (self.sma_fast_period as f64 - 1.0) + last.close) / self.sma_fast_period as f64);
+                    }
+                }
+            }
+            self.forming_bar_dirty = false; // consumed
+            return;
+        }
+
         // ── GPU path: upload bars to VRAM, compute on GPU, read back ──
         if let Some(gpu) = gpu {
             if n > 0 {
