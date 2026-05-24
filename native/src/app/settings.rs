@@ -351,6 +351,37 @@ impl TyphooNApp {
                             .on_hover_text("Kraken Futures public instruments and candles.")
                             .changed();
                     });
+                    ui.horizontal_wrapped(|ui| {
+                        let ws_resp = ui
+                            .checkbox(
+                                &mut self.kraken_ws_ohlc_enabled,
+                                "Stream bars via WebSocket (1Min/5Min/15Min/30Min)",
+                            )
+                            .on_hover_text(
+                                "Kraken WS v2 OHLC channel pushes bar updates as ticks land — the only way to keep low timeframes healthy across the full Kraken universe (REST's ~55 req/min budget can't refresh 13k pairs × 1Min in 24 minutes). REST keeps doing cold-start historical backfill and high-TF refresh. One TCP connection per interval (8 total) is opened when this is on.",
+                            );
+                        if ws_resp.changed() {
+                            settings_save_after = true;
+                            if !self.kraken_ws_ohlc_enabled {
+                                // Toggle off → mark not-started so a later
+                                // toggle-on triggers a fresh spawn. We don't
+                                // currently support tearing down running
+                                // streamers mid-session; the next session
+                                // launches without them.
+                                self.kraken_ws_ohlc_started = false;
+                                self.log.push_back(LogEntry::info(
+                                    "Kraken WS OHLC disabled — already-running streamers stay live until next launch.",
+                                ));
+                            } else {
+                                self.log.push_back(LogEntry::info(
+                                    "Kraken WS OHLC enabled — streamers will spawn once the pair catalog is loaded.",
+                                ));
+                                // If pairs are already in hand, kick off immediately
+                                // instead of waiting for the next KrakenPairs message.
+                                self.maybe_start_kraken_ws_ohlc();
+                            }
+                        }
+                    });
                     ui.label(egui::RichText::new("Global crypto/fiat quote filters").color(AXIS_TEXT).small());
                     ui.horizontal_wrapped(|ui| {
                         kraken_scrape_changed |= ui.checkbox(&mut self.crypto_fiat_quote_usd, "USD").changed();

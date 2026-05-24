@@ -2096,6 +2096,12 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                     self.refill_market_data_sync_slots();
+                    // The WS OHLC pipeline needs the pair catalog to subscribe;
+                    // kick it off as soon as we have the list, if the user opted
+                    // in. Idempotent — kraken_ws_ohlc_started guards against
+                    // re-spawning if KrakenPairs lands again (rare, but happens
+                    // after a manual KrakenGetPairs).
+                    self.maybe_start_kraken_ws_ohlc();
                 }
                 BrokerMsg::KrakenFuturesInstruments(symbols) => {
                     self.log.push_back(LogEntry::info(format!(

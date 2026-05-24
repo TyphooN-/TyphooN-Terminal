@@ -298,6 +298,7 @@ impl TyphooNApp {
             "kraken_scrape_fiat_crypto": self.kraken_scrape_fiat_crypto,
             "kraken_scrape_crypto_crosses": self.kraken_scrape_crypto_crosses,
             "kraken_scrape_futures": self.kraken_scrape_futures,
+            "kraken_ws_ohlc_enabled": self.kraken_ws_ohlc_enabled,
             "crypto_fiat_quote_usd": self.crypto_fiat_quote_usd,
             "crypto_fiat_quote_usdt": self.crypto_fiat_quote_usdt,
             "crypto_fiat_quote_usdc": self.crypto_fiat_quote_usdc,
@@ -411,6 +412,9 @@ impl TyphooNApp {
             || self.crypto_fiat_quote_chf;
         if let Some(enabled) = value["kraken_scrape_futures"].as_bool() {
             self.kraken_scrape_futures = enabled;
+        }
+        if let Some(enabled) = value["kraken_ws_ohlc_enabled"].as_bool() {
+            self.kraken_ws_ohlc_enabled = enabled;
         }
         if let Some(arr) = value["enabled_sync_timeframes"].as_array() {
             self.enabled_sync_timeframes = arr
@@ -592,6 +596,7 @@ impl TyphooNApp {
             "kraken_scrape_fiat_crypto": self.kraken_scrape_fiat_crypto,
             "kraken_scrape_crypto_crosses": self.kraken_scrape_crypto_crosses,
             "kraken_scrape_futures": self.kraken_scrape_futures,
+            "kraken_ws_ohlc_enabled": self.kraken_ws_ohlc_enabled,
             "crypto_fiat_quote_usd": self.crypto_fiat_quote_usd,
             "crypto_fiat_quote_usdt": self.crypto_fiat_quote_usdt,
             "crypto_fiat_quote_usdc": self.crypto_fiat_quote_usdc,

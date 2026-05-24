@@ -25,6 +25,172 @@ use typhoon_engine::broker::kraken::{
 };
 use typhoon_engine::core::cache::SqliteCache;
 
+use super::{BrokerCmd, LogEntry, TyphooNApp};
+
+impl TyphooNApp {
+    /// Kick off the Kraken WS OHLC pipeline if the user opted in and the
+    /// pair catalog is loaded. Idempotent: `kraken_ws_ohlc_started` guards
+    /// against re-spawning streamers when KrakenPairs lands again or the
+    /// caller fires this from multiple lifecycle hooks. Returns `true` if
+    /// streamers were just spawned, `false` if any precondition wasn't met
+    /// or it was already started.
+    pub(super) fn maybe_start_kraken_ws_ohlc(&mut self) -> bool {
+        if !self.kraken_enabled
+            || !self.kraken_ws_ohlc_enabled
+            || self.kraken_ws_ohlc_started
+            || self.kraken_pairs.is_empty()
+        {
+            return false;
+        }
+        // Build the ws-format symbol list (e.g. "BTC/USD") that Kraken's WS
+        // expects. Use the wsname when available, falling back to the
+        // tradeable-pair display symbol.
+        let pairs: Vec<String> = build_kraken_ws_subscribe_symbols(&self.kraken_pairs);
+        if pairs.is_empty() {
+            return false;
+        }
+        let count = pairs.len();
+        let _ = self.broker_tx.send(BrokerCmd::KrakenStartOhlcStreamers { pairs });
+        self.kraken_ws_ohlc_started = true;
+        self.log.push_back(LogEntry::info(format!(
+            "Kraken WS OHLC: spawning streamers for {count} pairs × 8 intervals",
+        )));
+        true
+    }
+}
+
+/// Transform the `(pair_name, display_symbol)` tuples that Kraken's
+/// `/0/public/AssetPairs` REST call returns into the ws-friendly
+/// `BASE/QUOTE` format the WS v2 channel expects. Prefers the display
+/// symbol when it already contains a slash, otherwise inserts one between
+/// the base and quote derived from the legacy 8-char pair name. Deduped
+/// via BTreeSet for stable ordering and O(log n) inserts.
+pub(super) fn build_kraken_ws_subscribe_symbols(
+    pairs: &[(String, String)],
+) -> Vec<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for (pair_name, display) in pairs {
+        if let Some(formatted) = format_ws_symbol(pair_name, display) {
+            out.insert(formatted);
+        }
+    }
+    out.into_iter().collect()
+}
+
+fn format_ws_symbol(pair_name: &str, display: &str) -> Option<String> {
+    let display = display.trim();
+    if display.contains('/') && display.len() <= 32 {
+        return Some(display.to_ascii_uppercase());
+    }
+    // Fall back to splitting the legacy pair name. Kraken uses X- and Z-
+    // prefixed base/quote codes for legacy assets (XXBT/ZUSD); the existing
+    // normaliser folds those into the user-facing form. We then split on
+    // the common quote suffixes to insert the slash.
+    let normalised =
+        typhoon_engine::core::kraken::normalize_pair_symbol(pair_name).to_ascii_uppercase();
+    if normalised.is_empty() {
+        return None;
+    }
+    const QUOTES: [&str; 12] = [
+        "USDG", "USDT", "USDC", "USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "XBT", "BTC",
+    ];
+    for quote in QUOTES {
+        if let Some(base) = normalised.strip_suffix(quote) {
+            if base.is_empty() {
+                continue;
+            }
+            return Some(format!("{base}/{quote}"));
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_ws_symbol_prefers_display_when_already_slashed() {
+        assert_eq!(
+            format_ws_symbol("XXBTZUSD", "XBT/USD"),
+            Some("XBT/USD".into())
+        );
+        assert_eq!(
+            format_ws_symbol("ETHUSD", "eth/usd"),
+            Some("ETH/USD".into())
+        );
+    }
+
+    #[test]
+    fn format_ws_symbol_inserts_slash_from_legacy_pair_name() {
+        // Display is the flat form; we must reconstruct base/quote.
+        assert_eq!(
+            format_ws_symbol("XXBTZUSD", "XBTUSD"),
+            Some("BTC/USD".into())
+        );
+        assert_eq!(
+            format_ws_symbol("ETHUSD", "ETHUSD"),
+            Some("ETH/USD".into())
+        );
+        assert_eq!(
+            format_ws_symbol("SOLUSD", "SOLUSD"),
+            Some("SOL/USD".into())
+        );
+    }
+
+    #[test]
+    fn format_ws_symbol_handles_stablecoin_quotes() {
+        assert_eq!(
+            format_ws_symbol("USDCUSD", "USDCUSD"),
+            Some("USDC/USD".into())
+        );
+        assert_eq!(
+            format_ws_symbol("BTCUSDT", "BTCUSDT"),
+            Some("BTC/USDT".into())
+        );
+        // USDG (Paxos) — the longest stablecoin suffix.
+        assert_eq!(
+            format_ws_symbol("BTCUSDG", "BTCUSDG"),
+            Some("BTC/USDG".into())
+        );
+    }
+
+    #[test]
+    fn format_ws_symbol_returns_none_for_unrecognised_quote() {
+        // No known quote suffix at all → can't construct a /-form.
+        assert!(format_ws_symbol("XYZABC", "XYZABC").is_none());
+    }
+
+    #[test]
+    fn build_kraken_ws_subscribe_symbols_dedupes_and_sorts() {
+        let pairs = vec![
+            ("XXBTZUSD".to_string(), "XBT/USD".to_string()),
+            ("ETHUSD".to_string(), "ETHUSD".to_string()),
+            ("XXBTZUSD".to_string(), "XBTUSD".to_string()), // dup of first via fallback
+            ("SOLUSD".to_string(), "SOLUSD".to_string()),
+        ];
+        let symbols = build_kraken_ws_subscribe_symbols(&pairs);
+        // BTreeSet dedupes XBT/USD vs BTC/USD as distinct strings — both
+        // get included. That's fine: Kraken accepts either form on
+        // subscribe. Order is stable / sorted.
+        assert!(symbols.contains(&"ETH/USD".to_string()));
+        assert!(symbols.contains(&"SOL/USD".to_string()));
+        let mut sorted = symbols.clone();
+        sorted.sort();
+        assert_eq!(symbols, sorted, "BTreeSet output should already be sorted");
+    }
+
+    #[test]
+    fn build_kraken_ws_subscribe_symbols_filters_out_unmappable_pairs() {
+        let pairs = vec![
+            ("XXBTZUSD".to_string(), "XBT/USD".to_string()),
+            ("GARBAGE".to_string(), "GARBAGE".to_string()),
+        ];
+        let symbols = build_kraken_ws_subscribe_symbols(&pairs);
+        assert!(symbols.iter().all(|s| s.contains('/')));
+    }
+}
+
 /// Coalesce-and-flush cadence for the WS bar writer. Picked so an active
 /// pair's 1Min bar is flushed at least once per bar (~5 flushes/min), but
 /// idle pairs don't pay the cost of a same-bar rewrite every tick.

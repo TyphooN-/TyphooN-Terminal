@@ -10644,6 +10644,16 @@ pub struct TyphooNApp {
     kraken_scrape_fiat_crypto: bool,
     kraken_scrape_crypto_crosses: bool,
     kraken_scrape_futures: bool,
+    /// Stream Kraken bar updates via WS v2 in addition to the REST scheduler.
+    /// Subscribes to every spot pair across 1Min/5Min/15Min/30Min/1Hour/4Hour/
+    /// 1Day/1Week so low-timeframe bars stay current without burning REST
+    /// budget. Off by default until the user opts in; toggle persisted via
+    /// settings serde so reconnect on next launch is automatic.
+    kraken_ws_ohlc_enabled: bool,
+    /// Set once the WS OHLC pipeline has been kicked off this session so we
+    /// don't re-spawn streamers if the broker thread emits more lifecycle
+    /// events. Resets to false when the user toggles the setting off.
+    kraken_ws_ohlc_started: bool,
     crypto_fiat_quote_usd: bool,
     crypto_fiat_quote_usdt: bool,
     crypto_fiat_quote_usdc: bool,
@@ -29497,6 +29507,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
             kraken_scrape_fiat_crypto: false,
             kraken_scrape_crypto_crosses: false,
             kraken_scrape_futures: false,
+            kraken_ws_ohlc_enabled: false,
+            kraken_ws_ohlc_started: false,
             crypto_fiat_quote_usd: true,
             crypto_fiat_quote_usdt: true,
             crypto_fiat_quote_usdc: true,
