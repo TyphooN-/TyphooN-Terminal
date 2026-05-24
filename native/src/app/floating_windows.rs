@@ -32,6 +32,13 @@ fn sortable_header(
 
 impl TyphooNApp {
     pub(super) fn draw_floating_windows(&mut self, ctx: &egui::Context) {
+        // During heavy bar sync, skip expensive window work to keep UI responsive.
+        // Only essential windows (or light versions) are allowed.
+        if self.heavy_sync_in_progress {
+            // For now we still draw everything, but individual windows should early-out.
+            // Future: add a global light-mode flag here.
+        }
+
         // Settings
         // Save credentials to keyring + SQLite fallback when Settings window closes
         if self.was_settings_open && !self.show_settings {
@@ -100,6 +107,11 @@ impl TyphooNApp {
         self.render_connect_window(ctx, settings_save_after);
         self.render_indicators_window(ctx);
         self.render_kraken_spot_sell_dialog(ctx);
+
+        // News window is a known heavy renderer — skip during heavy sync
+        if self.heavy_sync_in_progress && self.show_news_research {
+            // TODO: draw a lightweight "sync in progress" placeholder instead
+        }
         // ── Kraken Trade History Window ─────────────────────────────────────
         if self.show_kraken_trade_history {
             egui::Window::new("Kraken Trade History")
