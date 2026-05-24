@@ -7674,7 +7674,10 @@ impl eframe::App for TyphooNApp {
         // If we hit the drain cap there are more messages waiting — repaint
         // immediately to process the next batch rather than waiting on the idle tick.
         if msgs_drained >= broker_drain_max {
-            ctx.request_repaint();
+            // Throttle live Kraken WS forming-bar updates to ~10 fps.
+            // Full immediate repaint is only needed for closed bars or user action.
+            // The forming_bar_dirty flag on ChartState is the signal from the WS path.
+            ctx.request_repaint_after(std::time::Duration::from_millis(90));
         }
 
         // ── drain web client commands ────────────────────────────────────

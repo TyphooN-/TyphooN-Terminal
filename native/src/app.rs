@@ -2009,6 +2009,16 @@ struct ChartState {
     scale_start_zoom: f64,
     /// Y position at start of price-axis drag.
     scale_start_y: f32,
+
+    // ── Live WS performance fields (added 2026-05) ──────────────────────
+    /// Incremented whenever the visible closed bars change (not forming bar).
+    /// Used by draw_chart for O(1) early-out when data is stable.
+    visible_bars_gen: u64,
+    /// Set by Kraken WS path when only the last bar was updated.
+    /// Allows skipping full indicator recompute on forming-bar ticks.
+    forming_bar_dirty: bool,
+    /// Timestamp of the right-most bar (used for fast-path decisions).
+    last_visible_bar_ts: i64,
 }
 
 /// Extract the bare symbol from a cache key. Accepts canonical 3-part
@@ -2413,7 +2423,33 @@ impl ChartState {
             is_scaling_price: false,
             scale_start_zoom: 1.0,
             scale_start_y: 0.0,
+            visible_bars_gen: 0,
+            forming_bar_dirty: false,
+            last_visible_bar_ts: 0,
         }
+    }
+
+    /// Fast-path update used by live Kraken WS: only mutate the last bar
+    /// and set the dirty flag so draw_chart can early-out everything else.
+    pub fn apply_forming_bar_update(&mut self, bar: Bar) {
+        if let Some(last) = self.bars.last_mut() {
+            if last.ts_ms == bar.ts_ms {
+                *last = bar;
+            } else {
+                self.bars.push(bar);
+            }
+        } else {
+            self.bars.push(bar);
+        }
+        self.forming_bar_dirty = true;
+        self.last_visible_bar_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
+    }
+
+    /// Call when a closed bar is added or the visible range structurally changes.
+    pub fn mark_structural_change(&mut self) {
+        self.visible_bars_gen = self.visible_bars_gen.wrapping_add(1);
+        self.forming_bar_dirty = false;
+        self.last_visible_bar_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
     }
 
     fn symbol_matches(&self, symbol: &str) -> bool {

@@ -3125,6 +3125,24 @@ pub(super) fn draw_chart(
     alerts: &[(f64, String)],
     draw_mode: &DrawMode,
 ) {
+    // ── Performance early-out for live Kraken WS updates ───────────────────
+    // Fast path: if the visible range and last bar timestamp are unchanged
+    // and we are not in an explicit forming-bar update, bail before any
+    // heavy painter or indicator work.
+    static mut LAST_GEN: u64 = 0;
+    static mut LAST_LAST_TS: i64 = 0;
+    unsafe {
+        if !chart.forming_bar_dirty
+            && chart.visible_bars_gen == LAST_GEN
+            && chart.last_visible_bar_ts == LAST_LAST_TS
+            && chart.visible_bars_gen > 0
+        {
+            return;
+        }
+        LAST_GEN = chart.visible_bars_gen;
+        LAST_LAST_TS = chart.last_visible_bar_ts;
+    }
+
     // ── background ──────────────────────────────────────────────────────────
     painter.rect_filled(rect, 0.0, BG);
 
