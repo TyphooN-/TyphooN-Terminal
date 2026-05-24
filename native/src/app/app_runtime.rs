@@ -11787,7 +11787,7 @@ impl eframe::App for TyphooNApp {
                                         .map(|(avg, cur)| ((cur - avg) * qty, (cur - avg) / avg * 100.0));
                                     ui.horizontal(|ui| {
                                         ui.label(
-                                            egui::RichText::new(format!("[Kraken] Long {display_holding}"))
+                                            egui::RichText::new("Long")
                                                 .color(UP)
                                                 .small()
                                                 .strong(),
