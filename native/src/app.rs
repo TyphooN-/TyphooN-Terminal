@@ -32697,4 +32697,36 @@ mod tests {
             &map, "BTCUSD", "1Min", now_ms
         ));
     }
+
+    #[test]
+    fn chart_state_forming_bar_fast_path() {
+        let mut chart = ChartState::new("TEST", Timeframe::M1);
+        chart.bars.push(Bar {
+            ts_ms: 1_000_000,
+            open: 100.0, high: 101.0, low: 99.0, close: 100.5, volume: 10.0,
+        });
+        chart.mark_structural_change();
+        let gen_before = chart.visible_bars_gen;
+
+        let forming = Bar {
+            ts_ms: 1_000_000,
+            open: 100.0, high: 102.0, low: 99.5, close: 101.8, volume: 15.0,
+        };
+        chart.apply_forming_bar_update(forming);
+
+        assert!(chart.forming_bar_dirty);
+        assert_eq!(chart.last_visible_bar_ts, 1_000_000);
+        assert_eq!(chart.bars.last().unwrap().close, 101.8);
+        assert_eq!(chart.visible_bars_gen, gen_before);
+
+        let closed = Bar {
+            ts_ms: 1_060_000,
+            open: 101.8, high: 103.0, low: 101.0, close: 102.5, volume: 20.0,
+        };
+        chart.bars.push(closed);
+        chart.mark_structural_change();
+
+        assert!(!chart.forming_bar_dirty);
+        assert!(chart.visible_bars_gen > gen_before);
+    }
 }
