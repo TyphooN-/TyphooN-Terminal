@@ -95,8 +95,7 @@ mod tests {
 
     #[test]
     fn merge_market_data_universe_sources_empty_both_sources_is_empty_ok() {
-        let merged =
-            merge_market_data_universe_sources(Ok(Vec::new()), Ok(Vec::new())).unwrap();
+        let merged = merge_market_data_universe_sources(Ok(Vec::new()), Ok(Vec::new())).unwrap();
         assert!(merged.is_empty());
     }
 

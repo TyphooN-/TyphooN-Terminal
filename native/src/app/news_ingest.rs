@@ -47,17 +47,10 @@ pub const HYDRATE_INTERVAL_SECS: u64 = 90;
 /// `symbol_hint`: when `Some`, prefers articles tied to that symbol. The
 /// app wires this to the symbol on the currently-visible chart so the
 /// user's foreground reading material is hydrated first.
-pub async fn hydrate_missing_bodies(
-    cache: Arc<SqliteCache>,
-    symbol_hint: Option<String>,
-) -> usize {
+pub async fn hydrate_missing_bodies(cache: Arc<SqliteCache>, symbol_hint: Option<String>) -> usize {
     let targets = match cache.connection() {
-        Ok(conn) => news::list_articles_missing_body(
-            &conn,
-            symbol_hint.as_deref(),
-            HYDRATE_BATCH,
-        )
-        .unwrap_or_default(),
+        Ok(conn) => news::list_articles_missing_body(&conn, symbol_hint.as_deref(), HYDRATE_BATCH)
+            .unwrap_or_default(),
         Err(_) => return 0,
     };
     if targets.is_empty() {
@@ -66,14 +59,11 @@ pub async fn hydrate_missing_bodies(
 
     // Issue all fetches concurrently so per-host RTT doesn't serialise the
     // batch. `HYDRATE_BATCH` is the concurrency cap.
-    let fetches = targets
-        .into_iter()
-        .map(|(url_hash, url)| async move {
-            let body = news::fetch_article_body(&url).await;
-            (url_hash, body)
-        });
-    let results: Vec<(String, Option<String>)> =
-        futures_util::future::join_all(fetches).await;
+    let fetches = targets.into_iter().map(|(url_hash, url)| async move {
+        let body = news::fetch_article_body(&url).await;
+        (url_hash, body)
+    });
+    let results: Vec<(String, Option<String>)> = futures_util::future::join_all(fetches).await;
 
     let conn = match cache.connection() {
         Ok(conn) => conn,

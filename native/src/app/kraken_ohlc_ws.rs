@@ -19,9 +19,9 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use typhoon_engine::broker::kraken::{
-    KRAKEN_WS_OHLC_INTERVALS_MIN, KrakenOhlcStreamerEvent, KrakenWsOhlcBar,
-    kraken_ws_bar_to_json, kraken_ws_interval_to_tf_label, kraken_ws_symbol_to_cache_key,
-    run_ohlc_streamer, ws_bar_is_closed,
+    KRAKEN_WS_OHLC_INTERVALS_MIN, KrakenOhlcStreamerEvent, KrakenWsOhlcBar, kraken_ws_bar_to_json,
+    kraken_ws_interval_to_tf_label, kraken_ws_symbol_to_cache_key, run_ohlc_streamer,
+    ws_bar_is_closed,
 };
 use typhoon_engine::core::cache::SqliteCache;
 
@@ -55,7 +55,9 @@ impl TyphooNApp {
             return false;
         }
         let count = pairs.len();
-        let _ = self.broker_tx.send(BrokerCmd::KrakenStartOhlcStreamers { pairs });
+        let _ = self
+            .broker_tx
+            .send(BrokerCmd::KrakenStartOhlcStreamers { pairs });
         self.kraken_ws_ohlc_started = true;
         self.log.push_back(LogEntry::info(format!(
             "Kraken WS OHLC: streaming {count} pairs × 8 intervals",
@@ -70,9 +72,7 @@ impl TyphooNApp {
 /// symbol when it already contains a slash, otherwise inserts one between
 /// the base and quote derived from the legacy 8-char pair name. Deduped
 /// via BTreeSet for stable ordering and O(log n) inserts.
-pub(super) fn build_kraken_ws_subscribe_symbols(
-    pairs: &[(String, String)],
-) -> Vec<String> {
+pub(super) fn build_kraken_ws_subscribe_symbols(pairs: &[(String, String)]) -> Vec<String> {
     let mut out = std::collections::BTreeSet::new();
     for (pair_name, display) in pairs {
         if let Some(formatted) = format_ws_symbol(pair_name, display) {
@@ -133,14 +133,8 @@ mod tests {
             format_ws_symbol("XXBTZUSD", "XBTUSD"),
             Some("BTC/USD".into())
         );
-        assert_eq!(
-            format_ws_symbol("ETHUSD", "ETHUSD"),
-            Some("ETH/USD".into())
-        );
-        assert_eq!(
-            format_ws_symbol("SOLUSD", "SOLUSD"),
-            Some("SOL/USD".into())
-        );
+        assert_eq!(format_ws_symbol("ETHUSD", "ETHUSD"), Some("ETH/USD".into()));
+        assert_eq!(format_ws_symbol("SOLUSD", "SOLUSD"), Some("SOL/USD".into()));
     }
 
     #[test]
@@ -216,10 +210,17 @@ mod tests {
         let now_ms = 1_700_000_300_000;
         let mut buffer = HashMap::new();
         // 1Min bar whose bucket runs to now+30s → still open.
-        buffer.insert(("BTCUSD".into(), 1, now_ms - 30_000), mk_bar(1, now_ms - 30_000));
+        buffer.insert(
+            ("BTCUSD".into(), 1, now_ms - 30_000),
+            mk_bar(1, now_ms - 30_000),
+        );
         let (to_flush, remaining) = partition_closed_bars(buffer, now_ms);
         assert!(to_flush.is_empty(), "open bar must not be flushed");
-        assert_eq!(remaining.len(), 1, "open bar must stay buffered for next tick");
+        assert_eq!(
+            remaining.len(),
+            1,
+            "open bar must stay buffered for next tick"
+        );
     }
 
     #[test]
@@ -316,8 +317,7 @@ pub(super) fn spawn_kraken_ohlc_pipeline(
     if pairs.is_empty() {
         return;
     }
-    // Bounded channel prevents unbounded memory growth during fast WS ticks
-    let (bar_tx, bar_rx) = mpsc::channel::<KrakenWsOhlcBar>(512);
+    let (bar_tx, bar_rx) = mpsc::unbounded_channel::<KrakenWsOhlcBar>();
     for &interval_min in KRAKEN_WS_OHLC_INTERVALS_MIN {
         let pairs = pairs.clone();
         let bar_tx = bar_tx.clone();

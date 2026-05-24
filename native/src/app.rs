@@ -3430,11 +3430,17 @@ impl ChartState {
                 // For SMA200 / SMA100 we can do a cheap rolling update
                 let prev200 = self.sma200.get(n - 2).copied().flatten();
                 if let (Some(last_sma200), Some(prev)) = (self.sma200.last_mut(), prev200) {
-                    *last_sma200 = Some((prev * (self.sma_slow_period as f64 - 1.0) + last.close) / self.sma_slow_period as f64);
+                    *last_sma200 = Some(
+                        (prev * (self.sma_slow_period as f64 - 1.0) + last.close)
+                            / self.sma_slow_period as f64,
+                    );
                 }
                 let prev100 = self.sma100.get(n - 2).copied().flatten();
                 if let (Some(last_sma100), Some(prev)) = (self.sma100.last_mut(), prev100) {
-                    *last_sma100 = Some((prev * (self.sma_fast_period as f64 - 1.0) + last.close) / self.sma_fast_period as f64);
+                    *last_sma100 = Some(
+                        (prev * (self.sma_fast_period as f64 - 1.0) + last.close)
+                            / self.sma_fast_period as f64,
+                    );
                 }
             }
             self.forming_bar_dirty = false; // consumed
@@ -3467,7 +3473,10 @@ impl ChartState {
                 let sma_fast = self.sma_fast_period;
                 // Prefer dedicated compute_sma_gpu when available
                 if let Some(data) = gpu.compute_sma_gpu(sma_slow, 0, self.bars.len() as u32) {
-                    self.sma200 = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                    self.sma200 = data
+                        .iter()
+                        .map(|&v| if v == 0.0 { None } else { Some(v as f64) })
+                        .collect();
                 } else if let Some(data) =
                     gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Sma, sma_slow, true)
                 {
@@ -13807,9 +13816,8 @@ impl TyphooNApp {
         let watchlist_rows: Vec<WatchlistRow> = Vec::new();
 
         // Create async broker channels
-        // Bounded channels for backpressure (critical for Kraken WS + heavy sync)
-        let (broker_tx, _broker_cmd_rx) = mpsc::channel::<BrokerCmd>(1024);
-        let (broker_msg_tx, broker_rx) = mpsc::channel::<BrokerMsg>(2048);
+        let (broker_tx, _broker_cmd_rx) = mpsc::unbounded_channel::<BrokerCmd>();
+        let (broker_msg_tx, broker_rx) = mpsc::unbounded_channel::<BrokerMsg>();
 
         // Flag: true while DARWIN XLSX import is running — background thread skips DB queries
         let importing_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -29660,8 +29668,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                 - std::time::Duration::from_secs(60),
             kraken_ws_ohlc_last_spawn_retry: std::time::Instant::now()
                 - std::time::Duration::from_secs(60),
-            news_body_last_hydrate: std::time::Instant::now()
-                - std::time::Duration::from_secs(60),
+            news_body_last_hydrate: std::time::Instant::now() - std::time::Duration::from_secs(60),
             news_body_hydrate_in_flight: false,
             kraken_futures_universe_last_schedule: std::time::Instant::now()
                 - std::time::Duration::from_secs(60),
@@ -32670,7 +32677,10 @@ mod tests {
     #[test]
     fn kraken_ws_pair_is_fresh_at_returns_false_for_unknown_timeframe() {
         let mut map = std::collections::HashMap::new();
-        map.insert(("BTCUSD".to_string(), "BOGUS".to_string()), 1_700_000_000_000);
+        map.insert(
+            ("BTCUSD".to_string(), "BOGUS".to_string()),
+            1_700_000_000_000,
+        );
         assert!(!TyphooNApp::kraken_ws_pair_is_fresh_at(
             &map,
             "BTCUSD",
@@ -32724,6 +32734,31 @@ mod tests {
     }
 
     #[test]
+    fn forming_bar_helpers_test() {
+        let mut chart = ChartState::new("TEST", Timeframe::M1);
+        chart.bars.push(Bar {
+            ts_ms: 1000,
+            open: 1.0,
+            high: 1.0,
+            low: 1.0,
+            close: 1.0,
+            volume: 1.0,
+        });
+        chart.mark_structural_change();
+        let gen_before = chart.visible_bars_gen;
+        chart.apply_forming_bar_update(Bar {
+            ts_ms: 1000,
+            open: 1.0,
+            high: 2.0,
+            low: 0.5,
+            close: 1.5,
+            volume: 2.0,
+        });
+        assert!(chart.forming_bar_dirty);
+        assert_eq!(chart.visible_bars_gen, gen);
+    }
+
+    #[test]
     fn news_dedup_placeholder_test() {
         // Placeholder test for article deduplication logic.
         // Real implementation will use article_exists_by_url_hash.
@@ -32749,14 +32784,22 @@ mod tests {
         let mut chart = ChartState::new("TEST", Timeframe::M1);
         chart.bars.push(Bar {
             ts_ms: 1_000_000,
-            open: 100.0, high: 101.0, low: 99.0, close: 100.5, volume: 10.0,
+            open: 100.0,
+            high: 101.0,
+            low: 99.0,
+            close: 100.5,
+            volume: 10.0,
         });
         chart.mark_structural_change();
         let gen_before = chart.visible_bars_gen;
 
         let forming = Bar {
             ts_ms: 1_000_000,
-            open: 100.0, high: 102.0, low: 99.5, close: 101.8, volume: 15.0,
+            open: 100.0,
+            high: 102.0,
+            low: 99.5,
+            close: 101.8,
+            volume: 15.0,
         };
         chart.apply_forming_bar_update(forming);
 
@@ -32767,7 +32810,11 @@ mod tests {
 
         let closed = Bar {
             ts_ms: 1_060_000,
-            open: 101.8, high: 103.0, low: 101.0, close: 102.5, volume: 20.0,
+            open: 101.8,
+            high: 103.0,
+            low: 101.0,
+            close: 102.5,
+            volume: 20.0,
         };
         chart.bars.push(closed);
         chart.mark_structural_change();
@@ -32779,7 +32826,14 @@ mod tests {
     #[test]
     fn chart_state_early_out_snapshot() {
         let mut chart = ChartState::new("TEST", Timeframe::M5);
-        chart.bars.push(Bar { ts_ms: 1000, open:1.0, high:1.0, low:1.0, close:1.0, volume:1.0 });
+        chart.bars.push(Bar {
+            ts_ms: 1000,
+            open: 1.0,
+            high: 1.0,
+            low: 1.0,
+            close: 1.0,
+            volume: 1.0,
+        });
         chart.mark_structural_change();
 
         // Simulate what draw_chart would do after a successful render
@@ -32811,7 +32865,11 @@ mod tests {
         chart.forming_bar_dirty = true;
         chart.apply_forming_bar_update(Bar {
             ts_ms: chart.bars.last().unwrap().ts_ms,
-            open: 130.0, high: 132.0, low: 129.0, close: 131.5, volume: 1500.0,
+            open: 130.0,
+            high: 132.0,
+            low: 129.0,
+            close: 131.5,
+            volume: 1500.0,
         });
 
         // The fast path in compute_indicators_gpu should handle this without full recompute

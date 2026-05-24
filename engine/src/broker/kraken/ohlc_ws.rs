@@ -264,11 +264,9 @@ pub fn kraken_ws_interval_to_tf_label(interval_min: u32) -> Option<&'static str>
 /// looks for (`timestamp` as RFC-3339 + numeric OHLCV), so writes from the
 /// WS path are indistinguishable from REST-fetched bars on read.
 pub fn kraken_ws_bar_to_json(bar: &KrakenWsOhlcBar) -> serde_json::Value {
-    let ts_rfc3339 = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
-        bar.interval_begin_ms,
-    )
-    .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-    .unwrap_or_default();
+    let ts_rfc3339 = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(bar.interval_begin_ms)
+        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_default();
     serde_json::json!({
         "timestamp": ts_rfc3339,
         "open": bar.open,
@@ -305,9 +303,7 @@ pub fn is_heartbeat_or_status(text: &str) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
         return false;
     };
-    let channel = value
-        .get("channel")
-        .and_then(|v| v.as_str());
+    let channel = value.get("channel").and_then(|v| v.as_str());
     matches!(channel, Some("heartbeat") | Some("status") | Some("pong"))
 }
 
@@ -358,8 +354,7 @@ pub async fn run_ohlc_streamer(
         if bar_tx.is_closed() {
             return;
         }
-        let one_pass =
-            run_ohlc_streamer_once(interval_min, &pairs, &bar_tx, &event_tx).await;
+        let one_pass = run_ohlc_streamer_once(interval_min, &pairs, &bar_tx, &event_tx).await;
         match one_pass {
             Ok(()) => {
                 consecutive_failures = 0;

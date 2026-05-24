@@ -31,8 +31,7 @@ pub(super) fn tastytrade_initial_from_time_ms(_timeframe: &str, _now_ms: i64) ->
 #[cfg(test)]
 mod tests {
     use super::super::sync_workset::{
-        AlpacaBackfillCompletePair, SyncCacheState, alpaca_fetch_key,
-        select_alpaca_sync_candidates,
+        AlpacaBackfillCompletePair, SyncCacheState, alpaca_fetch_key, select_alpaca_sync_candidates,
     };
     use super::*;
     use std::collections::{HashMap, HashSet};

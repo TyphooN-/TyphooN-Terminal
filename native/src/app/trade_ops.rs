@@ -1516,9 +1516,7 @@ impl TyphooNApp {
             })
     }
 
-    pub(super) fn kraken_trade_key(
-        trade: &typhoon_engine::broker::kraken::KrakenTrade,
-    ) -> String {
+    pub(super) fn kraken_trade_key(trade: &typhoon_engine::broker::kraken::KrakenTrade) -> String {
         if !trade.trade_id.is_empty() {
             trade.trade_id.clone()
         } else {

@@ -37,8 +37,7 @@ pub(super) fn kraken_futures_sync_target_bars(tf: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::super::sync_workset::{
-        AlpacaBackfillCompletePair, SyncCacheState, alpaca_fetch_key,
-        select_alpaca_sync_candidates,
+        AlpacaBackfillCompletePair, SyncCacheState, alpaca_fetch_key, select_alpaca_sync_candidates,
     };
     use super::*;
     use std::collections::{HashMap, HashSet};

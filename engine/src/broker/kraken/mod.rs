@@ -22,8 +22,8 @@ pub use self::ohlc_ws::{
 };
 pub use self::order_types::{KrakenConditionalClose, KrakenOrderRequest};
 pub use self::private_ws::{
-    KrakenOrder, KrakenPrivateWs, KrakenTrade, parse_open_orders_message,
-    parse_own_trades_message, parse_own_trades_messages,
+    KrakenOrder, KrakenPrivateWs, KrakenTrade, parse_open_orders_message, parse_own_trades_message,
+    parse_own_trades_messages,
 };
 
 use self::equities::{parse_json_i64, parse_json_number};
@@ -1984,4 +1984,3 @@ impl KrakenBroker {
         Ok(rx)
     }
 }
-

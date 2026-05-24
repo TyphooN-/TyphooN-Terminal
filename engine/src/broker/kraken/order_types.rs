@@ -276,8 +276,8 @@ mod tests {
 
     #[test]
     fn validate_rejects_stop_loss_limit_without_price2() {
-        let req = KrakenOrderRequest::basic("XBTUSD", "buy", "stop-loss-limit", 1.0)
-            .with_price(50_000.0);
+        let req =
+            KrakenOrderRequest::basic("XBTUSD", "buy", "stop-loss-limit", 1.0).with_price(50_000.0);
         assert!(req.validate().is_err());
     }
 

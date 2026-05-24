@@ -34,11 +34,7 @@ pub(super) fn format_f64_param(value: f64) -> String {
     }
 }
 
-pub(super) fn push_opt_param(
-    params: &mut Vec<(String, String)>,
-    key: &str,
-    value: Option<&str>,
-) {
+pub(super) fn push_opt_param(params: &mut Vec<(String, String)>, key: &str, value: Option<&str>) {
     if let Some(value) = value {
         if !value.is_empty() {
             params.push((key.to_string(), value.to_string()));
@@ -187,7 +183,10 @@ mod tests {
             "trailing-stop-limit",
             "settle-position",
         ] {
-            assert!(is_supported_kraken_order_type(ty), "{ty} should be supported");
+            assert!(
+                is_supported_kraken_order_type(ty),
+                "{ty} should be supported"
+            );
         }
         assert!(!is_supported_kraken_order_type("bracket"));
     }
@@ -262,7 +261,10 @@ mod tests {
     fn kraken_private_rest_counter_cost_categorizes_endpoints() {
         assert_eq!(kraken_private_rest_counter_cost("private/AddOrder"), 0.0);
         assert_eq!(kraken_private_rest_counter_cost("private/CancelOrder"), 0.0);
-        assert_eq!(kraken_private_rest_counter_cost("private/TradesHistory"), 4.0);
+        assert_eq!(
+            kraken_private_rest_counter_cost("private/TradesHistory"),
+            4.0
+        );
         assert_eq!(kraken_private_rest_counter_cost("private/Balance"), 1.0);
         assert_eq!(kraken_private_rest_counter_cost("Anything"), 1.0);
     }

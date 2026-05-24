@@ -186,7 +186,9 @@ mod tests {
             "as": [["50001.0", "1.0", "1700000000.0"], ["50002.0", "2.0", "1700000001.0"]],
             "bs": [["49999.0", "3.0", "1700000000.0"], ["49998.0", "4.0", "1700000001.0"]]
         }, "book-10", "XBT/USD"]"#;
-        assert!(apply_kraken_public_book_message(text, &mut bids, &mut asks, 10));
+        assert!(apply_kraken_public_book_message(
+            text, &mut bids, &mut asks, 10
+        ));
         assert_eq!(asks, vec![(50001.0, 1.0), (50002.0, 2.0)]);
         assert_eq!(bids, vec![(49999.0, 3.0), (49998.0, 4.0)]);
     }
@@ -199,7 +201,9 @@ mod tests {
             "a": [["50001.0", "5.0", "1700000010.0"]],
             "b": [["49999.0", "0.0", "1700000010.0"]]
         }, "book-10", "XBT/USD"]"#;
-        assert!(apply_kraken_public_book_message(text, &mut bids, &mut asks, 10));
+        assert!(apply_kraken_public_book_message(
+            text, &mut bids, &mut asks, 10
+        ));
         assert_eq!(asks, vec![(50001.0, 5.0)]);
         assert!(bids.is_empty(), "size=0 must remove the level");
     }
@@ -212,7 +216,9 @@ mod tests {
             "as": [["50001.0","1","_"], ["50002.0","1","_"], ["50003.0","1","_"]],
             "bs": [["49999.0","1","_"], ["49998.0","1","_"], ["49997.0","1","_"]]
         }, "book-10", "XBT/USD"]"#;
-        assert!(apply_kraken_public_book_message(text, &mut bids, &mut asks, 2));
+        assert!(apply_kraken_public_book_message(
+            text, &mut bids, &mut asks, 2
+        ));
         assert_eq!(asks.len(), 2);
         assert_eq!(bids.len(), 2);
     }
@@ -222,7 +228,9 @@ mod tests {
         let mut bids = Vec::new();
         let mut asks = Vec::new();
         let text = r#"{"event": "systemStatus", "status": "online"}"#;
-        assert!(!apply_kraken_public_book_message(text, &mut bids, &mut asks, 10));
+        assert!(!apply_kraken_public_book_message(
+            text, &mut bids, &mut asks, 10
+        ));
     }
 
     #[test]

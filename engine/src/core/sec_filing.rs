@@ -2510,7 +2510,10 @@ mod tests {
     #[test]
     fn decode_html_entities_preserves_multibyte_chars() {
         assert_eq!(decode_html_entities("café &amp; thé"), "café & thé");
-        assert_eq!(decode_html_entities("日本語 &#160; テキスト"), "日本語   テキスト");
+        assert_eq!(
+            decode_html_entities("日本語 &#160; テキスト"),
+            "日本語   テキスト"
+        );
     }
 
     #[test]
@@ -2548,7 +2551,10 @@ mod tests {
         let html = r#"<p>Check this box: [&#9744;] before &#160; signing</p>"#;
         let stripped = strip_html_to_text(html);
         assert!(stripped.contains("\u{2610}"), "ballot box must be decoded");
-        assert!(!stripped.contains("&#"), "no raw numeric entities should remain");
+        assert!(
+            !stripped.contains("&#"),
+            "no raw numeric entities should remain"
+        );
     }
 
     #[test]
@@ -2564,6 +2570,10 @@ mod tests {
         assert!(stripped.contains("Real cell"));
         assert!(stripped.contains("Other cell"));
         // The all-NBSP row must not show up as `| | | |`.
-        assert!(!stripped.lines().any(|l| l.trim().chars().all(|c| c == '|' || c.is_whitespace())));
+        assert!(
+            !stripped
+                .lines()
+                .any(|l| l.trim().chars().all(|c| c == '|' || c.is_whitespace()))
+        );
     }
 }

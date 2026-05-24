@@ -151,7 +151,10 @@ pub fn create_news_tables(conn: &Connection) -> Result<(), String> {
 
     // Idempotent migrations for installs that pre-date the full-body column.
     // `ALTER TABLE ADD COLUMN` errors on duplicate; the `_ =` ignores that.
-    let _ = conn.execute("ALTER TABLE research_news ADD COLUMN body TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute(
+        "ALTER TABLE research_news ADD COLUMN body TEXT NOT NULL DEFAULT ''",
+        [],
+    );
     let _ = conn.execute(
         "ALTER TABLE research_news ADD COLUMN body_fetched_at INTEGER NOT NULL DEFAULT 0",
         [],
@@ -246,11 +249,7 @@ pub fn upsert_news(conn: &Connection, article: &NewsArticle) -> Result<(), Strin
 /// Write the full article body for an existing row and refresh its FTS5
 /// mirror so search hits the new content. Idempotent; safe to call from a
 /// background hydration task.
-pub fn upsert_news_body(
-    conn: &Connection,
-    url_hash: &str,
-    body: &str,
-) -> Result<(), String> {
+pub fn upsert_news_body(conn: &Connection, url_hash: &str, body: &str) -> Result<(), String> {
     let _ = create_news_tables(conn);
     if url_hash.is_empty() || body.is_empty() {
         return Ok(());
@@ -291,9 +290,7 @@ pub fn list_articles_missing_body(
 ) -> Result<Vec<(String, String)>, String> {
     let _ = create_news_tables(conn);
     let limit_i = limit.min(10_000) as i64;
-    let sym = symbol
-        .map(|s| s.trim().to_uppercase())
-        .unwrap_or_default();
+    let sym = symbol.map(|s| s.trim().to_uppercase()).unwrap_or_default();
     let rows: rusqlite::Result<Vec<(String, String)>> = if sym.is_empty() {
         let mut stmt = conn
             .prepare(
@@ -343,7 +340,9 @@ pub async fn fetch_article_body(url: &str) -> Option<String> {
         return None;
     }
     let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (compatible; TyphooN-Terminal/0.1; +https://riskprivacy.com/typhoon)")
+        .user_agent(
+            "Mozilla/5.0 (compatible; TyphooN-Terminal/0.1; +https://riskprivacy.com/typhoon)",
+        )
         .timeout(FETCH_TIMEOUT)
         .build()
         .ok()?;
@@ -504,7 +503,9 @@ fn decode_html_entities(s: &str) -> String {
                 }
                 // Numeric: &#NNN; or &#xHH;
                 if let Some(num) = entity.strip_prefix('#') {
-                    let parsed = if let Some(hex) = num.strip_prefix('x').or_else(|| num.strip_prefix('X')) {
+                    let parsed = if let Some(hex) =
+                        num.strip_prefix('x').or_else(|| num.strip_prefix('X'))
+                    {
                         u32::from_str_radix(hex, 16).ok()
                     } else {
                         num.parse::<u32>().ok()
@@ -534,11 +535,19 @@ fn decode_html_entities(s: &str) -> String {
 }
 
 fn utf8_char_len(b: u8) -> usize {
-    if b < 0x80 { 1 }
-    else if b < 0xC0 { 1 } // continuation; treat as 1 to make progress on malformed input
-    else if b < 0xE0 { 2 }
-    else if b < 0xF0 { 3 }
-    else { 4 }
+    if b < 0x80 {
+        1
+    } else if b < 0xC0 {
+        1
+    }
+    // continuation; treat as 1 to make progress on malformed input
+    else if b < 0xE0 {
+        2
+    } else if b < 0xF0 {
+        3
+    } else {
+        4
+    }
 }
 
 /// Bulk upsert a batch in a single transaction.
@@ -1379,23 +1388,20 @@ fn strip_html(s: &str) -> String {
 /// symbols like "BTCUSD" from equity tickers, and to filter general-feed crypto
 /// news (CoinDesk RSS, Finnhub crypto) by base mention.
 const CRYPTO_BASES: &[&str] = &[
-    "BTC", "ETH", "SOL", "ADA", "DOT", "DOGE", "MATIC", "POL", "AVAX", "LINK",
-    "UNI", "XRP", "LTC", "BCH", "ATOM", "ALGO", "NEAR", "FTM", "HBAR", "VET",
-    "SAND", "MANA", "SHIB", "TRX", "ETC", "XLM", "USDT", "USDC", "DAI", "WBTC",
-    "FIL", "ICP", "APT", "ARB", "OP", "INJ", "TIA", "SEI", "STX", "RNDR",
-    "PYTH", "FET", "TAO", "PEPE", "BONK", "WIF", "FLOKI", "JUP", "STRK", "ENA",
-    "ONDO", "SUI", "TON", "MKR", "GRT", "AAVE", "CRV", "SNX", "COMP", "LDO",
-    "RUNE", "KAS", "QNT", "XMR", "ZEC", "DASH", "EOS", "NEO", "BAT", "ENJ",
-    "CHZ", "CAKE", "GALA", "AXS", "FLOW", "ROSE", "1INCH", "YFI", "BAL", "ZRX",
-    "KSM", "WAVES", "DCR", "OMG", "REN", "STORJ", "ANKR", "CELO", "NMR", "RLC",
-    "BAND", "REP", "KAVA", "BNT", "OXT", "GNO", "POLY", "LRC", "NU", "PAXG",
-    "KNC", "REQ", "WLD",
+    "BTC", "ETH", "SOL", "ADA", "DOT", "DOGE", "MATIC", "POL", "AVAX", "LINK", "UNI", "XRP", "LTC",
+    "BCH", "ATOM", "ALGO", "NEAR", "FTM", "HBAR", "VET", "SAND", "MANA", "SHIB", "TRX", "ETC",
+    "XLM", "USDT", "USDC", "DAI", "WBTC", "FIL", "ICP", "APT", "ARB", "OP", "INJ", "TIA", "SEI",
+    "STX", "RNDR", "PYTH", "FET", "TAO", "PEPE", "BONK", "WIF", "FLOKI", "JUP", "STRK", "ENA",
+    "ONDO", "SUI", "TON", "MKR", "GRT", "AAVE", "CRV", "SNX", "COMP", "LDO", "RUNE", "KAS", "QNT",
+    "XMR", "ZEC", "DASH", "EOS", "NEO", "BAT", "ENJ", "CHZ", "CAKE", "GALA", "AXS", "FLOW", "ROSE",
+    "1INCH", "YFI", "BAL", "ZRX", "KSM", "WAVES", "DCR", "OMG", "REN", "STORJ", "ANKR", "CELO",
+    "NMR", "RLC", "BAND", "REP", "KAVA", "BNT", "OXT", "GNO", "POLY", "LRC", "NU", "PAXG", "KNC",
+    "REQ", "WLD",
 ];
 
 /// Quote currencies recognised when parsing trading-pair symbols.
 const CRYPTO_QUOTES: &[&str] = &[
-    "USD", "USDT", "USDC", "DAI", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD",
-    "BTC", "ETH", "XBT",
+    "USD", "USDT", "USDC", "DAI", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "BTC", "ETH", "XBT",
 ];
 
 /// Map a base ticker to the full asset name for keyword filtering of general
@@ -1739,11 +1745,7 @@ pub async fn fetch_all_sources_for_symbol(
             .unwrap_or_else(|| sym.clone());
         match fetch_gdelt_news(client, &gdelt_query, 30).await {
             Ok(v) => {
-                cb(&format!(
-                    "news/gdelt {}: {} articles",
-                    gdelt_query,
-                    v.len()
-                ));
+                cb(&format!("news/gdelt {}: {} articles", gdelt_query, v.len()));
                 all_articles.extend(v);
             }
             Err(e) => {
