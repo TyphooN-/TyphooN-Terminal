@@ -1035,10 +1035,14 @@ impl eframe::App for TyphooNApp {
         if self.indicators_dirty && !self.user_interacting {
             self.indicators_dirty = false;
             let mut gpu = self.gpu_indicators.take();
-            // Only compute indicators for the active chart during heavy sync
-            // to keep the UI responsive. Background charts are skipped.
+            // MAX PERFORMANCE: During heavy sync, completely skip indicator computation
+            // for everything except the single active chart, and even then only if
+            // we are not in a forming bar update (which has its own O(1) path).
             if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                if !self.heavy_sync_in_progress || self.charts.len() <= 3 {
+                if !self.heavy_sync_in_progress {
+                    chart.compute_indicators_gpu(gpu.as_mut());
+                } else if chart.forming_bar_dirty {
+                    // Still allow the cheap forming-bar path
                     chart.compute_indicators_gpu(gpu.as_mut());
                 }
             }

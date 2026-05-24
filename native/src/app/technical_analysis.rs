@@ -3125,11 +3125,10 @@ pub(super) fn draw_chart(
     alerts: &[(f64, String)],
     draw_mode: &DrawMode,
 ) {
-    // During heavy sync, draw a cheaper version (fewer panes, simpler lines)
-    // to keep the UI responsive.
-    if chart.heavy_sync_in_progress {
-        // For now we just proceed — a full cheap path can be added later
-        // (e.g. skip sub-panes, use coarser tessellation).
+    // MAX PERFORMANCE: During heavy sync, bail as early as possible.
+    // Only allow drawing if this is a forming-bar update (which is O(1)).
+    if chart.heavy_sync_in_progress && !chart.forming_bar_dirty {
+        return;
     }
 
     // ── Performance early-out for live Kraken WS updates ───────────────────
