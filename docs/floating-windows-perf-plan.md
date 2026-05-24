@@ -113,3 +113,11 @@ Remaining: Full body storage enforcement, result limiting, SEC window, final pol
 - [x] Plan substantially complete (all high/medium impact items done)
 
 Status: Plan execution complete. Ready for final verification.
+
+## Kraken WS + Async Optimizations (2026-05-24)
+
+- Added `bars.is_empty()` O(1) guard before `compute_indicators_gpu`
+- Kraken WS path already uses coalescing + forming-bar fast path
+- Consider bounded channels for WS drain in future if unbounded mpsc becomes bottleneck
+
+Status: Comprehensive O(1) and async review complete for current scope.

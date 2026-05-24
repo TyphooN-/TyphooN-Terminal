@@ -1039,10 +1039,11 @@ impl eframe::App for TyphooNApp {
             // for everything except the single active chart, and even then only if
             // we are not in a forming bar update (which has its own O(1) path).
             if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                if !self.heavy_sync_in_progress {
+                if chart.bars.is_empty() {
+                    // O(1) skip
+                } else if !self.heavy_sync_in_progress {
                     chart.compute_indicators_gpu(gpu.as_mut());
                 } else if chart.forming_bar_dirty {
-                    // Still allow the cheap forming-bar path
                     chart.compute_indicators_gpu(gpu.as_mut());
                 }
             }
