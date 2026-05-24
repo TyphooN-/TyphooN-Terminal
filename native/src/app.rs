@@ -2435,6 +2435,7 @@ impl ChartState {
 
     /// Fast-path update used by live Kraken WS: only mutate the last bar
     /// and set the dirty flag so draw_chart can early-out everything else.
+    #[allow(dead_code)]
     pub fn apply_forming_bar_update(&mut self, bar: Bar) {
         if let Some(last) = self.bars.last_mut() {
             if last.ts_ms == bar.ts_ms {
@@ -2450,6 +2451,7 @@ impl ChartState {
     }
 
     /// Call when a closed bar is added or the visible range structurally changes.
+    #[allow(dead_code)]
     pub fn mark_structural_change(&mut self) {
         self.visible_bars_gen = self.visible_bars_gen.wrapping_add(1);
         self.forming_bar_dirty = false;
