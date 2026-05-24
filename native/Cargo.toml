@@ -28,6 +28,9 @@ wgpu = { version = "29", default-features = false, features = ["std", "parking_l
 # Async runtime (shared with engine)
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
 
+# Concurrent future combinators (join_all for the news-body hydrator)
+futures-util = "0.3"
+
 # HTTP client (for Kraken API in broker task — matches engine)
 reqwest = { workspace = true, features = ["json", "rustls"] }
 

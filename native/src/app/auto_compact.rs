@@ -53,9 +53,53 @@ impl Default for Schedule {
     }
 }
 
+/// Cadence presets surfaced to the user. The underlying schedule still
+/// stores `cadence_days`, so a custom interval can be dialled in via the
+/// numeric DragValue; this enum is just the dropdown taxonomy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CadencePreset {
+    Daily,
+    Weekly,
+    Monthly,
+    Yearly,
+    Custom,
+}
+
+impl CadencePreset {
+    pub fn from_days(days: i64) -> Self {
+        match days {
+            1 => Self::Daily,
+            7 => Self::Weekly,
+            30 => Self::Monthly,
+            365 => Self::Yearly,
+            _ => Self::Custom,
+        }
+    }
+
+    pub fn to_days(self, current: i64) -> i64 {
+        match self {
+            Self::Daily => 1,
+            Self::Weekly => 7,
+            Self::Monthly => 30,
+            Self::Yearly => 365,
+            Self::Custom => current.clamp(1, 365),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Daily => "Daily",
+            Self::Weekly => "Weekly",
+            Self::Monthly => "Monthly",
+            Self::Yearly => "Yearly",
+            Self::Custom => "Custom",
+        }
+    }
+}
+
 impl Schedule {
     pub fn sanitized(self) -> Self {
-        let cadence_days = self.cadence_days.clamp(1, 30);
+        let cadence_days = self.cadence_days.clamp(1, 365);
         let window_weekday = self.window_weekday.min(6);
         let window_hour_start = self.window_hour_start.min(23);
         let mut window_hour_end = self.window_hour_end.clamp(1, 24);
@@ -110,7 +154,11 @@ pub fn evaluate_gate(inputs: &GateInputs) -> GateDecision {
             days_remaining
         ));
     }
-    if inputs.local_weekday != schedule.window_weekday {
+    // Sub-weekly cadences (Daily / Custom < 7d) skip the weekday gate so a
+    // daily preset doesn't get pinned to whichever weekday the schedule still
+    // has stored. Weekly / Monthly / Yearly keep their weekday so the user
+    // can still steer the run to a low-traffic day.
+    if schedule.cadence_days >= 7 && inputs.local_weekday != schedule.window_weekday {
         return skip(&format!(
             "outside idle window (expected {})",
             weekday_label(schedule.window_weekday)
@@ -161,9 +209,10 @@ fn next_eligible_time_ms_at(
     } else {
         now_ms
     };
+    let weekday_gated = schedule.cadence_days >= 7;
 
     if now_ms >= cadence_ready_ms
-        && now.weekday().num_days_from_sunday() == schedule.window_weekday
+        && (!weekday_gated || now.weekday().num_days_from_sunday() == schedule.window_weekday)
         && now.hour() >= schedule.window_hour_start
         && now.hour() < schedule.window_hour_end
     {
@@ -175,7 +224,7 @@ fn next_eligible_time_ms_at(
         let Some(date) = today.checked_add_signed(chrono::Duration::days(day_offset)) else {
             continue;
         };
-        if date.weekday().num_days_from_sunday() != schedule.window_weekday {
+        if weekday_gated && date.weekday().num_days_from_sunday() != schedule.window_weekday {
             continue;
         }
         let Some(window_start_ms) = local_window_boundary_ms(date, schedule.window_hour_start)
@@ -223,14 +272,29 @@ pub fn weekday_label(weekday: u32) -> &'static str {
 
 pub fn schedule_summary(schedule: Schedule) -> String {
     let schedule = schedule.sanitized();
-    format!(
-        "every {}d {} {:02}:00-{:02}:00, >= {} rows",
-        schedule.cadence_days,
-        weekday_label(schedule.window_weekday),
-        schedule.window_hour_start,
-        schedule.window_hour_end,
-        schedule.uncompacted_threshold
-    )
+    let preset = CadencePreset::from_days(schedule.cadence_days);
+    let cadence_label: String = match preset {
+        CadencePreset::Custom => format!("every {}d", schedule.cadence_days),
+        _ => preset.label().to_string(),
+    };
+    if schedule.cadence_days >= 7 {
+        format!(
+            "{} {} {:02}:00-{:02}:00, >= {} rows",
+            cadence_label,
+            weekday_label(schedule.window_weekday),
+            schedule.window_hour_start,
+            schedule.window_hour_end,
+            schedule.uncompacted_threshold
+        )
+    } else {
+        format!(
+            "{} {:02}:00-{:02}:00, >= {} rows",
+            cadence_label,
+            schedule.window_hour_start,
+            schedule.window_hour_end,
+            schedule.uncompacted_threshold
+        )
+    }
 }
 
 fn skip(reason: &str) -> GateDecision {

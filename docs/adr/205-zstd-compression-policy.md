@@ -1,8 +1,8 @@
 # ADR-205: ZSTD Compression Level Policy and Auto-Compaction
 
 **Status:** Updated / Implemented
-**Date:** 2026-04-28 (original decision), 2026-04-29 (auto-compact wired), 2026-05-03 (Storage Manager schedule controls), 2026-05-20 (bar-cache writes moved to zstd-22)
-**Related:** ADR-003 (SQLite + zstd cache), ADR-052 (performance architecture), ADR-079 (LAN sync bandwidth), `engine/src/core/cache.rs`, `native/src/app/auto_compact.rs`, `native/src/app.rs::BrokerCmd::CompactStorage`
+**Date:** 2026-04-28 (original decision), 2026-04-29 (auto-compact wired), 2026-05-03 (Storage Manager schedule controls), 2026-05-20 (bar-cache writes moved to zstd-22), 2026-05-24 (WS hot-path carve-out at zstd-3, see ADR-214)
+**Related:** ADR-003 (SQLite + zstd cache), ADR-052 (performance architecture), ADR-079 (LAN sync bandwidth), ADR-214 (Kraken WS full-universe responsiveness), `engine/src/core/cache.rs`, `native/src/app/auto_compact.rs`, `native/src/app.rs::BrokerCmd::CompactStorage`
 
 ## Context
 
@@ -12,10 +12,11 @@ The important distinction is bar data vs hot mutable KV data:
 
 | Class | Level | Examples |
 |---|---:|---|
-| Bar cache writes | 22 | `put_bars`, `put_bars_fast`, merge/backfill writes, new bar-cache rows |
+| Bar cache writes (REST / batch / imports) | 22 | `put_bars`, `merge_bars`, broker backfill, bar batch writes, new bar-cache rows |
+| **Bar cache hot writes (WS bar-close)** | **3** | `merge_bars_fast` from Kraken WS OHLC writer (`native/src/app/kraken_ohlc_ws.rs`) |
 | KV / metadata hot writes | 3 | AI sessions, broker queues, fundamentals metadata, LAN metadata |
 | Backup / export | 22 | compressed SQLite snapshot exports |
-| Manual / auto compact | 22 | legacy rows, raw imported rows, or any entries still marked below 22 |
+| Manual / auto compact | 22 | legacy rows, raw imported rows, any entries still marked below 22 — promotes WS-written rows back to 22 once the streamer settles |
 
 A schema column `bar_cache.zstd_level` tracks the level each entry is currently stored at. New bar rows default to 22. Compact remains useful only for legacy rows, LAN/raw rows with unknown provenance, or existing databases created before this policy.
 
@@ -54,8 +55,20 @@ Auto-compact and manual Compact stay, but their role changes:
 - Existing databases may contain zstd-3 rows from the old policy.
 - MT5/BarCacheWriter/raw LAN rows may arrive without level-22 metadata.
 - Restored backups may contain older rows.
+- **Kraken WS OHLC writes (`merge_bars_fast`) intentionally store at zstd-3** so the snapshot storm on first subscribe (≈12k keys × ≈720 closed bars) does not saturate CPU and stall egui. Compactor promotes those rows back to zstd-22 on its next pass.
 
-The compactor should keep skipping entries with `zstd_level >= 22`. In steady state, newly-written Rust bar blobs should already be at target and require no scheduled recompression.
+The compactor keeps the `zstd_level < target` filter at `engine/src/core/cache.rs::compact_storage`, so anything below 22 — legacy rows, WS hot writes, raw LAN rows — is naturally promoted on the next scheduled or manual run. In steady state, REST/import bar blobs are already at 22 and skipped; the only entries the compactor touches are the WS-write rows since the last compaction. The weekly auto-compact + `Compact (zstd-22)` button in Storage Manager close the loop without operator action.
+
+### 5. Carve-out: WS bar-close writer uses zstd-3
+
+The Kraken WS OHLC writer is the only `put_bars_*` path that intentionally bypasses level 22 on first write. Justification:
+
+- The WS pipeline writes one merge per (symbol, timeframe) per bar-close (~25 closes/sec at steady state with the full Spot universe), but the load-bearing event is the initial **snapshot storm**: every freshly subscribed (pair, interval) hands back the last ≈720 closed bars in one batch. With ≈1500 pairs × 8 intervals that is ~12k cache entries to re-pack inside the first flush window. At zstd-22 (encoder ~5–10 MB/s) that work pegs every core for tens of seconds and is exactly the workload that visibly stalls the UI.
+- zstd-3 (encoder ~150–200 MB/s) cuts that to a few seconds of background work behind `spawn_blocking`, keeping the egui thread idle.
+- Storage cost of the carve-out is ≤20% per affected blob until the next compaction. With the bar cache typically a few hundred MB total and compaction running automatically, that is a transient overhead the user does not see.
+- Read path is unchanged: `get_bars` decompresses whatever level the row was written at; chart loads pay the same TTBR unpack regardless.
+
+See ADR-214 for the broader UI-responsiveness work this carve-out enables.
 
 ## Consequences
 
@@ -74,10 +87,11 @@ The compactor should keep skipping entries with `zstd_level >= 22`. In steady st
 ## Implementation pointers
 
 - Bar compression constants: `engine/src/core/cache.rs` (`BAR_ZSTD_LEVEL = 22`, `BACKUP_ZSTD_LEVEL = 22`, `KV_ZSTD_LEVEL = 3`).
-- Bar writes: `put_bars`, `put_bars_fast`, and bar batch metadata should mark new rows as level 22.
-- Merge O(1)-discipline cleanup: `merge_bars` parses RFC3339 timestamps once into keyed bars before sort/dedup.
-- Compact gate/tests: `native/src/app/auto_compact.rs`.
-- Storage UI: manual `Compact (zstd-22)` remains a cleanup button for older or externally imported rows.
+- Bar writes (default): `put_bars`, `merge_bars`, and bar batch metadata mark new rows as level 22.
+- Bar writes (WS hot path): `merge_bars_fast` → `put_bars_with_level(.., 3)` (`engine/src/core/cache.rs`).
+- Merge O(1)-discipline cleanup: `merge_bars_with_level` parses RFC3339 timestamps once into keyed bars before sort/dedup.
+- Compact gate / promotion: `compact_storage` at `engine/src/core/cache.rs:2390` filters `WHERE zstd_level < target` so WS-written rows are picked up automatically.
+- Compact scheduling: `native/src/app/auto_compact.rs` runs the weekly job; the manual `Compact (zstd-22)` button in Storage Manager invokes the same path.
 
 ## Non-goals
 

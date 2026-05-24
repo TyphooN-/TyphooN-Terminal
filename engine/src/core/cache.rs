@@ -1292,6 +1292,33 @@ impl SqliteCache {
     /// Uses zstd-22 for final bar storage so rows never need a later recompression pass.
     /// Returns the full merged dataset as JSON.
     pub fn merge_bars(&self, key: &str, new_json: &str, max_bars: usize) -> Result<String, String> {
+        self.merge_bars_with_level(key, new_json, max_bars, BAR_ZSTD_LEVEL)
+    }
+
+    /// Hot-path merge for high-frequency writers (Kraken WS bar close). Uses
+    /// zstd-3 instead of zstd-22. Encoder is ~10–20× faster which is the
+    /// load-bearing fix for first-subscribe snapshot storms (~12k keys × ~700
+    /// closed bars each landing in one flush): zstd-22 turns that into ~30s
+    /// of CPU saturation, zstd-3 into ~3s. Compression ratio drops by ~15%
+    /// (mid-50s KB → low-60s KB per blob) which is irrelevant on disk but
+    /// massive on encode latency. The next REST refetch that touches this
+    /// key will re-pack it at zstd-22 via [`merge_bars`].
+    pub fn merge_bars_fast(
+        &self,
+        key: &str,
+        new_json: &str,
+        max_bars: usize,
+    ) -> Result<String, String> {
+        self.merge_bars_with_level(key, new_json, max_bars, 3)
+    }
+
+    fn merge_bars_with_level(
+        &self,
+        key: &str,
+        new_json: &str,
+        max_bars: usize,
+        zstd_level: i32,
+    ) -> Result<String, String> {
         // Parse new bars
         let new_bars: Vec<serde_json::Value> =
             serde_json::from_str(new_json).map_err(|e| format!("JSON parse failed: {e}"))?;
@@ -1334,22 +1361,27 @@ impl SqliteCache {
         let all_bars: Vec<serde_json::Value> = keyed_bars.into_iter().map(|(_, bar)| bar).collect();
         let merged_json =
             serde_json::to_string(&all_bars).map_err(|e| format!("JSON serialize failed: {e}"))?;
-        self.put_bars_fast(key, &merged_json)?;
+        self.put_bars_with_level(key, &merged_json, zstd_level)?;
 
         Ok(merged_json)
     }
 
-    /// Store bar data with zstd-22. Broker sync and imports run off the render hot path;
-    /// decompression speed for charts is unaffected by choosing maximum compression here.
-    fn put_bars_fast(&self, key: &str, json_data: &str) -> Result<(), String> {
+    /// Store bar data with caller-chosen zstd level. Encoder cost varies by
+    /// 10–20× across zstd-3 → zstd-22; this lets WS hot writes pay the
+    /// cheaper level while batch REST writes pay max compression.
+    fn put_bars_with_level(
+        &self,
+        key: &str,
+        json_data: &str,
+        zstd_level: i32,
+    ) -> Result<(), String> {
         let binary = pack_bars(json_data)?;
         let bar_count = u32::from_le_bytes(
             binary[4..8]
                 .try_into()
-                .map_err(|_| "bar_count header slice failed in put_bars_fast")?,
+                .map_err(|_| "bar_count header slice failed in put_bars_with_level")?,
         ) as i64;
         let (second_last_ts, last_ts) = get_last_two_bar_timestamps(&binary, bar_count as usize);
-        let zstd_level = BAR_ZSTD_LEVEL;
         let compressed = zstd::encode_all(binary.as_slice(), zstd_level)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();

@@ -28,12 +28,17 @@ use typhoon_engine::core::cache::SqliteCache;
 use super::{BrokerCmd, LogEntry, TyphooNApp};
 
 impl TyphooNApp {
-    /// Kick off the Kraken WS OHLC pipeline if the user opted in and the
-    /// pair catalog is loaded. Idempotent: `kraken_ws_ohlc_started` guards
-    /// against re-spawning streamers when KrakenPairs lands again or the
-    /// caller fires this from multiple lifecycle hooks. Returns `true` if
-    /// streamers were just spawned, `false` if any precondition wasn't met
-    /// or it was already started.
+    /// Kick off the Kraken WS OHLC pipeline across the full spot universe.
+    /// The WS feed exists so every (pair, low-TF) cache slot stays current
+    /// independent of the REST budget — narrowing to focus symbols would
+    /// leave the rest of the universe relying on REST alone, which is
+    /// exactly the gap WS was added to close. UX-impact concerns are
+    /// addressed in the per-bar work (typed parse, bar-close-only writes,
+    /// lighter WS-write compression) rather than by shrinking subscriptions.
+    ///
+    /// Idempotent: `kraken_ws_ohlc_started` guards against re-spawning
+    /// when KrakenPairs lands again or the caller fires this from
+    /// multiple lifecycle hooks.
     pub(super) fn maybe_start_kraken_ws_ohlc(&mut self) -> bool {
         if !self.kraken_enabled
             || !self.kraken_ws_ohlc_enabled
@@ -53,7 +58,7 @@ impl TyphooNApp {
         let _ = self.broker_tx.send(BrokerCmd::KrakenStartOhlcStreamers { pairs });
         self.kraken_ws_ohlc_started = true;
         self.log.push_back(LogEntry::info(format!(
-            "Kraken WS OHLC: spawning streamers for {count} pairs × 8 intervals",
+            "Kraken WS OHLC: streaming {count} pairs × 8 intervals",
         )));
         true
     }

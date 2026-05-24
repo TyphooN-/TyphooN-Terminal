@@ -4435,11 +4435,28 @@ impl TyphooNApp {
                                             .auto_shrink([false, false])
                                             .max_height((pane_h - 110.0).max(120.0))
                                             .show(ui, |ui| {
-                                                if a.summary.is_empty() {
+                                                // Prefer the cached full body when the
+                                                // hydrator has fetched it (see ADR-214 +
+                                                // `news_ingest`); fall back to the
+                                                // provider summary; finally show a
+                                                // placeholder so the user knows the
+                                                // body fetch is still pending.
+                                                if !a.body.is_empty() {
+                                                    ui.label(egui::RichText::new(&a.body));
+                                                } else if !a.summary.is_empty() {
+                                                    ui.label(egui::RichText::new(&a.summary));
+                                                    ui.add_space(6.0);
+                                                    ui.label(
+                                                        egui::RichText::new(
+                                                            "(Full article still hydrating — re-open in a minute or click Open Source.)",
+                                                        )
+                                                        .color(AXIS_TEXT)
+                                                        .italics()
+                                                        .small(),
+                                                    );
+                                                } else {
                                                     ui.label(egui::RichText::new("(No summary — click Open Source for the full article.)")
                                                         .color(AXIS_TEXT).italics());
-                                                } else {
-                                                    ui.label(egui::RichText::new(&a.summary));
                                                 }
                                             });
                                         ui.horizontal(|ui| {
@@ -52933,7 +52950,7 @@ impl TyphooNApp {
                     });
                     // ── Search box ──
                     ui.horizontal(|ui| {
-                        let search_resp = ui.add(egui::TextEdit::singleline(&mut self.sec_search_query).desired_width(300.0).hint_text("Search filings...").font(egui::TextStyle::Small));
+                        let search_resp = ui.add(egui::TextEdit::singleline(&mut self.sec_search_query).desired_width(300.0).hint_text("Search: ticker / company / sector / industry").font(egui::TextStyle::Small));
                         if ui.small_button("X").clicked() {
                             self.sec_search_query.clear();
                             self.sec_page = 0;
@@ -53095,16 +53112,27 @@ impl TyphooNApp {
                         }
 
                         // Filing table (scrollable, fill remaining height)
+                        // Build sector/industry lookup for the visible rows. Map keys borrow
+                        // from `self.bg.all_fundamentals` so this is allocation-light: O(n)
+                        // over fundamentals + O(1) per row lookup.
+                        let sec_fund_map: std::collections::HashMap<&str, (&str, &str)> = self
+                            .bg
+                            .all_fundamentals
+                            .iter()
+                            .map(|f| (f.symbol.as_str(), (f.sector.as_str(), f.industry.as_str())))
+                            .collect();
                         let avail = ui.available_height().max(200.0);
                         egui::ScrollArea::vertical().id_salt("sec_filings_tab").min_scrolled_height(avail).auto_shrink(false).show(ui, |ui| {
                             if idxs.is_empty() {
                                 ui.label(egui::RichText::new("No filings. Click Scrape Now to fetch from SEC EDGAR.").color(sec_low));
                             } else {
-                                egui::Grid::new("sec_filings_grid").striped(true).num_columns(6).min_col_width(45.0).show(ui, |ui| {
+                                egui::Grid::new("sec_filings_grid").striped(true).num_columns(8).min_col_width(45.0).show(ui, |ui| {
                                     if SortState::header(ui, "Date", 0, &self.sec_sort) { self.sec_sort.toggle(0); }
                                     if SortState::header(ui, "Symbol", 1, &self.sec_sort) { self.sec_sort.toggle(1); }
                                     if SortState::header(ui, "Type", 2, &self.sec_sort) { self.sec_sort.toggle(2); }
                                     if SortState::header(ui, "Category", 3, &self.sec_sort) { self.sec_sort.toggle(3); }
+                                    if SortState::header(ui, "Sector", 6, &self.sec_sort) { self.sec_sort.toggle(6); }
+                                    if SortState::header(ui, "Industry", 7, &self.sec_sort) { self.sec_sort.toggle(7); }
                                     if SortState::header(ui, "Company", 4, &self.sec_sort) { self.sec_sort.toggle(4); }
                                     if SortState::header(ui, "Accession #", 5, &self.sec_sort) { self.sec_sort.toggle(5); }
                                     ui.end_row();
@@ -53130,6 +53158,12 @@ impl TyphooNApp {
                                         ui.label(egui::RichText::new(&f.form_type).color(tc).small());
                                         let cc = match f.category.as_str() { c if c.contains("INSIDER") => sec_med, c if c.contains("DILUTION") => sec_high, c if c.contains("RESTATE") => sec_orange, _ => sec_low };
                                         ui.label(egui::RichText::new(&f.category).color(cc).small());
+                                        let (sector, industry) = sec_fund_map
+                                            .get(f.ticker.as_str())
+                                            .copied()
+                                            .unwrap_or(("", ""));
+                                        ui.label(egui::RichText::new(sector).small().color(if sector.is_empty() { sec_low } else { rc }));
+                                        ui.label(egui::RichText::new(industry).small().color(if industry.is_empty() { sec_low } else { rc }));
                                         ui.label(egui::RichText::new(&f.company_name).small().color(rc));
                                         ui.label(egui::RichText::new(&f.accession_number).color(sec_low).small().monospace());
                                         ui.end_row();
@@ -59786,23 +59820,51 @@ impl TyphooNApp {
                         ui.horizontal(|ui| {
                             let mut schedule = self.auto_compact_schedule.sanitized();
                             let mut changed = false;
-                            ui.label(egui::RichText::new("Every").color(AXIS_TEXT).small());
-                            changed |= ui
-                                .add(egui::DragValue::new(&mut schedule.cadence_days).range(1..=30).suffix("d"))
-                                .changed();
-                            egui::ComboBox::from_id_salt("auto_compact_weekday")
-                                .selected_text(auto_compact::weekday_label(schedule.window_weekday))
+                            ui.label(egui::RichText::new("Cadence").color(AXIS_TEXT).small());
+                            let mut preset =
+                                auto_compact::CadencePreset::from_days(schedule.cadence_days);
+                            let preset_before = preset;
+                            egui::ComboBox::from_id_salt("auto_compact_cadence_preset")
+                                .selected_text(preset.label())
                                 .show_ui(ui, |ui| {
-                                    for day in 0..=6 {
-                                        changed |= ui
-                                            .selectable_value(
-                                                &mut schedule.window_weekday,
-                                                day,
-                                                auto_compact::weekday_label(day),
-                                            )
-                                            .changed();
+                                    for option in [
+                                        auto_compact::CadencePreset::Daily,
+                                        auto_compact::CadencePreset::Weekly,
+                                        auto_compact::CadencePreset::Monthly,
+                                        auto_compact::CadencePreset::Yearly,
+                                        auto_compact::CadencePreset::Custom,
+                                    ] {
+                                        ui.selectable_value(&mut preset, option, option.label());
                                     }
                                 });
+                            if preset != preset_before {
+                                let new_days = preset.to_days(schedule.cadence_days);
+                                if new_days != schedule.cadence_days {
+                                    schedule.cadence_days = new_days;
+                                    changed = true;
+                                }
+                            }
+                            ui.label(egui::RichText::new("Every").color(AXIS_TEXT).small());
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut schedule.cadence_days).range(1..=365).suffix("d"))
+                                .changed();
+                            // Sub-weekly cadences ignore the weekday gate — hide the picker
+                            // so the UI matches what evaluate_gate actually checks.
+                            if schedule.cadence_days >= 7 {
+                                egui::ComboBox::from_id_salt("auto_compact_weekday")
+                                    .selected_text(auto_compact::weekday_label(schedule.window_weekday))
+                                    .show_ui(ui, |ui| {
+                                        for day in 0..=6 {
+                                            changed |= ui
+                                                .selectable_value(
+                                                    &mut schedule.window_weekday,
+                                                    day,
+                                                    auto_compact::weekday_label(day),
+                                                )
+                                                .changed();
+                                        }
+                                    });
+                            }
                             ui.label(egui::RichText::new("Start").color(AXIS_TEXT).small());
                             changed |= ui
                                 .add(egui::DragValue::new(&mut schedule.window_hour_start).range(0..=23).suffix(":00"))

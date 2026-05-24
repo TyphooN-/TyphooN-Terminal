@@ -53,6 +53,7 @@ mod floating_windows;
 mod kraken_ohlc_ws;
 mod kraken_sync;
 mod market_data_sync;
+mod news_ingest;
 mod session_persistence;
 mod settings;
 mod storage;
@@ -13610,6 +13611,15 @@ pub struct TyphooNApp {
     /// native-refresh rendering can run at 60/144/240Hz, while old code assumed 4fps idle.
     periodic_crypto_last_refresh: std::time::Instant,
     kraken_universe_last_schedule: std::time::Instant,
+    /// Wall-clock anchor for the periodic re-evaluation of the WS OHLC spawn
+    /// when focus was empty at startup. Once the streamers are up
+    /// (`kraken_ws_ohlc_started == true`) this stops being read.
+    kraken_ws_ohlc_last_spawn_retry: std::time::Instant,
+    /// Wall-clock anchor for the background news-body hydration tick.
+    /// Throttle is HYDRATE_INTERVAL_SECS (see `news_ingest`). One in-flight
+    /// hydrate at a time is enforced by `news_body_hydrate_in_flight`.
+    news_body_last_hydrate: std::time::Instant,
+    news_body_hydrate_in_flight: bool,
     kraken_futures_universe_last_schedule: std::time::Instant,
     tastytrade_universe_last_schedule: std::time::Instant,
     lan_client_last_reload: std::time::Instant,
@@ -24088,6 +24098,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                 sentiment_score: 0.0,
                                                 tickers: vec![sym.clone()],
                                                 categories: vec![],
+                                                body: String::new(),
                                             };
                                             if let Err(e) = news::upsert_news(&conn, &art) {
                                                 tracing::warn!("ingest news upsert {}: {}", sym, e);
@@ -29573,6 +29584,11 @@ When the question touches recent news, sentiment, or prices, combine the researc
                 - std::time::Duration::from_secs(60),
             kraken_universe_last_schedule: std::time::Instant::now()
                 - std::time::Duration::from_secs(60),
+            kraken_ws_ohlc_last_spawn_retry: std::time::Instant::now()
+                - std::time::Duration::from_secs(60),
+            news_body_last_hydrate: std::time::Instant::now()
+                - std::time::Duration::from_secs(60),
+            news_body_hydrate_in_flight: false,
             kraken_futures_universe_last_schedule: std::time::Instant::now()
                 - std::time::Duration::from_secs(60),
             tastytrade_universe_last_schedule: std::time::Instant::now()

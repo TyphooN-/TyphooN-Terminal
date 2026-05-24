@@ -254,6 +254,22 @@ impl TyphooNApp {
             let has_search = !search_upper.is_empty();
             let filings = &self.bg.sec_filings;
 
+            // Search now spans (ticker, company, sector, industry). Build a small
+            // fundamentals lookup so the sector/industry hit is O(1) per row.
+            let search_fund_map: std::collections::HashMap<&str, (String, String)> = if has_search {
+                self.bg
+                    .all_fundamentals
+                    .iter()
+                    .map(|f| {
+                        (
+                            f.symbol.as_str(),
+                            (f.sector.to_uppercase(), f.industry.to_uppercase()),
+                        )
+                    })
+                    .collect()
+            } else {
+                std::collections::HashMap::new()
+            };
             let mut seen: std::collections::HashSet<(String, String, String)> =
                 std::collections::HashSet::with_capacity(filings.len());
             let mut idxs: Vec<usize> = Vec::with_capacity(filings.len());
@@ -284,14 +300,40 @@ impl TyphooNApp {
                         continue;
                     }
                 }
-                if has_search && !f.ticker.contains(search_upper.as_str()) {
-                    continue;
+                if has_search {
+                    let ticker_hit = f.ticker.contains(search_upper.as_str());
+                    let company_hit = f
+                        .company_name
+                        .to_uppercase()
+                        .contains(search_upper.as_str());
+                    let (sector_hit, industry_hit) = match search_fund_map.get(f.ticker.as_str()) {
+                        Some((sec, ind)) => (
+                            sec.contains(search_upper.as_str()),
+                            ind.contains(search_upper.as_str()),
+                        ),
+                        None => (false, false),
+                    };
+                    if !(ticker_hit || company_hit || sector_hit || industry_hit) {
+                        continue;
+                    }
                 }
                 idxs.push(idx);
             }
             // Sort by selected column — avoid borrowing self.sec_sort inside closure.
+            // Sector / industry columns (6,7) read from the fundamentals map; build
+            // it once before the sort closure so the lookup is O(1) per compare.
             let col = self.sec_sort.column;
             let asc = self.sec_sort.ascending;
+            let needs_fund_lookup = matches!(col, 6 | 7);
+            let fund_map: std::collections::HashMap<&str, (&str, &str)> = if needs_fund_lookup {
+                self.bg
+                    .all_fundamentals
+                    .iter()
+                    .map(|f| (f.symbol.as_str(), (f.sector.as_str(), f.industry.as_str())))
+                    .collect()
+            } else {
+                std::collections::HashMap::new()
+            };
             idxs.sort_by(|&a, &b| {
                 let fa = &filings[a];
                 let fb = &filings[b];
@@ -302,6 +344,16 @@ impl TyphooNApp {
                     3 => fa.category.cmp(&fb.category),
                     4 => fa.company_name.cmp(&fb.company_name),
                     5 => fa.accession_number.cmp(&fb.accession_number),
+                    6 => {
+                        let sa = fund_map.get(fa.ticker.as_str()).map(|v| v.0).unwrap_or("");
+                        let sb = fund_map.get(fb.ticker.as_str()).map(|v| v.0).unwrap_or("");
+                        sa.cmp(sb)
+                    }
+                    7 => {
+                        let ia = fund_map.get(fa.ticker.as_str()).map(|v| v.1).unwrap_or("");
+                        let ib = fund_map.get(fb.ticker.as_str()).map(|v| v.1).unwrap_or("");
+                        ia.cmp(ib)
+                    }
                     _ => std::cmp::Ordering::Equal,
                 };
                 if asc { ord } else { ord.reverse() }

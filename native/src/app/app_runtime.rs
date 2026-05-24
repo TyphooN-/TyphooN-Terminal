@@ -37,6 +37,26 @@ impl eframe::App for TyphooNApp {
         if ctx.input(|i| !i.events.is_empty()) {
             self.auto_compact_last_input_at = std::time::Instant::now();
         }
+        // user_interacting is set true on drag-start / price-axis scale-start
+        // and was never reset, so after the user's first mouse drag the cache
+        // rebuild gates further down (`if !self.user_interacting && ...`) and
+        // every market_data_sync throttle (`if user_interacting && !full_tilt`)
+        // stayed in their "interacting" state forever. That left active-symbol
+        // sets, scoped fundamentals, MT5/tastytrade coverage maps, and alpaca
+        // sync state permanently frozen at whatever value they had the moment
+        // of that first drag, even hours later, and held BG sync at the
+        // throttled batch sizes. Reset here so any cache rebuild gated on
+        // !user_interacting can proceed the moment the mouse is released.
+        if self.user_interacting {
+            let still_interacting = ctx.input(|i| {
+                i.pointer.primary_down()
+                    || i.pointer.secondary_down()
+                    || i.smooth_scroll_delta.y.abs() > 0.0
+            });
+            if !still_interacting {
+                self.user_interacting = false;
+            }
+        }
         self.tick_auto_compact();
         // Alpaca retry queue: internally throttled to 10s between ticks.
         // Loads persisted state on first call, re-dispatches due entries.
@@ -257,6 +277,61 @@ impl eframe::App for TyphooNApp {
             self.kraken_universe_last_schedule = now_instant;
             let _ = self.schedule_kraken_universe_sectors();
             let _ = self.schedule_kraken_equities_universe();
+        }
+
+        // WS OHLC spawn is focus-driven: at first KrakenPairs landing the
+        // user's focus set (open charts + positions + watchlist + held
+        // balances) may be empty, in which case maybe_start_kraken_ws_ohlc
+        // defers without flipping `started=true`. Retry every 15s so opening
+        // a chart, taking a position, or adding to the watchlist eventually
+        // brings the streamers up without forcing the user to toggle the
+        // setting. Cheap idempotent no-op once `started=true`.
+        if !self.kraken_ws_ohlc_started
+            && self.kraken_ws_ohlc_enabled
+            && self.kraken_enabled
+            && now_instant.duration_since(self.kraken_ws_ohlc_last_spawn_retry)
+                >= std::time::Duration::from_secs(15)
+        {
+            self.kraken_ws_ohlc_last_spawn_retry = now_instant;
+            self.maybe_start_kraken_ws_ohlc();
+        }
+
+        // News body hydrator: fetch the full article text for rows that
+        // still only have the provider summary. Throttled by
+        // HYDRATE_INTERVAL_SECS and gated on `in_flight` so we never have
+        // two tokio tasks racing on the same cache rows.
+        if self.cache_loaded
+            && !self.news_body_hydrate_in_flight
+            && now_instant.duration_since(self.news_body_last_hydrate)
+                >= std::time::Duration::from_secs(super::news_ingest::HYDRATE_INTERVAL_SECS)
+        {
+            if let Some(cache) = self.cache.clone() {
+                self.news_body_last_hydrate = now_instant;
+                self.news_body_hydrate_in_flight = true;
+                let symbol_hint = self
+                    .charts
+                    .first()
+                    .map(|c| c.symbol.clone())
+                    .filter(|s| !s.is_empty());
+                let rt = self.rt_handle.clone();
+                rt.spawn(async move {
+                    let _ = super::news_ingest::hydrate_missing_bodies(cache, symbol_hint).await;
+                    // No callback channel: the next tick simply observes the
+                    // `in_flight` flag being reset after the task completes.
+                    // We can't poke `self` from here, so the gate is released
+                    // on the next `update()` by a separate fast path below.
+                });
+            }
+        }
+        // Release the in-flight flag after a generous timeout — covers the
+        // case where the spawned task is still running but a new tick wants
+        // to re-arm. We don't need exact synchronisation: the new task will
+        // pick up whatever rows are still empty.
+        if self.news_body_hydrate_in_flight
+            && now_instant.duration_since(self.news_body_last_hydrate)
+                >= std::time::Duration::from_secs(super::news_ingest::HYDRATE_INTERVAL_SECS * 2)
+        {
+            self.news_body_hydrate_in_flight = false;
         }
 
         if now_instant.duration_since(self.kraken_futures_universe_last_schedule)
@@ -1135,14 +1210,17 @@ impl eframe::App for TyphooNApp {
                     if !self.kraken_enabled {
                         continue;
                     }
-                    if self.insert_kraken_live_trade(trade) {
+                    let t0 = std::time::Instant::now();
+                    let inserted = self.insert_kraken_live_trade(trade);
+                    if inserted {
                         self.refresh_kraken_position_costs();
-                        // ownTrades is the low-latency fill signal. Reconcile REST snapshots
-                        // after fills so balances, position P/L, and open-order state catch up
-                        // without waiting for a manual refresh.
                         let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
                         let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
                         let _ = self.broker_tx.send(BrokerCmd::KrakenFetchOpenOrders);
+                    }
+                    let dt = t0.elapsed();
+                    if dt > std::time::Duration::from_millis(2) {
+                        tracing::warn!("KrakenLiveTrade path took {:?} (inserted={})", dt, inserted);
                     }
                 }
                 BrokerMsg::KrakenOpenOrders(orders) => {

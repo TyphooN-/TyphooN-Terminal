@@ -75,6 +75,13 @@ pub struct NewsArticle {
     pub sentiment_score: f64, // -1.0 to 1.0 if API provides, else 0.0
     pub tickers: Vec<String>, // cross-referenced tickers
     pub categories: Vec<String>, // topic tags
+    /// Full article body extracted from the source URL. Empty until a fetcher
+    /// hydrates it (see [`fetch_article_body`] + [`upsert_news_body`]).
+    /// Populated lazily by the native app so the publisher's article text is
+    /// in the local SQLite cache for offline reading, AI prompts, and FTS5
+    /// search beyond what the upstream news APIs return as `summary`.
+    #[serde(default)]
+    pub body: String,
 }
 
 impl NewsArticle {
@@ -136,10 +143,49 @@ pub fn create_news_tables(conn: &Connection) -> Result<(), String> {
             url_hash UNINDEXED,
             headline,
             summary,
+            body,
             tokenize='porter unicode61'
         );",
     )
     .map_err(|e| format!("create news tables: {e}"))?;
+
+    // Idempotent migrations for installs that pre-date the full-body column.
+    // `ALTER TABLE ADD COLUMN` errors on duplicate; the `_ =` ignores that.
+    let _ = conn.execute("ALTER TABLE research_news ADD COLUMN body TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute(
+        "ALTER TABLE research_news ADD COLUMN body_fetched_at INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    // FTS5 layout cannot ALTER. If an older DB has a 3-column FTS table, drop
+    // and rebuild so search hits the body too. Cheap (no UNINDEXED on body
+    // means re-tokenising only the rows we've already fetched body for, but
+    // those are the only ones with content beyond headline+summary anyway).
+    let fts_has_body: bool = conn
+        .query_row(
+            "SELECT 1 FROM pragma_table_info('research_news_fts') WHERE name='body'",
+            [],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    if !fts_has_body {
+        let _ = conn.execute_batch(
+            "DROP TABLE IF EXISTS research_news_fts;
+             CREATE VIRTUAL TABLE research_news_fts USING fts5(
+                 url_hash UNINDEXED,
+                 headline,
+                 summary,
+                 body,
+                 tokenize='porter unicode61'
+             );",
+        );
+        // Repopulate from the main table so search keeps working for already-
+        // cached rows without waiting for the next upsert.
+        let _ = conn.execute(
+            "INSERT INTO research_news_fts(url_hash, headline, summary, body)
+             SELECT url_hash, headline, summary, body FROM research_news",
+            [],
+        );
+    }
     Ok(())
 }
 
@@ -163,8 +209,8 @@ pub fn upsert_news(conn: &Connection, article: &NewsArticle) -> Result<(), Strin
     conn.execute(
         "INSERT INTO research_news
          (url_hash, symbol, source, provider, headline, summary, url, published_at,
-          image_url, sentiment, sentiment_score, tickers_json, categories_json, updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+          image_url, sentiment, sentiment_score, tickers_json, categories_json, updated_at, body)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
          ON CONFLICT(url_hash) DO UPDATE SET
             symbol = CASE WHEN research_news.symbol = '' THEN excluded.symbol ELSE research_news.symbol END,
             source = excluded.source,
@@ -176,11 +222,12 @@ pub fn upsert_news(conn: &Connection, article: &NewsArticle) -> Result<(), Strin
             sentiment_score = CASE WHEN research_news.sentiment_score = 0.0 THEN excluded.sentiment_score ELSE research_news.sentiment_score END,
             tickers_json = excluded.tickers_json,
             categories_json = excluded.categories_json,
+            body = CASE WHEN research_news.body = '' THEN excluded.body ELSE research_news.body END,
             updated_at = excluded.updated_at",
         params![
             a.url_hash, a.symbol.to_uppercase(), a.source, a.provider, a.headline, a.summary,
             a.url, a.published_at, a.image_url, a.sentiment, a.sentiment_score,
-            tickers_json, categories_json, now_ts(),
+            tickers_json, categories_json, now_ts(), a.body,
         ],
     ).map_err(|e| format!("upsert news: {e}"))?;
 
@@ -190,10 +237,308 @@ pub fn upsert_news(conn: &Connection, article: &NewsArticle) -> Result<(), Strin
         params![a.url_hash],
     );
     let _ = conn.execute(
-        "INSERT INTO research_news_fts(url_hash, headline, summary) VALUES (?1,?2,?3)",
-        params![a.url_hash, a.headline, a.summary],
+        "INSERT INTO research_news_fts(url_hash, headline, summary, body) VALUES (?1,?2,?3,?4)",
+        params![a.url_hash, a.headline, a.summary, a.body],
     );
     Ok(())
+}
+
+/// Write the full article body for an existing row and refresh its FTS5
+/// mirror so search hits the new content. Idempotent; safe to call from a
+/// background hydration task.
+pub fn upsert_news_body(
+    conn: &Connection,
+    url_hash: &str,
+    body: &str,
+) -> Result<(), String> {
+    let _ = create_news_tables(conn);
+    if url_hash.is_empty() || body.is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE research_news
+            SET body = ?1, body_fetched_at = ?2, updated_at = ?2
+          WHERE url_hash = ?3",
+        params![body, now_ts(), url_hash],
+    )
+    .map_err(|e| format!("update news body: {e}"))?;
+    // FTS5: refresh headline+summary+body for this row. We need the headline
+    // and summary because FTS rows are replaced, not patched in place.
+    if let Ok((headline, summary)) = conn.query_row(
+        "SELECT headline, summary FROM research_news WHERE url_hash = ?1",
+        params![url_hash],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    ) {
+        let _ = conn.execute(
+            "DELETE FROM research_news_fts WHERE url_hash = ?1",
+            params![url_hash],
+        );
+        let _ = conn.execute(
+            "INSERT INTO research_news_fts(url_hash, headline, summary, body) VALUES (?1,?2,?3,?4)",
+            params![url_hash, headline, summary, body],
+        );
+    }
+    Ok(())
+}
+
+/// Return up to `limit` `(url_hash, url)` rows for articles whose body
+/// hasn't been fetched yet. Caller is the body hydrator — it walks the
+/// list, fetches each URL, and writes the result via [`upsert_news_body`].
+pub fn list_articles_missing_body(
+    conn: &Connection,
+    symbol: Option<&str>,
+    limit: usize,
+) -> Result<Vec<(String, String)>, String> {
+    let _ = create_news_tables(conn);
+    let limit_i = limit.min(10_000) as i64;
+    let sym = symbol
+        .map(|s| s.trim().to_uppercase())
+        .unwrap_or_default();
+    let rows: rusqlite::Result<Vec<(String, String)>> = if sym.is_empty() {
+        let mut stmt = conn
+            .prepare(
+                "SELECT url_hash, url FROM research_news
+                  WHERE body = '' AND url <> '' AND source <> 'SEC'
+                  ORDER BY published_at DESC
+                  LIMIT ?1",
+            )
+            .map_err(|e| format!("prepare missing body: {e}"))?;
+        stmt.query_map(params![limit_i], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("query missing body: {e}"))?
+        .collect()
+    } else {
+        let like = format!("%\"{}\"%", sym);
+        let mut stmt = conn
+            .prepare(
+                "SELECT url_hash, url FROM research_news
+                  WHERE body = '' AND url <> '' AND source <> 'SEC'
+                    AND (symbol = ?1 OR tickers_json LIKE ?2)
+                  ORDER BY published_at DESC
+                  LIMIT ?3",
+            )
+            .map_err(|e| format!("prepare missing body: {e}"))?;
+        stmt.query_map(params![sym, like, limit_i], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("query missing body: {e}"))?
+        .collect()
+    };
+    rows.map_err(|e| format!("collect missing body: {e}"))
+}
+
+/// HTTP-fetch `url` and return its plain-text article body. Caps the
+/// fetched HTML at `MAX_FETCH_BYTES` so a hostile or runaway page can't
+/// blow up the cache. Returns `None` for non-2xx responses, empty bodies,
+/// or extracted text under 200 chars (likely a paywall splash, not the
+/// article). The output is suitable for direct storage via
+/// [`upsert_news_body`] and for indexing in `research_news_fts`.
+pub async fn fetch_article_body(url: &str) -> Option<String> {
+    const MAX_FETCH_BYTES: usize = 2 * 1024 * 1024; // 2 MiB cap on raw HTML
+    const MIN_BODY_CHARS: usize = 200; // anything shorter is probably a redirect/paywall splash
+    const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+    let url = url.trim();
+    if url.is_empty() || !(url.starts_with("http://") || url.starts_with("https://")) {
+        return None;
+    }
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (compatible; TyphooN-Terminal/0.1; +https://riskprivacy.com/typhoon)")
+        .timeout(FETCH_TIMEOUT)
+        .build()
+        .ok()?;
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    // Soft size cap: stream-read until we hit the limit, then bail.
+    let bytes = resp.bytes().await.ok()?;
+    let html = if bytes.len() > MAX_FETCH_BYTES {
+        String::from_utf8_lossy(&bytes[..MAX_FETCH_BYTES]).into_owned()
+    } else {
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+    let text = extract_article_text(&html);
+    if text.chars().count() < MIN_BODY_CHARS {
+        return None;
+    }
+    Some(text)
+}
+
+/// Light-weight HTML → text extractor. Drops `<script>`/`<style>`/`<noscript>`
+/// blocks wholesale, strips remaining tags, decodes the common entities, and
+/// collapses whitespace. Not a real parser — designed for the constrained
+/// case of news article body extraction where the publisher's main content
+/// is broadly readable as plain text once tags are removed.
+///
+/// Operates on bytes (so byte indices for the drop-tag lookup stay sound)
+/// and writes raw bytes into a `Vec<u8>` so UTF-8 sequences for non-ASCII
+/// characters (smart quotes, em dashes, accented letters) survive intact.
+/// The final `from_utf8_lossy` only replaces genuinely invalid bytes.
+pub fn extract_article_text(html: &str) -> String {
+    let bytes = html.as_bytes();
+    let lower: Vec<u8> = bytes.iter().map(|b| b.to_ascii_lowercase()).collect();
+    let mut out: Vec<u8> = Vec::with_capacity(html.len() / 4);
+
+    fn find_close(lower: &[u8], from: usize, tag: &[u8]) -> Option<usize> {
+        let mut i = from;
+        while i + tag.len() <= lower.len() {
+            if lower[i..i + tag.len()] == *tag {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    let drop_tags: [(&[u8], &[u8]); 3] = [
+        (b"<script", b"</script>"),
+        (b"<style", b"</style>"),
+        (b"<noscript", b"</noscript>"),
+    ];
+
+    let mut i = 0;
+    let mut inside_tag = false;
+    while i < bytes.len() {
+        // Skip whole drop-block (script/style/noscript) if we're at one.
+        if !inside_tag {
+            let mut skipped = false;
+            for (open, close) in &drop_tags {
+                if i + open.len() <= lower.len() && &lower[i..i + open.len()] == *open {
+                    if let Some(end) = find_close(&lower, i + open.len(), close) {
+                        i = end + close.len();
+                        skipped = true;
+                        break;
+                    } else {
+                        // Unterminated; bail out of the rest of the doc.
+                        return finalize_extracted_text(out);
+                    }
+                }
+            }
+            if skipped {
+                continue;
+            }
+        }
+
+        let b = bytes[i];
+        if b == b'<' {
+            inside_tag = true;
+        } else if b == b'>' {
+            inside_tag = false;
+            // Treat block-level closers as paragraph breaks so we don't
+            // glue adjacent paragraphs into one blob.
+            out.push(b' ');
+        } else if !inside_tag {
+            out.push(b);
+        }
+        i += 1;
+    }
+
+    finalize_extracted_text(out)
+}
+
+fn finalize_extracted_text(raw_bytes: Vec<u8>) -> String {
+    // Lossy decode here is final — anything that wasn't valid UTF-8 in the
+    // source HTML gets a replacement char, which is fine for an indexable
+    // article body.
+    let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
+    let decoded = decode_html_entities(&raw);
+    // Collapse whitespace runs to single spaces; convert paragraph breaks
+    // (multiple spaces) into newlines so the stored text is readable.
+    let mut out = String::with_capacity(decoded.len());
+    let mut last_was_space = true;
+    let mut consecutive_spaces = 0u32;
+    for ch in decoded.chars() {
+        if ch.is_whitespace() {
+            consecutive_spaces += 1;
+            if !last_was_space {
+                out.push(if consecutive_spaces > 4 { '\n' } else { ' ' });
+                last_was_space = true;
+            } else if consecutive_spaces == 5 {
+                // first promotion of a long run → make it a paragraph break
+                if out.ends_with(' ') {
+                    out.pop();
+                }
+                out.push('\n');
+            }
+        } else {
+            consecutive_spaces = 0;
+            out.push(ch);
+            last_was_space = false;
+        }
+    }
+    out.trim().to_string()
+}
+
+fn decode_html_entities(s: &str) -> String {
+    // Walk by chars but track byte position so we can spot `&...;` entities
+    // (which are pure ASCII) without breaking up multi-byte UTF-8 sequences
+    // in the surrounding text.
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'&' {
+            if let Some(semi) = (i + 1..(i + 12).min(bytes.len())).find(|&j| bytes[j] == b';') {
+                let entity = &s[i + 1..semi];
+                let mapped = match entity {
+                    "amp" => Some("&"),
+                    "lt" => Some("<"),
+                    "gt" => Some(">"),
+                    "quot" => Some("\""),
+                    "apos" => Some("'"),
+                    "nbsp" => Some(" "),
+                    "mdash" => Some("—"),
+                    "ndash" => Some("–"),
+                    "hellip" => Some("…"),
+                    "lsquo" | "rsquo" => Some("'"),
+                    "ldquo" | "rdquo" => Some("\""),
+                    "copy" => Some("©"),
+                    "reg" => Some("®"),
+                    _ => None,
+                };
+                if let Some(m) = mapped {
+                    out.push_str(m);
+                    i = semi + 1;
+                    continue;
+                }
+                // Numeric: &#NNN; or &#xHH;
+                if let Some(num) = entity.strip_prefix('#') {
+                    let parsed = if let Some(hex) = num.strip_prefix('x').or_else(|| num.strip_prefix('X')) {
+                        u32::from_str_radix(hex, 16).ok()
+                    } else {
+                        num.parse::<u32>().ok()
+                    };
+                    if let Some(code) = parsed.and_then(char::from_u32) {
+                        out.push(code);
+                        i = semi + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        // Determine the byte length of the char starting at `i` so we copy
+        // the whole UTF-8 sequence in one shot.
+        let len = utf8_char_len(bytes[i]);
+        if i + len <= bytes.len() {
+            if let Ok(seg) = std::str::from_utf8(&bytes[i..i + len]) {
+                out.push_str(seg);
+                i += len;
+                continue;
+            }
+        }
+        // Fallback for an invalid sequence: skip one byte and continue.
+        i += 1;
+    }
+    out
+}
+
+fn utf8_char_len(b: u8) -> usize {
+    if b < 0x80 { 1 }
+    else if b < 0xC0 { 1 } // continuation; treat as 1 to make progress on malformed input
+    else if b < 0xE0 { 2 }
+    else if b < 0xF0 { 3 }
+    else { 4 }
 }
 
 /// Bulk upsert a batch in a single transaction.
@@ -323,14 +668,14 @@ pub fn get_news_by_symbol(
     let sym = symbol.to_uppercase();
     let sql = if sym.is_empty() {
         "SELECT url_hash, symbol, source, provider, headline, summary, url, published_at,
-                image_url, sentiment, sentiment_score, tickers_json, categories_json
+                image_url, sentiment, sentiment_score, tickers_json, categories_json, body
          FROM research_news
          WHERE source <> 'SEC'
          ORDER BY published_at DESC, updated_at DESC
          LIMIT ?1"
     } else {
         "SELECT url_hash, symbol, source, provider, headline, summary, url, published_at,
-                image_url, sentiment, sentiment_score, tickers_json, categories_json
+                image_url, sentiment, sentiment_score, tickers_json, categories_json, body
          FROM research_news
          WHERE source <> 'SEC' AND (symbol = ?2 OR tickers_json LIKE ?3)
          ORDER BY published_at DESC, updated_at DESC
@@ -366,6 +711,7 @@ pub fn get_news_by_symbol(
             sentiment_score: r.get(10).unwrap_or(0.0),
             tickers: serde_json::from_str(&tickers_s).unwrap_or_default(),
             categories: serde_json::from_str(&cats_s).unwrap_or_default(),
+            body: r.get(13).unwrap_or_default(),
         });
     }
     Ok(out)
@@ -383,7 +729,7 @@ pub fn search_news(
     }
     let mut stmt = conn.prepare(
         "SELECT n.url_hash, n.symbol, n.source, n.provider, n.headline, n.summary, n.url, n.published_at,
-                n.image_url, n.sentiment, n.sentiment_score, n.tickers_json, n.categories_json
+                n.image_url, n.sentiment, n.sentiment_score, n.tickers_json, n.categories_json, n.body
          FROM research_news n
          JOIN research_news_fts f ON f.url_hash = n.url_hash
          WHERE n.source <> 'SEC' AND research_news_fts MATCH ?1
@@ -411,6 +757,7 @@ pub fn search_news(
             sentiment_score: r.get(10).unwrap_or(0.0),
             tickers: serde_json::from_str(&tickers_s).unwrap_or_default(),
             categories: serde_json::from_str(&cats_s).unwrap_or_default(),
+            body: r.get(13).unwrap_or_default(),
         });
     }
     Ok(out)
