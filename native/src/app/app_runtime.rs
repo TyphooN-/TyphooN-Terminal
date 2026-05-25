@@ -12241,7 +12241,7 @@ impl eframe::App for TyphooNApp {
                                 );
                             } else if self.watchlist_rows.is_empty() {
                                 ui.label(
-                                    egui::RichText::new("No cached data.")
+                                    egui::RichText::new("No cached data (Yahoo fallback available)")
                                         .color(AXIS_TEXT)
                                         .small(),
                                 );
