@@ -505,20 +505,33 @@ impl TyphooNApp {
                     use typhoon_engine::core::research as rx;
                     let fmt_money = typhoon_engine::core::fundamentals::format_large_number;
 
-                    // Recent news (research_news + news crate — most relevant wins)
-                    if let Ok(articles) =
-                        typhoon_engine::core::news::get_news_by_symbol(&conn, &sym_upper, 8)
-                    {
+                    // Recent news (research_news + news crate — most relevant wins).
+                    // Bodies are included when the hydrator has fetched them so
+                    // the LLM has actual article text to ground its analysis,
+                    // not just headlines. Each body is truncated to ~1500
+                    // chars (lede + first few paragraphs) to keep the packet
+                    // token-budget under control even with 8 articles.
+                    const NEWS_ARTICLE_COUNT: usize = 8;
+                    const NEWS_BODY_CHAR_LIMIT: usize = 1500;
+                    if let Ok(articles) = typhoon_engine::core::news::get_news_by_symbol(
+                        &conn,
+                        &sym_upper,
+                        NEWS_ARTICLE_COUNT,
+                    ) {
                         if !articles.is_empty() {
+                            let bodies_present = articles
+                                .iter()
+                                .take(NEWS_ARTICLE_COUNT)
+                                .filter(|a| !a.body.is_empty())
+                                .count();
                             let _ = writeln!(
                                 p,
-                                "### Recent News ({} of {})",
-                                articles.len().min(8),
-                                articles.len()
+                                "### Recent News ({} of {}, {} with full body)",
+                                articles.len().min(NEWS_ARTICLE_COUNT),
+                                articles.len(),
+                                bodies_present
                             );
-                            let _ = writeln!(p, "| Date | Source | Sentiment | Headline |");
-                            let _ = writeln!(p, "|---|---|---|---|");
-                            for a in articles.iter().take(8) {
+                            for (idx, a) in articles.iter().take(NEWS_ARTICLE_COUNT).enumerate() {
                                 let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(
                                     a.published_at,
                                     0,
@@ -530,19 +543,55 @@ impl TyphooNApp {
                                 } else {
                                     a.sentiment.clone()
                                 };
-                                let hl = if a.headline.len() > 120 {
-                                    &a.headline[..120]
-                                } else {
-                                    a.headline.as_str()
-                                };
                                 let src = if a.provider.is_empty() {
                                     a.source.as_str()
                                 } else {
                                     a.provider.as_str()
                                 };
-                                let _ = writeln!(p, "| {} | {} | {} | {} |", dt, src, sent, hl);
+                                let _ = writeln!(
+                                    p,
+                                    "**Article {}** — {} — {} — sentiment: {}",
+                                    idx + 1,
+                                    dt,
+                                    src,
+                                    sent
+                                );
+                                let _ = writeln!(p, "Headline: {}", a.headline);
+                                if !a.url.is_empty() {
+                                    let _ = writeln!(p, "URL: {}", a.url);
+                                }
+                                // Prefer body (hydrated full text) over summary
+                                // (provider-supplied blurb). When neither is
+                                // present the row degrades to a headline-only
+                                // entry, same as the previous table format.
+                                let text = if !a.body.is_empty() {
+                                    a.body.as_str()
+                                } else {
+                                    a.summary.as_str()
+                                };
+                                if !text.is_empty() {
+                                    let label = if !a.body.is_empty() {
+                                        "Body"
+                                    } else {
+                                        "Summary"
+                                    };
+                                    // Char-aware truncate so multi-byte UTF-8
+                                    // (em-dashes, smart quotes, accented
+                                    // letters) doesn't slice a code point.
+                                    let truncated: String = if text.chars().count()
+                                        > NEWS_BODY_CHAR_LIMIT
+                                    {
+                                        let mut buf =
+                                            text.chars().take(NEWS_BODY_CHAR_LIMIT).collect::<String>();
+                                        buf.push('…');
+                                        buf
+                                    } else {
+                                        text.to_string()
+                                    };
+                                    let _ = writeln!(p, "{}: {}", label, truncated);
+                                }
+                                let _ = writeln!(p);
                             }
-                            let _ = writeln!(p);
                         }
                     }
 
