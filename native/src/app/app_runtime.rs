@@ -12242,11 +12242,7 @@ impl eframe::App for TyphooNApp {
                             } else if self.watchlist_rows.is_empty() {
                                 // Call self.refresh_watchlist_fallback_prices() periodically from main loop
                                 // (recommended: every 5-10 minutes or when watchlist tab is opened)
-                                ui.label(
-                                    egui::RichText::new("No cached data (Yahoo fallback available)")
-                                        .color(AXIS_TEXT)
-                                        .small(),
-                                );
+                                nav_muted(ui, "No cached data (Yahoo fallback available)");
                                 for sym in &self.user_watchlist {
                                     if let Some((price, source, ts)) = self.watchlist_fallback_prices.get(sym) {
                                         let age = ts.elapsed().as_secs() / 3600;

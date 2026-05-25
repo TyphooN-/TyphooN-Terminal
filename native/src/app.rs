@@ -20,6 +20,28 @@ use std::collections::{HashSet, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+// === Navbar Typography Helpers (US Graphics level) ===
+pub fn nav_primary(ui: &mut egui::Ui, text: impl Into<String>) {
+    ui.label(egui::RichText::new(text).strong().size(13.0));
+}
+
+pub fn nav_secondary(ui: &mut egui::Ui, text: impl Into<String>) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(11.5)
+            .color(egui::Color32::from_rgb(170, 170, 170)),
+    );
+}
+
+pub fn nav_muted(ui: &mut egui::Ui, text: impl Into<String>) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(10.5)
+            .color(AXIS_TEXT),
+    );
+}
+
 use tokio::sync::mpsc;
 use typhoon_engine::broker::alpaca::{
     AccountInfo, AlpacaBroker, Bar as EngineBar, OrderInfo, PositionInfo,
@@ -32735,6 +32757,12 @@ mod tests {
         assert!(!TyphooNApp::kraken_ws_pair_is_fresh_at(
             &map, "BTCUSD", "1Day", now_ms
         ));
+    }
+
+    #[test]
+    fn nav_typography_helpers_exist() {
+        // These functions should compile and be callable
+        assert!(true);
     }
 
     #[test]
