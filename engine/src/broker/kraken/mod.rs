@@ -17,7 +17,9 @@ pub use self::equities::{
     IAPI_RATE_LIMITED_ERR_PREFIX, KrakenEquityBar, KrakenEquityMarket, KrakenEquityTicker,
     iapi_rate_limited_for_secs,
 };
-pub use self::iapi_limiter::{IapiLimiter, IapiLimiterConfig, iapi_limiter, iapi_limiter_init};
+pub use self::iapi_limiter::{
+    IapiLimiter, IapiLimiterConfig, iapi_limiter, iapi_limiter_init, log_iapi_response_headers,
+};
 pub use self::ohlc_ws::{
     KRAKEN_WS_OHLC_INTERVALS_MIN, KRAKEN_WS_V2_URL, KrakenOhlcStreamerEvent, KrakenWsOhlcBar,
     build_subscribe_frames, build_unsubscribe_frame, compute_reconnect_backoff,
@@ -144,6 +146,7 @@ impl KrakenBroker {
                     "Kraken equity catalog request failed: HTTP {status}: {body}"
                 ));
             }
+            log_iapi_response_headers(resp.headers(), "catalog");
             iapi_limiter().record_success().await;
             let body: serde_json::Value = resp
                 .json()
@@ -262,6 +265,7 @@ impl KrakenBroker {
                 "Kraken equity ticker request failed: HTTP {status}: {body}"
             ));
         }
+        log_iapi_response_headers(resp.headers(), "ticker");
         iapi_limiter().record_success().await;
 
         let body: serde_json::Value = resp
@@ -383,6 +387,7 @@ impl KrakenBroker {
                 "Kraken equity history request failed: HTTP {status}: {body}"
             ));
         }
+        log_iapi_response_headers(resp.headers(), "history");
         iapi_limiter().record_success().await;
         let body: serde_json::Value = resp
             .json()

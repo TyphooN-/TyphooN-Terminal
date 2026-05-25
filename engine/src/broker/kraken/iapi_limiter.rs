@@ -23,7 +23,7 @@
 //!     next launch a free pass to immediately re-trip Cloudflare.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex as TokioMutex;
@@ -99,6 +99,56 @@ struct PersistedState {
 /// Process-wide instance. Initialised lazily with `IapiLimiterConfig::default`
 /// if `iapi_limiter_init` is not called first.
 static INSTANCE: OnceLock<IapiLimiter> = OnceLock::new();
+
+/// Latches on the first successful iapi response so the diagnostic
+/// header dump fires once at INFO (visible without enabling debug
+/// logging) and subsequent responses log at DEBUG. Helps callers see
+/// at-a-glance whether iapi exposes a budget header without flooding
+/// the log on every fetch.
+static IAPI_HEADERS_LOGGED_ONCE: AtomicBool = AtomicBool::new(false);
+
+/// Header names worth surfacing for rate-limit diagnosis. Cloudflare and
+/// Kraken sometimes return upstream RateLimit-* headers (RFC 9239 draft
+/// names) and Cloudflare always sets `cf-ray`. If none of these appear
+/// on a 200 OK, we know we'll have to estimate the ceiling empirically.
+const RATE_LIMIT_HEADER_NAMES: &[&str] = &[
+    "x-ratelimit-limit",
+    "x-ratelimit-remaining",
+    "x-ratelimit-reset",
+    "ratelimit-limit",
+    "ratelimit-remaining",
+    "ratelimit-reset",
+    "ratelimit-policy",
+    "retry-after",
+    "cf-ray",
+    "cf-cache-status",
+    "server",
+];
+
+/// Log a one-line summary of any rate-limit-related response headers
+/// returned by an iapi endpoint after a 2xx response. First call per
+/// process logs at INFO; subsequent calls at DEBUG. Use the `endpoint`
+/// label to differentiate sites (e.g. "ticker", "history", "catalog").
+pub fn log_iapi_response_headers(headers: &reqwest::header::HeaderMap, endpoint: &str) {
+    let mut found: Vec<String> = Vec::new();
+    for name in RATE_LIMIT_HEADER_NAMES {
+        if let Some(value) = headers.get(*name) {
+            if let Ok(s) = value.to_str() {
+                found.push(format!("{name}={s}"));
+            }
+        }
+    }
+    let summary = if found.is_empty() {
+        "(none of the inspected headers were present)".to_string()
+    } else {
+        found.join(" ")
+    };
+    if !IAPI_HEADERS_LOGGED_ONCE.swap(true, Ordering::Relaxed) {
+        tracing::info!("iapi {endpoint} response headers (one-shot diagnostic): {summary}");
+    } else {
+        tracing::debug!("iapi {endpoint} response headers: {summary}");
+    }
+}
 
 /// Access the process-wide limiter. Lazy-creates with defaults if uninit.
 pub fn iapi_limiter() -> &'static IapiLimiter {
