@@ -60082,6 +60082,7 @@ impl TyphooNApp {
                                     self.storage_purge_darwin_confirm = false;
                                     self.storage_purge_broker_confirm = None;
                                     self.storage_purge_timeframe_confirm = false;
+                                    self.storage_purge_news_confirm = false;
                                 }
                             }
                         });
@@ -60157,6 +60158,7 @@ impl TyphooNApp {
                                         self.storage_purge_bars_confirm = false;
                                         self.storage_purge_darwin_confirm = false;
                                         self.storage_purge_timeframe_confirm = false;
+                                        self.storage_purge_news_confirm = false;
                                     }
                                 }
                             }
@@ -60233,6 +60235,161 @@ impl TyphooNApp {
                                 self.storage_purge_bars_confirm = false;
                                 self.storage_purge_darwin_confirm = false;
                                 self.storage_purge_broker_confirm = None;
+                                self.storage_purge_news_confirm = false;
+                            }
+                        });
+                        // ── News purge by age (slider with date notches) ──
+                        // Manual tool only — there is no automatic news TTL
+                        // (see ADR-107 + ADR-215). Articles persist
+                        // indefinitely; this gives the user a way to
+                        // reclaim space without writing SQL.
+                        ui.horizontal(|ui| {
+                            // Notches: 1w / 1m / 3m / 6m / 1y / 2y / 5y.
+                            // Days, not seconds, so the cutoff is timezone
+                            // independent and the labels read naturally.
+                            const NEWS_PURGE_NOTCHES_DAYS: &[(i64, &str)] = &[
+                                (7,    "7 days"),
+                                (30,   "30 days"),
+                                (90,   "90 days"),
+                                (180,  "6 months"),
+                                (365,  "1 year"),
+                                (730,  "2 years"),
+                                (1825, "5 years"),
+                            ];
+                            let idx = self
+                                .storage_purge_news_age_idx
+                                .min(NEWS_PURGE_NOTCHES_DAYS.len() - 1);
+                            let (days, label) = NEWS_PURGE_NOTCHES_DAYS[idx];
+                            let cutoff_ts =
+                                chrono::Utc::now().timestamp() - days * 86_400;
+                            let count = self
+                                .cache
+                                .as_ref()
+                                .and_then(|c| c.connection().ok())
+                                .and_then(|conn| {
+                                    typhoon_engine::core::news::count_articles_older_than(
+                                        &conn, cutoff_ts,
+                                    )
+                                    .ok()
+                                })
+                                .unwrap_or(0);
+                            ui.label(
+                                egui::RichText::new("Purge news older than:")
+                                    .color(AXIS_TEXT)
+                                    .small(),
+                            );
+                            let mut slider_idx = idx;
+                            let slider = egui::Slider::new(
+                                &mut slider_idx,
+                                0..=(NEWS_PURGE_NOTCHES_DAYS.len() - 1),
+                            )
+                            .integer()
+                            .show_value(false)
+                            .custom_formatter(|n, _| {
+                                let i = (n as usize)
+                                    .min(NEWS_PURGE_NOTCHES_DAYS.len() - 1);
+                                NEWS_PURGE_NOTCHES_DAYS[i].1.to_string()
+                            });
+                            if ui.add(slider).changed() {
+                                self.storage_purge_news_age_idx = slider_idx;
+                                // Cancel any pending confirm if the user is
+                                // re-aiming the slider — they should
+                                // explicitly re-confirm at the new cutoff.
+                                self.storage_purge_news_confirm = false;
+                            }
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "({}) — {} articles affected",
+                                    label, count
+                                ))
+                                .color(AXIS_TEXT)
+                                .small(),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            // Re-resolve count for the confirm line so the
+                            // displayed N matches the in-flight slider
+                            // value even on the confirmation frame.
+                            const NEWS_PURGE_NOTCHES_DAYS: &[(i64, &str)] = &[
+                                (7,    "7 days"),
+                                (30,   "30 days"),
+                                (90,   "90 days"),
+                                (180,  "6 months"),
+                                (365,  "1 year"),
+                                (730,  "2 years"),
+                                (1825, "5 years"),
+                            ];
+                            let idx = self
+                                .storage_purge_news_age_idx
+                                .min(NEWS_PURGE_NOTCHES_DAYS.len() - 1);
+                            let (days, label) = NEWS_PURGE_NOTCHES_DAYS[idx];
+                            let cutoff_ts =
+                                chrono::Utc::now().timestamp() - days * 86_400;
+                            if self.storage_purge_news_confirm {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Delete every news article older than {}? (irreversible)",
+                                        label
+                                    ))
+                                    .color(egui::Color32::from_rgb(231, 76, 60))
+                                    .small(),
+                                );
+                                if ui
+                                    .button(
+                                        egui::RichText::new("Yes, Purge News")
+                                            .color(egui::Color32::from_rgb(231, 76, 60))
+                                            .small(),
+                                    )
+                                    .clicked()
+                                {
+                                    self.storage_purge_news_confirm = false;
+                                    if let Some(cache) = self.cache.clone() {
+                                        if let Ok(conn) = cache.connection() {
+                                            match typhoon_engine::core::news::purge_older_than(
+                                                &conn, cutoff_ts,
+                                            ) {
+                                                Ok(n) => {
+                                                    let size_now = cache
+                                                        .stats()
+                                                        .ok()
+                                                        .map(|(_, _, bytes)| {
+                                                            format_bytes_human(bytes)
+                                                        })
+                                                        .unwrap_or_else(|| "?".to_string());
+                                                    self.log.push_back(LogEntry::info(format!(
+                                                        "News purge: removed {} articles older than {}, DB now {}",
+                                                        n, label, size_now
+                                                    )));
+                                                }
+                                                Err(e) => self.log.push_back(LogEntry::err(
+                                                    format!("News purge failed: {}", e),
+                                                )),
+                                            }
+                                        }
+                                        self.refresh_storage_snapshot_after_action(
+                                            "news age purge",
+                                        );
+                                    }
+                                }
+                                if ui
+                                    .small_button(egui::RichText::new("Cancel").small())
+                                    .clicked()
+                                {
+                                    self.storage_purge_news_confirm = false;
+                                }
+                            } else if ui
+                                .button(
+                                    egui::RichText::new("Purge News")
+                                        .color(egui::Color32::from_rgb(231, 76, 60))
+                                        .small(),
+                                )
+                                .clicked()
+                            {
+                                self.storage_purge_news_confirm = true;
+                                self.storage_purge_bars_confirm = false;
+                                self.storage_purge_darwin_confirm = false;
+                                self.storage_purge_broker_confirm = None;
+                                self.storage_purge_timeframe_confirm = false;
                             }
                         });
                         // Purge All DARWIN Data
@@ -60269,6 +60426,7 @@ impl TyphooNApp {
                                     self.storage_purge_bars_confirm = false;
                                     self.storage_purge_broker_confirm = None;
                                     self.storage_purge_timeframe_confirm = false;
+                                    self.storage_purge_news_confirm = false;
                                 }
                             }
                         });

@@ -999,6 +999,20 @@ pub fn search_news(
     Ok(out)
 }
 
+/// Count articles whose `published_at` is older than `cutoff_ts`. Paired
+/// with `purge_older_than` for the Storage Manager UI: the count gives
+/// the user a preview ("N articles would be deleted") before the
+/// destructive button.
+pub fn count_articles_older_than(conn: &Connection, cutoff_ts: i64) -> Result<i64, String> {
+    let _ = create_news_tables(conn);
+    conn.query_row(
+        "SELECT COUNT(*) FROM research_news WHERE published_at < ?1",
+        params![cutoff_ts],
+        |r| r.get::<_, i64>(0),
+    )
+    .map_err(|e| format!("count older than: {e}"))
+}
+
 /// Delete articles older than `cutoff_ts`. Keeps the FTS5 table in sync.
 pub fn purge_older_than(conn: &Connection, cutoff_ts: i64) -> Result<usize, String> {
     let _ = create_news_tables(conn);
@@ -2572,5 +2586,37 @@ mod tests {
             </head><body><p>Hi.</p></body></html>"#;
         let (_, image) = extract_article_with_image(html);
         assert_eq!(image, "");
+    }
+
+    #[test]
+    fn count_older_than_matches_purge_count() {
+        let conn = mem_conn();
+        let now = chrono::Utc::now().timestamp();
+        // 5 articles spanning a year of ages.
+        let ages_days: [i64; 5] = [1, 30, 100, 200, 400];
+        for (i, age) in ages_days.iter().enumerate() {
+            let a = NewsArticle {
+                symbol: "AAPL".into(),
+                url: format!("https://example.com/a{i}"),
+                published_at: now - age * 86_400,
+                ..Default::default()
+            }
+            .with_hash();
+            upsert_news(&conn, &a).unwrap();
+        }
+        // Older than 90 days → ages 100, 200, 400 = 3 articles.
+        let cutoff_90 = now - 90 * 86_400;
+        assert_eq!(count_articles_older_than(&conn, cutoff_90).unwrap(), 3);
+        // Older than 365 days → only the 400-day-old one.
+        let cutoff_365 = now - 365 * 86_400;
+        assert_eq!(count_articles_older_than(&conn, cutoff_365).unwrap(), 1);
+        // Older than 1000 days → none.
+        let cutoff_1000 = now - 1000 * 86_400;
+        assert_eq!(count_articles_older_than(&conn, cutoff_1000).unwrap(), 0);
+        // After purging at cutoff_90, the count should match what purge
+        // reported, and a fresh count_older_than should return 0.
+        let purged = purge_older_than(&conn, cutoff_90).unwrap();
+        assert_eq!(purged, 3);
+        assert_eq!(count_articles_older_than(&conn, cutoff_90).unwrap(), 0);
     }
 }

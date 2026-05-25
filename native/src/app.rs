@@ -11186,6 +11186,13 @@ pub struct TyphooNApp {
     storage_purge_darwin_confirm: bool,
     storage_purge_broker_confirm: Option<String>,
     storage_purge_timeframe_confirm: bool,
+    /// Slider position for the news age-purge tool (index into the
+    /// NEWS_PURGE_AGE_DAYS notch array — 7/30/90/180/365/730/1825).
+    /// Default 4 = 1 year, which is the most common "I want to free
+    /// some space but keep recent context" pick.
+    storage_purge_news_age_idx: usize,
+    /// 2-step confirmation latch for the news purge button.
+    storage_purge_news_confirm: bool,
     storage_page: usize,
     storage_sort_col: usize,
     storage_sort_asc: bool,
@@ -27625,6 +27632,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
             storage_purge_darwin_confirm: false,
             storage_purge_broker_confirm: None,
             storage_purge_timeframe_confirm: false,
+            storage_purge_news_age_idx: 4,
+            storage_purge_news_confirm: false,
             storage_page: 0,
             storage_sort_col: 4,
             storage_sort_asc: false,
