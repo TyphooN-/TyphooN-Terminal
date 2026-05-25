@@ -658,6 +658,76 @@ fn extract_hero_image_url(doc: &scraper::Html) -> String {
     String::new()
 }
 
+/// Normalize a headline for content-based dedup across sources. Strips the
+/// publisher suffix patterns that local-news sites tack on (`" | <Publisher>"`,
+/// `" - <Publisher>"`) and lowercases / collapses whitespace. Two articles
+/// that produce the same normalized headline are considered the same story
+/// surfaced by different outlets, so the UI can show one row with a
+/// "N sources" badge instead of N near-identical rows.
+///
+/// Examples (all collapse to "dads club colchester says it is the antidote
+/// to manosphere"):
+///   - "Dads club Colchester says it is the antidote to manosphere"
+///   - "Dads club Colchester says it is the antidote to manosphere | Clacton and Frinton Gazette"
+///   - "Dads club Colchester says it is the antidote to manosphere - Halstead Gazette"
+pub fn normalize_headline_for_dedup(headline: &str) -> String {
+    let lower = headline.to_lowercase();
+    // Strip trailing " | <publisher>" — the most common pattern across
+    // Yahoo-syndicated UK regional news. `rsplit_once` so we don't break
+    // headlines that legitimately contain "|" earlier in the text.
+    let trimmed: &str = match lower.rsplit_once(" | ") {
+        // Sanity check: the prefix must be substantial (> 12 chars) so we
+        // don't decapitate a headline like "Apple | Q3 earnings".
+        Some((before, _)) if before.len() > 12 => before,
+        _ => &lower,
+    };
+    // Also try " - <publisher>" (Yahoo-syndicated US local news pattern).
+    // Same length guard so common em-dash titles aren't truncated.
+    let trimmed: &str = match trimmed.rsplit_once(" - ") {
+        Some((before, _)) if before.len() > 12 => before,
+        _ => trimmed,
+    };
+    trimmed.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Group articles whose normalized headlines match into a single
+/// "story" with one primary (the most recent) and the rest as
+/// alternates. Preserves the input ordering of groups (the order their
+/// primary article first appears in the input). Within a group the
+/// primary is the article with the latest `published_at`; alternates
+/// are sorted newest → oldest after the primary. Returns
+/// `Vec<(primary_index, alternate_indices)>` so the caller can index
+/// back into the original slice without cloning the articles.
+pub fn group_articles_by_headline(
+    articles: &[NewsArticle],
+) -> Vec<(usize, Vec<usize>)> {
+    use std::collections::HashMap;
+    // Map normalized headline → indices in input order.
+    let mut buckets: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for (i, a) in articles.iter().enumerate() {
+        let key = normalize_headline_for_dedup(&a.headline);
+        if !buckets.contains_key(&key) {
+            order.push(key.clone());
+        }
+        buckets.entry(key).or_default().push(i);
+    }
+    let mut out: Vec<(usize, Vec<usize>)> = Vec::with_capacity(order.len());
+    for key in order {
+        let mut indices = buckets.remove(&key).unwrap_or_default();
+        // Sort by published_at descending so the freshest source wins
+        // the primary slot.
+        indices.sort_by(|&a, &b| {
+            articles[b]
+                .published_at
+                .cmp(&articles[a].published_at)
+        });
+        let primary = indices.remove(0);
+        out.push((primary, indices));
+    }
+    out
+}
+
 fn finalize_extracted_text(raw_bytes: Vec<u8>) -> String {
     // Lossy decode here is final — anything that wasn't valid UTF-8 in the
     // source HTML gets a replacement char, which is fine for an indexable
@@ -2586,6 +2656,77 @@ mod tests {
             </head><body><p>Hi.</p></body></html>"#;
         let (_, image) = extract_article_with_image(html);
         assert_eq!(image, "");
+    }
+
+    #[test]
+    fn normalize_headline_strips_publisher_pipe_suffix() {
+        let h1 = "Dads club Colchester says it is the antidote to manosphere";
+        let h2 = "Dads club Colchester says it is the antidote to manosphere | Clacton and Frinton Gazette";
+        let h3 = "Dads club Colchester says it is the antidote to manosphere | Maldon and Burnham Standard";
+        let h4 = "Dads club Colchester says it is the antidote to manosphere - Halstead Gazette";
+        let n1 = normalize_headline_for_dedup(h1);
+        let n2 = normalize_headline_for_dedup(h2);
+        let n3 = normalize_headline_for_dedup(h3);
+        let n4 = normalize_headline_for_dedup(h4);
+        assert_eq!(n1, n2);
+        assert_eq!(n2, n3);
+        assert_eq!(n3, n4);
+        assert!(n1.contains("dads club colchester"));
+        assert!(!n1.contains("gazette"));
+        assert!(!n1.contains("standard"));
+    }
+
+    #[test]
+    fn normalize_headline_preserves_short_titles_with_pipes() {
+        // Don't decapitate "Apple | Q3 earnings" — the prefix is too
+        // short to be a publisher name.
+        let h = "Apple | Q3 earnings";
+        let n = normalize_headline_for_dedup(h);
+        assert_eq!(n, "apple | q3 earnings");
+    }
+
+    #[test]
+    fn group_articles_collapses_same_story_across_sources() {
+        let mk = |url: &str, headline: &str, ts: i64| NewsArticle {
+            url: url.into(),
+            headline: headline.into(),
+            published_at: ts,
+            ..Default::default()
+        }
+        .with_hash();
+        let articles = vec![
+            mk("u1", "Dads club Colchester | A Gazette",  100),
+            mk("u2", "Apple beats Q3 estimates",          200),
+            mk("u3", "Dads club Colchester | B Standard", 110),
+            mk("u4", "Dads club Colchester - C News",     120),
+            mk("u5", "Tesla rises",                       300),
+        ];
+        let groups = group_articles_by_headline(&articles);
+        // 3 distinct stories: dads (3 sources), apple, tesla
+        assert_eq!(groups.len(), 3);
+        // Find the dads group — primary should be the newest (ts=120, idx=3)
+        let dads = groups
+            .iter()
+            .find(|(p, _)| articles[*p].headline.contains("Dads"))
+            .expect("dads group present");
+        assert_eq!(dads.0, 3, "primary should be newest (idx 3)");
+        assert_eq!(dads.1.len(), 2, "two alternates for the dads story");
+    }
+
+    #[test]
+    fn group_articles_preserves_singletons() {
+        let mk = |url: &str, headline: &str| NewsArticle {
+            url: url.into(),
+            headline: headline.into(),
+            ..Default::default()
+        }
+        .with_hash();
+        let articles = vec![mk("u1", "Unique A"), mk("u2", "Unique B")];
+        let groups = group_articles_by_headline(&articles);
+        assert_eq!(groups.len(), 2);
+        for (_, alts) in &groups {
+            assert!(alts.is_empty());
+        }
     }
 
     #[test]

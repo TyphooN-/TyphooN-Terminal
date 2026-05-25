@@ -37,6 +37,11 @@ tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macr
 # Concurrent future combinators (join_all for the news-body hydrator)
 futures-util = "0.3"
 
+# Regex filter for the News window — lets the user search article headlines
+# with /pattern/ syntax in addition to the keyword and comma-separated
+# multi-symbol modes. Already transitively in the build via tracing-subscriber.
+regex = "1"
+
 # HTTP client (for Kraken API in broker task — matches engine)
 reqwest = { workspace = true, features = ["json", "rustls"] }
 

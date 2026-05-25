@@ -1,5 +1,104 @@
 use super::*;
 
+/// Client-side filter parsed from the News window's Search field. The
+/// search text is interpreted in three modes, auto-detected from its
+/// content, so the user doesn't need a separate "Symbol:" input or a
+/// mode toggle:
+///
+///   * empty                  → [`SearchFilterMode::All`] — show every cached article
+///   * `/<pattern>/`          → [`SearchFilterMode::Regex`] — case-insensitive headline match
+///   * `TNDM, GDC, CC` (CSV)  → [`SearchFilterMode::Symbols`] — match article.symbol OR any ticker
+///
+/// The FTS broker keyword search stays available via the dedicated "FTS
+/// Search" button next to the field so a user can still ask for the
+/// literal substring "TNDM" in body text rather than tagging.
+pub(super) enum SearchFilterMode {
+    All,
+    Symbols(Vec<String>),
+    Regex {
+        pattern: String,
+        compiled: regex::Regex,
+    },
+    InvalidRegex(String),
+}
+
+impl SearchFilterMode {
+    pub(super) fn parse(raw: &str) -> Self {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Self::All;
+        }
+        // Regex mode: `/pattern/` (case-insensitive headline match).
+        // Strip the slashes, compile, fall back to InvalidRegex when the
+        // pattern itself is malformed so the UI can show why the filter
+        // isn't biting instead of silently returning everything.
+        if trimmed.starts_with('/') && trimmed.ends_with('/') && trimmed.len() >= 3 {
+            let pattern = trimmed[1..trimmed.len() - 1].to_string();
+            return match regex::RegexBuilder::new(&pattern)
+                .case_insensitive(true)
+                .build()
+            {
+                Ok(compiled) => Self::Regex { pattern, compiled },
+                Err(e) => Self::InvalidRegex(e.to_string()),
+            };
+        }
+        // Symbol CSV mode: comma-separated tokens that look like tickers.
+        // A "ticker-shaped" token is short (≤6 chars), alphanumeric +
+        // dot/dash/slash (covers BRK.B, TSLA, BTC/USD, etc.). If every
+        // comma-separated token passes the shape check, treat the whole
+        // thing as a symbol list; otherwise fall through to FTS keyword
+        // semantics (which the FTS Search button explicitly invokes).
+        let candidates: Vec<&str> = trimmed
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !candidates.is_empty()
+            && candidates.iter().all(|c| {
+                c.len() <= 8
+                    && c.chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '/')
+            })
+        {
+            let syms: Vec<String> = candidates
+                .iter()
+                .map(|s| s.to_ascii_uppercase())
+                .collect();
+            return Self::Symbols(syms);
+        }
+        // Bare keyword that isn't a symbol-CSV or regex: show all and
+        // wait for the user to press the FTS Search button (which
+        // submits to the broker). Falling back to All here means the
+        // user typing a partial keyword sees the full list rather than
+        // an empty one — and the FTS button is right next to the field.
+        Self::All
+    }
+
+    /// True when the given article passes this filter.
+    pub(super) fn matches(&self, a: &typhoon_engine::core::news::NewsArticle) -> bool {
+        match self {
+            Self::All | Self::InvalidRegex(_) => true,
+            Self::Symbols(syms) => {
+                // Match article.symbol OR any tagged ticker, case-
+                // insensitive. The article symbol is already upper in
+                // most providers; we normalise both sides to be safe.
+                let primary = a.symbol.trim().to_ascii_uppercase();
+                if !primary.is_empty() && syms.iter().any(|s| s == &primary) {
+                    return true;
+                }
+                for t in &a.tickers {
+                    let t_up = t.trim().to_ascii_uppercase();
+                    if !t_up.is_empty() && syms.iter().any(|s| s == &t_up) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Self::Regex { compiled, .. } => compiled.is_match(&a.headline),
+        }
+    }
+}
+
 fn sortable_header(
     ui: &mut egui::Ui,
     label: &str,
@@ -4173,9 +4272,14 @@ impl TyphooNApp {
                         .to_string()
                 })
                 .unwrap_or_else(|| "AAPL".to_string());
-            if self.news_symbol_filter.is_empty() {
-                self.news_symbol_filter = chart_symbol.clone();
-            }
+            // `news_symbol_filter` was removed from the UI (the Search
+            // field now owns filtering). The field is retained on the
+            // app struct for backward-compat with sessions saved by
+            // older builds, but the auto-fill from active-chart no
+            // longer happens — the Fetch button uses `chart_symbol`
+            // directly, and the Search field starts empty so all cached
+            // articles are visible.
+            let _ = &self.news_symbol_filter; // keep the borrow live for any future use
             let news_scope_label = self.broker_scope_label().to_string();
             let mut scoped_news_symbols: Vec<String> =
                 if let Some(set) = self.broker_scope_symbols() {
@@ -4210,32 +4314,37 @@ impl TyphooNApp {
                 .min_size([680.0, 320.0])
                 .max_size([1280.0, news_max_h])
                 .show(ctx, |ui| {
-                    // ── Top bar: symbol filter + search + fetch controls ─────────
+                    // ── Top bar: Search-driven filter + fetch controls ────────────
+                    // The Search field is now the single point of control for
+                    // the news list. Three modes are auto-detected from the
+                    // text content:
+                    //   * Empty               → show every cached article
+                    //   * "TNDM, GDC, CC"     → comma-separated symbol filter
+                    //                           (matches article.symbol OR any
+                    //                           ticker in article.tickers)
+                    //   * "/dads.*club/i"     → regex headline match
+                    //   * anything else       → FTS5 broker keyword search
+                    // The previous separate "Symbol:" input + "Use Chart" pair
+                    // was redundant once the search field took over filtering.
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.news_symbol_filter).desired_width(90.0));
-                        if ui.button("Use Chart").on_hover_text("Copy active chart symbol").clicked() {
-                            self.news_symbol_filter = chart_symbol.clone();
-                        }
-                        ui.separator();
                         if ui.add_enabled(!self.news_loading, egui::Button::new("Load Cached").fill(BTN_GREEN))
-                            .on_hover_text("Read cached articles from SQLite without fetching").clicked() {
-                            let sym = self.news_symbol_filter.trim().to_uppercase();
+                            .on_hover_text("Read all cached articles from SQLite (no fetch). Use Search to filter the result by symbol(s) or regex.").clicked() {
                             self.news_loading = true;
-                            let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews { symbol: sym, limit: 200 });
+                            // Empty symbol = "all symbols" on the broker side.
+                            let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews { symbol: String::new(), limit: 500 });
                         }
                         if ui.add_enabled(!self.news_loading, egui::Button::new("Fetch All Sources").fill(BTN_BLUE))
-                            .on_hover_text("Equities: GDELT + Yahoo RSS + Marketaux + Alpha Vantage + FMP. Crypto: GDELT + Yahoo + CryptoPanic + CoinDesk RSS + Finnhub crypto").clicked() {
+                            .on_hover_text("Fetch fresh news for the active chart symbol from every configured provider (GDELT, Yahoo, Marketaux, Alpha Vantage, FMP, Finnhub, CryptoPanic, CoinDesk).").clicked() {
                                 if self.heavy_sync_in_progress {
                                     return; // Skip heavy news rendering during sync
                                 }
-                                // Result limiting for performance
-                                #[allow(dead_code)]
-                                const MAX_NEWS_RESULTS: usize = 50;
-                                // (actual limiting would be applied when building the list)
-                            let sym = self.news_symbol_filter.trim().to_uppercase();
+                            // Falls back to the active chart's symbol so the
+                            // user doesn't need a separate symbol input. To
+                            // fetch for a different symbol, open that symbol
+                            // on a chart first (CHARTSYMBOL command).
+                            let sym = chart_symbol.trim().to_uppercase();
                             if sym.is_empty() {
-                                self.log.push_back(LogEntry::warn("News: enter a symbol"));
+                                self.log.push_back(LogEntry::warn("News: open a symbol on a chart first"));
                             } else {
                                 self.news_loading = true;
                                 let _ = self.broker_tx.send(BrokerCmd::FetchNewsMulti {
@@ -4286,14 +4395,26 @@ impl TyphooNApp {
                     });
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Search:").color(AXIS_TEXT));
-                        let resp = ui.add(egui::TextEdit::singleline(&mut self.news_search_query).desired_width(260.0).hint_text("keyword… (FTS5)"));
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.news_search_query)
+                                .desired_width(360.0)
+                                .hint_text("symbol(s) e.g. TNDM, GDC  ·  /regex/  ·  keyword… (FTS5)"),
+                        );
                         let do_search = (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                            || ui.button("Search").clicked();
+                            || ui.button("FTS Search").clicked();
+                        // FTS button explicitly forces a broker keyword search
+                        // even when the field LOOKS like a symbol or regex —
+                        // useful when you actually want to search article
+                        // bodies for the literal text "TNDM".
                         if do_search {
                             let q = self.news_search_query.trim().to_string();
                             if !q.is_empty() {
                                 self.news_loading = true;
                                 let _ = self.broker_tx.send(BrokerCmd::SearchNews { query: q, limit: 200 });
+                            } else {
+                                // Empty query → reload everything cached.
+                                self.news_loading = true;
+                                let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews { symbol: String::new(), limit: 500 });
                             }
                         }
                         ui.separator();
@@ -4323,10 +4444,74 @@ impl TyphooNApp {
                     if self.news_full_articles.is_empty() {
                         ui.label(egui::RichText::new("No cached news. Click Load Cached or Fetch All Sources.").color(AXIS_TEXT));
                     } else {
-                        let total = self.news_full_articles.len();
+                        // Parse the Search field into a client-side filter
+                        // before grouping so dedup only spans the filtered set.
+                        // Three modes: empty, /regex/, symbol-CSV.
+                        let raw_filter = self.news_search_query.trim();
+                        let filter_mode = SearchFilterMode::parse(raw_filter);
+                        // Apply filter to produce visible_indices in input
+                        // order. Indices stay relative to news_full_articles
+                        // so click handlers can still index back cleanly.
+                        let visible_indices: Vec<usize> = self
+                            .news_full_articles
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, a)| filter_mode.matches(a))
+                            .map(|(i, _)| i)
+                            .collect();
+                        // Group the FILTERED articles so multiple sources of
+                        // the same story collapse into one row. Each group is
+                        // (primary_idx, alternate_indices) — both index into
+                        // news_full_articles, not into visible_indices.
+                        let filtered_articles: Vec<typhoon_engine::core::news::NewsArticle> = visible_indices
+                            .iter()
+                            .map(|&i| self.news_full_articles[i].clone())
+                            .collect();
+                        let local_groups = typhoon_engine::core::news::group_articles_by_headline(
+                            &filtered_articles,
+                        );
+                        // Remap local indices (into filtered_articles) back to
+                        // full-list indices so click handlers still work.
+                        let groups: Vec<(usize, Vec<usize>)> = local_groups
+                            .into_iter()
+                            .map(|(primary, alternates)| {
+                                let p = visible_indices[primary];
+                                let alts = alternates
+                                    .into_iter()
+                                    .map(|i| visible_indices[i])
+                                    .collect();
+                                (p, alts)
+                            })
+                            .collect();
                         let avail = ui.available_size();
                         let pane_h = avail.y.clamp(220.0, news_max_h - 150.0);
                         let list_w = (avail.x * 0.38).clamp(240.0, 420.0);
+                        // Filter status line above the panes so the user sees
+                        // "12 stories from 47 articles · TNDM, GDC" etc.
+                        let status = match &filter_mode {
+                            SearchFilterMode::All => format!(
+                                "{} stories from {} articles",
+                                groups.len(),
+                                self.news_full_articles.len()
+                            ),
+                            SearchFilterMode::Symbols(syms) => format!(
+                                "{} stories from {} articles · filter: {}",
+                                groups.len(),
+                                visible_indices.len(),
+                                syms.join(", ")
+                            ),
+                            SearchFilterMode::Regex { pattern, .. } => format!(
+                                "{} stories from {} articles · /{}/i",
+                                groups.len(),
+                                visible_indices.len(),
+                                pattern
+                            ),
+                            SearchFilterMode::InvalidRegex(err) => format!(
+                                "Regex error: {} (showing all)",
+                                err
+                            ),
+                        };
+                        ui.label(egui::RichText::new(status).color(AXIS_TEXT).small());
                         ui.horizontal(|ui| {
                             // ── Left: article list ──
                             ui.allocate_ui_with_layout(egui::vec2(list_w, pane_h), egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -4334,9 +4519,12 @@ impl TyphooNApp {
                                     .id_salt("news_list_scroll")
                                     .auto_shrink([false, false])
                                     .show(ui, |ui| {
-                                        for i in 0..total {
+                                        for (i, alternates) in &groups {
+                                            let i = *i;
                                             let a = &self.news_full_articles[i];
-                                            let selected = self.news_selected == Some(i);
+                                            let selected = self.news_selected == Some(i)
+                                                || alternates.iter().any(|&j| self.news_selected == Some(j));
+                                            let source_count = 1 + alternates.len();
                                             let ts = if a.published_at > 0 {
                                                 chrono::DateTime::from_timestamp(a.published_at, 0)
                                                     .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
@@ -4372,6 +4560,23 @@ impl TyphooNApp {
                                                         }
                                                         if !a.sentiment.is_empty() {
                                                             ui.label(egui::RichText::new(format!("· {}", &a.sentiment)).color(sent_color).small());
+                                                        }
+                                                        if source_count > 1 {
+                                                            // Group badge: tells the user this
+                                                            // story was published by N outlets.
+                                                            // The right pane lets them switch
+                                                            // between them via the Sources
+                                                            // dropdown.
+                                                            ui.label(
+                                                                egui::RichText::new(format!(
+                                                                    "· +{} sources",
+                                                                    source_count - 1
+                                                                ))
+                                                                .color(egui::Color32::from_rgb(
+                                                                    200, 160, 100,
+                                                                ))
+                                                                .small(),
+                                                            );
                                                         }
                                                     });
                                                     let color = if selected {
@@ -4433,6 +4638,56 @@ impl TyphooNApp {
                             // ── Right: article body ──
                             ui.vertical(|ui| {
                                 if let Some(idx) = self.news_selected {
+                                    // Find which group (if any) this selected
+                                    // article belongs to so we can show the
+                                    // Sources switcher when there are siblings.
+                                    let selected_group: Option<&(usize, Vec<usize>)> = groups
+                                        .iter()
+                                        .find(|(p, alts)| *p == idx || alts.iter().any(|&j| j == idx));
+                                    // Sources switcher: one button per article
+                                    // in this group, including the currently-
+                                    // selected one. Clicking switches which
+                                    // article is rendered without affecting the
+                                    // left-list selection-state styling.
+                                    if let Some((primary, alts)) = selected_group {
+                                        if !alts.is_empty() {
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "Sources ({}):",
+                                                        1 + alts.len()
+                                                    ))
+                                                    .color(AXIS_TEXT)
+                                                    .small(),
+                                                );
+                                                let mut all = vec![*primary];
+                                                all.extend(alts.iter().copied());
+                                                for src_idx in all {
+                                                    let src_a = match self
+                                                        .news_full_articles
+                                                        .get(src_idx)
+                                                    {
+                                                        Some(x) => x,
+                                                        None => continue,
+                                                    };
+                                                    let label = if !src_a.provider.is_empty() {
+                                                        src_a.provider.clone()
+                                                    } else {
+                                                        src_a.source.clone()
+                                                    };
+                                                    let is_selected = idx == src_idx;
+                                                    let btn = egui::Button::new(
+                                                        egui::RichText::new(&label).small(),
+                                                    )
+                                                    .selected(is_selected);
+                                                    if ui.add(btn).clicked() {
+                                                        self.news_selected = Some(src_idx);
+                                                    }
+                                                }
+                                            });
+                                            ui.add_space(2.0);
+                                        }
+                                    }
                                     if let Some(a) = self.news_full_articles.get(idx) {
                                         let mut associated_tickers = Vec::new();
                                         let primary = a.symbol.trim().to_uppercase();
