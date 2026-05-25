@@ -54426,6 +54426,13 @@ pub struct WebArticle {
     pub summary: String,
     pub agent_used: String, // "claude" | "gemini" | "chatgpt" | free-form
     pub ingested_at: i64,   // unix seconds
+    /// Full article text when the agent actually fetched the source (web_search /
+    /// browse tools). Empty when the agent only had access to the headline / their
+    /// own synthesis — in that case `summary` is the only content. `serde` default
+    /// keeps this field backward-compatible with pre-existing
+    /// `research_web_articles` JSON blobs and with LAN peers running older builds.
+    #[serde(default)]
+    pub body: String,
 }
 
 /// Per-symbol bag of ingested web articles. JSON-blob-per-symbol.
@@ -54646,6 +54653,15 @@ pub fn parse_ingest_block(text: &str) -> Vec<(String, Vec<WebArticle>)> {
                         .or_else(|| obj.get("agent").and_then(|s| s.as_str()))
                         .unwrap_or("")
                         .to_string();
+                    // Optional `body` field: full article text when the agent
+                    // actually fetched the source. Accepts `body` or `text` as
+                    // aliases since different LLMs default to different keys.
+                    let body = obj
+                        .get("body")
+                        .and_then(|s| s.as_str())
+                        .or_else(|| obj.get("text").and_then(|s| s.as_str()))
+                        .unwrap_or("")
+                        .to_string();
                     out.entry(symbol).or_default().push(WebArticle {
                         title,
                         url,
@@ -54654,6 +54670,7 @@ pub fn parse_ingest_block(text: &str) -> Vec<(String, Vec<WebArticle>)> {
                         summary,
                         agent_used,
                         ingested_at: now,
+                        body,
                     });
                 }
             }
@@ -74702,6 +74719,7 @@ mod tests {
                 summary: "Strong quarter.".into(),
                 agent_used: "claude".into(),
                 ingested_at: 1_700_000_000,
+                body: String::new(),
             }],
         };
         upsert_ingested_articles(&c, "AAPL", &snap).unwrap();
@@ -74811,6 +74829,91 @@ Trailing text.
         let text = "No ingest block here.";
         let parsed = parse_ingest_block(text);
         assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn parse_ingest_block_reads_optional_body_field() {
+        let text = r#"
+===TYPHOON_INGEST===
+[
+  {"symbol": "AAPL", "url": "https://r.com/a", "title": "iPhone sales",
+   "summary": "Strong quarter.",
+   "body": "Apple reported Q3 iPhone sales of 50M units, up 12% YoY..."},
+  {"symbol": "MSFT", "url": "https://b.com/b", "title": "Azure growth",
+   "summary": "Cloud accelerating.",
+   "text": "Microsoft Azure revenue grew 28% on AI workload demand..."}
+]
+===END_INGEST===
+"#;
+        let parsed = parse_ingest_block(text);
+        let by_sym: std::collections::HashMap<_, _> = parsed.into_iter().collect();
+        let aapl = &by_sym["AAPL"][0];
+        assert!(aapl.body.starts_with("Apple reported Q3"));
+        // `text` is accepted as an alias for `body` (different LLMs prefer
+        // different keys; both should round-trip into the same field).
+        let msft = &by_sym["MSFT"][0];
+        assert!(msft.body.starts_with("Microsoft Azure"));
+    }
+
+    #[test]
+    fn parse_ingest_block_defaults_body_to_empty_when_absent() {
+        let text = r#"
+===TYPHOON_INGEST===
+[
+  {"symbol": "NVDA", "url": "https://x.com/n", "title": "Blackwell",
+   "summary": "Strong demand."}
+]
+===END_INGEST===
+"#;
+        let parsed = parse_ingest_block(text);
+        let by_sym: std::collections::HashMap<_, _> = parsed.into_iter().collect();
+        assert_eq!(by_sym["NVDA"][0].body, "");
+    }
+
+    #[test]
+    fn web_article_body_roundtrips_through_snapshot() {
+        let c = Connection::open_in_memory().unwrap();
+        create_research_tables_v23(&c).unwrap();
+        let snap = IngestedArticlesSnapshot {
+            symbol: "AAPL".into(),
+            articles: vec![WebArticle {
+                title: "Paywalled scoop".into(),
+                url: "https://wsj.com/article".into(),
+                source: "WSJ".into(),
+                summary: "Big news.".into(),
+                body: "Full paywalled text the agent fetched and returned.".into(),
+                ingested_at: 1_700_000_000,
+                ..Default::default()
+            }],
+        };
+        upsert_ingested_articles(&c, "AAPL", &snap).unwrap();
+        let got = get_ingested_articles(&c, "AAPL").unwrap().unwrap();
+        assert_eq!(got.articles[0].body, "Full paywalled text the agent fetched and returned.");
+    }
+
+    #[test]
+    fn web_article_backward_compatible_json_without_body() {
+        // Simulate a snapshot blob written by an older binary that didn't
+        // know about the `body` field — deserialise should not fail, and
+        // body should default to empty.
+        let legacy_json = r#"{
+            "symbol": "AAPL",
+            "articles": [
+                {
+                    "title": "Old article",
+                    "url": "https://example.com/x",
+                    "source": "Reuters",
+                    "published_at": "2026-01-01",
+                    "summary": "From before body shipped.",
+                    "agent_used": "claude",
+                    "ingested_at": 1700000000
+                }
+            ]
+        }"#;
+        let snap: IngestedArticlesSnapshot =
+            serde_json::from_str(legacy_json).expect("legacy JSON must deserialize");
+        assert_eq!(snap.articles[0].body, "");
+        assert_eq!(snap.articles[0].title, "Old article");
     }
 
     // ── ADR-131 Round 23 tests ──

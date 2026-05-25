@@ -12822,10 +12822,22 @@ impl TyphooNApp {
                     // ── ADR-130 prior-ingested web research (if any) ──
                     if let Ok(Some(ing)) = rx::get_ingested_articles(&conn, &sym_upper) {
                         if !ing.articles.is_empty() {
+                            // Char limits match the news section so a long body
+                            // doesn't blow the token budget when a chatty agent
+                            // dumps multi-thousand-character article text.
+                            const INGEST_BODY_CHAR_LIMIT: usize = 1500;
+                            const INGEST_SUMMARY_CHAR_LIMIT: usize = 260;
+                            let bodies_present = ing
+                                .articles
+                                .iter()
+                                .take(15)
+                                .filter(|a| !a.body.is_empty())
+                                .count();
                             let _ = writeln!(
                                 p,
-                                "### Prior Ingested Web Research — INGESTED ({} articles)",
-                                ing.articles.len()
+                                "### Prior Ingested Web Research — INGESTED ({} articles, {} with body)",
+                                ing.articles.len(),
+                                bodies_present
                             );
                             for a in ing.articles.iter().take(15) {
                                 let src = if !a.source.is_empty() {
@@ -12854,12 +12866,35 @@ impl TyphooNApp {
                                     title, src, when, agent
                                 );
                                 if !a.summary.is_empty() {
-                                    let mut s = a.summary.clone();
-                                    if s.len() > 260 {
-                                        s.truncate(260);
-                                        s.push('…');
-                                    }
+                                    // char-aware truncate so multi-byte UTF-8 sequences
+                                    // (em-dashes, smart quotes, accented letters) don't
+                                    // get sliced mid-code-point.
+                                    let s = if a.summary.chars().count() > INGEST_SUMMARY_CHAR_LIMIT {
+                                        let mut buf = a
+                                            .summary
+                                            .chars()
+                                            .take(INGEST_SUMMARY_CHAR_LIMIT)
+                                            .collect::<String>();
+                                        buf.push('…');
+                                        buf
+                                    } else {
+                                        a.summary.clone()
+                                    };
                                     let _ = writeln!(p, "  - {}", s);
+                                }
+                                if !a.body.is_empty() {
+                                    let b = if a.body.chars().count() > INGEST_BODY_CHAR_LIMIT {
+                                        let mut buf = a
+                                            .body
+                                            .chars()
+                                            .take(INGEST_BODY_CHAR_LIMIT)
+                                            .collect::<String>();
+                                        buf.push('…');
+                                        buf
+                                    } else {
+                                        a.body.clone()
+                                    };
+                                    let _ = writeln!(p, "  - Body: {}", b);
                                 }
                                 if !a.url.is_empty() {
                                     let _ = writeln!(p, "  - {}", a.url);
@@ -13024,7 +13059,11 @@ impl TyphooNApp {
         );
         let _ = writeln!(
             p,
-            "   \"summary\": \"2-3 sentence takeaway\", \"agent\": \"claude|gemini|chatgpt|...\"}},"
+            "   \"summary\": \"2-3 sentence takeaway\", \"agent\": \"claude|gemini|chatgpt|...\","
+        );
+        let _ = writeln!(
+            p,
+            "   \"body\": \"full article text if you actually fetched the source (optional)\"}},"
         );
         let _ = writeln!(p, "  ...");
         let _ = writeln!(p, "]");
@@ -13036,8 +13075,11 @@ impl TyphooNApp {
             "Rules: (1) one object per distinct article, (2) include every symbol from \
             the research packet that the article references, (3) each article may appear once per symbol \
             (dedup by URL is handled on ingest), (4) the `summary` field should be YOUR synthesis, not a \
-            raw copy-paste, (5) missing fields are OK — the parser will skip entries without a symbol or \
-            url but keep the rest."
+            raw copy-paste, (5) the `body` field is optional — populate it with the full article text \
+            ONLY when you actually fetched and read the source (e.g. via web_search/browse), since \
+            TyphooN-Terminal can already hydrate bodies for the public web; the value of `body` here is \
+            for paywalled or hard-to-fetch content where the terminal's own fetcher would 4xx, (6) \
+            missing fields are OK — the parser will skip entries without a symbol or url but keep the rest."
         );
         p
     }
