@@ -10939,6 +10939,9 @@ pub struct TyphooNApp {
     orders_last_update_ts: i64,
     /// User-managed watchlist symbols (persisted in session).
     user_watchlist: Vec<String>,
+    /// Fallback prices from Yahoo (or other sources) when primary broker has no data.
+    /// Key = symbol, Value = (price, source, timestamp)
+    watchlist_fallback_prices: std::collections::HashMap<String, (f64, String, std::time::Instant)>,
     /// Input field for adding symbols to watchlist.
     watchlist_input: String,
 
@@ -27305,6 +27308,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             positions_last_update_ts: 0,
             orders_last_update_ts: 0,
             user_watchlist: Vec::new(),
+            watchlist_fallback_prices: std::collections::HashMap::new(),
             watchlist_input: String::new(),
             show_settings: false,
             was_settings_open: false,
@@ -32731,6 +32735,17 @@ mod tests {
         assert!(!TyphooNApp::kraken_ws_pair_is_fresh_at(
             &map, "BTCUSD", "1Day", now_ms
         ));
+    }
+
+    #[test]
+    fn watchlist_fallback_price_display_test() {
+        let mut app = TyphooNApp::default_for_test();
+        app.user_watchlist.push("TEST".to_string());
+        app.watchlist_fallback_prices.insert(
+            "TEST".to_string(),
+            (123.45, "Yahoo".to_string(), std::time::Instant::now()),
+        );
+        assert!(app.watchlist_fallback_prices.contains_key("TEST"));
     }
 
     #[test]

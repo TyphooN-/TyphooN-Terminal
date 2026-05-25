@@ -12246,12 +12246,21 @@ impl eframe::App for TyphooNApp {
                                         .small(),
                                 );
                                 for sym in &self.user_watchlist {
-                                    ui.label(
-                                        egui::RichText::new(sym)
-                                            .color(egui::Color32::from_rgb(100, 100, 110))
-                                            .small()
-                                            .monospace(),
-                                    );
+                                    if let Some((price, source, ts)) = self.watchlist_fallback_prices.get(sym) {
+                                        let age = ts.elapsed().as_secs() / 3600;
+                                        ui.label(
+                                            egui::RichText::new(format!("{} {:.2} ({} • {}h ago)", sym, price, source, age))
+                                                .small()
+                                                .monospace(),
+                                        );
+                                    } else {
+                                        ui.label(
+                                            egui::RichText::new(sym)
+                                                .color(egui::Color32::from_rgb(100, 100, 110))
+                                                .small()
+                                                .monospace(),
+                                        );
+                                    }
                                 }
                             } else {
                                 let mut load_key: Option<String> = None;

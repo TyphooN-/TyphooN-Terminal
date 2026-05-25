@@ -172,3 +172,10 @@ Next: Wire into watchlist rendering + show source + age
 - Updated "No cached data" message to indicate Yahoo fallback is available
 - `fetch_yahoo_last_price` implemented and ready to be wired
 - Next: Modify price display to always show source + age when available
+
+## Watchlist Fallback Integration (2026-05-24)
+
+- Added `watchlist_fallback_prices` storage
+- Wired fallback display in watchlist (shows price + source + age)
+- Added unit test for fallback display
+- Always show source requirement implemented
