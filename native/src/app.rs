@@ -13742,6 +13742,11 @@ pub struct TyphooNApp {
     /// hydrate at a time is enforced by `news_body_hydrate_in_flight`.
     news_body_last_hydrate: std::time::Instant,
     news_body_hydrate_in_flight: bool,
+    /// CommonMark renderer cache for the article-body pane (egui_commonmark
+    /// needs a persistent cache so per-frame parse + image-handle lookup
+    /// stays cheap). Hero images render via the egui image loader installed
+    /// in `new` on construction.
+    news_md_cache: egui_commonmark::CommonMarkCache,
     kraken_futures_universe_last_schedule: std::time::Instant,
     tastytrade_universe_last_schedule: std::time::Instant,
     lan_client_last_reload: std::time::Instant,
@@ -13803,8 +13808,14 @@ struct AlpacaRetry {
 }
 
 impl TyphooNApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>, rt_handle: tokio::runtime::Handle) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, rt_handle: tokio::runtime::Handle) -> Self {
         let log: VecDeque<LogEntry> = VecDeque::new();
+
+        // Install the egui image loaders (PNG/JPEG/WEBP + HTTP/file URI
+        // dispatch) so news article hero images and inline markdown
+        // images decode from URLs without manual texture management.
+        // Idempotent in practice — egui_extras dedups on tag.
+        egui_extras::install_image_loaders(&cc.egui_ctx);
 
         // Initialize the process-wide iapi limiter with persistence pointing at
         // the config dir. This must happen before any KrakenBroker iapi call;
@@ -29827,6 +29838,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                 - std::time::Duration::from_secs(60),
             news_body_last_hydrate: std::time::Instant::now() - std::time::Duration::from_secs(60),
             news_body_hydrate_in_flight: false,
+            news_md_cache: egui_commonmark::CommonMarkCache::default(),
             kraken_futures_universe_last_schedule: std::time::Instant::now()
                 - std::time::Duration::from_secs(60),
             tastytrade_universe_last_schedule: std::time::Instant::now()
@@ -30882,7 +30894,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
         }
 
         // Initialize GPU compute from eframe's wgpu device (available when renderer = Wgpu)
-        if let Some(ref render_state) = _cc.wgpu_render_state {
+        if let Some(ref render_state) = cc.wgpu_render_state {
             let device = Arc::new(render_state.device.clone());
             let queue = Arc::new(render_state.queue.clone());
             let storage_limit = device.limits().max_storage_buffers_per_shader_stage;

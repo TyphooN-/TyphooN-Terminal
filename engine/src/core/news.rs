@@ -273,15 +273,33 @@ pub fn upsert_news(conn: &Connection, article: &NewsArticle) -> Result<(), Strin
 /// mirror so search hits the new content. Idempotent; safe to call from a
 /// background hydration task.
 pub fn upsert_news_body(conn: &Connection, url_hash: &str, body: &str) -> Result<(), String> {
+    upsert_news_body_and_image(conn, url_hash, body, "")
+}
+
+/// Like `upsert_news_body` but also writes `image_url` when the caller
+/// extracted a hero image (og:image / twitter:image) from the article
+/// page. Only fills in the image when the row currently has none — we
+/// don't want a body-fetch backfill to clobber an image URL the source
+/// RSS feed already provided. Empty `image_url` is a no-op for that
+/// column, so the existing `upsert_news_body` semantics are unchanged.
+pub fn upsert_news_body_and_image(
+    conn: &Connection,
+    url_hash: &str,
+    body: &str,
+    image_url: &str,
+) -> Result<(), String> {
     let _ = create_news_tables(conn);
     if url_hash.is_empty() || body.is_empty() {
         return Ok(());
     }
     conn.execute(
         "UPDATE research_news
-            SET body = ?1, body_fetched_at = ?2, updated_at = ?2
-          WHERE url_hash = ?3",
-        params![body, now_ts(), url_hash],
+            SET body = ?1,
+                body_fetched_at = ?2,
+                updated_at = ?2,
+                image_url = CASE WHEN image_url = '' AND ?3 <> '' THEN ?3 ELSE image_url END
+          WHERE url_hash = ?4",
+        params![body, now_ts(), image_url, url_hash],
     )
     .map_err(|e| format!("update news body: {e}"))?;
     // FTS5: refresh headline+summary+body for this row. We need the headline
@@ -381,6 +399,16 @@ pub fn bump_news_body_fetch_attempts(conn: &Connection, url_hash: &str) -> Resul
 /// article). The output is suitable for direct storage via
 /// [`upsert_news_body`] and for indexing in `research_news_fts`.
 pub async fn fetch_article_body(url: &str) -> Option<String> {
+    fetch_article_body_with_image(url).await.map(|(body, _)| body)
+}
+
+/// Same as `fetch_article_body` but also returns the hero image URL when
+/// the page exposes one via og:image / twitter:image. Used by the body
+/// hydrator to backfill `NewsArticle.image_url` for sources whose RSS
+/// feed (Yahoo RSS is the big offender) doesn't carry image metadata.
+/// Returns `None` when the fetch fails or the extracted body is below
+/// the minimum chars threshold (probably a paywall / redirect splash).
+pub async fn fetch_article_body_with_image(url: &str) -> Option<(String, String)> {
     const MAX_FETCH_BYTES: usize = 2 * 1024 * 1024; // 2 MiB cap on raw HTML
     const MIN_BODY_CHARS: usize = 200; // anything shorter is probably a redirect/paywall splash
     const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
@@ -406,83 +434,228 @@ pub async fn fetch_article_body(url: &str) -> Option<String> {
     } else {
         String::from_utf8_lossy(&bytes).into_owned()
     };
-    let text = extract_article_text(&html);
+    let (text, image_url) = extract_article_with_image(&html);
     if text.chars().count() < MIN_BODY_CHARS {
         return None;
     }
-    Some(text)
+    Some((text, image_url))
 }
 
-/// Light-weight HTML → text extractor. Drops `<script>`/`<style>`/`<noscript>`
-/// blocks wholesale, strips remaining tags, decodes the common entities, and
-/// collapses whitespace. Not a real parser — designed for the constrained
-/// case of news article body extraction where the publisher's main content
-/// is broadly readable as plain text once tags are removed.
+/// DOM-aware HTML → text extractor. Builds an html5ever DOM via `scraper`
+/// and walks it picking the publisher's main article container while
+/// dropping site chrome (nav, header, footer, aside, related-articles,
+/// menus, ads). The byte-level scanner this replaced kept every text node
+/// in document order, which on Yahoo Finance meant the entire left nav
+/// menu rendered before the actual article body.
 ///
-/// Operates on bytes (so byte indices for the drop-tag lookup stay sound)
-/// and writes raw bytes into a `Vec<u8>` so UTF-8 sequences for non-ASCII
-/// characters (smart quotes, em dashes, accented letters) survive intact.
-/// The final `from_utf8_lossy` only replaces genuinely invalid bytes.
+/// Strategy:
+///   1. Try a priority list of semantic + class/id selectors known to
+///      wrap the article body (`<article>`, `<main>`, `.caas-body`,
+///      `.article-body`, etc.). First one whose subtree has enough text
+///      wins.
+///   2. If none matched, fall back to `<body>` minus the same chrome.
+///   3. While walking either path, recursively skip subtrees that match
+///      a drop selector (nav / header / footer / .related / etc.).
+///   4. `finalize_extracted_text` then collapses whitespace and folds
+///      long whitespace runs into paragraph breaks.
+///
+/// Returns the cleaned text. For callers that also want the hero image
+/// (og:image / twitter:image), use `extract_article_with_image` instead.
 pub fn extract_article_text(html: &str) -> String {
-    let bytes = html.as_bytes();
-    let lower: Vec<u8> = bytes.iter().map(|b| b.to_ascii_lowercase()).collect();
-    let mut out: Vec<u8> = Vec::with_capacity(html.len() / 4);
+    let (body, _image) = extract_article_with_image(html);
+    body
+}
 
-    fn find_close(lower: &[u8], from: usize, tag: &[u8]) -> Option<usize> {
-        let mut i = from;
-        while i + tag.len() <= lower.len() {
-            if lower[i..i + tag.len()] == *tag {
-                return Some(i);
-            }
-            i += 1;
-        }
-        None
-    }
+/// Same DOM walk as `extract_article_text` but additionally returns the
+/// hero image URL extracted from `<meta property="og:image">` (or the
+/// twitter:image variants) — empty string if the document has none.
+/// Used by the body hydrator to backfill the `image_url` field on
+/// articles whose source RSS didn't supply one (Yahoo, primarily).
+pub fn extract_article_with_image(html: &str) -> (String, String) {
+    let doc = scraper::Html::parse_document(html);
+    let image_url = extract_hero_image_url(&doc);
 
-    let drop_tags: [(&[u8], &[u8]); 3] = [
-        (b"<script", b"</script>"),
-        (b"<style", b"</style>"),
-        (b"<noscript", b"</noscript>"),
+    // Priority list of selectors for the article body container. The
+    // first one that matches and yields ≥200 chars of text wins. Ordered
+    // most-specific → least-specific so a site with both `<article>` and
+    // `.caas-body` (Yahoo nests them) picks the tighter wrapper.
+    const ARTICLE_SELECTORS: &[&str] = &[
+        "div.caas-body",
+        "div.article-body",
+        "div.article-content",
+        "div.story-body",
+        "div.post-content",
+        "div.entry-content",
+        "div#article-body",
+        "div#article-content",
+        "div#main-content",
+        "article",
+        "[role=\"main\"]",
+        "main",
     ];
 
-    let mut i = 0;
-    let mut inside_tag = false;
-    while i < bytes.len() {
-        // Skip whole drop-block (script/style/noscript) if we're at one.
-        if !inside_tag {
-            let mut skipped = false;
-            for (open, close) in &drop_tags {
-                if i + open.len() <= lower.len() && &lower[i..i + open.len()] == *open {
-                    if let Some(end) = find_close(&lower, i + open.len(), close) {
-                        i = end + close.len();
-                        skipped = true;
-                        break;
-                    } else {
-                        // Unterminated; bail out of the rest of the doc.
-                        return finalize_extracted_text(out);
-                    }
-                }
-            }
-            if skipped {
-                continue;
-            }
-        }
+    let drop_selectors = parse_drop_selectors();
 
-        let b = bytes[i];
-        if b == b'<' {
-            inside_tag = true;
-        } else if b == b'>' {
-            inside_tag = false;
-            // Treat block-level closers as paragraph breaks so we don't
-            // glue adjacent paragraphs into one blob.
-            out.push(b' ');
-        } else if !inside_tag {
-            out.push(b);
+    for sel_str in ARTICLE_SELECTORS {
+        let Ok(sel) = scraper::Selector::parse(sel_str) else {
+            continue;
+        };
+        for node in doc.select(&sel) {
+            let mut buf = String::with_capacity(2048);
+            walk_visible_text(node, &drop_selectors, &mut buf);
+            if buf.chars().count() >= 200 {
+                let body = finalize_extracted_text(buf.into_bytes());
+                return (body, image_url);
+            }
         }
-        i += 1;
     }
 
-    finalize_extracted_text(out)
+    // Fallback: walk the document body and rely on the drop list. Better
+    // than the old whole-page strip because chrome elements are now
+    // pruned by selector rather than greedily included as plain text.
+    let mut buf = String::with_capacity(2048);
+    if let Ok(body_sel) = scraper::Selector::parse("body") {
+        if let Some(body) = doc.select(&body_sel).next() {
+            walk_visible_text(body, &drop_selectors, &mut buf);
+        }
+    }
+    let body = finalize_extracted_text(buf.into_bytes());
+    (body, image_url)
+}
+
+/// Selectors for subtrees we never want in the article text: site
+/// navigation, headers/footers, related-article rails, ads, social
+/// widgets, comment blocks, login/paywall prompts. Parsed once per
+/// extract call. Anything that doesn't parse as a valid CSS selector
+/// is silently skipped.
+fn parse_drop_selectors() -> Vec<scraper::Selector> {
+    const DROP_PATTERNS: &[&str] = &[
+        // Semantic / role tags
+        "nav",
+        "header",
+        "footer",
+        "aside",
+        "form",
+        "button",
+        "script",
+        "style",
+        "noscript",
+        "[role=\"navigation\"]",
+        "[role=\"banner\"]",
+        "[role=\"contentinfo\"]",
+        "[role=\"complementary\"]",
+        // Common boilerplate class hooks across publishers
+        ".nav",
+        ".navbar",
+        ".menu",
+        ".sidebar",
+        ".footer",
+        ".header",
+        ".masthead",
+        ".breadcrumb",
+        ".breadcrumbs",
+        ".related",
+        ".related-articles",
+        ".related-content",
+        ".recommended",
+        ".comments",
+        ".comment",
+        ".advertisement",
+        ".ad-container",
+        ".ad-slot",
+        ".social",
+        ".social-share",
+        ".share",
+        ".newsletter",
+        ".subscribe",
+        ".paywall",
+        ".cookie-banner",
+        ".cookie-notice",
+        ".consent",
+        ".promo",
+        ".promotion",
+        // Yahoo Finance specific noise
+        ".caas-tools",
+        ".caas-related",
+        ".caas-readmore",
+        ".caas-share",
+        ".caas-da",
+        ".caas-disclaimer",
+    ];
+    DROP_PATTERNS
+        .iter()
+        .filter_map(|s| scraper::Selector::parse(s).ok())
+        .collect()
+}
+
+/// Recursive walker that appends visible text from `node` into `out`,
+/// skipping any subtree rooted at an element matching one of the drop
+/// selectors. A trailing newline is inserted after block-level elements
+/// so paragraphs don't get glued together.
+fn walk_visible_text(
+    node: scraper::ElementRef,
+    drops: &[scraper::Selector],
+    out: &mut String,
+) {
+    for d in drops {
+        if d.matches(&node) {
+            return;
+        }
+    }
+    for child in node.children() {
+        if let Some(text_node) = child.value().as_text() {
+            out.push_str(text_node);
+        } else if let Some(elem) = scraper::ElementRef::wrap(child) {
+            walk_visible_text(elem, drops, out);
+            let name = elem.value().name();
+            if matches!(
+                name,
+                "p" | "br"
+                    | "div"
+                    | "li"
+                    | "tr"
+                    | "h1"
+                    | "h2"
+                    | "h3"
+                    | "h4"
+                    | "h5"
+                    | "h6"
+                    | "blockquote"
+                    | "section"
+                    | "article"
+                    | "pre"
+            ) {
+                out.push('\n');
+            }
+        }
+    }
+}
+
+/// Pull a hero image URL from common OpenGraph / Twitter Card meta tags.
+/// Returns empty string when none is present or the URL isn't absolute
+/// http(s). Used by the body hydrator to populate `NewsArticle.image_url`
+/// for sources that don't supply one in their RSS / API payload.
+fn extract_hero_image_url(doc: &scraper::Html) -> String {
+    const META_SELECTORS: &[&str] = &[
+        "meta[property=\"og:image\"]",
+        "meta[name=\"twitter:image\"]",
+        "meta[name=\"twitter:image:src\"]",
+        "meta[property=\"og:image:secure_url\"]",
+    ];
+    for sel_str in META_SELECTORS {
+        let Ok(sel) = scraper::Selector::parse(sel_str) else {
+            continue;
+        };
+        if let Some(node) = doc.select(&sel).next() {
+            if let Some(val) = node.value().attr("content") {
+                let trimmed = val.trim();
+                if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                    return trimmed.to_string();
+                }
+            }
+        }
+    }
+    String::new()
 }
 
 fn finalize_extracted_text(raw_bytes: Vec<u8>) -> String {
@@ -2273,5 +2446,131 @@ mod tests {
             .collect();
         let n = upsert_news_batch(&conn, &articles).unwrap();
         assert_eq!(n, 5);
+    }
+
+    #[test]
+    fn extract_article_prefers_caas_body_over_page_chrome() {
+        // Yahoo Finance-style page with a left nav full of menu links and
+        // a `<div class="caas-body">` containing the actual article. The
+        // extractor must return the article body, not the nav text.
+        let html = r#"<html><head>
+            <meta property="og:image" content="https://yimg.com/hero.jpg">
+            </head><body>
+            <nav>
+                <ul>
+                    <li>Today's news</li><li>US</li><li>Politics</li>
+                    <li>World</li><li>Weather</li><li>Climate change</li>
+                    <li>Health</li><li>Science</li><li>Originals</li>
+                    <li>Newsletters</li><li>Games</li><li>Life</li>
+                </ul>
+            </nav>
+            <header><h1>Yahoo Finance</h1></header>
+            <div class="caas-body">
+                <p>WORK Medical Technology Group Ltd. (NASDAQ: WOK) shares are
+                trending on Wednesday.</p>
+                <p>WOK shares spiked 69.67% to $11.30 in after-hours trading
+                on Tuesday after the Hangzhou-based medical device supplier
+                disclosed a strategic cooperation agreement with Shanghai
+                Novabioplus Biotechnology Co., Ltd.</p>
+                <p>The deal is centered on a "BioToken" framework.</p>
+            </div>
+            <footer>Copyright Yahoo</footer>
+            <aside class="related">Related articles: foo, bar, baz</aside>
+        </body></html>"#;
+        let (body, image) = extract_article_with_image(html);
+        // The article body must be present.
+        assert!(body.contains("WORK Medical Technology"));
+        assert!(body.contains("BioToken"));
+        // The nav menu, header, footer, and related-articles aside must
+        // be stripped — the old extractor kept them all.
+        assert!(!body.contains("Today's news"));
+        assert!(!body.contains("Politics"));
+        assert!(!body.contains("Copyright Yahoo"));
+        assert!(!body.contains("Related articles"));
+        // og:image meta tag should be picked up.
+        assert_eq!(image, "https://yimg.com/hero.jpg");
+    }
+
+    #[test]
+    fn extract_article_picks_semantic_article_tag() {
+        let html = r#"<html><body>
+            <nav><a href="/">Home</a><a href="/news">News</a></nav>
+            <article>
+                <h1>Breaking</h1>
+                <p>The first paragraph of a thousand chars at minimum so we
+                cross the MIN threshold. ABCDEFGHIJKLMNOPQRSTUVWXYZ
+                ABCDEFGHIJKLMNOPQRSTUVWXYZ ABCDEFGHIJKLMNOPQRSTUVWXYZ
+                ABCDEFGHIJKLMNOPQRSTUVWXYZ ABCDEFGHIJKLMNOPQRSTUVWXYZ
+                ABCDEFGHIJKLMNOPQRSTUVWXYZ ABCDEFGHIJKLMNOPQRSTUVWXYZ.</p>
+            </article>
+            <footer>Site footer</footer>
+        </body></html>"#;
+        let (body, _) = extract_article_with_image(html);
+        assert!(body.contains("Breaking"));
+        assert!(body.contains("first paragraph"));
+        assert!(!body.contains("Home"));
+        assert!(!body.contains("Site footer"));
+    }
+
+    #[test]
+    fn extract_article_falls_back_to_body_when_no_container() {
+        // No <article>, no .caas-body, etc. — the extractor falls back to
+        // <body> but still drops the nav/header/footer chrome thanks to
+        // the drop-selector pass.
+        let html = r#"<html><body>
+            <nav>Top nav with lots of menu items everywhere</nav>
+            <header>Page header that should not appear</header>
+            <div class="content-wrapper">
+                <p>This is the article content rendered in a generic div
+                wrapper that the extractor's selector list doesn't
+                explicitly know about, so the fallback path runs and at
+                least skips the obvious chrome around it ABCDEFGHIJKLMN
+                ABCDEFGHIJKLMN ABCDEFGHIJKLMN ABCDEFGHIJKLMN.</p>
+            </div>
+            <footer>Page footer that should also not appear</footer>
+        </body></html>"#;
+        let (body, _) = extract_article_with_image(html);
+        assert!(body.contains("article content"));
+        assert!(!body.contains("Top nav"));
+        assert!(!body.contains("Page header"));
+        assert!(!body.contains("Page footer"));
+    }
+
+    #[test]
+    fn extract_article_drops_script_and_style_blocks() {
+        let html = r#"<html><body>
+            <article>
+                <script>alert('xss');</script>
+                <style>body { display: none; }</style>
+                <p>Real paragraph text that is long enough to clear the
+                 MIN threshold so the article selector wins. Padding
+                 padding padding padding padding padding padding padding
+                 padding padding padding padding padding padding.</p>
+            </article>
+        </body></html>"#;
+        let (body, _) = extract_article_with_image(html);
+        assert!(body.contains("Real paragraph"));
+        assert!(!body.contains("alert"));
+        assert!(!body.contains("display: none"));
+    }
+
+    #[test]
+    fn extract_image_uses_twitter_card_fallback() {
+        let html = r#"<html><head>
+            <meta name="twitter:image" content="https://cdn.example.com/twitter.jpg">
+            </head><body><p>Hi.</p></body></html>"#;
+        let (_, image) = extract_article_with_image(html);
+        assert_eq!(image, "https://cdn.example.com/twitter.jpg");
+    }
+
+    #[test]
+    fn extract_image_ignores_non_absolute_urls() {
+        // Relative or javascript: URIs must not be returned as a hero image.
+        let html = r#"<html><head>
+            <meta property="og:image" content="/local/image.jpg">
+            <meta name="twitter:image" content="javascript:alert(1)">
+            </head><body><p>Hi.</p></body></html>"#;
+        let (_, image) = extract_article_with_image(html);
+        assert_eq!(image, "");
     }
 }

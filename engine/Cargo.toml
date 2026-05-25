@@ -37,6 +37,10 @@ pbkdf2 = { workspace = true }
 rand = "0.10"
 base64 = { workspace = true }
 calamine = "0.35"
+# DOM-aware article body extractor: picks the publisher's main content node
+# (article/main/.caas-body/.article-body/etc.) and drops nav/header/footer/aside
+# chrome before returning text. See news::extract_article_text.
+scraper = { version = "0.27", default-features = false }
 zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 flate2 = "1"  # Gzip decompression for DARWIN FTP quote files
 thirtyfour = { workspace = true, default-features = false, features = ["reqwest", "rustls-tls"] }    # Async WebDriver client (Selenium) for Darwinex Zero scraping

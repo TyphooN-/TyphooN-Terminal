@@ -4490,19 +4490,43 @@ impl TyphooNApp {
                                             .auto_shrink([false, false])
                                             .max_height((pane_h - 110.0).max(120.0))
                                             .show(ui, |ui| {
+                                                // Hero image (og:image / provider banner).
+                                                // Constrained to pane width to keep the
+                                                // layout stable when the source is a
+                                                // 2000×1500 publisher hero. Errors load
+                                                // silently — egui's loader retries the URL
+                                                // on its own schedule and the rest of the
+                                                // article renders regardless.
+                                                if !a.image_url.is_empty() {
+                                                    let max_w = ui.available_width().min(560.0);
+                                                    ui.add(
+                                                        egui::Image::new(&a.image_url)
+                                                            .max_width(max_w)
+                                                            .corner_radius(4.0),
+                                                    );
+                                                    ui.add_space(8.0);
+                                                }
                                                 // Prefer the cached full body when the
                                                 // hydrator has fetched it (see ADR-214 +
                                                 // `news_ingest`); fall back to the
                                                 // provider summary; finally show a
                                                 // placeholder so the user knows the
-                                                // body fetch is still pending.
+                                                // body fetch is still pending. The body is
+                                                // rendered via the CommonMark viewer so
+                                                // paragraph breaks, inline links, and any
+                                                // markdown the extractor or AI return path
+                                                // preserves all format properly — see
+                                                // ADR-215 for the threat-model decision
+                                                // against a full HTML/JS renderer.
                                                 if !a.body.is_empty() {
-                                                    ui.label(egui::RichText::new(&a.body));
+                                                    egui_commonmark::CommonMarkViewer::new()
+                                                        .show(ui, &mut self.news_md_cache, &a.body);
                                                 } else {
                                                     let hydration_exhausted = a.body_fetch_attempts
                                                         >= typhoon_engine::core::news::MAX_BODY_FETCH_ATTEMPTS;
                                                     if !a.summary.is_empty() {
-                                                        ui.label(egui::RichText::new(&a.summary));
+                                                        egui_commonmark::CommonMarkViewer::new()
+                                                            .show(ui, &mut self.news_md_cache, &a.summary);
                                                         ui.add_space(6.0);
                                                     }
                                                     let placeholder = if hydration_exhausted {

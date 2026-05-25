@@ -60,22 +60,25 @@ pub async fn hydrate_missing_bodies(cache: Arc<SqliteCache>, symbol_hint: Option
     }
 
     // Issue all fetches concurrently so per-host RTT doesn't serialise the
-    // batch. `HYDRATE_BATCH` is the concurrency cap.
+    // batch. `HYDRATE_BATCH` is the concurrency cap. We grab the og:image
+    // alongside the body so Yahoo (which leaves image_url empty in its
+    // RSS) gets a hero image backfilled on first hydration.
     let fetches = targets.into_iter().map(|(url_hash, url)| async move {
-        let body = news::fetch_article_body(&url).await;
-        (url_hash, body)
+        let result = news::fetch_article_body_with_image(&url).await;
+        (url_hash, result)
     });
-    let results: Vec<(String, Option<String>)> = futures_util::future::join_all(fetches).await;
+    let results: Vec<(String, Option<(String, String)>)> =
+        futures_util::future::join_all(fetches).await;
 
     let conn = match cache.connection() {
         Ok(conn) => conn,
         Err(_) => return 0,
     };
     let mut written = 0usize;
-    for (url_hash, body) in results {
-        match body {
-            Some(body) => {
-                if news::upsert_news_body(&conn, &url_hash, &body).is_ok() {
+    for (url_hash, result) in results {
+        match result {
+            Some((body, image_url)) => {
+                if news::upsert_news_body_and_image(&conn, &url_hash, &body, &image_url).is_ok() {
                     written += 1;
                 }
             }
@@ -103,12 +106,14 @@ pub async fn hydrate_one_url(
     if url.is_empty() {
         return false;
     }
-    let body = news::fetch_article_body(&url).await;
+    let result = news::fetch_article_body_with_image(&url).await;
     let Ok(conn) = cache.connection() else {
         return false;
     };
-    match body {
-        Some(body) => news::upsert_news_body(&conn, &url_hash, &body).is_ok(),
+    match result {
+        Some((body, image_url)) => {
+            news::upsert_news_body_and_image(&conn, &url_hash, &body, &image_url).is_ok()
+        }
         None => {
             let _ = news::bump_news_body_fetch_attempts(&conn, &url_hash);
             false

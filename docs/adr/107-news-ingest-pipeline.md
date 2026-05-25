@@ -207,7 +207,11 @@ Controls above the panes:
   fixed-format so this is fine in practice, but adding a real parser would be
   a first step if we extend to more providers with messier feeds.
 - GDELT can return raw-only headlines with no summary — the UI shows "No
-  summary — click Open Source" rather than guessing.
+  summary — click Open Source" rather than guessing. The body hydrator
+  (`news_ingest::hydrate_missing_bodies`) closes the gap by fetching and
+  extracting the publisher's article text on a background loop; see
+  ADR-215 for the DOM-aware extractor (scraper), hero-image rendering,
+  and the explicit rejection of an embedded HTML/JS renderer.
 - The existing Finnhub `news_articles` tuple state (and its web-protocol
   mirror) is retained for backward compatibility with the compact news side
   pane. Full-fat reader state lives in `news_full_articles`.
