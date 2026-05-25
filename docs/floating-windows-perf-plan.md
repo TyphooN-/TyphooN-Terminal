@@ -187,3 +187,10 @@ Next: Wire into watchlist rendering + show source + age
 - Extend fallback chain with Finnhub / FMP
 - Call `refresh_watchlist_fallback_prices` when watchlist is opened
 - Update ADR for price source fallback
+
+## Current Status (Yahoo Fallback)
+
+- Core fetch functions implemented
+- Storage + display with source + age working
+- Background refresh TODO added in watchlist rendering
+- Ready for async integration

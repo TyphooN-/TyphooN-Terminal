@@ -12240,6 +12240,7 @@ impl eframe::App for TyphooNApp {
                                         .small(),
                                 );
                             } else if self.watchlist_rows.is_empty() {
+                                // TODO: Call self.refresh_watchlist_fallback_prices() here (async)
                                 ui.label(
                                     egui::RichText::new("No cached data (Yahoo fallback available)")
                                         .color(AXIS_TEXT)
