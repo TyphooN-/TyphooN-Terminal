@@ -4195,7 +4195,12 @@ impl TyphooNApp {
 
             let content_h = ctx.content_rect().height();
             let news_default_h = (content_h * 0.58).clamp(420.0, 560.0);
-            let news_max_h = (content_h * 0.82).clamp(480.0, 760.0);
+            // Resize cap = full viewport height minus a small margin so the
+            // window can fill the screen on tall monitors. The previous
+            // `.clamp(480.0, 760.0)` pinned the upper bound at 760 px
+            // regardless of `content_h`, which silently blocked vertical
+            // resize past that on any monitor taller than ~930 px.
+            let news_max_h = (content_h - 16.0).max(480.0);
             let mut open = self.show_news;
             let mut open_url: Option<String> = None;
             egui::Window::new("News & Research")
