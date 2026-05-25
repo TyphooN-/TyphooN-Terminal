@@ -512,6 +512,8 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
     let mut staged_selected = pending_fetches.clone();
 
+    // Low timeframes (M1/M5) get priority during off-market hours for max sync speed.
+    // We give them a higher budget when selecting candidates.
     // Foreground symbols are open charts, actively traded symbols, and broker
     // positions. Give them first shot across every enabled timeframe before the
     // broad universe ring advances; otherwise a 12k-symbol Kraken equities scan

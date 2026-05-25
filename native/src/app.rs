@@ -22,10 +22,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 // === Navbar Typography Helpers (US Graphics level) ===
+#[allow(dead_code)]
 pub fn nav_primary(ui: &mut egui::Ui, text: impl Into<String>) {
     ui.label(egui::RichText::new(text).strong().size(13.0));
 }
 
+#[allow(dead_code)]
 pub fn nav_secondary(ui: &mut egui::Ui, text: impl Into<String>) {
     ui.label(
         egui::RichText::new(text)
@@ -35,11 +37,7 @@ pub fn nav_secondary(ui: &mut egui::Ui, text: impl Into<String>) {
 }
 
 pub fn nav_muted(ui: &mut egui::Ui, text: impl Into<String>) {
-    ui.label(
-        egui::RichText::new(text)
-            .size(10.5)
-            .color(AXIS_TEXT),
-    );
+    ui.label(egui::RichText::new(text).size(10.5).color(AXIS_TEXT));
 }
 
 use tokio::sync::mpsc;
@@ -145,7 +143,7 @@ const WL_COLORS: [egui::Color32; 8] = [
 
 /// A single OHLCV bar.
 #[derive(Clone, Debug)]
-struct Bar {
+pub struct Bar {
     ts_ms: i64,
     open: f64,
     high: f64,
@@ -32761,8 +32759,16 @@ mod tests {
 
     #[test]
     fn nav_typography_helpers_exist() {
-        // These functions should compile and be callable
-        assert!(true);
+        // Create a dummy context to exercise the helpers
+        let mut ctx = egui::Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        ctx.set_fonts(fonts);
+
+        egui::CentralPanel::default().show(&ctx, |ui| {
+            nav_primary(ui, "TEST");
+            nav_secondary(ui, "123.45");
+            nav_muted(ui, "Yahoo");
+        });
     }
 
     #[test]
@@ -32933,58 +32939,178 @@ mod tests {
         assert!(chart.forming_bar_dirty); // still set until compute_indicators_gpu consumes it
     }
 
+    // Yahoo Finance price fallback (used when primary broker has no recent data)
+    pub async fn fetch_yahoo_last_price(symbol: &str) -> Option<(f64, String)> {
+        // Simple rate limiting to avoid hammering Yahoo
+        static LAST_YAHOO_CALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let last = LAST_YAHOO_CALL.load(std::sync::atomic::Ordering::Relaxed);
+        if now - last < 5 {
+            return None; // too soon
+        }
+        LAST_YAHOO_CALL.store(now, std::sync::atomic::Ordering::Relaxed);
 
-// Yahoo Finance price fallback (used when primary broker has no recent data)
-pub async fn fetch_yahoo_last_price(symbol: &str) -> Option<(f64, String)> {
-    // Simple rate limiting to avoid hammering Yahoo
-    static LAST_YAHOO_CALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let last = LAST_YAHOO_CALL.load(std::sync::atomic::Ordering::Relaxed);
-    if now - last < 5 {
-        return None; // too soon
+        let url = format!(
+            "https://query1.finance.yahoo.com/v8/finance/chart/{}?interval=1d&range=5d",
+            symbol
+        );
+
+        let client = reqwest::Client::new();
+        let resp = match client
+            .get(&url)
+            .header("User-Agent", "Mozilla/5.0 (compatible; TyphooN-Terminal)")
+            .timeout(std::time::Duration::from_secs(8))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => return None,
+        };
+
+        if !resp.status().is_success() {
+            return None;
+        }
+
+        let json: serde_json::Value = match resp.json().await {
+            Ok(j) => j,
+            Err(_) => return None,
+        };
+
+        let price = json["chart"]["result"][0]["meta"]["regularMarketPrice"]
+            .as_f64()
+            .or_else(|| json["chart"]["result"][0]["meta"]["previousClose"].as_f64())?;
+
+        Some((price, "Yahoo".to_string()))
     }
-    LAST_YAHOO_CALL.store(now, std::sync::atomic::Ordering::Relaxed);
 
-    let url = format!(
-        "https://query1.finance.yahoo.com/v8/finance/chart/{}?interval=1d&range=5d",
-        symbol
-    );
-
-    let client = reqwest::Client::new();
-    let resp = match client
-        .get(&url)
-        .header("User-Agent", "Mozilla/5.0 (compatible; TyphooN-Terminal)")
-        .timeout(std::time::Duration::from_secs(8))
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(_) => return None,
-    };
-
-    if !resp.status().is_success() {
-        return None;
+    pub async fn fetch_last_price_with_fallback(symbol: &str) -> Option<(f64, String)> {
+        if let Some((price, source)) = fetch_yahoo_last_price(symbol).await {
+            return Some((price, source));
+        }
+        None
     }
-
-    let json: serde_json::Value = match resp.json().await {
-        Ok(j) => j,
-        Err(_) => return None,
-    };
-
-    let price = json["chart"]["result"][0]["meta"]["regularMarketPrice"]
-        .as_f64()
-        .or_else(|| json["chart"]["result"][0]["meta"]["previousClose"].as_f64())?;
-
-    Some((price, "Yahoo".to_string()))
 }
 
-pub async fn fetch_last_price_with_fallback(symbol: &str) -> Option<(f64, String)> {
-    if let Some((price, source)) = fetch_yahoo_last_price(symbol).await {
-        return Some((price, source));
-    }
-    None
+// === Phase 1 ADR Gap Items ===
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub struct MarketDepth {
+    pub bids: Vec<(f64, f64)>,
+    pub asks: Vec<(f64, f64)>,
+    pub last_update: std::time::Instant,
 }
+
+#[allow(dead_code)]
+pub fn compute_market_depth(bids: &[(f64, f64)], asks: &[(f64, f64)]) -> MarketDepth {
+
+/// Basic Market Depth rendering stub
+pub fn draw_market_depth(_painter: &egui::Painter, _depth: &MarketDepth, _rect: egui::Rect) {
+    // TODO: Render depth heatmap or order book ladder
+
+    // TODO: Implement order book heatmap / depth chart
+}
+
+
+/// Basic Volume Profile rendering stub (will be expanded)
+#[derive(Clone, Debug, Default)]
+pub struct VolumeProfile {
+    pub price_levels: Vec<(f64, f64)>,
+    pub poc: f64,
+    pub value_area_high: f64,
+    pub value_area_low: f64,
+}
+
+pub fn draw_volume_profile(_painter: &egui::Painter, _profile: &VolumeProfile, _rect: egui::Rect) {
+    // TODO: Render horizontal bars on the price axis using _profile.price_levels
+
+    // TODO: Implement horizontal histogram on the price axis
+}
+
+    MarketDepth {
+        bids: bids.to_vec(),
+        asks: asks.to_vec(),
+        last_update: std::time::Instant::now(),
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+#[allow(dead_code)]
+pub struct EarningsSurprise {
+
+/// Simple earnings surprise calculation
+    pub symbol: String,
+    pub actual: f64,
+    pub estimate: f64,
+    pub surprise_pct: f64,
+    pub date: String,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub struct Alert {
+    pub symbol: String,
+    pub condition: String,
+    pub triggered: bool,
+    pub timestamp: std::time::Instant,
+}
+
+#[allow(dead_code)]
+pub fn check_price_alert(current_price: f64, alert_price: f64, direction: &str) -> bool {
+
+/// Basic earnings surprise table row
+pub fn format_earnings_row(surprise: &EarningsSurprise) -> String {
+    format!("{}: Actual {:.2} vs Est {:.2} ({:.1}% surprise)", 
+        surprise.symbol, surprise.actual, surprise.estimate, surprise.surprise_pct)
+}
+
+    match direction {
+        "above" => current_price > alert_price,
+        "below" => current_price < alert_price,
+        _ => false,
+    }
+}
+
+/// Basic Session Template
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub struct SessionTemplate {
+
+/// Simple session check
+    pub name: String,
+    pub start_hour: u8,
+    pub end_hour: u8,
+    pub timezone: String,
+}
+
+/// Basic Workspace structure
+#[derive(Clone, Debug, Default)]
+#[allow(dead_code)]
+pub struct Workspace {
+    pub name: String,
+    pub open_charts: Vec<String>,
+    pub layout: String,
+}
+
+/// Basic Trade History Filter
+#[derive(Clone, Debug, Default)]
+#[allow(dead_code)]
+pub struct TradeHistoryFilter {
+    pub symbol: Option<String>,
+    pub side: Option<String>,
+    pub min_qty: Option<f64>,
+}
+
+#[allow(dead_code)]
+pub fn trigger_alert(alert: &Alert, current_price: f64) -> bool {
+
+/// Simple workspace switch helper
+pub fn switch_workspace(_current: &Workspace, target: &Workspace) -> Workspace {
+    target.clone()
+}
+
+    check_price_alert(current_price, alert.condition.parse().unwrap_or(0.0), "above")
 }
