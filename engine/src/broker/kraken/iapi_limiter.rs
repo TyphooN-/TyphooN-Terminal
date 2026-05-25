@@ -29,13 +29,17 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex as TokioMutex;
 
 /// Tunables for the iapi limiter. Defaults are calibrated for the observed
-/// Cloudflare ceiling on `iapi.kraken.com`.
+/// Cloudflare ceiling on `iapi.kraken.com`. AIMD parameters auto-discover
+/// the actual ceiling so the user doesn't have to guess.
 #[derive(Debug, Clone)]
 pub struct IapiLimiterConfig {
     /// Maximum tokens in the bucket. Each iapi call costs `cost` tokens
     /// (history = 1.0, ticker = 1.0, catalog page = 2.0).
     pub capacity: f64,
-    /// Refill rate, tokens per second. Steady-state request rate.
+    /// Initial refill rate, tokens per second. When AIMD is enabled (the
+    /// default) this is just the starting point — the live rate adapts
+    /// upward during clean traffic and downward on 429s. When AIMD is
+    /// disabled, this is the static steady-state rate forever.
     pub refill_per_sec: f64,
     /// Backoff seconds applied to a plain HTTP 429 body.
     pub default_backoff_secs: i64,
@@ -51,6 +55,41 @@ pub struct IapiLimiterConfig {
     /// Where to mirror cooldown state so a restart respects an in-flight ban.
     /// `None` disables persistence (used in tests and unauthenticated tools).
     pub persistence_path: Option<PathBuf>,
+    /// AIMD (Additive Increase / Multiplicative Decrease) rate adaptation.
+    /// When enabled, the live refill rate climbs during clean runs and
+    /// halves on each 429, converging on Cloudflare's actual ceiling
+    /// without manual tuning. Set false to pin the rate at
+    /// `refill_per_sec` forever (useful in tests).
+    pub aimd_enabled: bool,
+    /// Floor for the AIMD rate — even after repeated 429s the limiter
+    /// will not drop below this. Default 0.5 req/s: aggressive enough to
+    /// catch up on a small backlog, conservative enough that Cloudflare
+    /// shouldn't 1015 us at this rate.
+    pub aimd_min_rate: f64,
+    /// Ceiling for the AIMD rate. The limiter will not climb above this
+    /// even on a long clean run. Default 5.0 req/s: ~2× the observed
+    /// pre-ban burst rate, deliberately not raw uncapped.
+    pub aimd_max_rate: f64,
+    /// How often (during clean traffic) to bump the rate by
+    /// `aimd_increment_per_step`. A 30 s interval at +0.1 means we'd
+    /// reach the 5 req/s ceiling in ~22 minutes of unbroken clean
+    /// traffic, which is fast enough to find the limit in one session
+    /// but slow enough that we don't blow past it on the way up.
+    pub aimd_increase_interval: Duration,
+    /// Additive increment applied per `aimd_increase_interval`.
+    pub aimd_increment_per_step: f64,
+    /// Multiplicative decrease applied to the rate on each 429. Default
+    /// 0.5 (TCP-style halving) — aggressive enough to back off hard
+    /// when Cloudflare pushes back, gentle enough that occasional false
+    /// positives don't cripple throughput.
+    pub aimd_decrease_factor: f64,
+    /// How long the rate must hold steady (no increase, no 429) before
+    /// the limiter declares it "converged" and starts persisting the
+    /// value. Once converged the rate is mirrored to disk so the next
+    /// run skips the ramp-up phase entirely. A subsequent 429 unsets
+    /// the converged flag — Cloudflare can change limits, so we keep
+    /// AIMD active as a safety net even after convergence.
+    pub aimd_tuned_after: Duration,
 }
 
 impl Default for IapiLimiterConfig {
@@ -63,6 +102,13 @@ impl Default for IapiLimiterConfig {
             max_backoff_secs: 3600,
             escalation_reset_after: Duration::from_secs(600),
             persistence_path: None,
+            aimd_enabled: true,
+            aimd_min_rate: 0.5,
+            aimd_max_rate: 5.0,
+            aimd_increase_interval: Duration::from_secs(30),
+            aimd_increment_per_step: 0.1,
+            aimd_decrease_factor: 0.5,
+            aimd_tuned_after: Duration::from_secs(30 * 60),
         }
     }
 }
@@ -81,6 +127,19 @@ pub struct IapiLimiter {
 struct TokenBucket {
     tokens: f64,
     last_refill: Instant,
+    /// Live AIMD-controlled refill rate. Initialised from
+    /// `config.refill_per_sec`; mutated by the AIMD ramp / decrease
+    /// paths inside `acquire` and `record_rate_limited`.
+    current_rate: f64,
+    /// Wall-clock anchor for the next AIMD increase step. Reset on each
+    /// successful bump and on each 429-triggered decrease so the +0.1
+    /// cadence restarts cleanly from each rate-change event.
+    last_rate_change: Instant,
+    /// `true` once `last_rate_change` has been older than
+    /// `aimd_tuned_after`. Means we've found a stable ceiling and the
+    /// value has been persisted. Cleared on any 429 so a future
+    /// Cloudflare tightening re-enters the ramp/decrease cycle.
+    converged: bool,
 }
 
 #[derive(Debug)]
@@ -94,6 +153,12 @@ struct PersistedState {
     cooldown_until_unix: i64,
     consecutive: u32,
     last_arm_unix: i64,
+    /// AIMD-converged rate (req/s) from the last session, or 0.0 when
+    /// we never reached convergence. `#[serde(default)]` keeps older
+    /// persistence files (pre-AIMD) decoding cleanly — they just won't
+    /// carry a tuned value and the new session ramps from scratch.
+    #[serde(default)]
+    tuned_rate: f64,
 }
 
 /// Process-wide instance. Initialised lazily with `IapiLimiterConfig::default`
@@ -177,7 +242,7 @@ impl IapiLimiter {
             .as_ref()
             .and_then(|p| load_persisted(p));
         let now_unix = chrono::Utc::now().timestamp();
-        let (cooldown_until, escalation) = match persisted {
+        let (cooldown_until, escalation, tuned_rate) = match &persisted {
             Some(state) if state.cooldown_until_unix > now_unix => {
                 // Reconstruct an Instant for the persisted `last_arm` so the
                 // escalation window keeps decaying after a restart.
@@ -193,9 +258,11 @@ impl IapiLimiter {
                         consecutive: state.consecutive,
                         last_arm,
                     },
+                    state.tuned_rate,
                 )
             }
-            _ => (0, EscalationState::default()),
+            Some(state) => (0, EscalationState::default(), state.tuned_rate),
+            None => (0, EscalationState::default(), 0.0),
         };
         let starting_tokens = if cooldown_until > now_unix {
             // Already in cooldown — start drained so resume traffic ramps.
@@ -203,15 +270,44 @@ impl IapiLimiter {
         } else {
             config.capacity
         };
+        // Prefer a persisted tuned rate over the cold config default —
+        // skip the AIMD ramp-up if the previous session already
+        // discovered the ceiling. Then clamp into the configured band
+        // so a stale or corrupt persisted value doesn't drive us out
+        // of bounds.
+        let raw_starting_rate = if tuned_rate > 0.0 {
+            tuned_rate
+        } else {
+            config.refill_per_sec
+        };
+        let starting_rate = raw_starting_rate
+            .max(config.aimd_min_rate)
+            .min(config.aimd_max_rate);
+        let starts_converged = tuned_rate > 0.0;
+        if starts_converged {
+            tracing::info!(
+                "iapi AIMD: restored tuned rate {:.2} req/s from persisted state",
+                starting_rate
+            );
+        }
         Self {
             cooldown_until_unix: AtomicI64::new(cooldown_until),
             bucket: TokioMutex::new(TokenBucket {
                 tokens: starting_tokens,
                 last_refill: Instant::now(),
+                current_rate: starting_rate,
+                last_rate_change: Instant::now(),
+                converged: starts_converged,
             }),
             escalation: StdMutex::new(escalation),
             config,
         }
+    }
+
+    /// Current live AIMD rate, observed for tests and diagnostics.
+    /// Cheap (one mutex lock, no I/O); not exposed in the hot path.
+    pub async fn current_rate_per_sec(&self) -> f64 {
+        self.bucket.lock().await.current_rate
     }
 
     /// Remaining cooldown in seconds, or `None` if free to call. Cheap; safe
@@ -224,7 +320,10 @@ impl IapiLimiter {
 
     /// Wait for `cost` tokens. Returns immediately with `Err(secs)` if the
     /// limiter is in cooldown; otherwise sleeps until enough refill has
-    /// accumulated and deducts the cost.
+    /// accumulated and deducts the cost. AIMD ramp-up runs here too:
+    /// every `aimd_increase_interval` of clean traffic bumps the live
+    /// rate by `aimd_increment_per_step`, logged at INFO so the
+    /// discovered ceiling shows up in tracing.
     pub async fn acquire(&self, cost: f64) -> AcquireResult {
         if let Some(remaining) = self.remaining_backoff_secs() {
             return Err(remaining);
@@ -233,19 +332,79 @@ impl IapiLimiter {
             return Ok(());
         }
         loop {
+            let mut converged_now: Option<f64> = None;
             let wait = {
                 let mut bucket = self.bucket.lock().await;
-                bucket.refill(self.config.refill_per_sec, self.config.capacity, Instant::now());
+                let now = Instant::now();
+                // AIMD additive-increase step: if enough time has passed
+                // since the last rate change AND we're not at the ceiling,
+                // bump the rate. Bounded by `aimd_max_rate` so we don't
+                // climb past whatever Cloudflare actually tolerates.
+                // Skipped once we've converged — the persisted tuned rate
+                // is treated as the truth until the next 429 clears it.
+                if self.config.aimd_enabled
+                    && !bucket.converged
+                    && bucket.current_rate < self.config.aimd_max_rate
+                    && now.saturating_duration_since(bucket.last_rate_change)
+                        >= self.config.aimd_increase_interval
+                {
+                    let new_rate = (bucket.current_rate
+                        + self.config.aimd_increment_per_step)
+                        .min(self.config.aimd_max_rate);
+                    if (new_rate - bucket.current_rate).abs() >= 0.001 {
+                        tracing::info!(
+                            "iapi AIMD: rate ↑ {:.2} → {:.2} req/s after clean run",
+                            bucket.current_rate,
+                            new_rate
+                        );
+                        bucket.current_rate = new_rate;
+                        bucket.last_rate_change = now;
+                    }
+                }
+                // Convergence check: rate has been steady (no AIMD bump,
+                // no 429) for `aimd_tuned_after`. Mark converged and
+                // remember the value for the post-lock persist call.
+                if self.config.aimd_enabled
+                    && !bucket.converged
+                    && now.saturating_duration_since(bucket.last_rate_change)
+                        >= self.config.aimd_tuned_after
+                {
+                    bucket.converged = true;
+                    converged_now = Some(bucket.current_rate);
+                    tracing::info!(
+                        "iapi AIMD: rate converged at {:.2} req/s — persisting and pausing ramp-up",
+                        bucket.current_rate
+                    );
+                }
+                let rate = bucket.current_rate.max(0.001);
+                bucket.refill(rate, self.config.capacity, now);
                 if bucket.tokens >= cost {
                     bucket.tokens -= cost;
                     None
                 } else {
                     let deficit = cost - bucket.tokens;
-                    Some(Duration::from_secs_f64(
-                        (deficit / self.config.refill_per_sec).max(0.05),
-                    ))
+                    Some(Duration::from_secs_f64((deficit / rate).max(0.05)))
                 }
             };
+            // Persist outside the bucket lock so file IO doesn't block
+            // concurrent acquires. Persistence is best-effort — failure
+            // just means the next run re-discovers the rate.
+            if let Some(tuned_rate) = converged_now {
+                let escalation = self.escalation.lock().expect("escalation mutex poisoned");
+                let last_arm_unix = match escalation.last_arm {
+                    Some(t) => chrono::Utc::now().timestamp()
+                        - Instant::now().saturating_duration_since(t).as_secs() as i64,
+                    None => 0,
+                };
+                let consecutive = escalation.consecutive;
+                drop(escalation);
+                self.persist_with_rate(
+                    self.cooldown_until_unix.load(Ordering::Relaxed),
+                    consecutive,
+                    last_arm_unix,
+                    tuned_rate,
+                );
+            }
             // A cooldown may have been armed while we were waiting on the
             // bucket — re-check before sleeping or returning success.
             if let Some(remaining) = self.remaining_backoff_secs() {
@@ -311,18 +470,43 @@ impl IapiLimiter {
                 Err(actual) => current = actual,
             }
         }
-        // Drain tokens. Post-cooldown the bucket refills from zero, so the
-        // first calls trickle through at the refill rate instead of firing
-        // a burst that re-trips Cloudflare immediately.
-        {
+        // Drain tokens AND apply AIMD multiplicative-decrease so the
+        // resumed traffic comes back at a slower rate that Cloudflare
+        // is less likely to ban again. The rate floor (`aimd_min_rate`)
+        // keeps us from collapsing to zero on repeated bans. Clearing
+        // `converged` means the ramp-up restarts: if we had a stored
+        // tuned rate that's now too high, the next clean run discovers
+        // the new ceiling.
+        let post_rate = {
             let mut bucket = self.bucket.lock().await;
             bucket.tokens = 0.0;
             bucket.last_refill = Instant::now();
-        }
-        self.persist(
+            bucket.converged = false;
+            if self.config.aimd_enabled {
+                let new_rate = (bucket.current_rate * self.config.aimd_decrease_factor)
+                    .max(self.config.aimd_min_rate);
+                if (new_rate - bucket.current_rate).abs() >= 0.001 {
+                    tracing::warn!(
+                        "iapi AIMD: rate ↓ {:.2} → {:.2} req/s after {}",
+                        bucket.current_rate,
+                        new_rate,
+                        if is_cf { "Cloudflare 1015" } else { "HTTP 429" }
+                    );
+                    bucket.current_rate = new_rate;
+                    bucket.last_rate_change = Instant::now();
+                }
+            }
+            bucket.current_rate
+        };
+        // Persist the post-429 rate so a restart mid-throttle resumes
+        // at the same conservative rate rather than re-attacking from
+        // the cold default. Zero in tuned_rate would mean "no record",
+        // so we always write the live value here.
+        self.persist_with_rate(
             self.cooldown_until_unix.load(Ordering::Relaxed),
             consecutive,
             now_unix,
+            post_rate,
         );
         let final_until = self.cooldown_until_unix.load(Ordering::Relaxed);
         (final_until - now_unix).max(0)
@@ -342,7 +526,13 @@ impl IapiLimiter {
         }
     }
 
-    fn persist(&self, until_unix: i64, consecutive: u32, last_arm_unix: i64) {
+    fn persist_with_rate(
+        &self,
+        until_unix: i64,
+        consecutive: u32,
+        last_arm_unix: i64,
+        tuned_rate: f64,
+    ) {
         let Some(path) = self.config.persistence_path.clone() else {
             return;
         };
@@ -350,6 +540,7 @@ impl IapiLimiter {
             cooldown_until_unix: until_unix,
             consecutive,
             last_arm_unix,
+            tuned_rate,
         };
         if let Ok(json) = serde_json::to_string(&state) {
             // Best-effort write. A failure here only costs us correct
@@ -391,7 +582,9 @@ mod tests {
     use tokio::time::Duration as TokioDuration;
 
     fn fast_config() -> IapiLimiterConfig {
-        // Faster refill so tests don't take seconds.
+        // Faster refill so tests don't take seconds. AIMD is disabled
+        // here so the bucket math stays deterministic; the AIMD-specific
+        // tests below opt back in with their own configs.
         IapiLimiterConfig {
             capacity: 4.0,
             refill_per_sec: 40.0, // one token per 25 ms
@@ -400,6 +593,13 @@ mod tests {
             max_backoff_secs: 3600,
             escalation_reset_after: StdDuration::from_secs(60),
             persistence_path: None,
+            aimd_enabled: false,
+            aimd_min_rate: 1.0,
+            aimd_max_rate: 100.0,
+            aimd_increase_interval: StdDuration::from_secs(1),
+            aimd_increment_per_step: 1.0,
+            aimd_decrease_factor: 0.5,
+            aimd_tuned_after: StdDuration::from_secs(60),
         }
     }
 
@@ -505,6 +705,7 @@ mod tests {
             cooldown_until_unix: 1_700_000_000,
             consecutive: 3,
             last_arm_unix: 1_699_999_000,
+            tuned_rate: 0.0,
         };
         std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
         let loaded = load_persisted(tmp.path()).expect("decoded");
@@ -521,6 +722,7 @@ mod tests {
             cooldown_until_unix: now_unix + 300,
             consecutive: 2,
             last_arm_unix: now_unix - 5,
+            tuned_rate: 0.0,
         };
         std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
         let cfg = IapiLimiterConfig {
@@ -541,6 +743,7 @@ mod tests {
             cooldown_until_unix: now_unix - 60,
             consecutive: 1,
             last_arm_unix: now_unix - 100,
+            tuned_rate: 0.0,
         };
         std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
         let cfg = IapiLimiterConfig {
@@ -550,5 +753,236 @@ mod tests {
         let lim = IapiLimiter::new(cfg);
         assert!(lim.remaining_backoff_secs().is_none());
         lim.acquire(1.0).await.expect("free");
+    }
+
+    /// Build a config tuned for AIMD behaviour tests: 10 ms increase
+    /// interval and a large per-step jump so the ramp is observable in
+    /// a single test without sleeping for seconds.
+    fn aimd_config() -> IapiLimiterConfig {
+        IapiLimiterConfig {
+            capacity: 8.0,
+            refill_per_sec: 1.0,
+            default_backoff_secs: 90,
+            cloudflare_backoff_secs: 600,
+            max_backoff_secs: 3600,
+            escalation_reset_after: StdDuration::from_secs(60),
+            persistence_path: None,
+            aimd_enabled: true,
+            aimd_min_rate: 0.5,
+            aimd_max_rate: 5.0,
+            aimd_increase_interval: StdDuration::from_millis(10),
+            aimd_increment_per_step: 1.0,
+            aimd_decrease_factor: 0.5,
+            // Default for AIMD tests: long enough that ramp tests don't
+            // accidentally hit convergence; convergence tests override
+            // it explicitly via `convergence_config`.
+            aimd_tuned_after: StdDuration::from_secs(60),
+        }
+    }
+
+    #[tokio::test]
+    async fn aimd_starts_at_refill_per_sec() {
+        let lim = IapiLimiter::new(aimd_config());
+        let rate = lim.current_rate_per_sec().await;
+        assert!((rate - 1.0).abs() < 1e-6, "got {rate}");
+    }
+
+    #[tokio::test]
+    async fn aimd_clamps_starting_rate_into_band() {
+        // refill_per_sec sits below the configured floor — limiter should
+        // clamp it up so the bucket isn't permanently stuck at a sub-min
+        // rate before the first AIMD step.
+        let cfg = IapiLimiterConfig {
+            refill_per_sec: 0.1,
+            aimd_min_rate: 0.5,
+            ..aimd_config()
+        };
+        let lim = IapiLimiter::new(cfg);
+        let rate = lim.current_rate_per_sec().await;
+        assert!(rate >= 0.5, "got {rate}");
+    }
+
+    #[tokio::test]
+    async fn aimd_ramps_up_after_clean_interval() {
+        let lim = IapiLimiter::new(aimd_config());
+        // Initial acquire — first interval hasn't elapsed yet so the
+        // rate doesn't bump on this call.
+        lim.acquire(1.0).await.expect("free");
+        let r0 = lim.current_rate_per_sec().await;
+        // Wait past the increase interval, then acquire again — the
+        // acquire path is what triggers the AIMD bump.
+        tokio::time::sleep(StdDuration::from_millis(25)).await;
+        lim.acquire(1.0).await.expect("free");
+        let r1 = lim.current_rate_per_sec().await;
+        assert!(r1 > r0, "rate should have grown: r0={r0} r1={r1}");
+    }
+
+    #[tokio::test]
+    async fn aimd_increase_caps_at_max_rate() {
+        let lim = IapiLimiter::new(aimd_config());
+        // Bang on the acquire path with sleeps between to allow many AIMD
+        // steps. 30 iterations × +1 per step should saturate the 5.0 cap.
+        for _ in 0..30 {
+            tokio::time::sleep(StdDuration::from_millis(12)).await;
+            lim.acquire(1.0).await.expect("free");
+        }
+        let rate = lim.current_rate_per_sec().await;
+        assert!(
+            (rate - 5.0).abs() < 1e-6,
+            "should saturate at max 5.0, got {rate}"
+        );
+    }
+
+    #[tokio::test]
+    async fn aimd_halves_rate_on_429() {
+        let lim = IapiLimiter::new(aimd_config());
+        // Push rate up to ~3.0 first so the halving is observable.
+        for _ in 0..2 {
+            tokio::time::sleep(StdDuration::from_millis(12)).await;
+            lim.acquire(1.0).await.expect("free");
+        }
+        let before = lim.current_rate_per_sec().await;
+        assert!(before > 1.0, "expected rate > 1, got {before}");
+        lim.record_rate_limited("Too Many Requests").await;
+        let after = lim.current_rate_per_sec().await;
+        assert!(
+            (after - before * 0.5).abs() < 0.05,
+            "rate should halve: before={before} after={after}"
+        );
+    }
+
+    #[tokio::test]
+    async fn aimd_decrease_floors_at_min_rate() {
+        let lim = IapiLimiter::new(aimd_config());
+        // Many 429s in a row — rate should clamp at aimd_min_rate (0.5).
+        for _ in 0..10 {
+            lim.record_rate_limited("Too Many Requests").await;
+        }
+        let rate = lim.current_rate_per_sec().await;
+        assert!(
+            (rate - 0.5).abs() < 1e-6,
+            "should floor at min 0.5, got {rate}"
+        );
+    }
+
+    #[tokio::test]
+    async fn aimd_disabled_pins_rate_constant() {
+        let mut cfg = aimd_config();
+        cfg.aimd_enabled = false;
+        cfg.refill_per_sec = 2.0;
+        let lim = IapiLimiter::new(cfg);
+        // Many acquires, but rate must stay at 2.0 since AIMD is off.
+        for _ in 0..10 {
+            tokio::time::sleep(StdDuration::from_millis(12)).await;
+            lim.acquire(1.0).await.expect("free");
+        }
+        let rate = lim.current_rate_per_sec().await;
+        assert!((rate - 2.0).abs() < 1e-6, "rate should be pinned at 2.0, got {rate}");
+        // And 429 should also leave the rate unchanged when disabled.
+        lim.record_rate_limited("Too Many Requests").await;
+        let rate2 = lim.current_rate_per_sec().await;
+        assert!((rate2 - 2.0).abs() < 1e-6, "rate should stay at 2.0, got {rate2}");
+    }
+
+    /// Config tuned for convergence tests: short `aimd_tuned_after` so
+    /// the test doesn't have to sleep for 30 min.
+    fn convergence_config() -> IapiLimiterConfig {
+        IapiLimiterConfig {
+            aimd_tuned_after: StdDuration::from_millis(40),
+            // Make `aimd_increase_interval` larger than `aimd_tuned_after`
+            // so a single quiet acquire reaches the tuned threshold
+            // without the AIMD ramp accidentally resetting last_rate_change.
+            aimd_increase_interval: StdDuration::from_millis(200),
+            ..aimd_config()
+        }
+    }
+
+    #[tokio::test]
+    async fn aimd_converges_after_quiet_period_and_persists_rate() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let cfg = IapiLimiterConfig {
+            persistence_path: Some(tmp.path().to_path_buf()),
+            ..convergence_config()
+        };
+        let lim = IapiLimiter::new(cfg);
+        // First acquire arms the bucket. Rate starts at refill_per_sec (1.0).
+        lim.acquire(1.0).await.expect("free");
+        // Wait past aimd_tuned_after, then trigger another acquire — the
+        // convergence check fires inside acquire's bucket lock.
+        tokio::time::sleep(StdDuration::from_millis(60)).await;
+        lim.acquire(1.0).await.expect("free");
+        // Persisted file should now carry the tuned rate.
+        let raw = std::fs::read_to_string(tmp.path()).expect("persisted file");
+        assert!(
+            raw.contains("\"tuned_rate\""),
+            "expected tuned_rate key in persisted state, got: {raw}"
+        );
+        let persisted: PersistedState = serde_json::from_str(&raw).expect("decode");
+        assert!(persisted.tuned_rate > 0.0, "tuned_rate must be > 0");
+    }
+
+    #[tokio::test]
+    async fn aimd_restores_tuned_rate_on_construction() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        // Pre-seed a persisted tuned rate of 3.5.
+        let persisted = PersistedState {
+            cooldown_until_unix: 0,
+            consecutive: 0,
+            last_arm_unix: 0,
+            tuned_rate: 3.5,
+        };
+        std::fs::write(tmp.path(), serde_json::to_string(&persisted).unwrap()).unwrap();
+        let cfg = IapiLimiterConfig {
+            persistence_path: Some(tmp.path().to_path_buf()),
+            // Cold default is 1.0, but persisted 3.5 should win.
+            refill_per_sec: 1.0,
+            ..convergence_config()
+        };
+        let lim = IapiLimiter::new(cfg);
+        let rate = lim.current_rate_per_sec().await;
+        assert!((rate - 3.5).abs() < 1e-6, "expected 3.5 restored, got {rate}");
+    }
+
+    #[tokio::test]
+    async fn aimd_429_clears_converged_flag_and_decreases_rate() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let cfg = IapiLimiterConfig {
+            persistence_path: Some(tmp.path().to_path_buf()),
+            ..convergence_config()
+        };
+        let lim = IapiLimiter::new(cfg);
+        // Force convergence.
+        lim.acquire(1.0).await.expect("free");
+        tokio::time::sleep(StdDuration::from_millis(60)).await;
+        lim.acquire(1.0).await.expect("free");
+        let pre = lim.current_rate_per_sec().await;
+        // 429 should halve the rate and clear `converged` so subsequent
+        // clean traffic ramps again.
+        lim.record_rate_limited("Too Many Requests").await;
+        let post = lim.current_rate_per_sec().await;
+        assert!(
+            post < pre,
+            "rate should decrease after 429: pre={pre} post={post}"
+        );
+        // Persisted state should reflect the post-429 rate, not the
+        // pre-429 tuned value.
+        let raw = std::fs::read_to_string(tmp.path()).expect("persisted file");
+        let persisted: PersistedState = serde_json::from_str(&raw).expect("decode");
+        assert!(
+            (persisted.tuned_rate - post).abs() < 1e-6,
+            "post-429 persisted rate {} should match live {}",
+            persisted.tuned_rate,
+            post
+        );
+    }
+
+    #[test]
+    fn legacy_persisted_state_without_tuned_rate_decodes() {
+        // Pre-AIMD persistence files don't have the tuned_rate key — serde
+        // default keeps them decoding cleanly.
+        let legacy = r#"{"cooldown_until_unix":1700000000,"consecutive":1,"last_arm_unix":1699999000}"#;
+        let s: PersistedState = serde_json::from_str(legacy).expect("legacy decode");
+        assert_eq!(s.cooldown_until_unix, 1_700_000_000);
+        assert_eq!(s.tuned_rate, 0.0);
     }
 }
