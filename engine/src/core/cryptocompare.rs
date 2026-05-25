@@ -3,6 +3,17 @@
 //! Replaces Kraken OHLC as primary crypto backfill source.
 
 use std::sync::atomic::{AtomicI64, Ordering};
+use tokio::sync::Semaphore;
+
+/// Serialises in-flight CryptoCompare fetches. At startup the terminal can
+/// kick off ~12 backfill calls in parallel, all of which read the back-off
+/// clock as "free", all hit the API, all get 429, and only AFTER the dust
+/// settles does the back-off clock get armed — so the protection comes one
+/// burst too late. Holding this single permit across each fetch means the
+/// first 429 arms the clock and every queued caller sees it on the
+/// post-acquire re-check, falling back to Kraken without spending the
+/// round-trip.
+static BURST_GATE: Semaphore = Semaphore::const_new(1);
 
 /// Process-wide back-off clock. When CryptoCompare hits a rate limit
 /// (HTTP 429 or in-body "rate limit"/"upgrade" message), this gets set
@@ -77,6 +88,9 @@ pub async fn fetch_ohlcv(
         Some(e) => e,
         None => {
             // Aggregate: 4Hour from hourly, 1Week from daily, etc.
+            // Each recursive call serialises through the same burst gate
+            // below — we MUST NOT hold a permit during recursion or two
+            // aggregation timeframes deadlock against each other.
             match timeframe {
                 "5Min" => {
                     let minutely =
@@ -112,6 +126,25 @@ pub async fn fetch_ohlcv(
             }
         }
     };
+
+    // Serialise the in-flight fetch so a startup burst can't all read the
+    // back-off as "free" before any of them gets a chance to arm it. Only
+    // the leaf (non-aggregating) path holds the permit; the recursive
+    // aggregation arms above never reach this point.
+    let _permit = BURST_GATE
+        .acquire()
+        .await
+        .map_err(|e| format!("CryptoCompare burst gate closed: {e}"))?;
+
+    // Re-check the back-off after acquiring the permit. If we queued
+    // behind a sibling that armed the clock, short-circuit so the
+    // post-queue round-trip isn't wasted.
+    if let Some(secs) = rate_limited_for_secs() {
+        return Err(format!(
+            "CryptoCompare in rate-limit back-off ({}s remaining) — caller should use Kraken",
+            secs
+        ));
+    }
 
     // Normalize symbol: BTCUSD → BTC, SOL/USD → SOL
     let fsym = symbol.replace("/USD", "").replace("USD", "").to_uppercase();

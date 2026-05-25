@@ -203,9 +203,7 @@ impl TyphooNApp {
                 "tastytrade" => self.queue_tastytrade_fetch(&source_symbol, tf_key),
                 "kraken" => self.queue_kraken_fetch(&source_symbol, tf_key),
                 "kraken-equities" => {
-                    let _ = self.broker_tx.send(BrokerCmd::KrakenFetchEquityTicker {
-                        symbol: source_symbol.clone(),
-                    });
+                    self.dispatch_kraken_equity_ticker(&source_symbol);
                     self.queue_kraken_equity_fetch(&source_symbol, tf_key)
                 }
                 "kraken-futures" => self.queue_kraken_futures_fetch(&source_symbol, tf_key),
@@ -231,9 +229,7 @@ impl TyphooNApp {
                 .binary_search_by(|candidate| candidate.as_str().cmp(bare.as_str()))
                 .is_ok()
         {
-            let _ = self.broker_tx.send(BrokerCmd::KrakenFetchEquityTicker {
-                symbol: bare.clone(),
-            });
+            self.dispatch_kraken_equity_ticker(&bare);
             if self.queue_kraken_equity_fetch(&bare, tf_key) {
                 return true;
             }
@@ -290,9 +286,7 @@ impl TyphooNApp {
                         "tastytrade" => self.queue_tastytrade_fetch(&source_symbol, tf_key),
                         "kraken" => self.queue_kraken_fetch(&source_symbol, tf_key),
                         "kraken-equities" => {
-                            let _ = self.broker_tx.send(BrokerCmd::KrakenFetchEquityTicker {
-                                symbol: source_symbol.clone(),
-                            });
+                            self.dispatch_kraken_equity_ticker(&source_symbol);
                             self.queue_kraken_equity_fetch(&source_symbol, tf_key)
                         }
                         "kraken-futures" => self.queue_kraken_futures_fetch(&source_symbol, tf_key),

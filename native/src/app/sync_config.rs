@@ -28,6 +28,11 @@ pub(super) const KRAKEN_EQUITIES_FULL_TILT_BATCH_SIZE: usize = 16;
 pub(super) const KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 4096;
 pub(super) const KRAKEN_EQUITIES_HISTORY_MIN_INTERVAL_MS: u64 = 260;
 pub(super) const KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS: i64 = 45;
+/// Minimum interval between full REST `TradesHistory` fetches issued by the
+/// periodic KrakenBalances handler. The `ownTrades` WebSocket already keeps
+/// the trade list current; the REST pull is a safety-net resync, not a
+/// primary feed.
+pub(super) const KRAKEN_TRADES_REST_REFRESH_SECS: u64 = 600;
 pub(super) const KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW: usize = 192;
 pub(super) const KRAKEN_FUTURES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2048;
 pub(super) const TASTYTRADE_FULL_TILT_QUEUE_WINDOW: usize = 96;

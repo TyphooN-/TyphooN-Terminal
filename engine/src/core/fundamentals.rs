@@ -324,10 +324,14 @@ impl YahooSession {
             .build()
             .map_err(|e| format!("Failed to build Yahoo client: {e}"))?;
 
-        // Step 1: Accept consent / get session cookies via fc.yahoo.com
-        // This sets the A1/A3 cookies that bypass the EU consent wall
+        // Step 1: Accept consent / get session cookies via fc.yahoo.com.
+        // This sets the A1/A3 cookies that bypass the EU consent wall.
+        // A 404 here is expected — when no consent wall is needed the
+        // endpoint reports not-found but the cookies still attach, and the
+        // following crumb call succeeds. Demoted to debug so the typical
+        // boot trace stays clean.
         match client.get("https://fc.yahoo.com").send().await {
-            Ok(r) => tracing::info!("Yahoo fc.yahoo.com: status {}", r.status()),
+            Ok(r) => tracing::debug!("Yahoo fc.yahoo.com: status {}", r.status()),
             Err(e) => tracing::warn!("Yahoo fc.yahoo.com failed (non-fatal): {}", e),
         }
 

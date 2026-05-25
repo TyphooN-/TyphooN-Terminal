@@ -1181,6 +1181,21 @@ impl TyphooNApp {
         true
     }
 
+    /// Dispatch a Kraken equity ticker fetch unless the iapi host is currently
+    /// rate-limited. Cloudflare 1015 / HTTP 429 from any iapi endpoint arms a
+    /// shared back-off in the engine; checking here means we suppress the
+    /// dispatch (and the noisy error round-trip) until the window clears.
+    /// Returns whether the command was actually sent.
+    pub(super) fn dispatch_kraken_equity_ticker(&self, symbol: &str) -> bool {
+        if typhoon_engine::broker::kraken::iapi_rate_limited_for_secs().is_some() {
+            return false;
+        }
+        let _ = self.broker_tx.send(BrokerCmd::KrakenFetchEquityTicker {
+            symbol: symbol.to_string(),
+        });
+        true
+    }
+
     pub(super) fn queue_kraken_equity_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
@@ -1232,10 +1247,11 @@ impl TyphooNApp {
                 .eq_ignore_ascii_case(&symbol)
         });
         if chart_or_owned {
-            self.log.push_back(LogEntry::info(format!(
-                "Kraken equities sync queued {} {}",
-                symbol, tf
-            )));
+            // Multi-TF refills push one line per TF in quick succession
+            // (1Hour + 30Min + 15Min + 5Min, etc.). Visible in tracing for
+            // diagnostics but no longer stacking four user-log entries per
+            // symbol refresh.
+            tracing::debug!("Kraken equities sync queued {} {}", symbol, tf);
         }
         true
     }

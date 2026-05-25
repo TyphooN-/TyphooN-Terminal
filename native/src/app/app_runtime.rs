@@ -8,6 +8,12 @@ fn is_routine_market_data_status(msg: &str) -> bool {
             || msg.contains(" already up to date")
             || msg.contains(": no bars returned")))
         || msg.starts_with("CryptoCompare backfill ")
+        // Once the iapi back-off is armed, late-arriving dispatches that
+        // race the gate come back with this prefix. The first arm already
+        // produced a tracing::warn at the engine layer, so the user-log
+        // path should treat repeats as routine status instead of stacking
+        // a red error per balance tick.
+        || msg.starts_with(typhoon_engine::broker::kraken::IAPI_RATE_LIMITED_ERR_PREFIX)
 }
 
 // egui 0.34: Panel::show(ctx) deprecated in favor of show_inside(ui).
@@ -1213,14 +1219,30 @@ impl eframe::App for TyphooNApp {
                     if trades.len() > KRAKEN_TRADE_HISTORY_CAP {
                         trades.truncate(KRAKEN_TRADE_HISTORY_CAP);
                     }
+                    let prev_trades = self.kraken_trades.len();
+                    let prev_basis = self.kraken_cost_basis.len();
                     self.kraken_trades = VecDeque::from(trades);
                     self.rebuild_kraken_trade_indexes();
                     self.refresh_kraken_position_costs();
-                    self.log.push_back(LogEntry::info(format!(
-                        "Kraken: loaded {} trades; cost basis for {} held assets",
-                        self.kraken_trades.len(),
-                        self.kraken_cost_basis.len()
-                    )));
+                    self.kraken_trades_last_fetch = std::time::Instant::now();
+                    let new_trades = self.kraken_trades.len();
+                    let new_basis = self.kraken_cost_basis.len();
+                    // The safety-net REST fetch normally returns the same
+                    // counts as the last pull. Only surface the user log
+                    // line when something actually changed; routine
+                    // confirmations go to trace at debug level.
+                    if new_trades != prev_trades || new_basis != prev_basis {
+                        self.log.push_back(LogEntry::info(format!(
+                            "Kraken: loaded {} trades; cost basis for {} held assets",
+                            new_trades, new_basis
+                        )));
+                    } else {
+                        tracing::debug!(
+                            "Kraken trades resync: {} trades / {} held assets (unchanged)",
+                            new_trades,
+                            new_basis
+                        );
+                    }
                 }
                 BrokerMsg::KrakenLiveTrade(trade) => {
                     if !self.kraken_enabled {
@@ -1876,9 +1898,31 @@ impl eframe::App for TyphooNApp {
                         .to_string();
                     self.pending_kraken_fetches
                         .retain(|key| key != &format!("equity:{}:{}", symbol, timeframe));
+                    let iapi_rl_prefix =
+                        typhoon_engine::broker::kraken::IAPI_RATE_LIMITED_ERR_PREFIX;
                     if error.contains("No data") || error.contains("no data") {
                         self.unresolvable_mark("kraken-equities", &symbol, &timeframe, &error);
                         tracing::debug!("Kraken equities: no bars for {} {}", symbol, timeframe);
+                    } else if error.starts_with(iapi_rl_prefix) {
+                        // Engine-side iapi gate already short-circuited the
+                        // round-trip; this branch fires once per already-
+                        // queued fetch as the broker thread drains them.
+                        // Arm the queue-side pause to stop NEW dispatches
+                        // and silence the per-fetch errors — the first 429
+                        // produced a single tracing::warn at the engine.
+                        let now = chrono::Utc::now().timestamp();
+                        let pause = typhoon_engine::broker::kraken::iapi_rate_limited_for_secs()
+                            .unwrap_or(KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS);
+                        if now + pause > self.kraken_equities_sync_pause_until_ts {
+                            self.kraken_equities_sync_pause_until_ts = now + pause;
+                            self.kraken_equities_sync_pause_reason = error.clone();
+                        }
+                        tracing::debug!(
+                            "Kraken equities: {} {} skipped — iapi back-off ({}s left)",
+                            symbol,
+                            timeframe,
+                            pause
+                        );
                     } else if error.contains("429") || error.contains("Too Many Requests") {
                         let now = chrono::Utc::now().timestamp();
                         self.kraken_equities_sync_pause_until_ts =
@@ -2134,9 +2178,7 @@ impl eframe::App for TyphooNApp {
                         .collect();
                     for (pair, is_equity) in balance_pairs {
                         if is_equity {
-                            let _ = self.broker_tx.send(BrokerCmd::KrakenFetchEquityTicker {
-                                symbol: pair.clone(),
-                            });
+                            self.dispatch_kraken_equity_ticker(&pair);
                             let mut queued_equity_tf = false;
                             queued_equity_tf |= self.queue_kraken_equity_fetch(&pair, active_tf);
                             queued_equity_tf |= self.queue_tastytrade_fetch(&pair, active_tf);
@@ -2162,12 +2204,27 @@ impl eframe::App for TyphooNApp {
                             queued += 1;
                         }
                     }
-                    let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
-                    self.log.push_back(LogEntry::info(format!(
-                        "Kraken: {} assets with balance; queued {} owned-symbol bar fetches",
-                        self.kraken_balances.len(),
-                        queued
-                    )));
+                    // Trades stream live via ownTrades WS — the REST pull
+                    // is only a periodic safety-net resync. Skip when the
+                    // last successful fetch was inside the refresh window.
+                    if std::time::Instant::now()
+                        .duration_since(self.kraken_trades_last_fetch)
+                        >= std::time::Duration::from_secs(KRAKEN_TRADES_REST_REFRESH_SECS)
+                    {
+                        let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
+                    }
+                    if queued > 0 {
+                        self.log.push_back(LogEntry::info(format!(
+                            "Kraken: {} assets with balance; queued {} owned-symbol bar fetches",
+                            self.kraken_balances.len(),
+                            queued
+                        )));
+                    } else {
+                        tracing::debug!(
+                            "Kraken balances tick: {} assets, 0 fetches queued (all up-to-date)",
+                            self.kraken_balances.len()
+                        );
+                    }
                 }
                 BrokerMsg::KrakenPairs(pairs) => {
                     self.log.push_back(LogEntry::info(format!(
@@ -7513,10 +7570,21 @@ impl eframe::App for TyphooNApp {
                     );
                     if changed {
                         let marker_count = self.kraken_backfill_complete_pairs.len();
-                        self.log.push_back(LogEntry::info(format!(
-                            "Kraken {} {}: provider window saturated at {}/{} bars — automated delta sync will keep it current ({} marked)",
+                        // First-time saturation per pair is one-shot, but
+                        // across ~12 k tradable symbols this floods the
+                        // user log during initial sweep. Detailed line goes
+                        // to debug; a milestone rollup at every 100th new
+                        // marker keeps progress visible without spam.
+                        tracing::debug!(
+                            "Kraken {} {}: provider window saturated at {}/{} bars ({} marked)",
                             symbol, timeframe, bar_count, target_bars, marker_count
-                        )));
+                        );
+                        if marker_count.is_multiple_of(100) {
+                            self.log.push_back(LogEntry::info(format!(
+                                "Kraken backfill milestone: {} pairs at provider-window saturation",
+                                marker_count
+                            )));
+                        }
                     }
                 }
                 BrokerMsg::KrakenFuturesFetchSettled { symbol, timeframe } => {

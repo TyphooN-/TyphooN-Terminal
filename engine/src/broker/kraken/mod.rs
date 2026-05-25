@@ -12,7 +12,10 @@ mod order_types;
 mod private_ws;
 mod public_book;
 
-pub use self::equities::{KrakenEquityBar, KrakenEquityMarket, KrakenEquityTicker};
+pub use self::equities::{
+    IAPI_RATE_LIMITED_ERR_PREFIX, KrakenEquityBar, KrakenEquityMarket, KrakenEquityTicker,
+    iapi_rate_limited_for_secs,
+};
 pub use self::ohlc_ws::{
     KRAKEN_WS_OHLC_INTERVALS_MIN, KRAKEN_WS_V2_URL, KrakenOhlcStreamerEvent, KrakenWsOhlcBar,
     build_subscribe_frames, build_unsubscribe_frame, compute_reconnect_backoff,
@@ -26,7 +29,10 @@ pub use self::private_ws::{
     parse_own_trades_messages,
 };
 
-use self::equities::{parse_json_i64, parse_json_number};
+use self::equities::{
+    IAPI_RATE_LIMITED_ERR_PREFIX as IAPI_RL_PREFIX, arm_iapi_backoff,
+    iapi_rate_limited_for_secs as iapi_rl_for_secs, parse_json_i64, parse_json_number,
+};
 use self::private_ws::{
     kraken_order_from_object, kraken_ws_status_message, parse_trades_history_result,
 };
@@ -94,6 +100,9 @@ impl KrakenBroker {
     /// frontend headers Kraken Pro sends; without them iapi currently returns 404.
     pub async fn get_equity_markets(&self) -> Result<Vec<KrakenEquityMarket>, String> {
         const PAGE_SIZE: usize = 1000;
+        if let Some(secs) = iapi_rl_for_secs() {
+            return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
+        }
         let mut page = 0usize;
         let mut out = Vec::new();
         loop {
@@ -120,6 +129,13 @@ impl KrakenBroker {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS || body.contains("1015") {
+                    let secs = arm_iapi_backoff(&body);
+                    tracing::warn!(
+                        "Kraken iapi rate-limited via equity catalog (HTTP {status}); backoff {secs}s engaged"
+                    );
+                    return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
+                }
                 return Err(format!(
                     "Kraken equity catalog request failed: HTTP {status}: {body}"
                 ));
@@ -205,6 +221,9 @@ impl KrakenBroker {
     /// internal equities market-data API. This is separate from Kraken Spot:
     /// xStock/equity holdings such as `WOK.EQ` are not in public AssetPairs.
     pub async fn get_equity_ticker(&self, symbol: &str) -> Result<KrakenEquityTicker, String> {
+        if let Some(secs) = iapi_rl_for_secs() {
+            return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
+        }
         let symbol = symbol
             .trim()
             .trim_end_matches(".EQ")
@@ -227,6 +246,13 @@ impl KrakenBroker {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS || body.contains("1015") {
+                let secs = arm_iapi_backoff(&body);
+                tracing::warn!(
+                    "Kraken iapi rate-limited via equity ticker (HTTP {status}); backoff {secs}s engaged"
+                );
+                return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
+            }
             return Err(format!(
                 "Kraken equity ticker request failed: HTTP {status}: {body}"
             ));
@@ -303,6 +329,9 @@ impl KrakenBroker {
         interval_minutes: u32,
         since_seconds: Option<i64>,
     ) -> Result<Vec<KrakenEquityBar>, String> {
+        if let Some(secs) = iapi_rl_for_secs() {
+            return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
+        }
         let symbol = symbol
             .trim()
             .trim_end_matches(".EQ")
@@ -337,6 +366,13 @@ impl KrakenBroker {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS || body.contains("1015") {
+                let secs = arm_iapi_backoff(&body);
+                tracing::warn!(
+                    "Kraken iapi rate-limited via equity history (HTTP {status}); backoff {secs}s engaged"
+                );
+                return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
+            }
             return Err(format!(
                 "Kraken equity history request failed: HTTP {status}: {body}"
             ));

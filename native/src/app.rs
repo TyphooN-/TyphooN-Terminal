@@ -13741,6 +13741,13 @@ pub struct TyphooNApp {
     lan_remote_last_poll: std::time::Instant,
     broker_positions_last_poll: std::time::Instant,
     kraken_positions_last_poll: std::time::Instant,
+    /// Last REST `TradesHistory` fetch. The `ownTrades` WebSocket already
+    /// streams new trades live (see KrakenLiveTrade handler), so the REST
+    /// pull is only needed at connect / reconnect / cold cache. A periodic
+    /// dispatch on every KrakenBalances tick (~60 s) was burning a private
+    /// REST counter slot and re-rendering the same history; this gate caps
+    /// the cadence to KRAKEN_TRADES_REST_REFRESH_SECS.
+    kraken_trades_last_fetch: std::time::Instant,
     watchlist_quotes_last_poll: std::time::Instant,
     weekend_crypto_last_sync: std::time::Instant,
     mt5_bar_last_sync: std::time::Instant,
@@ -24990,12 +24997,23 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 });
                             }
                             Err(e) => {
-                                if e.contains("429") || e.contains("Too Many Requests") {
+                                let iapi_rl_hit = e.starts_with(
+                                    typhoon_engine::broker::kraken::IAPI_RATE_LIMITED_ERR_PREFIX,
+                                );
+                                if e.contains("429")
+                                    || e.contains("Too Many Requests")
+                                    || iapi_rl_hit
+                                {
+                                    // Use the engine's remaining back-off
+                                    // when available — the host gate sets a
+                                    // longer window for Cloudflare 1015
+                                    // than the short per-endpoint default.
+                                    let secs = typhoon_engine::broker::kraken::iapi_rate_limited_for_secs()
+                                        .unwrap_or(KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS)
+                                        as u64;
                                     kraken_equity_history_backoff_until = Some(
                                         std::time::Instant::now()
-                                            + std::time::Duration::from_secs(
-                                                KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS as u64,
-                                            ),
+                                            + std::time::Duration::from_secs(secs),
                                     );
                                 }
                                 let _ = broker_msg_tx_clone.send(BrokerMsg::KrakenEquityHistoryError {
@@ -29720,6 +29738,10 @@ When the question touches recent news, sentiment, or prices, combine the researc
                 - std::time::Duration::from_secs(60),
             kraken_positions_last_poll: std::time::Instant::now()
                 - std::time::Duration::from_secs(60),
+            // Initialise far enough in the past that the first
+            // KrakenBalances tick after startup will be allowed to fetch.
+            kraken_trades_last_fetch: std::time::Instant::now()
+                - std::time::Duration::from_secs(60 * 60),
             watchlist_quotes_last_poll: std::time::Instant::now()
                 - std::time::Duration::from_secs(15),
             weekend_crypto_last_sync: std::time::Instant::now()
@@ -30156,10 +30178,15 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         let need_full_refresh = !full_refresh_done;
                         if !need_full_refresh {
                             // Lightweight refresh only — skip expensive phases
-                            // Low-priority: backfill SEC filing content (5 per ~30s cycle)
+                            // Low-priority: backfill SEC filing content (15 per ~30s cycle).
+                            // SEC permits 10 req/s for identified user agents
+                            // (we set a User-Agent with contact) and the loop
+                            // sleeps 250 ms per request, so 15/cycle stays an
+                            // order of magnitude below their cap while still
+                            // making real progress on the backlog.
                             // Spawns a short-lived thread with its own tokio runtime (same pattern as scrape thread).
                             if !is_lan_client && bg_cycle_count % 10 == 5 {
-                                if let Ok(unfetched) = sec_filing::get_unfetched_filings(conn, 5) {
+                                if let Ok(unfetched) = sec_filing::get_unfetched_filings(conn, 15) {
                                     if !unfetched.is_empty() {
                                         if let Some(ref wr_cache) = cache_arc {
                                             let wr_cache = wr_cache.clone();
