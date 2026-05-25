@@ -14,7 +14,26 @@ impl TyphooNApp {
             }
             Err(_) => {}
         }
+        // Stay in full-tilt while we are behind on coverage regardless of
+        // power source. A weekend that lands us at 55% would otherwise idle
+        // overnight at the balanced cadence and never catch up before Monday
+        // open. Threshold/hysteresis live in `auto_full_tilt_until_caught_up`.
+        if self.auto_full_tilt_until_caught_up() {
+            return true;
+        }
         super::auto_compact::on_ac_power()
+    }
+
+    /// True while live-broker bar coverage sits below the "we're caught up"
+    /// threshold. Reads the cached Sync Status snapshot so it is O(1) on the
+    /// hot path; the snapshot itself is refreshed at most once per second
+    /// from `compute_bar_sync_rows` and proactively pumped from the main
+    /// update loop so it stays current even when the Sync Status window
+    /// isn't open. Hysteresis lives in `compute_bar_sync_rows` so the flip
+    /// happens exactly when the snapshot is computed, not when the predicate
+    /// is read.
+    pub(super) fn auto_full_tilt_until_caught_up(&self) -> bool {
+        self.auto_full_tilt_active
     }
 
     pub(super) fn market_data_sync_interval(&self) -> std::time::Duration {

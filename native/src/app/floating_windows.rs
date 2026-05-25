@@ -4473,20 +4473,26 @@ impl TyphooNApp {
                                                 // body fetch is still pending.
                                                 if !a.body.is_empty() {
                                                     ui.label(egui::RichText::new(&a.body));
-                                                } else if !a.summary.is_empty() {
-                                                    ui.label(egui::RichText::new(&a.summary));
-                                                    ui.add_space(6.0);
-                                                    ui.label(
-                                                        egui::RichText::new(
-                                                            "(Full article still hydrating — re-open in a minute or click Open Source.)",
-                                                        )
-                                                        .color(AXIS_TEXT)
-                                                        .italics()
-                                                        .small(),
-                                                    );
                                                 } else {
-                                                    ui.label(egui::RichText::new("(No summary — click Open Source for the full article.)")
-                                                        .color(AXIS_TEXT).italics());
+                                                    let hydration_exhausted = a.body_fetch_attempts
+                                                        >= typhoon_engine::core::news::MAX_BODY_FETCH_ATTEMPTS;
+                                                    if !a.summary.is_empty() {
+                                                        ui.label(egui::RichText::new(&a.summary));
+                                                        ui.add_space(6.0);
+                                                    }
+                                                    let placeholder = if hydration_exhausted {
+                                                        "(Body unavailable for this publisher — click Open Source for the full article.)"
+                                                    } else if !a.summary.is_empty() {
+                                                        "(Full article still hydrating — re-open in a minute or click Open Source.)"
+                                                    } else {
+                                                        "(No summary — click Open Source for the full article.)"
+                                                    };
+                                                    ui.label(
+                                                        egui::RichText::new(placeholder)
+                                                            .color(AXIS_TEXT)
+                                                            .italics()
+                                                            .small(),
+                                                    );
                                                 }
                                             });
                                         ui.horizontal(|ui| {

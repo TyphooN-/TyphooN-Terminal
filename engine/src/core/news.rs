@@ -82,7 +82,21 @@ pub struct NewsArticle {
     /// search beyond what the upstream news APIs return as `summary`.
     #[serde(default)]
     pub body: String,
+    /// Number of times the lazy hydrator tried to fetch the article body and
+    /// failed (non-2xx, paywall splash under MIN_BODY_CHARS, timeout, parser
+    /// returned empty). Used by the UI to swap the "still hydrating"
+    /// placeholder for "body unavailable" once retries are exhausted, and by
+    /// `list_articles_missing_body` to skip permanently-broken URLs.
+    #[serde(default)]
+    pub body_fetch_attempts: i64,
 }
+
+/// Hydrator retry budget. After this many failed body fetches the row is
+/// considered permanently unhydratable — the UI shows a terminal message and
+/// the hydrator stops re-queueing it. Five attempts ≈ ~7.5 minutes of retry
+/// at the default 90s tick before giving up, which is plenty for a transient
+/// publisher outage but cheap to abandon for the long tail of JS-only pages.
+pub const MAX_BODY_FETCH_ATTEMPTS: i64 = 5;
 
 impl NewsArticle {
     fn compute_hash(url: &str) -> String {
@@ -157,6 +171,15 @@ pub fn create_news_tables(conn: &Connection) -> Result<(), String> {
     );
     let _ = conn.execute(
         "ALTER TABLE research_news ADD COLUMN body_fetched_at INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    // body_fetch_attempts: count of times the hydrator tried and failed to
+    // extract a usable article body for this URL. After MAX_BODY_FETCH_ATTEMPTS
+    // the UI shows "Body unavailable" instead of the misleading "still
+    // hydrating" placeholder. Persistent so a re-launch doesn't reset retry
+    // budgets.
+    let _ = conn.execute(
+        "ALTER TABLE research_news ADD COLUMN body_fetch_attempts INTEGER NOT NULL DEFAULT 0",
         [],
     );
     // FTS5 layout cannot ALTER. If an older DB has a 3-column FTS table, drop
@@ -281,8 +304,12 @@ pub fn upsert_news_body(conn: &Connection, url_hash: &str, body: &str) -> Result
 }
 
 /// Return up to `limit` `(url_hash, url)` rows for articles whose body
-/// hasn't been fetched yet. Caller is the body hydrator — it walks the
-/// list, fetches each URL, and writes the result via [`upsert_news_body`].
+/// hasn't been fetched yet AND whose `body_fetch_attempts` counter is below
+/// [`MAX_BODY_FETCH_ATTEMPTS`]. Caller is the body hydrator — it walks the
+/// list, fetches each URL, and writes the result via [`upsert_news_body`]
+/// or [`bump_news_body_fetch_attempts`] for failures. Skipping URLs that
+/// have already failed N times means a single publisher (e.g. Yahoo's JS-
+/// only article pages) can't keep eating hydrator slots forever.
 pub fn list_articles_missing_body(
     conn: &Connection,
     symbol: Option<&str>,
@@ -296,11 +323,12 @@ pub fn list_articles_missing_body(
             .prepare(
                 "SELECT url_hash, url FROM research_news
                   WHERE body = '' AND url <> '' AND source <> 'SEC'
+                    AND body_fetch_attempts < ?2
                   ORDER BY published_at DESC
                   LIMIT ?1",
             )
             .map_err(|e| format!("prepare missing body: {e}"))?;
-        stmt.query_map(params![limit_i], |r| {
+        stmt.query_map(params![limit_i, MAX_BODY_FETCH_ATTEMPTS], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })
         .map_err(|e| format!("query missing body: {e}"))?
@@ -311,18 +339,39 @@ pub fn list_articles_missing_body(
             .prepare(
                 "SELECT url_hash, url FROM research_news
                   WHERE body = '' AND url <> '' AND source <> 'SEC'
+                    AND body_fetch_attempts < ?4
                     AND (symbol = ?1 OR tickers_json LIKE ?2)
                   ORDER BY published_at DESC
                   LIMIT ?3",
             )
             .map_err(|e| format!("prepare missing body: {e}"))?;
-        stmt.query_map(params![sym, like, limit_i], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })
+        stmt.query_map(
+            params![sym, like, limit_i, MAX_BODY_FETCH_ATTEMPTS],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
         .map_err(|e| format!("query missing body: {e}"))?
         .collect()
     };
     rows.map_err(|e| format!("collect missing body: {e}"))
+}
+
+/// Increment the failure counter for a URL whose body fetch came back empty
+/// or failed. Once it reaches [`MAX_BODY_FETCH_ATTEMPTS`] the row is filtered
+/// out of [`list_articles_missing_body`] and the UI swaps "still hydrating"
+/// for "body unavailable".
+pub fn bump_news_body_fetch_attempts(conn: &Connection, url_hash: &str) -> Result<(), String> {
+    if url_hash.is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE research_news
+            SET body_fetch_attempts = body_fetch_attempts + 1,
+                updated_at = ?1
+          WHERE url_hash = ?2",
+        params![now_ts(), url_hash],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("bump body attempts: {e}"))
 }
 
 /// HTTP-fetch `url` and return its plain-text article body. Caps the
@@ -677,14 +726,16 @@ pub fn get_news_by_symbol(
     let sym = symbol.to_uppercase();
     let sql = if sym.is_empty() {
         "SELECT url_hash, symbol, source, provider, headline, summary, url, published_at,
-                image_url, sentiment, sentiment_score, tickers_json, categories_json, body
+                image_url, sentiment, sentiment_score, tickers_json, categories_json, body,
+                body_fetch_attempts
          FROM research_news
          WHERE source <> 'SEC'
          ORDER BY published_at DESC, updated_at DESC
          LIMIT ?1"
     } else {
         "SELECT url_hash, symbol, source, provider, headline, summary, url, published_at,
-                image_url, sentiment, sentiment_score, tickers_json, categories_json, body
+                image_url, sentiment, sentiment_score, tickers_json, categories_json, body,
+                body_fetch_attempts
          FROM research_news
          WHERE source <> 'SEC' AND (symbol = ?2 OR tickers_json LIKE ?3)
          ORDER BY published_at DESC, updated_at DESC
@@ -721,6 +772,7 @@ pub fn get_news_by_symbol(
             tickers: serde_json::from_str(&tickers_s).unwrap_or_default(),
             categories: serde_json::from_str(&cats_s).unwrap_or_default(),
             body: r.get(13).unwrap_or_default(),
+            body_fetch_attempts: r.get(14).unwrap_or(0),
         });
     }
     Ok(out)
@@ -738,7 +790,8 @@ pub fn search_news(
     }
     let mut stmt = conn.prepare(
         "SELECT n.url_hash, n.symbol, n.source, n.provider, n.headline, n.summary, n.url, n.published_at,
-                n.image_url, n.sentiment, n.sentiment_score, n.tickers_json, n.categories_json, n.body
+                n.image_url, n.sentiment, n.sentiment_score, n.tickers_json, n.categories_json, n.body,
+                n.body_fetch_attempts
          FROM research_news n
          JOIN research_news_fts f ON f.url_hash = n.url_hash
          WHERE n.source <> 'SEC' AND research_news_fts MATCH ?1
@@ -767,6 +820,7 @@ pub fn search_news(
             tickers: serde_json::from_str(&tickers_s).unwrap_or_default(),
             categories: serde_json::from_str(&cats_s).unwrap_or_default(),
             body: r.get(13).unwrap_or_default(),
+            body_fetch_attempts: r.get(14).unwrap_or(0),
         });
     }
     Ok(out)

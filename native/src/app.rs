@@ -11088,6 +11088,17 @@ pub struct TyphooNApp {
     /// render-thread waste.
     cached_bar_sync_rows: Vec<SyncStatsRow>,
     cached_bar_sync_rows_last: std::time::Instant,
+    /// Coverage % across live brokers from the most recent Sync Status snapshot.
+    /// Refreshed on every `compute_bar_sync_rows` call (cached, ≤1Hz).
+    /// `auto_full_tilt_until_caught_up` consults it to keep request pressure
+    /// high while the catch-up is in progress and let the scheduler drop back
+    /// to balanced cadence once it crosses the healthy threshold.
+    cached_bar_sync_overall_pct: f32,
+    /// Latched "catch-up in progress" flag. Engages when overall coverage drops
+    /// below the engage threshold and only releases once we cross the higher
+    /// release threshold — hysteresis to keep a row flipping at the edge from
+    /// rapidly cycling full-tilt mode on/off.
+    auto_full_tilt_active: bool,
     /// Full tradable Kraken Securities/equities symbol universe from the internal public catalog.
     kraken_equity_universe_symbols: Vec<String>,
     kraken_equity_universe_requested: bool,
@@ -24201,6 +24212,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                 tickers: vec![sym.clone()],
                                                 categories: vec![],
                                                 body: String::new(),
+                                                body_fetch_attempts: 0,
                                             };
                                             if let Err(e) = news::upsert_news(&conn, &art) {
                                                 tracing::warn!("ingest news upsert {}: {}", sym, e);
@@ -27420,6 +27432,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
             cached_bar_sync_rows_last: std::time::Instant::now()
                 .checked_sub(std::time::Duration::from_secs(10))
                 .unwrap_or_else(std::time::Instant::now),
+            cached_bar_sync_overall_pct: 0.0,
+            auto_full_tilt_active: false,
             kraken_equity_universe_symbols: Vec::new(),
             kraken_equity_universe_requested: false,
             kraken_equity_universe_retry_after_ts: 0,

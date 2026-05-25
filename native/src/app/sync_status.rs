@@ -9,9 +9,59 @@ impl TyphooNApp {
         {
             return self.cached_bar_sync_rows.clone();
         }
-        let mut rows = compute_bar_sync_stats(&self.bg.detailed_stats, &self.bg.bar_ts_cache);
+        let backfill_lookup = |key: &str| -> bool {
+            let mut parts = key.splitn(3, ':');
+            let Some(prefix) = parts.next() else {
+                return false;
+            };
+            let Some(symbol) = parts.next() else {
+                return false;
+            };
+            let Some(tf) = parts.next() else {
+                return false;
+            };
+            let fetch_key = alpaca_fetch_key(symbol, tf);
+            match prefix {
+                "alpaca" => self.alpaca_backfill_complete_pairs.contains_key(&fetch_key),
+                "kraken" | "kraken-equities" => {
+                    self.kraken_backfill_complete_pairs.contains_key(&fetch_key)
+                }
+                "kraken-futures" => self
+                    .kraken_futures_backfill_complete_pairs
+                    .contains_key(&fetch_key),
+                "tastytrade" => self
+                    .tastytrade_backfill_complete_pairs
+                    .contains_key(&fetch_key),
+                _ => false,
+            }
+        };
+        let mut rows = compute_bar_sync_stats(
+            &self.bg.detailed_stats,
+            &self.bg.bar_ts_cache,
+            &backfill_lookup,
+        );
         self.add_expected_kraken_sync_rows(&mut rows);
         sort_sync_stats_rows(&mut rows);
+        let (total, healthy) = rows
+            .iter()
+            .fold((0u64, 0u64), |(t, h), row| (t + row.total, h + row.healthy));
+        self.cached_bar_sync_overall_pct = if total == 0 {
+            100.0
+        } else {
+            (healthy as f32 / total as f32) * 100.0
+        };
+        // Latched flag with hysteresis: engage below 97%, release at 99%.
+        // Read by `full_tilt_sync_enabled` to keep request pressure high
+        // until coverage actually catches up, then drop back to the balanced
+        // cadence on AC and the battery-saving cadence on battery.
+        let pct = self.cached_bar_sync_overall_pct;
+        if self.auto_full_tilt_active {
+            if pct >= 99.0 {
+                self.auto_full_tilt_active = false;
+            }
+        } else if pct < 97.0 && total > 0 {
+            self.auto_full_tilt_active = true;
+        }
         self.cached_bar_sync_rows = rows;
         self.cached_bar_sync_rows_last = now;
         self.cached_bar_sync_rows.clone()

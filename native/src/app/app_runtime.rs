@@ -266,6 +266,13 @@ impl eframe::App for TyphooNApp {
             }
         }
 
+        // Refresh the cached Sync Status coverage % so auto-full-tilt sees
+        // current data even when the Sync Status window isn't open. The
+        // compute call self-throttles to ≤1Hz so this is cheap.
+        if self.cache_loaded {
+            let _ = self.compute_bar_sync_rows();
+        }
+
         if now_instant.duration_since(self.kraken_universe_last_schedule)
             >= self.market_data_sync_interval()
             && self.cache_loaded

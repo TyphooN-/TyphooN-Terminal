@@ -21,9 +21,18 @@ pub(super) struct SyncStatsRow {
 /// actively managed live bar sources (Kraken / Alpaca / Tastytrade). MT5 appears
 /// only after it has actually written bars, so unconfigured MT5 sync no longer
 /// consumes Sync Status space.
+///
+/// `is_backfill_complete(key)` distinguishes "stale because we haven't checked
+/// lately" from "stale because the provider has no newer bar to give us." A
+/// pair flagged backfill-complete (provider window saturated for Kraken,
+/// historical depth exhausted for the others) stays in the Healthy bucket once
+/// its cached bar ages past 24×TF — fetching it again can't move that anchor
+/// forward, so counting it as Stale is a UI lie that paints the long tail of
+/// illiquid pairs red on every weekend.
 pub(super) fn compute_bar_sync_stats(
     detailed_stats: &[(String, i64, i64)],
     bar_ts_cache: &std::collections::HashMap<String, (i64, i64, i64)>,
+    is_backfill_complete: &dyn Fn(&str) -> bool,
 ) -> Vec<SyncStatsRow> {
     use std::collections::BTreeMap;
 
@@ -101,7 +110,8 @@ pub(super) fn compute_bar_sync_stats(
         } else if let Some(period) = period_ms.get(tf) {
             let write_ms = write_ts_s.saturating_mul(1000);
             let recently_checked = write_ms > 0 && now_ms - write_ms <= period * 24;
-            if now_ms - last_ms > period * 24 && !recently_checked {
+            let bar_aged_out = now_ms - last_ms > period * 24;
+            if bar_aged_out && !recently_checked && !is_backfill_complete(key) {
                 entry.1 += 1;
             } else {
                 entry.0 += 1;
@@ -250,6 +260,7 @@ mod tests {
                 ("alpaca:QQQ:W1".into(), 10, now_s),
             ],
             &std::collections::HashMap::from([("alpaca:AAPL:1Day".into(), (1, old_bar_ms, 1))]),
+            &|_| false,
         );
 
         let day = rows
@@ -263,5 +274,41 @@ mod tests {
             .find(|row| row.broker == "Alpaca" && row.tf == "1Week")
             .expect("missing 1Week row");
         assert_eq!(week.total, 1);
+    }
+
+    #[test]
+    fn backfill_complete_pair_with_aged_bar_counts_healthy() {
+        // 1Hour staleness window is 24h; this last bar is 48h old AND the
+        // last cache write was also 48h ago (so `recently_checked` is false).
+        // Without the backfill_complete escape hatch this row would land in
+        // Stale; with it, it stays Healthy because Kraken has no newer bar.
+        let now_s = chrono::Utc::now().timestamp();
+        let aged_bar_ms = (now_s - 48 * 3600).saturating_mul(1000);
+        let aged_write_s = now_s - 48 * 3600;
+        let key = "kraken:BTC/USD:1Hour".to_string();
+
+        let stale_rows = compute_bar_sync_stats(
+            &[(key.clone(), 720, aged_write_s)],
+            &std::collections::HashMap::from([(key.clone(), (1, aged_bar_ms, 1))]),
+            &|_| false,
+        );
+        let stale_row = stale_rows
+            .iter()
+            .find(|row| row.broker == "Kraken" && row.tf == "1Hour")
+            .expect("missing 1Hour row");
+        assert_eq!(stale_row.stale, 1);
+        assert_eq!(stale_row.healthy, 0);
+
+        let healthy_rows = compute_bar_sync_stats(
+            &[(key.clone(), 720, aged_write_s)],
+            &std::collections::HashMap::from([(key.clone(), (1, aged_bar_ms, 1))]),
+            &|k| k == "kraken:BTC/USD:1Hour",
+        );
+        let healthy_row = healthy_rows
+            .iter()
+            .find(|row| row.broker == "Kraken" && row.tf == "1Hour")
+            .expect("missing 1Hour row");
+        assert_eq!(healthy_row.healthy, 1);
+        assert_eq!(healthy_row.stale, 0);
     }
 }

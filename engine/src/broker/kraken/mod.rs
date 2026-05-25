@@ -313,7 +313,12 @@ impl KrakenBroker {
         }
         let interval = interval_minutes.max(1).to_string();
         let since = since_seconds.unwrap_or(0).max(0).to_string();
-        let url = format!("{KRAKEN_INTERNAL_API_BASE_URL}/markets/{symbol}/ticker/history");
+        // Endpoint lives under `/markets/equities/{symbol}/...` like the ticker
+        // call above; the previous path without the `equities/` segment now
+        // 404s with `{"errors":[{"type":"Unknown method"}]}`. Kraken doesn't
+        // dispatch on `asset_class` alone — the URL has to be in the equities
+        // namespace.
+        let url = format!("{KRAKEN_INTERNAL_API_BASE_URL}/markets/equities/{symbol}/ticker/history");
         let resp = self
             .client
             .get(&url)

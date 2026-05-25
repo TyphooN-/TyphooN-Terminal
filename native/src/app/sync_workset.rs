@@ -317,41 +317,78 @@ where
         }
     }
 
-    let selected_bucket_map = if missing_by_tf.values().any(|bucket| !bucket.is_empty()) {
-        &mut missing_by_tf
-    } else if stale_by_tf.values().any(|bucket| !bucket.is_empty()) {
-        &mut stale_by_tf
-    } else {
-        &mut backfill_by_tf
-    };
-
     let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
-    let sort_bucket = |bucket: &mut Vec<AlpacaSyncCandidate>| {
+
+    // Stale slots are reserved so a wave of Missing 1Min candidates can't
+    // starve 30M/1H Stale refresh during catch-up. Order remains
+    // Missing > Stale > Backfill within their share of the batch.
+    let stale_reserve = (batch_size / 4).max(1);
+    let missing_budget = batch_size.saturating_sub(stale_reserve);
+
+    drain_buckets_high_tf_first(
+        &mut selected,
+        &mut missing_by_tf,
+        &ordered_timeframes,
+        missing_budget,
+    );
+    drain_buckets_high_tf_first(
+        &mut selected,
+        &mut stale_by_tf,
+        &ordered_timeframes,
+        batch_size,
+    );
+    drain_buckets_high_tf_first(
+        &mut selected,
+        &mut missing_by_tf,
+        &ordered_timeframes,
+        batch_size,
+    );
+    drain_buckets_high_tf_first(
+        &mut selected,
+        &mut backfill_by_tf,
+        &ordered_timeframes,
+        batch_size,
+    );
+
+    selected
+}
+
+/// Drain `buckets` into `selected` in the supplied timeframe order, stopping
+/// when `selected.len() >= cap`. Within a single timeframe bucket, sorts by
+/// (focus desc, score desc, symbol asc) so foreground charts win and the most-
+/// stale entries fetch first.
+fn drain_buckets_high_tf_first(
+    selected: &mut Vec<AlpacaSyncCandidate>,
+    buckets: &mut HashMap<&'static str, Vec<AlpacaSyncCandidate>>,
+    ordered_timeframes: &[String],
+    cap: usize,
+) {
+    if selected.len() >= cap {
+        return;
+    }
+    for timeframe in ordered_timeframes {
+        if selected.len() >= cap {
+            return;
+        }
+        let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
+            continue;
+        };
+        let Some(bucket) = buckets.get_mut(tf) else {
+            continue;
+        };
+        if bucket.is_empty() {
+            continue;
+        }
         bucket.sort_by(|a, b| {
             b.focus
                 .cmp(&a.focus)
                 .then(b.score.cmp(&a.score))
                 .then(a.symbol.cmp(&b.symbol))
         });
-    };
-
-    for timeframe in &ordered_timeframes {
-        let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
-            continue;
-        };
-        let Some(bucket) = selected_bucket_map.get_mut(tf) else {
-            continue;
-        };
-        sort_bucket(bucket);
-        for candidate in bucket.drain(..) {
-            selected.push(candidate);
-            if selected.len() >= batch_size {
-                return selected;
-            }
-        }
+        let want = cap.saturating_sub(selected.len());
+        let take = want.min(bucket.len());
+        selected.extend(bucket.drain(..take));
     }
-
-    selected
 }
 
 pub(super) fn select_alpaca_sync_candidates(
@@ -614,22 +651,38 @@ pub(super) fn select_alpaca_sync_workset_rotating(
         }
     }
 
-    let candidates = if !missing.is_empty() {
-        missing
-    } else if !stale.is_empty() {
-        stale
-    } else {
-        backfill
-    };
+    // Same priority+reservation policy as the inner selector: Missing wins
+    // most slots but Stale gets a guaranteed share so 30M/1H refresh keeps
+    // moving even when 1Min Missing dominates a scan slice. Order: Missing
+    // up to missing_budget → Stale up to batch_size → leftover Missing →
+    // Backfill.
+    let remaining = batch_size.saturating_sub(selected.len());
+    let stale_reserve = (remaining / 4).max(1).min(remaining);
+    let missing_budget = remaining.saturating_sub(stale_reserve);
 
-    for candidate in candidates {
-        if selected.len() >= batch_size {
-            break;
-        }
-        if staged_selected.insert(alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)) {
-            selected.push(candidate);
+    fn take_from(
+        bucket: &mut Vec<AlpacaSyncCandidate>,
+        cap_total: usize,
+        selected: &mut Vec<AlpacaSyncCandidate>,
+        staged_selected: &mut std::collections::HashSet<String>,
+    ) {
+        let want = cap_total.saturating_sub(selected.len());
+        let take = want.min(bucket.len());
+        for c in bucket.drain(..take) {
+            if staged_selected.insert(alpaca_fetch_key(&c.symbol, &c.timeframe)) {
+                selected.push(c);
+            }
         }
     }
+
+    let missing_cap = selected.len() + missing_budget;
+    let mut missing = missing;
+    let mut stale = stale;
+    let mut backfill = backfill;
+    take_from(&mut missing, missing_cap, &mut selected, &mut staged_selected);
+    take_from(&mut stale, batch_size, &mut selected, &mut staged_selected);
+    take_from(&mut missing, batch_size, &mut selected, &mut staged_selected);
+    take_from(&mut backfill, batch_size, &mut selected, &mut staged_selected);
     selected
 }
 

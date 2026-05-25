@@ -71,12 +71,19 @@ pub async fn hydrate_missing_bodies(cache: Arc<SqliteCache>, symbol_hint: Option
     };
     let mut written = 0usize;
     for (url_hash, body) in results {
-        let Some(body) = body else { continue };
-        if news::upsert_news_body(&conn, &url_hash, &body).is_ok() {
-            written += 1;
+        match body {
+            Some(body) => {
+                if news::upsert_news_body(&conn, &url_hash, &body).is_ok() {
+                    written += 1;
+                }
+            }
+            None => {
+                // Bump the failure counter so we eventually stop retrying
+                // and the UI swaps the "still hydrating" placeholder for a
+                // terminal "body unavailable" message.
+                let _ = news::bump_news_body_fetch_attempts(&conn, &url_hash);
+            }
         }
     }
-    // On first ingest we also try to store full body immediately when possible
-    // (dedup + full body on insert is the goal)
     written
 }
