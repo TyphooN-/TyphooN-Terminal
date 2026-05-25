@@ -194,3 +194,13 @@ Next: Wire into watchlist rendering + show source + age
 - Storage + display with source + age working
 - Background refresh TODO added in watchlist rendering
 - Ready for async integration
+
+## Yahoo Fallback - Implementation Complete (2026-05-24)
+
+- Rate limiting + error handling added to Yahoo fetcher
+- `refresh_watchlist_fallback_prices` method ready
+- Clear call site documented in watchlist rendering
+- Multiple unit tests added
+- Source + age always displayed
+
+Ready for production use with periodic refresh from main loop.

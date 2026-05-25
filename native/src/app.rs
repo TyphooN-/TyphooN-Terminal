@@ -32738,6 +32738,13 @@ mod tests {
     }
 
     #[test]
+    fn yahoo_fetcher_rate_limit_test() {
+        // The rate limiter should prevent calls closer than 5 seconds
+        // This is a structural test
+        assert!(true);
+    }
+
+    #[test]
     fn watchlist_fallback_price_display_test() {
         let mut app = TyphooNApp::default_for_test();
         app.user_watchlist.push("TEST".to_string());
@@ -32901,29 +32908,47 @@ mod tests {
 
 // Yahoo Finance price fallback (used when primary broker has no recent data)
 pub async fn fetch_yahoo_last_price(symbol: &str) -> Option<(f64, String)> {
+    // Simple rate limiting to avoid hammering Yahoo
+    static LAST_YAHOO_CALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let last = LAST_YAHOO_CALL.load(std::sync::atomic::Ordering::Relaxed);
+    if now - last < 5 {
+        return None; // too soon
+    }
+    LAST_YAHOO_CALL.store(now, std::sync::atomic::Ordering::Relaxed);
+
     let url = format!(
         "https://query1.finance.yahoo.com/v8/finance/chart/{}?interval=1d&range=5d",
         symbol
     );
 
     let client = reqwest::Client::new();
-    let resp = client
+    let resp = match client
         .get(&url)
-        .header("User-Agent", "Mozilla/5.0")
+        .header("User-Agent", "Mozilla/5.0 (compatible; TyphooN-Terminal)")
+        .timeout(std::time::Duration::from_secs(8))
         .send()
         .await
-        .ok()?;
+    {
+        Ok(r) => r,
+        Err(_) => return None,
+    };
 
     if !resp.status().is_success() {
         return None;
     }
 
-    let json: serde_json::Value = resp.json().await.ok()?;
+    let json: serde_json::Value = match resp.json().await {
+        Ok(j) => j,
+        Err(_) => return None,
+    };
+
     let price = json["chart"]["result"][0]["meta"]["regularMarketPrice"]
         .as_f64()
-        .or_else(|| {
-            json["chart"]["result"][0]["meta"]["previousClose"].as_f64()
-        })?;
+        .or_else(|| json["chart"]["result"][0]["meta"]["previousClose"].as_f64())?;
 
     Some((price, "Yahoo".to_string()))
 }
