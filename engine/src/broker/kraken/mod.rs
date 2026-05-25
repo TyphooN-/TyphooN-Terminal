@@ -6,6 +6,7 @@
 
 mod equities;
 mod helpers;
+mod iapi_limiter;
 mod limiter;
 mod ohlc_ws;
 mod order_types;
@@ -16,6 +17,7 @@ pub use self::equities::{
     IAPI_RATE_LIMITED_ERR_PREFIX, KrakenEquityBar, KrakenEquityMarket, KrakenEquityTicker,
     iapi_rate_limited_for_secs,
 };
+pub use self::iapi_limiter::{IapiLimiter, IapiLimiterConfig, iapi_limiter, iapi_limiter_init};
 pub use self::ohlc_ws::{
     KRAKEN_WS_OHLC_INTERVALS_MIN, KRAKEN_WS_V2_URL, KrakenOhlcStreamerEvent, KrakenWsOhlcBar,
     build_subscribe_frames, build_unsubscribe_frame, compute_reconnect_backoff,
@@ -30,8 +32,8 @@ pub use self::private_ws::{
 };
 
 use self::equities::{
-    IAPI_RATE_LIMITED_ERR_PREFIX as IAPI_RL_PREFIX, arm_iapi_backoff,
-    iapi_rate_limited_for_secs as iapi_rl_for_secs, parse_json_i64, parse_json_number,
+    IAPI_RATE_LIMITED_ERR_PREFIX as IAPI_RL_PREFIX, arm_iapi_backoff, parse_json_i64,
+    parse_json_number,
 };
 use self::private_ws::{
     kraken_order_from_object, kraken_ws_status_message, parse_trades_history_result,
@@ -100,12 +102,14 @@ impl KrakenBroker {
     /// frontend headers Kraken Pro sends; without them iapi currently returns 404.
     pub async fn get_equity_markets(&self) -> Result<Vec<KrakenEquityMarket>, String> {
         const PAGE_SIZE: usize = 1000;
-        if let Some(secs) = iapi_rl_for_secs() {
-            return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
-        }
         let mut page = 0usize;
         let mut out = Vec::new();
         loop {
+            // Catalog pages are heavier than ticker/history (1k rows each),
+            // so we charge a higher token cost to keep their burst rate down.
+            if let Err(secs) = iapi_limiter().acquire(2.0).await {
+                return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
+            }
             let page_s = page.to_string();
             let page_size_s = PAGE_SIZE.to_string();
             let url = format!("{KRAKEN_INTERNAL_API_BASE_URL}/markets/all/equities");
@@ -130,7 +134,7 @@ impl KrakenBroker {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
                 if status == reqwest::StatusCode::TOO_MANY_REQUESTS || body.contains("1015") {
-                    let secs = arm_iapi_backoff(&body);
+                    let secs = arm_iapi_backoff(&body).await;
                     tracing::warn!(
                         "Kraken iapi rate-limited via equity catalog (HTTP {status}); backoff {secs}s engaged"
                     );
@@ -140,6 +144,7 @@ impl KrakenBroker {
                     "Kraken equity catalog request failed: HTTP {status}: {body}"
                 ));
             }
+            iapi_limiter().record_success().await;
             let body: serde_json::Value = resp
                 .json()
                 .await
@@ -221,9 +226,6 @@ impl KrakenBroker {
     /// internal equities market-data API. This is separate from Kraken Spot:
     /// xStock/equity holdings such as `WOK.EQ` are not in public AssetPairs.
     pub async fn get_equity_ticker(&self, symbol: &str) -> Result<KrakenEquityTicker, String> {
-        if let Some(secs) = iapi_rl_for_secs() {
-            return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
-        }
         let symbol = symbol
             .trim()
             .trim_end_matches(".EQ")
@@ -231,6 +233,9 @@ impl KrakenBroker {
             .to_ascii_uppercase();
         if symbol.is_empty() {
             return Err("Kraken equity ticker: empty symbol".to_string());
+        }
+        if let Err(secs) = iapi_limiter().acquire(1.0).await {
+            return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
         }
 
         let url = format!("{KRAKEN_INTERNAL_API_BASE_URL}/markets/equities/{symbol}/ticker");
@@ -247,7 +252,7 @@ impl KrakenBroker {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS || body.contains("1015") {
-                let secs = arm_iapi_backoff(&body);
+                let secs = arm_iapi_backoff(&body).await;
                 tracing::warn!(
                     "Kraken iapi rate-limited via equity ticker (HTTP {status}); backoff {secs}s engaged"
                 );
@@ -257,6 +262,7 @@ impl KrakenBroker {
                 "Kraken equity ticker request failed: HTTP {status}: {body}"
             ));
         }
+        iapi_limiter().record_success().await;
 
         let body: serde_json::Value = resp
             .json()
@@ -329,9 +335,6 @@ impl KrakenBroker {
         interval_minutes: u32,
         since_seconds: Option<i64>,
     ) -> Result<Vec<KrakenEquityBar>, String> {
-        if let Some(secs) = iapi_rl_for_secs() {
-            return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
-        }
         let symbol = symbol
             .trim()
             .trim_end_matches(".EQ")
@@ -339,6 +342,9 @@ impl KrakenBroker {
             .to_ascii_uppercase();
         if symbol.is_empty() {
             return Err("Kraken equity history: empty symbol".to_string());
+        }
+        if let Err(secs) = iapi_limiter().acquire(1.0).await {
+            return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
         }
         let interval = interval_minutes.max(1).to_string();
         let since = since_seconds.unwrap_or(0).max(0).to_string();
@@ -367,7 +373,7 @@ impl KrakenBroker {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS || body.contains("1015") {
-                let secs = arm_iapi_backoff(&body);
+                let secs = arm_iapi_backoff(&body).await;
                 tracing::warn!(
                     "Kraken iapi rate-limited via equity history (HTTP {status}); backoff {secs}s engaged"
                 );
@@ -377,6 +383,7 @@ impl KrakenBroker {
                 "Kraken equity history request failed: HTTP {status}: {body}"
             ));
         }
+        iapi_limiter().record_success().await;
         let body: serde_json::Value = resp
             .json()
             .await

@@ -13797,6 +13797,25 @@ impl TyphooNApp {
     pub fn new(_cc: &eframe::CreationContext<'_>, rt_handle: tokio::runtime::Handle) -> Self {
         let log: VecDeque<LogEntry> = VecDeque::new();
 
+        // Initialize the process-wide iapi limiter with persistence pointing at
+        // the config dir. This must happen before any KrakenBroker iapi call;
+        // we run it here so a partial cooldown from a previous session is
+        // restored before the broker thread (spawned below) starts dispatching.
+        // Best-effort: a duplicate init returns Err which we silently ignore.
+        {
+            let mut backoff_path = dirs_home();
+            backoff_path.push("kraken_iapi_backoff.json");
+            if let Some(parent) = backoff_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = typhoon_engine::broker::kraken::iapi_limiter_init(
+                typhoon_engine::broker::kraken::IapiLimiterConfig {
+                    persistence_path: Some(backoff_path),
+                    ..Default::default()
+                },
+            );
+        }
+
         // ── SQLite cache opened ASYNCHRONOUSLY ────────────────────────────
         // On a 3.9 GB database, SqliteCache::open() + PRAGMA setup can take 10+ seconds.
         // We defer it: window appears immediately, cache arrives via channel on first frame.
@@ -13884,8 +13903,10 @@ impl TyphooNApp {
                 Arc::new(tokio::sync::Mutex::new(None));
             let mut kraken_broker: Option<typhoon_engine::broker::kraken::KrakenBroker> = None;
             let mut kraken_ws_broker: Option<typhoon_engine::broker::kraken::KrakenBroker> = None;
-            let mut kraken_equity_history_next_at = std::time::Instant::now();
-            let mut kraken_equity_history_backoff_until: Option<std::time::Instant> = None;
+            // Pre-acquire and per-endpoint spacing are now owned by the
+            // engine-side `iapi_limiter` (token bucket + escalating backoff,
+            // shared across all iapi endpoints). The handler below just
+            // delegates to it instead of maintaining its own gate state.
             let importing_flag = importing_flag_broker;
             let lan_client = lan_client_broker;
             // Shared sender for forwarding requests to LAN sync WebSocket
@@ -24902,28 +24923,10 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                     }
                     BrokerCmd::KrakenFetchEquityHistory { symbol, timeframe } => {
-                        if let Some(until) = kraken_equity_history_backoff_until {
-                            if until > std::time::Instant::now() {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::KrakenEquityHistoryError {
-                                    symbol,
-                                    timeframe,
-                                    error: "Kraken equity history paused after HTTP 429".to_string(),
-                                });
-                                continue;
-                            }
-                            kraken_equity_history_backoff_until = None;
-                        }
-                        let now = std::time::Instant::now();
-                        if kraken_equity_history_next_at > now {
-                            tokio::time::sleep_until(tokio::time::Instant::from_std(
-                                kraken_equity_history_next_at,
-                            ))
-                            .await;
-                        }
-                        kraken_equity_history_next_at = std::time::Instant::now()
-                            + std::time::Duration::from_millis(
-                                KRAKEN_EQUITIES_HISTORY_MIN_INTERVAL_MS,
-                            );
+                        // iapi_limiter inside get_equity_history short-circuits
+                        // with an IAPI_RATE_LIMITED prefixed error during an
+                        // active cooldown, and the bucket spacing means we no
+                        // longer need a handler-side interval gate.
                         let interval_minutes = match timeframe.as_str() {
                             "1Min" => 1,
                             "5Min" => 5,
@@ -24997,25 +25000,9 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 });
                             }
                             Err(e) => {
-                                let iapi_rl_hit = e.starts_with(
-                                    typhoon_engine::broker::kraken::IAPI_RATE_LIMITED_ERR_PREFIX,
-                                );
-                                if e.contains("429")
-                                    || e.contains("Too Many Requests")
-                                    || iapi_rl_hit
-                                {
-                                    // Use the engine's remaining back-off
-                                    // when available — the host gate sets a
-                                    // longer window for Cloudflare 1015
-                                    // than the short per-endpoint default.
-                                    let secs = typhoon_engine::broker::kraken::iapi_rate_limited_for_secs()
-                                        .unwrap_or(KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS)
-                                        as u64;
-                                    kraken_equity_history_backoff_until = Some(
-                                        std::time::Instant::now()
-                                            + std::time::Duration::from_secs(secs),
-                                    );
-                                }
+                                // Engine-side iapi_limiter already armed the
+                                // cooldown if this is a 429/1015; no extra
+                                // handler-side state to update here.
                                 let _ = broker_msg_tx_clone.send(BrokerMsg::KrakenEquityHistoryError {
                                     symbol,
                                     timeframe,

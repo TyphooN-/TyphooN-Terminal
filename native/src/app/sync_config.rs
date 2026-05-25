@@ -26,8 +26,10 @@ pub(super) const KRAKEN_SPOT_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 4096;
 pub(super) const KRAKEN_EQUITIES_FULL_TILT_QUEUE_WINDOW: usize = 32;
 pub(super) const KRAKEN_EQUITIES_FULL_TILT_BATCH_SIZE: usize = 16;
 pub(super) const KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 4096;
-pub(super) const KRAKEN_EQUITIES_HISTORY_MIN_INTERVAL_MS: u64 = 260;
-pub(super) const KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS: i64 = 45;
+// Per-call iapi spacing (was KRAKEN_EQUITIES_HISTORY_MIN_INTERVAL_MS) and the
+// flat post-429 pause (was KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS) are now
+// owned by the engine-side `iapi_limiter` (token bucket + escalating
+// exponential backoff, persisted across restarts).
 /// Minimum interval between full REST `TradesHistory` fetches issued by the
 /// periodic KrakenBalances handler. The `ownTrades` WebSocket already keeps
 /// the trade list current; the REST pull is a safety-net resync, not a

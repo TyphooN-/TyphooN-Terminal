@@ -1910,9 +1910,13 @@ impl eframe::App for TyphooNApp {
                         // Arm the queue-side pause to stop NEW dispatches
                         // and silence the per-fetch errors — the first 429
                         // produced a single tracing::warn at the engine.
+                        // Fallback only hits if remaining_backoff has already
+                        // ticked past zero in the brief window between the
+                        // engine arming and our read; 60s is a generous
+                        // re-probe interval.
                         let now = chrono::Utc::now().timestamp();
                         let pause = typhoon_engine::broker::kraken::iapi_rate_limited_for_secs()
-                            .unwrap_or(KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS);
+                            .unwrap_or(60);
                         if now + pause > self.kraken_equities_sync_pause_until_ts {
                             self.kraken_equities_sync_pause_until_ts = now + pause;
                             self.kraken_equities_sync_pause_reason = error.clone();
@@ -1923,16 +1927,7 @@ impl eframe::App for TyphooNApp {
                             timeframe,
                             pause
                         );
-                    } else if error.contains("429") || error.contains("Too Many Requests") {
-                        let now = chrono::Utc::now().timestamp();
-                        self.kraken_equities_sync_pause_until_ts =
-                            now + KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS;
-                        self.kraken_equities_sync_pause_reason = error.clone();
-                        tracing::debug!(
-                            "Kraken equities history rate-limited; pausing universe sync for {}s",
-                            KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS
-                        );
-                    } else if !error.contains("paused after HTTP 429") {
+                    } else {
                         self.log.push_back(LogEntry::err(error));
                     }
                 }
@@ -13254,12 +13249,17 @@ impl eframe::App for TyphooNApp {
                                                     bullish.iter().any(|w| hl.contains(w));
                                                 let is_bear =
                                                     bearish.iter().any(|w| hl.contains(w));
-                                                let hl_color = if is_bull {
-                                                    UP
+                                                let (hl_color, hl_prefix) = if is_bull {
+                                                    (UP, "[BULL] ")
                                                 } else if is_bear {
-                                                    DOWN
+                                                    (DOWN, "[BEAR] ")
                                                 } else {
-                                                    egui::Color32::from_rgb(190, 190, 200)
+                                                    (egui::Color32::from_rgb(190, 190, 200), "")
+                                                };
+                                                let hl_text = if hl_prefix.is_empty() {
+                                                    headline.clone()
+                                                } else {
+                                                    format!("{hl_prefix}{headline}")
                                                 };
                                                 // Wrap the row (meta line + headline) in a single
                                                 // frameless button so the whole article area is the
@@ -13272,7 +13272,7 @@ impl eframe::App for TyphooNApp {
                                                             egui::vec2(2.0, 2.0);
                                                         ui.add(
                                                             egui::Button::new(
-                                                                egui::RichText::new(headline)
+                                                                egui::RichText::new(&hl_text)
                                                                     .color(hl_color)
                                                                     .small(),
                                                             )
