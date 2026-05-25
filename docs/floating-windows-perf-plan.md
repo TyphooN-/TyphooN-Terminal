@@ -179,3 +179,11 @@ Next: Wire into watchlist rendering + show source + age
 - Wired fallback display in watchlist (shows price + source + age)
 - Added unit test for fallback display
 - Always show source requirement implemented
+
+## Next Steps for Yahoo Fallback (continued)
+
+- Add background refresh of `watchlist_fallback_prices`
+- Handle errors in Yahoo fetcher (rate limits, bad symbols)
+- Extend fallback chain with Finnhub / FMP
+- Call `refresh_watchlist_fallback_prices` when watchlist is opened
+- Update ADR for price source fallback
