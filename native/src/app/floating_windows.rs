@@ -4393,8 +4393,33 @@ impl TyphooNApp {
                                                     }
                                                 });
                                             });
-                                            if row.response.interact(egui::Sense::click()).clicked() {
+                            if row.response.interact(egui::Sense::click()).clicked() {
                                                 self.news_selected = Some(i);
+                                                // On-click hydrate: if the selected article
+                                                // still has no body, ask the broker thread to
+                                                // fetch the URL and refresh the symbol's
+                                                // article list when done. Idempotent at the
+                                                // cache layer, so the rare double-click is
+                                                // harmless. Articles past the per-URL retry
+                                                // ceiling (body_fetch_attempts >= MAX) skip
+                                                // the dispatch — the placeholder stays as
+                                                // "body unavailable" and the user has the
+                                                // Open Source button.
+                                                if let Some(article) = self.news_full_articles.get(i) {
+                                                    if article.body.is_empty()
+                                                        && !article.url.is_empty()
+                                                        && article.body_fetch_attempts
+                                                            < typhoon_engine::core::news::MAX_BODY_FETCH_ATTEMPTS
+                                                    {
+                                                        let _ = self.broker_tx.send(
+                                                            BrokerCmd::HydrateNewsArticle {
+                                                                symbol: article.symbol.clone(),
+                                                                url_hash: article.url_hash.clone(),
+                                                                url: article.url.clone(),
+                                                            },
+                                                        );
+                                                    }
+                                                }
                                             }
                                         }
                                     });

@@ -9090,6 +9090,15 @@ enum BrokerCmd {
         symbol: String,
         limit: usize,
     },
+    /// Foreground-fetch the body for one article and refresh the cached
+    /// news list for the symbol when the body arrives. Triggered by the
+    /// news window's on-click handler so a user clicking an unhydrated
+    /// article doesn't have to wait for the next background tick.
+    HydrateNewsArticle {
+        symbol: String,
+        url_hash: String,
+        url: String,
+    },
     /// Full-text search cached news across all symbols.
     SearchNews {
         query: String,
@@ -24345,8 +24354,9 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             // DB work must run off the tokio worker to avoid holding &Connection across await.
                             let sym_for_db = symbol.clone();
                             let msg_tx_db = msg_tx.clone();
+                            let shared_cache_for_first = shared_cache_broker.clone();
                             let _ = tokio::task::spawn_blocking(move || {
-                                let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) else {
+                                let Some(cache) = shared_cache_for_first.read().ok().and_then(|g| g.clone()) else {
                                     let _ = msg_tx_db.send(BrokerMsg::Error("News: cache not ready".into()));
                                     return;
                                 };
@@ -24373,6 +24383,45 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     Err(e) => { let _ = msg_tx_db.send(BrokerMsg::Error(format!("News read: {e}"))); }
                                 }
                             }).await;
+                            // Foreground hydrate the bodies for this symbol so they
+                            // arrive in the cache while the user is still scanning
+                            // the headline list. The first NewsArticlesLoaded above
+                            // landed with whatever bodies were already cached;
+                            // re-send after hydration so the UI swaps placeholders
+                            // for real article text without waiting for the next
+                            // background tick.
+                            let sym_for_hydrate = symbol.clone();
+                            let msg_tx_hydrate = msg_tx.clone();
+                            let shared_cache_hydrate = shared_cache_broker.clone();
+                            tokio::spawn(async move {
+                                let Some(cache) = shared_cache_hydrate.read().ok().and_then(|g| g.clone()) else {
+                                    return;
+                                };
+                                let written = news_ingest::hydrate_missing_bodies(
+                                    cache.clone(),
+                                    Some(sym_for_hydrate.clone()),
+                                )
+                                .await;
+                                if written == 0 {
+                                    return;
+                                }
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    let Ok(conn) = cache.connection() else { return; };
+                                    if let Ok(list) =
+                                        typhoon_engine::core::news::get_news_by_symbol(
+                                            &conn,
+                                            &sym_for_hydrate,
+                                            200,
+                                        )
+                                    {
+                                        let _ = msg_tx_hydrate.send(BrokerMsg::NewsArticlesLoaded {
+                                            symbol: sym_for_hydrate,
+                                            articles: list,
+                                        });
+                                    }
+                                })
+                                .await;
+                            });
                         });
                     }
                     BrokerCmd::LoadCachedNews { symbol, limit } => {
@@ -24392,6 +24441,42 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 Ok(list) => { let _ = msg_tx.send(BrokerMsg::NewsArticlesLoaded { symbol, articles: list }); }
                                 Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Cached news read: {e}"))); }
                             }
+                        });
+                    }
+                    BrokerCmd::HydrateNewsArticle { symbol, url_hash, url } => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) else {
+                                return;
+                            };
+                            let written = news_ingest::hydrate_one_url(
+                                cache.clone(),
+                                url_hash,
+                                url,
+                            )
+                            .await;
+                            // Always refresh the symbol's article list — even
+                            // a failure bumps body_fetch_attempts, which the
+                            // UI uses to decide whether to keep the "still
+                            // hydrating" placeholder or switch to "body
+                            // unavailable". A re-read keeps the placeholder
+                            // state in sync with the counter.
+                            let _ = written;
+                            let _ = tokio::task::spawn_blocking(move || {
+                                let Ok(conn) = cache.connection() else { return; };
+                                if let Ok(list) =
+                                    typhoon_engine::core::news::get_news_by_symbol(
+                                        &conn, &symbol, 200,
+                                    )
+                                {
+                                    let _ = msg_tx.send(BrokerMsg::NewsArticlesLoaded {
+                                        symbol,
+                                        articles: list,
+                                    });
+                                }
+                            })
+                            .await;
                         });
                     }
                     BrokerCmd::SearchNews { query, limit } => {

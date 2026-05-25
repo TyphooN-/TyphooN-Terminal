@@ -29,15 +29,17 @@ use std::sync::Arc;
 use typhoon_engine::core::cache::SqliteCache;
 use typhoon_engine::core::news;
 
-/// Maximum URLs to fetch per hydration tick. Sized so a typical run takes
-/// well under a second on a warm DNS cache and the egui thread never
-/// notices.
-const HYDRATE_BATCH: usize = 8;
+/// Maximum URLs to fetch per hydration tick. Fetches run with the batch
+/// as the concurrency cap (`futures::join_all`), so this also bounds the
+/// per-tick burst against any single host. URLs in a batch typically span
+/// many publishers (yahoo, motleyfool, tickerreport, etc.) so a single
+/// burst rarely hits one host more than once or twice.
+const HYDRATE_BATCH: usize = 32;
 
-/// Minimum gap between hydration ticks. Body fetches happen in the
-/// background — fetching too aggressively burns bandwidth and could be
-/// flagged by publishers as scraping.
-pub const HYDRATE_INTERVAL_SECS: u64 = 90;
+/// Minimum gap between hydration ticks. Combined with [`HYDRATE_BATCH`]
+/// this caps the steady-state rate at ~2 fetches/sec across all
+/// publishers, well under any reasonable per-host limit.
+pub const HYDRATE_INTERVAL_SECS: u64 = 15;
 
 /// Hydrate up to [`HYDRATE_BATCH`] missing-body articles. Returns the
 /// number of bodies actually written. Caller is expected to throttle by
@@ -86,4 +88,30 @@ pub async fn hydrate_missing_bodies(cache: Arc<SqliteCache>, symbol_hint: Option
         }
     }
     written
+}
+
+/// Fetch the body for a single URL and write it to the cache. Used by the
+/// on-click path so a user clicking an unhydrated article gets immediate
+/// feedback instead of waiting for the next background tick. Returns true
+/// if a body was actually stored, false if the fetch failed (in which
+/// case the per-URL failure counter is bumped, same as the batch path).
+pub async fn hydrate_one_url(
+    cache: Arc<SqliteCache>,
+    url_hash: String,
+    url: String,
+) -> bool {
+    if url.is_empty() {
+        return false;
+    }
+    let body = news::fetch_article_body(&url).await;
+    let Ok(conn) = cache.connection() else {
+        return false;
+    };
+    match body {
+        Some(body) => news::upsert_news_body(&conn, &url_hash, &body).is_ok(),
+        None => {
+            let _ = news::bump_news_body_fetch_attempts(&conn, &url_hash);
+            false
+        }
+    }
 }
