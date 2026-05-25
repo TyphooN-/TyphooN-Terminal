@@ -13850,6 +13850,35 @@ impl TyphooNApp {
                                 tracing::warn!("Cache-open thread: repair_bar_counts failed: {e}")
                             }
                         }
+                        // One-shot migration: iapi is 15-min-delayed for equities, so
+                        // M1/M5 fidelity is fake — the sync scheduler no longer fetches
+                        // them. Drop the rows already on disk so the freed pages can
+                        // host bars we actually use. Flagged so we don't re-run.
+                        const KRAKEN_EQ_M1M5_PURGE_KEY: &str =
+                            "migration:kraken_equity_m1m5_purged_v1";
+                        let already_purged =
+                            matches!(c.get_kv(KRAKEN_EQ_M1M5_PURGE_KEY), Ok(Some(_)));
+                        if !already_purged {
+                            match c.delete_kraken_equity_bars_by_tf(&["1Min", "5Min"]) {
+                                Ok((deleted, freed)) => {
+                                    tracing::info!(
+                                        "Cache-open thread: purged {deleted} kraken-equities M1/M5 rows, freed {} MB",
+                                        freed / 1_048_576
+                                    );
+                                    if let Err(e) = c.put_kv(
+                                        KRAKEN_EQ_M1M5_PURGE_KEY,
+                                        &chrono::Utc::now().to_rfc3339(),
+                                    ) {
+                                        tracing::warn!(
+                                            "Cache-open thread: failed to record purge flag: {e}"
+                                        );
+                                    }
+                                }
+                                Err(e) => tracing::warn!(
+                                    "Cache-open thread: kraken-equities M1/M5 purge failed: {e}"
+                                ),
+                            }
+                        }
                         let arc = Arc::new(c);
                         // Publish to both: RwLock for background thread, channel for UI
                         if let Ok(mut guard) = shared.write() {

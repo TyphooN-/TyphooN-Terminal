@@ -835,7 +835,15 @@ impl TyphooNApp {
         if self.kraken_equities_sync_pause_until_ts > chrono::Utc::now().timestamp() {
             return 0;
         }
-        let timeframes = self.enabled_standard_sync_timeframes();
+        // iapi is 15-min delayed for equities, so M1/M5 fidelity is fake —
+        // strip them at the scheduler so candidate selection doesn't even
+        // shortlist symbols we will drop at queue_kraken_equity_fetch. Saves
+        // the rotation cursor for TFs we actually fetch.
+        let timeframes: Vec<String> = self
+            .enabled_standard_sync_timeframes()
+            .into_iter()
+            .filter(|tf| !matches!(tf.as_str(), "1Min" | "5Min"))
+            .collect();
         if timeframes.is_empty() {
             return 0;
         }
@@ -1200,6 +1208,12 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
         };
+        // iapi delivers equity prices delayed by 15 minutes, so M1 and M5
+        // bars are illusory fidelity — they just consume budget we need for
+        // higher TFs. Per ADR-072 policy update 2026-05-26, never fetch these.
+        if matches!(tf, "1Min" | "5Min") {
+            return false;
+        }
         if !self.kraken_enabled || !self.sync_timeframe_enabled(tf) {
             return false;
         }

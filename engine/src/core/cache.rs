@@ -2247,6 +2247,42 @@ impl SqliteCache {
         Self::reclaim_space_locked(&conn, &self.db_path)
     }
 
+    /// Delete all kraken-equities bar cache + track rows for the given
+    /// timeframe suffixes (e.g. `&["1Min", "5Min"]`). Used by the one-shot
+    /// startup migration that drops illusory M1/M5 bars from the iapi
+    /// 15-min-delayed equity feed. Returns `(rows_deleted, bytes_freed)`.
+    pub fn delete_kraken_equity_bars_by_tf(
+        &self,
+        timeframe_suffixes: &[&str],
+    ) -> Result<(u64, i64), String> {
+        if timeframe_suffixes.is_empty() {
+            return Ok((0, 0));
+        }
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut deleted = 0u64;
+        for tf in timeframe_suffixes {
+            // Pattern: kraken-equities:<symbol>:<TF>. The middle %
+            // matches the symbol; ESCAPE '\' keeps the ':' literal.
+            let pattern = format!("kraken-equities:%:{}", tf);
+            let bars = conn
+                .execute(
+                    "DELETE FROM bar_cache WHERE key LIKE ?1 ESCAPE '\\'",
+                    params![pattern],
+                )
+                .map_err(|e| {
+                    format!("delete kraken-equities bars failed for tf {tf}: {e}")
+                })? as u64;
+            let _ = conn.execute(
+                "DELETE FROM bar_track WHERE key LIKE ?1 ESCAPE '\\'",
+                params![pattern],
+            );
+            deleted = deleted.saturating_add(bars);
+        }
+        let (before, after) = Self::reclaim_space_locked(&conn, &self.db_path)
+            .map_err(|e| format!("Deleted {deleted} rows but reclaim failed: {e}"))?;
+        Ok((deleted, (before - after).max(0)))
+    }
+
     /// Run PRAGMA incremental_vacuum to reclaim freed pages without full VACUUM.
     /// Lighter than VACUUM — doesn't rewrite the entire DB, just reclaims free pages.
     /// Safe to call periodically (e.g., on shutdown, after compaction).
@@ -3515,5 +3551,59 @@ mod tests {
         let _ = std::fs::remove_file(src_db_path);
         let _ = std::fs::remove_file(dst_db_path);
         let _ = std::fs::remove_file(backup_path);
+    }
+
+    #[test]
+    fn delete_kraken_equity_bars_by_tf_targets_only_matching_rows() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let json = r#"[{"timestamp":"2024-06-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
+        // Should be deleted:
+        cache.put_bars("kraken-equities:AAPL:1Min", json).unwrap();
+        cache.put_bars("kraken-equities:MSFT:5Min", json).unwrap();
+        cache.put_bars("kraken-equities:TSLA:1Min", json).unwrap();
+        // Should survive (different TF, different broker, or symbol-name
+        // patterns that don't end in the targeted suffix):
+        cache.put_bars("kraken-equities:AAPL:1Hour", json).unwrap();
+        cache.put_bars("kraken-equities:AAPL:1Day", json).unwrap();
+        cache.put_bars("kraken:BTCUSD:1Min", json).unwrap();
+        cache.put_bars("alpaca:AAPL:1Min", json).unwrap();
+        cache
+            .put_bars("kraken-equities:NOT1MinFoo:1Hour", json)
+            .unwrap();
+
+        let (deleted, _bytes) = cache
+            .delete_kraken_equity_bars_by_tf(&["1Min", "5Min"])
+            .unwrap();
+        assert_eq!(deleted, 3, "expected 3 rows deleted, got {deleted}");
+
+        // Survivors still queryable:
+        assert!(cache.get_bars("kraken-equities:AAPL:1Hour").unwrap().is_some());
+        assert!(cache.get_bars("kraken-equities:AAPL:1Day").unwrap().is_some());
+        assert!(cache.get_bars("kraken:BTCUSD:1Min").unwrap().is_some());
+        assert!(cache.get_bars("alpaca:AAPL:1Min").unwrap().is_some());
+        assert!(cache
+            .get_bars("kraken-equities:NOT1MinFoo:1Hour")
+            .unwrap()
+            .is_some());
+        // Targets gone:
+        assert!(cache.get_bars("kraken-equities:AAPL:1Min").unwrap().is_none());
+        assert!(cache.get_bars("kraken-equities:MSFT:5Min").unwrap().is_none());
+        assert!(cache.get_bars("kraken-equities:TSLA:1Min").unwrap().is_none());
+
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn delete_kraken_equity_bars_by_tf_empty_list_is_noop() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let json = r#"[{"timestamp":"2024-06-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
+        cache.put_bars("kraken-equities:AAPL:1Min", json).unwrap();
+        let (deleted, bytes) = cache.delete_kraken_equity_bars_by_tf(&[]).unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(bytes, 0);
+        assert!(cache.get_bars("kraken-equities:AAPL:1Min").unwrap().is_some());
+        let _ = std::fs::remove_file(db_path);
     }
 }
