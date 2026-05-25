@@ -90,6 +90,12 @@ pub struct IapiLimiterConfig {
     /// the converged flag — Cloudflare can change limits, so we keep
     /// AIMD active as a safety net even after convergence.
     pub aimd_tuned_after: Duration,
+    /// Headroom fraction applied to the rate that just triggered a 429
+    /// to derive the discovered ceiling (TCP-style `ssthresh`). 0.95
+    /// means "back off 5% from where Cloudflare pushed back" — small
+    /// enough to converge close to the real limit, large enough that
+    /// the next ramp doesn't immediately re-trip the ban.
+    pub aimd_ceiling_headroom: f64,
 }
 
 impl Default for IapiLimiterConfig {
@@ -109,6 +115,7 @@ impl Default for IapiLimiterConfig {
             aimd_increment_per_step: 0.1,
             aimd_decrease_factor: 0.5,
             aimd_tuned_after: Duration::from_secs(30 * 60),
+            aimd_ceiling_headroom: 0.95,
         }
     }
 }
@@ -140,6 +147,13 @@ struct TokenBucket {
     /// value has been persisted. Cleared on any 429 so a future
     /// Cloudflare tightening re-enters the ramp/decrease cycle.
     converged: bool,
+    /// ssthresh-style observed ceiling: the highest rate Cloudflare
+    /// tolerated before it 1015'd us, multiplied by
+    /// `aimd_ceiling_headroom`. `None` until the first 429 — until
+    /// then ramps can go all the way to `aimd_max_rate`. Once set, the
+    /// ramp caps at this value so the limiter converges just below the
+    /// real ceiling instead of oscillating around it forever.
+    discovered_ceiling: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -159,6 +173,12 @@ struct PersistedState {
     /// carry a tuned value and the new session ramps from scratch.
     #[serde(default)]
     tuned_rate: f64,
+    /// ssthresh observed ceiling from the last session, or 0.0 when no
+    /// 429 has been seen yet. Restored on startup so the next ramp
+    /// caps at the same value instead of climbing back into the
+    /// already-known ban zone.
+    #[serde(default)]
+    discovered_ceiling: f64,
 }
 
 /// Process-wide instance. Initialised lazily with `IapiLimiterConfig::default`
@@ -242,7 +262,7 @@ impl IapiLimiter {
             .as_ref()
             .and_then(|p| load_persisted(p));
         let now_unix = chrono::Utc::now().timestamp();
-        let (cooldown_until, escalation, tuned_rate) = match &persisted {
+        let (cooldown_until, escalation, tuned_rate, persisted_ceiling) = match &persisted {
             Some(state) if state.cooldown_until_unix > now_unix => {
                 // Reconstruct an Instant for the persisted `last_arm` so the
                 // escalation window keeps decaying after a restart.
@@ -259,10 +279,16 @@ impl IapiLimiter {
                         last_arm,
                     },
                     state.tuned_rate,
+                    state.discovered_ceiling,
                 )
             }
-            Some(state) => (0, EscalationState::default(), state.tuned_rate),
-            None => (0, EscalationState::default(), 0.0),
+            Some(state) => (
+                0,
+                EscalationState::default(),
+                state.tuned_rate,
+                state.discovered_ceiling,
+            ),
+            None => (0, EscalationState::default(), 0.0, 0.0),
         };
         let starting_tokens = if cooldown_until > now_unix {
             // Already in cooldown — start drained so resume traffic ramps.
@@ -284,10 +310,25 @@ impl IapiLimiter {
             .max(config.aimd_min_rate)
             .min(config.aimd_max_rate);
         let starts_converged = tuned_rate > 0.0;
+        let starting_ceiling = if persisted_ceiling > 0.0 {
+            Some(
+                persisted_ceiling
+                    .max(config.aimd_min_rate)
+                    .min(config.aimd_max_rate),
+            )
+        } else {
+            None
+        };
         if starts_converged {
             tracing::info!(
                 "iapi AIMD: restored tuned rate {:.2} req/s from persisted state",
                 starting_rate
+            );
+        }
+        if let Some(c) = starting_ceiling {
+            tracing::info!(
+                "iapi AIMD: restored discovered ceiling {:.2} req/s — ramp will cap here",
+                c
             );
         }
         Self {
@@ -298,6 +339,7 @@ impl IapiLimiter {
                 current_rate: starting_rate,
                 last_rate_change: Instant::now(),
                 converged: starts_converged,
+                discovered_ceiling: starting_ceiling,
             }),
             escalation: StdMutex::new(escalation),
             config,
@@ -337,20 +379,25 @@ impl IapiLimiter {
                 let mut bucket = self.bucket.lock().await;
                 let now = Instant::now();
                 // AIMD additive-increase step: if enough time has passed
-                // since the last rate change AND we're not at the ceiling,
-                // bump the rate. Bounded by `aimd_max_rate` so we don't
-                // climb past whatever Cloudflare actually tolerates.
-                // Skipped once we've converged — the persisted tuned rate
-                // is treated as the truth until the next 429 clears it.
+                // since the last rate change AND we're below the effective
+                // ceiling, bump the rate. The effective ceiling is the
+                // lesser of `aimd_max_rate` and the empirically discovered
+                // ssthresh — if Cloudflare 1015'd us at some rate before,
+                // we cap the ramp just below there instead of climbing
+                // back into the known ban zone.
+                let effective_max = bucket
+                    .discovered_ceiling
+                    .map(|c| c.min(self.config.aimd_max_rate))
+                    .unwrap_or(self.config.aimd_max_rate);
                 if self.config.aimd_enabled
                     && !bucket.converged
-                    && bucket.current_rate < self.config.aimd_max_rate
+                    && bucket.current_rate < effective_max
                     && now.saturating_duration_since(bucket.last_rate_change)
                         >= self.config.aimd_increase_interval
                 {
                     let new_rate = (bucket.current_rate
                         + self.config.aimd_increment_per_step)
-                        .min(self.config.aimd_max_rate);
+                        .min(effective_max);
                     if (new_rate - bucket.current_rate).abs() >= 0.001 {
                         tracing::info!(
                             "iapi AIMD: rate ↑ {:.2} → {:.2} req/s after clean run",
@@ -388,21 +435,27 @@ impl IapiLimiter {
             };
             // Persist outside the bucket lock so file IO doesn't block
             // concurrent acquires. Persistence is best-effort — failure
-            // just means the next run re-discovers the rate.
+            // just means the next run re-discovers the rate. The
+            // escalation guard is read inside an inner block so the
+            // std::sync::MutexGuard is provably dropped before any
+            // `.await` — required for this future to be `Send`.
             if let Some(tuned_rate) = converged_now {
-                let escalation = self.escalation.lock().expect("escalation mutex poisoned");
-                let last_arm_unix = match escalation.last_arm {
-                    Some(t) => chrono::Utc::now().timestamp()
-                        - Instant::now().saturating_duration_since(t).as_secs() as i64,
-                    None => 0,
+                let (last_arm_unix, consecutive) = {
+                    let escalation = self.escalation.lock().expect("escalation mutex poisoned");
+                    let last_arm_unix = match escalation.last_arm {
+                        Some(t) => chrono::Utc::now().timestamp()
+                            - Instant::now().saturating_duration_since(t).as_secs() as i64,
+                        None => 0,
+                    };
+                    (last_arm_unix, escalation.consecutive)
                 };
-                let consecutive = escalation.consecutive;
-                drop(escalation);
+                let ceiling = self.bucket.lock().await.discovered_ceiling.unwrap_or(0.0);
                 self.persist_with_rate(
                     self.cooldown_until_unix.load(Ordering::Relaxed),
                     consecutive,
                     last_arm_unix,
                     tuned_rate,
+                    ceiling,
                 );
             }
             // A cooldown may have been armed while we were waiting on the
@@ -474,15 +527,37 @@ impl IapiLimiter {
         // resumed traffic comes back at a slower rate that Cloudflare
         // is less likely to ban again. The rate floor (`aimd_min_rate`)
         // keeps us from collapsing to zero on repeated bans. Clearing
-        // `converged` means the ramp-up restarts: if we had a stored
-        // tuned rate that's now too high, the next clean run discovers
-        // the new ceiling.
-        let post_rate = {
+        // `converged` means the ramp-up restarts; setting (or lowering)
+        // `discovered_ceiling` to the rate that just failed × headroom
+        // tells the next ramp where to stop — ssthresh-style.
+        let (post_rate, post_ceiling) = {
             let mut bucket = self.bucket.lock().await;
             bucket.tokens = 0.0;
             bucket.last_refill = Instant::now();
             bucket.converged = false;
+            // ssthresh update: the rate that JUST 429'd is now known-bad.
+            // Set the ceiling to that rate × headroom (0.95 default), and
+            // if we already had a lower ceiling from a previous 429, keep
+            // the lower one — Cloudflare's worst recent limit is what we
+            // have to respect.
             if self.config.aimd_enabled {
+                let new_ceiling = (bucket.current_rate * self.config.aimd_ceiling_headroom)
+                    .max(self.config.aimd_min_rate)
+                    .min(self.config.aimd_max_rate);
+                let prev = bucket.discovered_ceiling;
+                let merged = match prev {
+                    Some(p) => p.min(new_ceiling),
+                    None => new_ceiling,
+                };
+                if prev != Some(merged) {
+                    tracing::info!(
+                        "iapi AIMD: discovered ceiling = {:.2} req/s (rate {:.2} just {}'d)",
+                        merged,
+                        bucket.current_rate,
+                        if is_cf { "1015" } else { "429" }
+                    );
+                    bucket.discovered_ceiling = Some(merged);
+                }
                 let new_rate = (bucket.current_rate * self.config.aimd_decrease_factor)
                     .max(self.config.aimd_min_rate);
                 if (new_rate - bucket.current_rate).abs() >= 0.001 {
@@ -496,17 +571,19 @@ impl IapiLimiter {
                     bucket.last_rate_change = Instant::now();
                 }
             }
-            bucket.current_rate
+            (bucket.current_rate, bucket.discovered_ceiling.unwrap_or(0.0))
         };
-        // Persist the post-429 rate so a restart mid-throttle resumes
-        // at the same conservative rate rather than re-attacking from
-        // the cold default. Zero in tuned_rate would mean "no record",
-        // so we always write the live value here.
+        // Persist the post-429 rate AND the freshly-updated ceiling so a
+        // restart mid-throttle resumes at the same conservative rate
+        // AND already knows where the ban-zone starts. tuned_rate zero
+        // would mean "no record", so we always write the live value
+        // here even though we just cleared `converged`.
         self.persist_with_rate(
             self.cooldown_until_unix.load(Ordering::Relaxed),
             consecutive,
             now_unix,
             post_rate,
+            post_ceiling,
         );
         let final_until = self.cooldown_until_unix.load(Ordering::Relaxed);
         (final_until - now_unix).max(0)
@@ -532,6 +609,7 @@ impl IapiLimiter {
         consecutive: u32,
         last_arm_unix: i64,
         tuned_rate: f64,
+        discovered_ceiling: f64,
     ) {
         let Some(path) = self.config.persistence_path.clone() else {
             return;
@@ -541,6 +619,7 @@ impl IapiLimiter {
             consecutive,
             last_arm_unix,
             tuned_rate,
+            discovered_ceiling,
         };
         if let Ok(json) = serde_json::to_string(&state) {
             // Best-effort write. A failure here only costs us correct
@@ -600,6 +679,7 @@ mod tests {
             aimd_increment_per_step: 1.0,
             aimd_decrease_factor: 0.5,
             aimd_tuned_after: StdDuration::from_secs(60),
+            aimd_ceiling_headroom: 0.95,
         }
     }
 
@@ -706,6 +786,7 @@ mod tests {
             consecutive: 3,
             last_arm_unix: 1_699_999_000,
             tuned_rate: 0.0,
+            discovered_ceiling: 0.0,
         };
         std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
         let loaded = load_persisted(tmp.path()).expect("decoded");
@@ -723,6 +804,7 @@ mod tests {
             consecutive: 2,
             last_arm_unix: now_unix - 5,
             tuned_rate: 0.0,
+            discovered_ceiling: 0.0,
         };
         std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
         let cfg = IapiLimiterConfig {
@@ -744,6 +826,7 @@ mod tests {
             consecutive: 1,
             last_arm_unix: now_unix - 100,
             tuned_rate: 0.0,
+            discovered_ceiling: 0.0,
         };
         std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
         let cfg = IapiLimiterConfig {
@@ -777,6 +860,7 @@ mod tests {
             // accidentally hit convergence; convergence tests override
             // it explicitly via `convergence_config`.
             aimd_tuned_after: StdDuration::from_secs(60),
+            aimd_ceiling_headroom: 0.95,
         }
     }
 
@@ -930,6 +1014,7 @@ mod tests {
             consecutive: 0,
             last_arm_unix: 0,
             tuned_rate: 3.5,
+            discovered_ceiling: 0.0,
         };
         std::fs::write(tmp.path(), serde_json::to_string(&persisted).unwrap()).unwrap();
         let cfg = IapiLimiterConfig {
@@ -978,11 +1063,116 @@ mod tests {
 
     #[test]
     fn legacy_persisted_state_without_tuned_rate_decodes() {
-        // Pre-AIMD persistence files don't have the tuned_rate key — serde
-        // default keeps them decoding cleanly.
+        // Pre-AIMD persistence files don't have tuned_rate or
+        // discovered_ceiling — serde defaults keep them decoding cleanly.
         let legacy = r#"{"cooldown_until_unix":1700000000,"consecutive":1,"last_arm_unix":1699999000}"#;
         let s: PersistedState = serde_json::from_str(legacy).expect("legacy decode");
         assert_eq!(s.cooldown_until_unix, 1_700_000_000);
         assert_eq!(s.tuned_rate, 0.0);
+        assert_eq!(s.discovered_ceiling, 0.0);
+    }
+
+    #[tokio::test]
+    async fn ssthresh_sets_ceiling_to_rate_times_headroom_on_first_429() {
+        let lim = IapiLimiter::new(aimd_config());
+        // Ramp up to 3.0 req/s so the 429 lands on a non-default rate.
+        for _ in 0..3 {
+            tokio::time::sleep(StdDuration::from_millis(12)).await;
+            lim.acquire(1.0).await.expect("free");
+        }
+        let pre_rate = lim.current_rate_per_sec().await;
+        assert!(pre_rate >= 2.5, "expected ramp >= 2.5, got {pre_rate}");
+        lim.record_rate_limited("error code: 1015").await;
+        let bucket = lim.bucket.lock().await;
+        let ceiling = bucket.discovered_ceiling.expect("ceiling set after 429");
+        let expected = (pre_rate * 0.95).max(0.5);
+        assert!(
+            (ceiling - expected).abs() < 0.01,
+            "expected ceiling ≈ {expected}, got {ceiling}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ssthresh_ramp_stops_at_discovered_ceiling() {
+        let lim = IapiLimiter::new(aimd_config());
+        // Ramp up + 429 to set a ceiling around 2.85 req/s.
+        for _ in 0..2 {
+            tokio::time::sleep(StdDuration::from_millis(12)).await;
+            lim.acquire(1.0).await.expect("free");
+        }
+        let pre = lim.current_rate_per_sec().await;
+        lim.record_rate_limited("error code: 1015").await;
+        let ceiling = lim.bucket.lock().await.discovered_ceiling.unwrap();
+        let expected_ceiling = (pre * 0.95).max(0.5);
+        assert!((ceiling - expected_ceiling).abs() < 0.01);
+        // Clear the 1015 cooldown so the acquire loop can run again —
+        // we're testing the ramp cap behavior, not cooldown gating.
+        lim.cooldown_until_unix.store(0, Ordering::Relaxed);
+        // Now ramp back up. The rate must NOT exceed the discovered
+        // ceiling even after many clean intervals.
+        for _ in 0..30 {
+            tokio::time::sleep(StdDuration::from_millis(12)).await;
+            lim.acquire(1.0).await.expect("free");
+        }
+        let post = lim.current_rate_per_sec().await;
+        assert!(
+            post <= ceiling + 0.001,
+            "ramp should cap at ceiling {ceiling}, got {post}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ssthresh_subsequent_429_only_lowers_ceiling() {
+        let lim = IapiLimiter::new(aimd_config());
+        // First 429 at ~3 req/s → ceiling ~2.85
+        for _ in 0..3 {
+            tokio::time::sleep(StdDuration::from_millis(12)).await;
+            lim.acquire(1.0).await.expect("free");
+        }
+        lim.record_rate_limited("error code: 1015").await;
+        let first_ceiling = lim.bucket.lock().await.discovered_ceiling.unwrap();
+        // Force the rate higher than first_ceiling by clearing the ceiling
+        // and ramping to a higher value, then re-applying — to simulate
+        // Cloudflare's behavior staying the same (next 429 fires at a
+        // higher rate that's still above prior ceiling). The merge logic
+        // should keep the LOWER ceiling since that's the worst-known limit.
+        {
+            let mut bucket = lim.bucket.lock().await;
+            bucket.current_rate = (first_ceiling + 1.0).min(5.0);
+            bucket.discovered_ceiling = Some(first_ceiling);
+        }
+        // Now a 429 at higher rate would compute a higher candidate ceiling,
+        // but merge with existing keeps the lower one.
+        lim.record_rate_limited("error code: 1015").await;
+        let merged = lim.bucket.lock().await.discovered_ceiling.unwrap();
+        assert!(
+            merged <= first_ceiling + 0.001,
+            "ceiling should not move up: first={first_ceiling} merged={merged}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ssthresh_persists_ceiling_across_restart() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let cfg = IapiLimiterConfig {
+            persistence_path: Some(tmp.path().to_path_buf()),
+            ..aimd_config()
+        };
+        let lim = IapiLimiter::new(cfg.clone());
+        // Ramp + 429 → ceiling persists
+        for _ in 0..2 {
+            tokio::time::sleep(StdDuration::from_millis(12)).await;
+            lim.acquire(1.0).await.expect("free");
+        }
+        lim.record_rate_limited("error code: 1015").await;
+        let original_ceiling = lim.bucket.lock().await.discovered_ceiling.unwrap();
+        drop(lim);
+        // Rebuild from the persisted file — fresh process simulation.
+        let lim2 = IapiLimiter::new(cfg);
+        let restored = lim2.bucket.lock().await.discovered_ceiling.unwrap_or(0.0);
+        assert!(
+            (restored - original_ceiling).abs() < 0.01,
+            "ceiling should restore: original={original_ceiling} restored={restored}"
+        );
     }
 }
