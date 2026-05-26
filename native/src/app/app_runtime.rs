@@ -1223,6 +1223,9 @@ impl eframe::App for TyphooNApp {
                     self.kraken_trades = VecDeque::from(trades);
                     self.rebuild_kraken_trade_indexes();
                     self.refresh_kraken_position_costs();
+                    for c in &mut self.charts {
+                        c.cached_trade_overlay_frame = 0;
+                    }
                     self.kraken_trades_last_fetch = std::time::Instant::now();
                     let new_trades = self.kraken_trades.len();
                     let new_basis = self.kraken_cost_basis.len();
@@ -1251,6 +1254,9 @@ impl eframe::App for TyphooNApp {
                     let inserted = self.insert_kraken_live_trade(trade);
                     if inserted {
                         self.refresh_kraken_position_costs();
+                        for c in &mut self.charts {
+                            c.cached_trade_overlay_frame = 0;
+                        }
                         let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
                         let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
                         let _ = self.broker_tx.send(BrokerCmd::KrakenFetchOpenOrders);
@@ -1624,6 +1630,9 @@ impl eframe::App for TyphooNApp {
                     }
                     self.kr_positions = pos;
                     self.refresh_kraken_position_costs();
+                    for c in &mut self.charts {
+                        c.cached_trade_overlay_frame = 0;
+                    }
                 }
                 BrokerMsg::Orders(orders) => {
                     if !self.alpaca_enabled {
@@ -1926,9 +1935,7 @@ impl eframe::App for TyphooNApp {
                             timeframe,
                             pause
                         );
-                    } else if error.contains("HTTP 500")
-                        && error.contains("Internal error")
-                    {
+                    } else if error.contains("HTTP 500") && error.contains("Internal error") {
                         // Kraken's internal equities history endpoint sometimes returns a
                         // transient JSON 500 (`type: Internal error`) for valid xStock
                         // symbols/timeframes. Treat it like temporary endpoint instability,
@@ -1939,7 +1946,8 @@ impl eframe::App for TyphooNApp {
                         if now + pause > self.kraken_equities_sync_pause_until_ts {
                             self.kraken_equities_sync_pause_until_ts = now + pause;
                             self.kraken_equities_sync_pause_reason =
-                                "Kraken equities history temporarily unavailable (HTTP 500)".to_string();
+                                "Kraken equities history temporarily unavailable (HTTP 500)"
+                                    .to_string();
                         }
                         tracing::debug!(
                             "Kraken equities: {} {} skipped — iapi HTTP 500/Internal error; paused {}s",
@@ -2009,7 +2017,8 @@ impl eframe::App for TyphooNApp {
                     for row in &mut rows {
                         if row.last <= 0.0 {
                             if let Some(existing) = self.watchlist_rows.iter().find(|existing| {
-                                existing.symbol.eq_ignore_ascii_case(&row.symbol) && existing.last > 0.0
+                                existing.symbol.eq_ignore_ascii_case(&row.symbol)
+                                    && existing.last > 0.0
                             }) {
                                 *row = existing.clone();
                             }
@@ -2181,6 +2190,10 @@ impl eframe::App for TyphooNApp {
                         continue;
                     }
                     self.kraken_balances = balances;
+                    self.refresh_kraken_position_costs();
+                    for c in &mut self.charts {
+                        c.cached_trade_overlay_frame = 0;
+                    }
                     let active_tf = self
                         .charts
                         .get(self.active_tab)
@@ -2233,8 +2246,7 @@ impl eframe::App for TyphooNApp {
                     // Trades stream live via ownTrades WS — the REST pull
                     // is only a periodic safety-net resync. Skip when the
                     // last successful fetch was inside the refresh window.
-                    if std::time::Instant::now()
-                        .duration_since(self.kraken_trades_last_fetch)
+                    if std::time::Instant::now().duration_since(self.kraken_trades_last_fetch)
                         >= std::time::Duration::from_secs(KRAKEN_TRADES_REST_REFRESH_SECS)
                     {
                         let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
@@ -7603,7 +7615,11 @@ impl eframe::App for TyphooNApp {
                         // marker keeps progress visible without spam.
                         tracing::debug!(
                             "Kraken {} {}: provider window saturated at {}/{} bars ({} marked)",
-                            symbol, timeframe, bar_count, target_bars, marker_count
+                            symbol,
+                            timeframe,
+                            bar_count,
+                            target_bars,
+                            marker_count
                         );
                         if marker_count.is_multiple_of(100) {
                             self.log.push_back(LogEntry::info(format!(

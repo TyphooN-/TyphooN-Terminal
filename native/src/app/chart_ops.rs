@@ -789,7 +789,9 @@ impl TyphooNApp {
             }
         }
 
-        // Broker fills (Alpaca/tastytrade) — add to marker map before conversion
+        // Broker fills — add to marker map before conversion. Alpaca currently
+        // enters through `recent_fills`; Kraken keeps a full REST + private-WS
+        // trade deque. Both paths feed the same chart arrows as DARWIN deals.
         if self.show_alpaca_positions {
             for (sym, side, qty, price, time) in &self.recent_fills {
                 let fill_sym = sym.replace('/', "").to_uppercase();
@@ -814,6 +816,46 @@ impl TyphooNApp {
                     ));
                     entry.0 += qty;
                     entry.1 += 1;
+                    if !entry.2.contains("Alpaca") {
+                        if !entry.2.is_empty() {
+                            entry.2.push_str(", ");
+                        }
+                        entry.2.push_str("Alpaca");
+                    }
+                }
+            }
+        }
+
+        if self.show_kr_positions {
+            for trade in &self.kraken_trades {
+                let pair_norm = typhoon_engine::core::kraken::normalize_pair_symbol(&trade.pair)
+                    .replace('/', "")
+                    .to_ascii_uppercase();
+                let base = Self::kraken_base_asset_for_pair(&pair_norm);
+                let matches_chart = symbol_matches_no_alloc(&pair_norm, &bare_upper)
+                    || Self::kraken_asset_keys_match(&base, &bare_upper)
+                    || pair_norm.contains(&bare_upper)
+                    || bare_upper.contains(&pair_norm);
+                if !matches_chart || trade.price <= 0.0 || trade.vol <= 0.0 {
+                    continue;
+                }
+                let ts = (trade.time * 1000.0) as i64;
+                if let Some(bar_idx) = find_bar(ts) {
+                    let is_buy = trade.side.eq_ignore_ascii_case("buy");
+                    let price_key = (trade.price * 100000.0) as i64;
+                    let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((
+                        0.0,
+                        0,
+                        String::new(),
+                    ));
+                    entry.0 += trade.vol;
+                    entry.1 += 1;
+                    if !entry.2.contains("Kraken") {
+                        if !entry.2.is_empty() {
+                            entry.2.push_str(", ");
+                        }
+                        entry.2.push_str("Kraken");
+                    }
                 }
             }
         }
@@ -872,7 +914,10 @@ impl TyphooNApp {
         }
         overlay.markers.sort_by_key(|m| m.bar_idx);
 
-        // Live broker position lines (Alpaca + tastytrade + Kraken)
+        // Live broker position lines (Alpaca + tastytrade + Kraken).
+        // Kraken spot crypto balances are inventory rather than broker
+        // `PositionInfo` rows, but the chart still needs a visible holding
+        // entry line when cost basis is known.
         let alpaca_iter: Box<dyn Iterator<Item = &PositionInfo>> = if self.show_alpaca_positions {
             Box::new(self.live_positions.iter())
         } else {
@@ -911,6 +956,40 @@ impl TyphooNApp {
                 is_buy,
                 line_type: 0, // entry
             });
+        }
+
+        if self.show_kr_positions {
+            for (asset, qty) in &self.kraken_balances {
+                if !qty.is_finite() || *qty <= 0.0 || Self::kraken_is_cash_balance_asset(asset) {
+                    continue;
+                }
+                let display = Self::kraken_display_asset(asset);
+                let pair = Self::kraken_spot_pair_for_balance_asset(asset);
+                let pair_norm = typhoon_engine::core::kraken::normalize_pair_symbol(&pair)
+                    .replace('/', "")
+                    .to_ascii_uppercase();
+                let base = Self::kraken_base_asset_for_pair(&pair_norm);
+                let matches_chart = Self::kraken_asset_keys_match(&display, &bare_upper)
+                    || Self::kraken_asset_keys_match(&base, &bare_upper)
+                    || symbol_matches_no_alloc(&pair_norm, &bare_upper)
+                    || pair_norm.contains(&bare_upper)
+                    || bare_upper.contains(&pair_norm);
+                if !matches_chart {
+                    continue;
+                }
+                let Some(avg_price) = self.kraken_balance_avg_price(asset) else {
+                    continue;
+                };
+                if avg_price <= 0.0 || !avg_price.is_finite() {
+                    continue;
+                }
+                overlay.position_lines.push(PositionLine {
+                    price: avg_price,
+                    volume: *qty,
+                    is_buy: true,
+                    line_type: 0,
+                });
+            }
         }
 
         // Deduplicate position lines (aggregate same price+type)
