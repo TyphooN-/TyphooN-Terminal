@@ -387,9 +387,22 @@ impl TyphooNApp {
         }
         self.render_kraken_spot_sell_dialog(ctx);
 
-        // News window is a known heavy renderer — skip during heavy sync
-        if self.heavy_sync_in_progress {
-            // TODO: draw a lightweight "sync in progress" placeholder instead
+        // News window is a known heavy renderer; during broad sync keep only a
+        // lightweight status shell visible so the render thread is not formatting
+        // and laying out hundreds of article rows.
+        if self.heavy_sync_in_progress && self.show_news {
+            let mut open = self.show_news;
+            egui::Window::new("News & Research")
+                .open(&mut open)
+                .default_size([420.0, 120.0])
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label("Heavy market-data sync is running.");
+                    ui.label("News rendering is paused to keep charts responsive.");
+                    ui.add_space(6.0);
+                    ui.spinner();
+                });
+            self.show_news = open;
         }
         // ── Kraken Trade History Window ─────────────────────────────────────
         if self.heavy_sync_in_progress && self.show_kraken_trade_history {
@@ -404,7 +417,10 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(format!("{} trades loaded", self.kraken_trades.len()));
-                        // TODO: Cache formatted rows for performance during heavy sync
+                        // The trade table is intentionally not rendered while
+                        // heavy_sync_in_progress is true; keep formatting local
+                        // here so the common non-sync path has no stale cache
+                        // invalidation surface.
                         if ui.button("Refresh").clicked() {
                             let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
                         }
@@ -4473,7 +4489,7 @@ impl TyphooNApp {
         self.render_optimizer_window(ctx);
 
         // News
-        if self.show_news {
+        if self.show_news && !self.heavy_sync_in_progress {
             // Resolve chart symbol once up front (avoid borrow conflicts inside the window closure).
             let chart_symbol = self
                 .charts

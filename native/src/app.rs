@@ -33128,6 +33128,31 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
+    fn market_depth_and_volume_profile_render_helpers_are_callable() {
+        let depth = compute_market_depth(&[(100.0, 2.0), (99.5, 1.0)], &[(100.5, 3.0)]);
+        assert_eq!(depth.bids.len(), 2);
+        assert_eq!(depth.asks.len(), 1);
+
+        let profile = VolumeProfile {
+            price_levels: vec![(99.5, 10.0), (100.0, 25.0), (100.5, 15.0)],
+            poc: 100.0,
+            value_area_high: 100.5,
+            value_area_low: 99.5,
+        };
+
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 120.0));
+                let painter = ui.painter();
+                draw_market_depth(painter, &depth, rect);
+                draw_volume_profile(painter, &profile, rect);
+            });
+        });
+    }
+
+    #[test]
     fn forming_bar_helpers_test() {
         let mut chart = ChartState::new("TEST", Timeframe::M1);
         chart.bars.push(Bar {
@@ -33340,17 +33365,76 @@ pub struct MarketDepth {
 
 #[allow(dead_code)]
 pub fn compute_market_depth(bids: &[(f64, f64)], asks: &[(f64, f64)]) -> MarketDepth {
+    MarketDepth {
+        bids: bids.to_vec(),
+        asks: asks.to_vec(),
+        last_update: std::time::Instant::now(),
+    }
+}
 
-/// Basic Market Depth rendering stub
-pub fn draw_market_depth(_painter: &egui::Painter, _depth: &MarketDepth, _rect: egui::Rect) {
-    // TODO: Render depth heatmap or order book ladder
+/// Basic market-depth ladder rendering for ADR gap coverage.
+#[allow(dead_code)]
+pub fn draw_market_depth(painter: &egui::Painter, depth: &MarketDepth, rect: egui::Rect) {
+    if rect.width() <= 1.0 || rect.height() <= 1.0 {
+        return;
+    }
 
-    // TODO: Implement order book heatmap / depth chart
+    let max_size = depth
+        .bids
+        .iter()
+        .chain(depth.asks.iter())
+        .map(|(_, size)| size.abs())
+        .fold(0.0_f64, f64::max);
+    if max_size <= f64::EPSILON {
+        painter.rect_stroke(
+            rect,
+            2.0,
+            egui::Stroke::new(1.0, egui::Color32::from_gray(80)),
+            egui::StrokeKind::Inside,
+        );
+        return;
+    }
+
+    let mid_x = rect.center().x;
+    let rows = depth.bids.len().max(depth.asks.len()).max(1);
+    let row_h = (rect.height() / rows as f32).max(1.0);
+    let bid_color = egui::Color32::from_rgba_unmultiplied(46, 204, 113, 112);
+    let ask_color = egui::Color32::from_rgba_unmultiplied(231, 76, 60, 112);
+
+    for (idx, (_, size)) in depth.bids.iter().enumerate() {
+        let y0 = rect.top() + idx as f32 * row_h;
+        let width = ((*size / max_size) as f32).clamp(0.0, 1.0) * rect.width() * 0.5;
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(mid_x - width, y0),
+                egui::pos2(mid_x, (y0 + row_h).min(rect.bottom())),
+            ),
+            0.0,
+            bid_color,
+        );
+    }
+    for (idx, (_, size)) in depth.asks.iter().enumerate() {
+        let y0 = rect.top() + idx as f32 * row_h;
+        let width = ((*size / max_size) as f32).clamp(0.0, 1.0) * rect.width() * 0.5;
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(mid_x, y0),
+                egui::pos2((mid_x + width).min(rect.right()), (y0 + row_h).min(rect.bottom())),
+            ),
+            0.0,
+            ask_color,
+        );
+    }
+    painter.line_segment(
+        [egui::pos2(mid_x, rect.top()), egui::pos2(mid_x, rect.bottom())],
+        egui::Stroke::new(1.0, egui::Color32::from_gray(95)),
+    );
 }
 
 
-/// Basic Volume Profile rendering stub (will be expanded)
+/// Basic Volume Profile rendering.
 #[derive(Clone, Debug, Default)]
+#[allow(dead_code)]
 pub struct VolumeProfile {
     pub price_levels: Vec<(f64, f64)>,
     pub poc: f64,
@@ -33358,16 +33442,41 @@ pub struct VolumeProfile {
     pub value_area_low: f64,
 }
 
-pub fn draw_volume_profile(_painter: &egui::Painter, _profile: &VolumeProfile, _rect: egui::Rect) {
-    // TODO: Render horizontal bars on the price axis using _profile.price_levels
+#[allow(dead_code)]
+pub fn draw_volume_profile(painter: &egui::Painter, profile: &VolumeProfile, rect: egui::Rect) {
+    if rect.width() <= 1.0 || rect.height() <= 1.0 || profile.price_levels.is_empty() {
+        return;
+    }
 
-    // TODO: Implement horizontal histogram on the price axis
-}
+    let max_volume = profile
+        .price_levels
+        .iter()
+        .map(|(_, volume)| volume.abs())
+        .fold(0.0_f64, f64::max);
+    if max_volume <= f64::EPSILON {
+        return;
+    }
 
-    MarketDepth {
-        bids: bids.to_vec(),
-        asks: asks.to_vec(),
-        last_update: std::time::Instant::now(),
+    let row_h = (rect.height() / profile.price_levels.len() as f32).max(1.0);
+    for (idx, (price, volume)) in profile.price_levels.iter().enumerate() {
+        let y0 = rect.bottom() - (idx as f32 + 1.0) * row_h;
+        let width = ((*volume / max_volume) as f32).clamp(0.0, 1.0) * rect.width();
+        let in_value_area = *price >= profile.value_area_low && *price <= profile.value_area_high;
+        let color = if (*price - profile.poc).abs() <= f64::EPSILON {
+            egui::Color32::from_rgb(255, 193, 7)
+        } else if in_value_area {
+            egui::Color32::from_rgba_unmultiplied(52, 152, 219, 140)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(127, 140, 141, 96)
+        };
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(rect.right() - width, y0.max(rect.top())),
+                egui::pos2(rect.right(), (y0 + row_h).min(rect.bottom())),
+            ),
+            0.0,
+            color,
+        );
     }
 }
 
