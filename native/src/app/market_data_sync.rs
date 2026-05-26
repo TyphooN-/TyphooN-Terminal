@@ -755,11 +755,12 @@ impl TyphooNApp {
             }
         };
 
-        for symbol in self.kraken_equity_universe_symbols.clone() {
-            push_symbol(&symbol);
-        }
-        // Fallback/augmentation while the full catalog is loading: include owned,
-        // charted, watched, and any symbols Kraken Spot exposes as xStock-looking pairs.
+        // The full Kraken Securities catalog is metadata/search space, not a
+        // historical-sync target. At the current iapi ceiling, syncing every
+        // tradable equity/ETF across every enabled timeframe turns into a
+        // multi-day backlog and starves the held/charted names the user
+        // actually needs. Keep automated bar sync demand-driven: owned,
+        // charted, watched, plus any legacy Spot xStock-looking pairs.
         for (pair_name, display_name) in &self.kraken_pairs {
             if let Some(symbol) = kraken_xstock_fundamental_symbol(pair_name, display_name) {
                 push_symbol(&symbol);
