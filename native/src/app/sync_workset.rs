@@ -181,6 +181,10 @@ pub(super) fn merge_recent_sync_overrides(
     }
 }
 
+fn foreground_sync_write_cooldown_secs(period_s: i64) -> i64 {
+    (period_s / 2).clamp(30, 300)
+}
+
 fn classify_alpaca_sync_candidate(
     now_s: i64,
     symbol: &str,
@@ -210,7 +214,18 @@ fn classify_alpaca_sync_candidate(
 
     if let Some(period_s) = alpaca_sync_period_secs(timeframe) {
         let age_s = now_s.saturating_sub(age_anchor_s);
-        if age_s >= period_s.saturating_mul(24) {
+        let write_age_s = now_s.saturating_sub(state.write_ts_s.max(0));
+        // Foreground charts (including every MTF_Grid cell) are trading-session
+        // critical. Do not let the broad-universe 24×TF stale window decide
+        // whether they refresh: once the current timeframe has elapsed, they
+        // are due, but still respect a per-TF write cooldown so a provider that
+        // has not printed the next bar yet cannot be hammered every scheduler tick.
+        let stale_due = if focus {
+            age_s >= period_s && write_age_s >= foreground_sync_write_cooldown_secs(period_s)
+        } else {
+            age_s >= period_s.saturating_mul(24)
+        };
+        if stale_due {
             return Some(AlpacaSyncCandidate {
                 symbol,
                 timeframe: timeframe.to_string(),
@@ -319,18 +334,15 @@ where
 
     let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
 
-    // Stale slots are reserved so a wave of Missing 1Min candidates can't
-    // starve 30M/1H Stale refresh during catch-up. Order remains
-    // Missing > Stale > Backfill within their share of the batch.
-    let stale_reserve = (batch_size / 4).max(1);
-    let missing_budget = batch_size.saturating_sub(stale_reserve);
-
     drain_buckets_high_tf_first(
         &mut selected,
         &mut missing_by_tf,
         &ordered_timeframes,
-        missing_budget,
+        batch_size,
     );
+    if !selected.is_empty() {
+        return selected;
+    }
     drain_buckets_high_tf_first(
         &mut selected,
         &mut stale_by_tf,
@@ -531,7 +543,7 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     backfill_complete_pairs: &HashMap<String, AlpacaBackfillCompletePair>,
     pending_fetches: &HashSet<String>,
     batch_size: usize,
-    foreground_slots: usize,
+    _foreground_slots: usize,
     background_scan_limit: usize,
     cursor: &mut usize,
     now_s: i64,
@@ -549,15 +561,12 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
     let mut staged_selected = pending_fetches.clone();
 
-    // Low timeframes (M1/M5) get priority during off-market hours for max sync speed.
-    // We give them a higher budget when selecting candidates.
     // Foreground symbols are open charts, actively traded symbols, and broker
-    // positions. Give them first shot across every enabled timeframe before the
-    // broad universe ring advances; otherwise a 12k-symbol Kraken equities scan
-    // can leave a visible chart saying "syncing" far too long.
-    let foreground_budget = foreground_slots
-        .max(ordered_timeframes.len())
-        .min(batch_size);
+    // positions. During the trading session these are the product: give them
+    // the entire available batch before the broad universe ring advances. That
+    // keeps every MTF_Grid cell current before backfilling/scanning lower-value
+    // symbols.
+    let foreground_budget = batch_size;
     if foreground_budget > 0 && !focus_symbols.is_empty() {
         let mut foreground_symbols: Vec<String> = focus_symbols.iter().cloned().collect();
         foreground_symbols.sort();
@@ -679,10 +688,25 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     let mut missing = missing;
     let mut stale = stale;
     let mut backfill = backfill;
-    take_from(&mut missing, missing_cap, &mut selected, &mut staged_selected);
+    take_from(
+        &mut missing,
+        missing_cap,
+        &mut selected,
+        &mut staged_selected,
+    );
     take_from(&mut stale, batch_size, &mut selected, &mut staged_selected);
-    take_from(&mut missing, batch_size, &mut selected, &mut staged_selected);
-    take_from(&mut backfill, batch_size, &mut selected, &mut staged_selected);
+    take_from(
+        &mut missing,
+        batch_size,
+        &mut selected,
+        &mut staged_selected,
+    );
+    take_from(
+        &mut backfill,
+        batch_size,
+        &mut selected,
+        &mut staged_selected,
+    );
     selected
 }
 
@@ -1179,6 +1203,81 @@ mod tests {
             ]
         );
         assert_eq!(cursor, 4);
+    }
+
+    #[test]
+    fn select_alpaca_sync_workset_rotating_gives_focus_the_full_batch() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec!["AAPL".to_string(), "MSFT".to_string(), "QQQ".to_string()];
+        let timeframes = vec!["1Min".to_string()];
+        let focus = HashSet::from(["MSFT".to_string(), "QQQ".to_string()]);
+        let mut cursor = 0usize;
+
+        let selected = select_alpaca_sync_workset_rotating(
+            &symbols,
+            &timeframes,
+            &HashMap::new(),
+            &focus,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            3,
+            1,
+            3,
+            &mut cursor,
+            now_s,
+            alpaca_sync_target_bars,
+        );
+
+        assert_eq!(selected.len(), 3);
+        assert_eq!(selected[0].symbol, "MSFT");
+        assert_eq!(selected[1].symbol, "QQQ");
+        assert!(selected[0].focus);
+        assert!(selected[1].focus);
+    }
+
+    #[test]
+    fn foreground_stale_refresh_is_due_after_one_timeframe_period() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec!["AAPL".to_string(), "MSFT".to_string()];
+        let timeframes = vec!["1Min".to_string()];
+        let state_map = HashMap::from([
+            (
+                ("AAPL".to_string(), "1Min".to_string()),
+                SyncCacheState {
+                    last_bar_ts_s: now_s - 65,
+                    write_ts_s: now_s - 60,
+                    bar_count: 50_000,
+                },
+            ),
+            (
+                ("MSFT".to_string(), "1Min".to_string()),
+                SyncCacheState {
+                    last_bar_ts_s: now_s - 65,
+                    write_ts_s: now_s - 60,
+                    bar_count: 50_000,
+                },
+            ),
+        ]);
+        let focus = HashSet::from(["AAPL".to_string()]);
+
+        let selected = select_alpaca_sync_candidates(
+            &symbols,
+            &timeframes,
+            &state_map,
+            &focus,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            2,
+            now_s,
+            |_| None,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].symbol, "AAPL");
+        assert_eq!(selected[0].bucket, AlpacaSyncBucket::Stale);
+        assert!(selected[0].focus);
     }
 
     #[test]
