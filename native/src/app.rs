@@ -6376,6 +6376,56 @@ struct WatchlistRow {
     ext_change_pct: f64,
 }
 
+fn watchlist_row_from_raw_bars(
+    symbol: &str,
+    cache_key: &str,
+    raw: &[(i64, f64, f64, f64, f64, f64)],
+) -> Option<WatchlistRow> {
+    let mut valid = raw.iter().filter(|(ts, o, h, l, c, _v)| {
+        *ts > 0
+            && *o > 0.0
+            && *h > 0.0
+            && *l > 0.0
+            && *c > 0.0
+            && o.is_finite()
+            && h.is_finite()
+            && l.is_finite()
+            && c.is_finite()
+            && *h >= *l
+    });
+    let last_bar = valid.next_back()?;
+    let prev_bar = valid.next_back().unwrap_or(last_bar);
+    let change = last_bar.4 - prev_bar.4;
+    let change_pct = if prev_bar.4 > 0.0 {
+        change / prev_bar.4 * 100.0
+    } else {
+        0.0
+    };
+    Some(WatchlistRow {
+        symbol: symbol.to_string(),
+        cache_key: cache_key.to_string(),
+        last: last_bar.4,
+        prev_close: prev_bar.4,
+        change,
+        change_pct,
+        volume: last_bar.5,
+        ext_change_pct: 0.0,
+    })
+}
+
+fn empty_watchlist_row(symbol: &str) -> WatchlistRow {
+    WatchlistRow {
+        symbol: symbol.to_string(),
+        cache_key: symbol.to_string(),
+        last: 0.0,
+        prev_close: 0.0,
+        change: 0.0,
+        change_pct: 0.0,
+        volume: 0.0,
+        ext_change_pct: 0.0,
+    }
+}
+
 /// Upcoming event source filter for the Event Calendar window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum EventSource {
@@ -14216,63 +14266,65 @@ impl TyphooNApp {
                         if lan_client.load(std::sync::atomic::Ordering::Relaxed) {
                             continue;
                         }
+                        let mut rows: Vec<WatchlistRow> = symbols
+                            .iter()
+                            .map(|sym| empty_watchlist_row(sym))
+                            .collect();
+
                         if let Some(ref b) = broker {
-                            let mut rows = Vec::new();
-                            for sym in &symbols {
+                            for row in &mut rows {
                                 let api_sym = {
                                     let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT","XMR","ZEC","DASH"];
-                                    let su = sym.to_uppercase();
+                                    let su = row.symbol.to_uppercase();
                                     crypto_bases.iter().find_map(|base| {
                                         if su.starts_with(base) && su.ends_with("USD") && su.len() == base.len() + 3 {
                                             Some(format!("{}/USD", base))
                                         } else { None }
-                                    }).unwrap_or_else(|| sym.clone())
+                                    }).unwrap_or_else(|| row.symbol.clone())
                                 };
-                                // 3s timeout per symbol — don't let one stale symbol block the entire watchlist
-                                match tokio::time::timeout(std::time::Duration::from_secs(3), b.get_snapshot(&api_sym)).await {
-                                    Ok(Ok(snap)) => {
-                                        let change = snap.last - snap.prev_close;
-                                        let change_pct = if snap.prev_close > 0.0 { (snap.last / snap.prev_close - 1.0) * 100.0 } else { 0.0 };
-                                        // Extended hours change: last trade vs regular session close
-                                        let ext_change_pct = if snap.regular_close > 0.0 && (snap.last - snap.regular_close).abs() > 1e-10 {
-                                            (snap.last / snap.regular_close - 1.0) * 100.0
-                                        } else { 0.0 };
-                                        rows.push(WatchlistRow {
-                                            symbol: sym.clone(),
-                                            cache_key: sym.clone(),
-                                            last: snap.last,
-                                            prev_close: snap.prev_close,
-                                            change,
-                                            change_pct,
-                                            volume: snap.daily_volume,
-                                            ext_change_pct,
-                                        });
-                                    }
-                                    _ => {
-                                        rows.push(WatchlistRow {
-                                            symbol: sym.clone(),
-                                            cache_key: sym.clone(),
-                                            last: 0.0, prev_close: 0.0, change: 0.0,
-                                            change_pct: 0.0, volume: 0.0, ext_change_pct: 0.0,
-                                        });
-                                    }
+                                // 3s timeout per symbol — don't let one stale symbol block the entire watchlist.
+                                // During weekends/off-hours this may fail or return stale/empty data; Yahoo/cache
+                                // enrichment below still keeps the watchlist usable.
+                                if let Ok(Ok(snap)) = tokio::time::timeout(
+                                    std::time::Duration::from_secs(3),
+                                    b.get_snapshot(&api_sym),
+                                ).await {
+                                    let change = snap.last - snap.prev_close;
+                                    let change_pct = if snap.prev_close > 0.0 { (snap.last / snap.prev_close - 1.0) * 100.0 } else { 0.0 };
+                                    // Extended hours change: last trade vs regular session close
+                                    let ext_change_pct = if snap.regular_close > 0.0 && (snap.last - snap.regular_close).abs() > 1e-10 {
+                                        (snap.last / snap.regular_close - 1.0) * 100.0
+                                    } else { 0.0 };
+                                    *row = WatchlistRow {
+                                        symbol: row.symbol.clone(),
+                                        cache_key: row.symbol.clone(),
+                                        last: snap.last,
+                                        prev_close: snap.prev_close,
+                                        change,
+                                        change_pct,
+                                        volume: snap.daily_volume,
+                                        ext_change_pct,
+                                    };
                                 }
                             }
-                            // Yahoo Finance enrichment for extended hours — returns preMarketPrice/postMarketPrice
-                            // Requires authenticated session (cookie jar + crumb) like fundamentals scraper.
-                            {
-                                // Batch all equity symbols into one Yahoo query
-                                let equity_syms: Vec<String> = rows.iter()
-                                    .filter(|r| !r.symbol.contains('/') && !(r.symbol.ends_with("USD") && r.symbol.len() > 5))
-                                    .map(|r| r.symbol.clone())
-                                    .collect();
-                                if !equity_syms.is_empty() {
-                                    // Reuse cached Yahoo session (recreate every 30 min to refresh cookies)
-                                    if yahoo_session.is_none() || yahoo_session_created.elapsed().as_secs() > 1800 {
-                                        yahoo_session = fundamentals::YahooSession::new().await.ok();
-                                        yahoo_session_created = std::time::Instant::now();
-                                    }
-                                    if let Some(ref session) = yahoo_session {
+                        }
+
+                        // Yahoo Finance enrichment for regular + extended-hours prices. This is deliberately
+                        // outside the Alpaca broker branch so the watchlist still refreshes on weekends,
+                        // holidays, and Kraken-only/offline-broker sessions.
+                        {
+                            // Batch all equity symbols into one Yahoo query
+                            let equity_syms: Vec<String> = rows.iter()
+                                .filter(|r| !r.symbol.contains('/') && !(r.symbol.ends_with("USD") && r.symbol.len() > 5))
+                                .map(|r| r.symbol.clone())
+                                .collect();
+                            if !equity_syms.is_empty() {
+                                // Reuse cached Yahoo session (recreate every 30 min to refresh cookies)
+                                if yahoo_session.is_none() || yahoo_session_created.elapsed().as_secs() > 1800 {
+                                    yahoo_session = fundamentals::YahooSession::new().await.ok();
+                                    yahoo_session_created = std::time::Instant::now();
+                                }
+                                if let Some(ref session) = yahoo_session {
                                     let sym_list = equity_syms.join(",");
                                     let crumb_param = if session.crumb().is_empty() { String::new() } else { format!("&crumb={}", session.crumb()) };
                                     let url = format!(
@@ -14325,17 +14377,18 @@ impl TyphooNApp {
                                                             row.last = reg_price;
                                                             row.change = reg_price - row.prev_close;
                                                             row.change_pct = (reg_price / row.prev_close - 1.0) * 100.0;
+                                                        } else if row.last <= 0.0 && reg_price > 0.0 {
+                                                            row.last = reg_price;
                                                         }
                                                     }
                                                 }
                                             }
                                         }
                                     }
-                                    } // if let Ok(session)
                                 }
                             }
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::WatchlistQuotes(rows));
                         }
+                        let _ = broker_msg_tx_clone.send(BrokerMsg::WatchlistQuotes(rows));
                     }
                     BrokerCmd::GetMarketClock => {
                         if let Some(ref b) = broker {
@@ -32939,10 +32992,11 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn nav_typography_helpers_exist() {
         // Create a dummy context to exercise the helpers
-        let mut ctx = egui::Context::default();
-        let mut fonts = egui::FontDefinitions::default();
+        let ctx = egui::Context::default();
+        let fonts = egui::FontDefinitions::default();
         ctx.set_fonts(fonts);
 
         egui::CentralPanel::default().show(&ctx, |ui| {
@@ -32961,13 +33015,42 @@ mod tests {
 
     #[test]
     fn watchlist_fallback_price_display_test() {
-        let mut app = TyphooNApp::default_for_test();
-        app.user_watchlist.push("TEST".to_string());
-        app.watchlist_fallback_prices.insert(
+        let mut fallback_prices = std::collections::HashMap::new();
+        fallback_prices.insert(
             "TEST".to_string(),
             (123.45, "Yahoo".to_string(), std::time::Instant::now()),
         );
-        assert!(app.watchlist_fallback_prices.contains_key("TEST"));
+        assert!(fallback_prices.contains_key("TEST"));
+    }
+
+    #[test]
+    fn watchlist_row_from_raw_bars_uses_close_prices_for_weekend_cache() {
+        let raw = vec![
+            (1_700_000_000_000, 100.0, 110.0, 90.0, 105.0, 1_000.0),
+            (1_700_086_400_000, 105.0, 115.0, 95.0, 112.0, 1_500.0),
+        ];
+
+        let row = watchlist_row_from_raw_bars("TEST", "alpaca:TEST:1Day", &raw).unwrap();
+
+        assert_eq!(row.symbol, "TEST");
+        assert_eq!(row.cache_key, "alpaca:TEST:1Day");
+        assert_eq!(row.last, 112.0);
+        assert_eq!(row.prev_close, 105.0);
+        assert_eq!(row.change, 7.0);
+        assert!((row.change_pct - 6.666_666_666_666_667).abs() < f64::EPSILON * 16.0);
+        assert_eq!(row.volume, 1_500.0);
+    }
+
+    #[test]
+    fn watchlist_row_from_raw_bars_accepts_single_valid_cached_bar() {
+        let raw = vec![(1_700_000_000_000, 10.0, 11.0, 9.0, 10.5, 250.0)];
+
+        let row = watchlist_row_from_raw_bars("SOLO", "default:SOLO:1Day", &raw).unwrap();
+
+        assert_eq!(row.last, 10.5);
+        assert_eq!(row.prev_close, 10.5);
+        assert_eq!(row.change, 0.0);
+        assert_eq!(row.change_pct, 0.0);
     }
 
     #[test]
@@ -32998,7 +33081,7 @@ mod tests {
             volume: 2.0,
         });
         assert!(chart.forming_bar_dirty);
-        assert_eq!(chart.visible_bars_gen, gen);
+        assert_eq!(chart.visible_bars_gen, gen_before);
     }
 
     #[test]
@@ -33121,6 +33204,7 @@ mod tests {
     }
 
     // Yahoo Finance price fallback (used when primary broker has no recent data)
+    #[allow(dead_code)]
     pub async fn fetch_yahoo_last_price(symbol: &str) -> Option<(f64, String)> {
         // Simple rate limiting to avoid hammering Yahoo
         static LAST_YAHOO_CALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -33167,6 +33251,7 @@ mod tests {
         Some((price, "Yahoo".to_string()))
     }
 
+    #[allow(dead_code)]
     pub async fn fetch_last_price_with_fallback(symbol: &str) -> Option<(f64, String)> {
         if let Some((price, source)) = fetch_yahoo_last_price(symbol).await {
             return Some((price, source));

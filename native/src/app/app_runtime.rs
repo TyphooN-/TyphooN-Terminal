@@ -2003,7 +2003,18 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                BrokerMsg::WatchlistQuotes(rows) => {
+                BrokerMsg::WatchlistQuotes(mut rows) => {
+                    // Weekend/off-hours quote providers can return empty/zero rows. Don't let a
+                    // failed refresh wipe useful cached rows already displayed in the watchlist.
+                    for row in &mut rows {
+                        if row.last <= 0.0 {
+                            if let Some(existing) = self.watchlist_rows.iter().find(|existing| {
+                                existing.symbol.eq_ignore_ascii_case(&row.symbol) && existing.last > 0.0
+                            }) {
+                                *row = existing.clone();
+                            }
+                        }
+                    }
                     self.watchlist_last_update_ts = chrono::Utc::now().timestamp();
                     // Store to KV for LAN clients — dedup to avoid timestamp churn
                     if let Ok(j) = serde_json::to_string(&rows) {
@@ -12125,6 +12136,7 @@ impl eframe::App for TyphooNApp {
                             let have_syms: std::collections::HashSet<&str> = self
                                 .watchlist_rows
                                 .iter()
+                                .filter(|r| r.last > 0.0)
                                 .map(|r| r.symbol.as_str())
                                 .collect();
                             let missing: Vec<String> = self
@@ -12136,51 +12148,52 @@ impl eframe::App for TyphooNApp {
                             if !missing.is_empty() && !self.watchlist_cache_tried {
                                 self.watchlist_cache_tried = true;
                                 if let Some(ref cache) = self.cache {
-                                    let tf = self
+                                    let primary_tf = self
                                         .charts
                                         .get(self.active_tab)
                                         .map(|c| c.timeframe.cache_suffix().to_string())
                                         .unwrap_or_else(|| "1Day".to_string());
+                                    let mut tfs = vec![primary_tf.clone()];
+                                    for fallback_tf in ["1Day", "4Hour", "1Hour"] {
+                                        if !tfs.iter().any(|tf| tf.eq_ignore_ascii_case(fallback_tf)) {
+                                            tfs.push(fallback_tf.to_string());
+                                        }
+                                    }
                                     let mut rows: Vec<WatchlistRow> = self.watchlist_rows.clone();
+                                    let mut updated_from_cache = false;
                                     for sym in &missing {
-                                        let candidates = [
-                                            format!("mt5:{}:{}", sym, tf),
-                                            format!("mt5:Darwinex:{}:{}", sym, tf),
-                                            format!("{}:{}", sym, tf),
-                                            format!("alpaca:{}:{}", sym, tf),
-                                            format!("default:{}:{}", sym, tf),
-                                        ];
                                         let mut found = false;
-                                        for key in &candidates {
-                                            if let Ok(Some(raw)) = cache.get_bars_raw(key) {
-                                                if raw.len() >= 2 {
-                                                    let last_bar = &raw[raw.len() - 1];
-                                                    let prev_bar = &raw[raw.len() - 2];
-                                                    let change = last_bar.3 - prev_bar.3;
-                                                    let change_pct = if prev_bar.3 > 0.0 {
-                                                        change / prev_bar.3 * 100.0
-                                                    } else {
-                                                        0.0
-                                                    };
-                                                    rows.push(WatchlistRow {
-                                                        symbol: sym.clone(),
-                                                        cache_key: key.clone(),
-                                                        last: last_bar.3,
-                                                        prev_close: prev_bar.3,
-                                                        change,
-                                                        change_pct,
-                                                        volume: last_bar.5,
-                                                        ext_change_pct: 0.0,
-                                                    });
-                                                    found = true;
-                                                    break;
+                                        'tf_search: for tf in &tfs {
+                                            for source in [
+                                                "mt5",
+                                                "mt5:Darwinex",
+                                                "alpaca",
+                                                "kraken",
+                                                "kraken-equities",
+                                                "tastytrade",
+                                                "default",
+                                            ] {
+                                                for key in chart_source_cache_keys(source, sym, tf) {
+                                                    if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
+                                                        if let Some(row) =
+                                                            watchlist_row_from_raw_bars(sym, &key, &raw)
+                                                        {
+                                                            rows.retain(|existing| {
+                                                                !existing.symbol.eq_ignore_ascii_case(sym)
+                                                            });
+                                                            rows.push(row);
+                                                            updated_from_cache = true;
+                                                            found = true;
+                                                            break 'tf_search;
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
                                         if !found {
-                                            {
-                                                let stats = &self.bg.detailed_stats;
-                                                let sym_lower = sym.to_lowercase();
+                                            let stats = &self.bg.detailed_stats;
+                                            let sym_lower = sym.to_lowercase();
+                                            for tf in &tfs {
                                                 let tf_lower = tf.to_lowercase();
                                                 for (k, _, _) in stats {
                                                     // BCW metadata keys (`mt5:__NAME__:…`) never
@@ -12194,39 +12207,30 @@ impl eframe::App for TyphooNApp {
                                                     if kl.contains(&sym_lower)
                                                         && kl.ends_with(&tf_lower)
                                                     {
-                                                        if let Ok(Some(raw)) = cache.get_bars_raw(k)
-                                                        {
-                                                            if raw.len() >= 2 {
-                                                                let last_bar = &raw[raw.len() - 1];
-                                                                let prev_bar = &raw[raw.len() - 2];
-                                                                let change =
-                                                                    last_bar.3 - prev_bar.3;
-                                                                let change_pct = if prev_bar.3 > 0.0
-                                                                {
-                                                                    change / prev_bar.3 * 100.0
-                                                                } else {
-                                                                    0.0
-                                                                };
-                                                                rows.push(WatchlistRow {
-                                                                    symbol: sym.clone(),
-                                                                    cache_key: k.clone(),
-                                                                    last: last_bar.3,
-                                                                    prev_close: prev_bar.3,
-                                                                    change,
-                                                                    change_pct,
-                                                                    volume: last_bar.5,
-                                                                    ext_change_pct: 0.0,
+                                                        if let Ok(Some(raw)) = cache.get_bars_raw(k) {
+                                                            if let Some(row) =
+                                                                watchlist_row_from_raw_bars(sym, k, &raw)
+                                                            {
+                                                                rows.retain(|existing| {
+                                                                    !existing.symbol.eq_ignore_ascii_case(sym)
                                                                 });
+                                                                rows.push(row);
+                                                                updated_from_cache = true;
+                                                                found = true;
                                                                 break;
                                                             }
                                                         }
                                                     }
                                                 }
+                                                if found {
+                                                    break;
+                                                }
                                             }
                                         }
                                     }
-                                    if rows.len() > self.watchlist_rows.len() {
+                                    if updated_from_cache {
                                         self.watchlist_rows = rows;
+                                        self.watchlist_last_update_ts = chrono::Utc::now().timestamp();
                                     }
                                 }
                             }
@@ -12273,14 +12277,12 @@ impl eframe::App for TyphooNApp {
                                     if !self.user_watchlist.contains(&sym) {
                                         self.user_watchlist.push(sym);
                                         self.watchlist_cache_tried = false; // retry cache lookup
-                                        // Trigger immediate refresh
-                                        if self.broker_connected {
-                                            let _ = self.broker_tx.send(
-                                                BrokerCmd::GetWatchlistQuotes {
-                                                    symbols: self.user_watchlist.clone(),
-                                                },
-                                            );
-                                        }
+                                        // Trigger immediate refresh. The handler falls back to Yahoo/cache
+                                        // when broker snapshots are unavailable, so don't gate this on
+                                        // market-hours broker connectivity.
+                                        let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes {
+                                            symbols: self.user_watchlist.clone(),
+                                        });
                                     }
                                     self.watchlist_input.clear();
                                 }
@@ -16970,12 +16972,11 @@ impl eframe::App for TyphooNApp {
         }
 
         // Poll watchlist quotes every ~15 seconds at 60fps (900 frames). Disabled for LAN client.
-        // Includes Alpaca snapshot + Yahoo extended hours enrichment per cycle.
+        // Uses the best available stack: broker snapshots when connected, Yahoo quote enrichment,
+        // and cached bars as a weekend/off-hours fallback.
         if now_instant.duration_since(self.watchlist_quotes_last_poll)
             >= std::time::Duration::from_secs(15)
             && !self.user_watchlist.is_empty()
-            && self.alpaca_enabled
-            && self.broker_connected
             && !self.lan_client_enabled
             && self.cache_loaded
             && !self.alpaca_bar_backlog_active()
