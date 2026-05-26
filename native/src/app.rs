@@ -10895,6 +10895,20 @@ pub struct TyphooNApp {
     news_search_query: String,
     /// UI state flag while a fetch/cached-load is in flight.
     news_loading: bool,
+    /// Latches once the News window has triggered its initial
+    /// `LoadCachedNews` for the session. Prevents auto-load from
+    /// firing every frame the window stays open, while still
+    /// re-triggering on the next restart.
+    news_initial_load_done: bool,
+    /// Total rows in the `research_news` SQLite table, queried via the
+    /// cheap COUNT helper after each cache load and again periodically
+    /// so the counter shows "N in DB" even when the in-memory list is
+    /// empty. `None` until the first query completes.
+    news_db_total: Option<i64>,
+    /// Anchor for the periodic DB-count refresh — we re-query every few
+    /// seconds so the user sees new articles arriving from background
+    /// scrapes without having to reopen the window.
+    news_db_total_last_refresh: std::time::Instant,
     /// User-entered Marketaux API key (free tier 100/day).
     marketaux_key: String,
     /// User-entered Alpha Vantage API key (free tier 25/day).
@@ -27432,6 +27446,10 @@ When the question touches recent news, sentiment, or prices, combine the researc
             news_symbol_filter: String::new(),
             news_search_query: String::new(),
             news_loading: false,
+            news_initial_load_done: false,
+            news_db_total: None,
+            news_db_total_last_refresh: std::time::Instant::now()
+                - std::time::Duration::from_secs(60),
             marketaux_key: String::new(),
             alpha_vantage_key: String::new(),
             fmp_key: String::new(),

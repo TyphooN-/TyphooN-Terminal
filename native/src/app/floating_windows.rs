@@ -4280,6 +4280,50 @@ impl TyphooNApp {
             // directly, and the Search field starts empty so all cached
             // articles are visible.
             let _ = &self.news_symbol_filter; // keep the borrow live for any future use
+
+            // Refresh the DB article count so the header can show "N in
+            // DB" even when the in-memory list is empty (fresh launch,
+            // before Load Cached fires). Throttled to 5 s so a window
+            // staying open doesn't hammer the cache lock — the SELECT
+            // COUNT is fast but still costs the read lock.
+            if self
+                .news_db_total_last_refresh
+                .elapsed()
+                .as_secs()
+                >= 5
+            {
+                self.news_db_total_last_refresh = std::time::Instant::now();
+                if let Some(cache) = &self.cache {
+                    if let Ok(conn) = cache.connection() {
+                        if let Ok(n) =
+                            typhoon_engine::core::news::count_all_articles(&conn)
+                        {
+                            self.news_db_total = Some(n);
+                        }
+                    }
+                }
+            }
+
+            // Auto-load cached articles into memory on first open this
+            // session. Without this, fresh launches show "0 cached"
+            // until the user clicks Load Cached even though the SQLite
+            // table holds the corpus. Gated on:
+            //   * cache is open (otherwise the load is a no-op)
+            //   * no load already in flight (avoid duplicate dispatch)
+            //   * not already done this session (one-shot)
+            //   * DB has rows worth loading (skip empty cache)
+            if !self.news_initial_load_done
+                && !self.news_loading
+                && self.cache.is_some()
+                && self.news_db_total.unwrap_or(0) > 0
+            {
+                self.news_initial_load_done = true;
+                self.news_loading = true;
+                let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews {
+                    symbol: String::new(),
+                    limit: 500,
+                });
+            }
             let news_scope_label = self.broker_scope_label().to_string();
             let mut scoped_news_symbols: Vec<String> =
                 if let Some(set) = self.broker_scope_symbols() {
@@ -4418,7 +4462,21 @@ impl TyphooNApp {
                             }
                         }
                         ui.separator();
-                        ui.label(egui::RichText::new(format!("{} cached", self.news_full_articles.len())).color(AXIS_TEXT).small());
+                        // Show in-memory count AND DB total so the user
+                        // can tell at a glance whether Load Cached has
+                        // pulled the data into memory yet, vs whether
+                        // the cache itself is empty. "47 loaded · 12,803
+                        // in DB" reads better than just "47 cached".
+                        let mem_n = self.news_full_articles.len();
+                        let label = match self.news_db_total {
+                            Some(db) if db as usize > mem_n => format!(
+                                "{} loaded · {} in DB",
+                                mem_n, db
+                            ),
+                            Some(_) => format!("{} cached", mem_n),
+                            None => format!("{} cached", mem_n),
+                        };
+                        ui.label(egui::RichText::new(label).color(AXIS_TEXT).small());
                     });
                     ui.collapsing("API Keys (free tier)", |ui| {
                         ui.horizontal(|ui| {
@@ -4442,7 +4500,25 @@ impl TyphooNApp {
 
                     // ── Two-pane reader: list (left) + body (right) ──────────────
                     if self.news_full_articles.is_empty() {
-                        ui.label(egui::RichText::new("No cached news. Click Load Cached or Fetch All Sources.").color(AXIS_TEXT));
+                        // Empty-state message differentiates "the DB is
+                        // empty" vs "the in-memory list is empty but
+                        // the DB has rows" so the user knows whether
+                        // Load Cached will actually surface anything.
+                        let msg = match self.news_db_total {
+                            Some(0) | None => {
+                                "No cached news. Click Fetch All Sources for the active chart symbol."
+                                    .to_string()
+                            }
+                            Some(n) if self.news_loading => format!(
+                                "Loading {} cached articles from SQLite…",
+                                n
+                            ),
+                            Some(n) => format!(
+                                "{} articles in cache. Click Load Cached to pull them into memory.",
+                                n
+                            ),
+                        };
+                        ui.label(egui::RichText::new(msg).color(AXIS_TEXT));
                     } else {
                         // Parse the Search field into a client-side filter
                         // before grouping so dedup only spans the filtered set.

@@ -1069,6 +1069,21 @@ pub fn search_news(
     Ok(out)
 }
 
+/// Cheap total-row count for the `research_news` table. Used by the
+/// News window header to display the on-disk article count even when
+/// the in-memory list is empty (e.g. fresh launch, before the user
+/// clicks Load Cached). Indexed PK scan — sub-millisecond on the
+/// production cache.
+pub fn count_all_articles(conn: &Connection) -> Result<i64, String> {
+    let _ = create_news_tables(conn);
+    conn.query_row(
+        "SELECT COUNT(*) FROM research_news",
+        [],
+        |r| r.get::<_, i64>(0),
+    )
+    .map_err(|e| format!("count all articles: {e}"))
+}
+
 /// Count articles whose `published_at` is older than `cutoff_ts`. Paired
 /// with `purge_older_than` for the Storage Manager UI: the count gives
 /// the user a preview ("N articles would be deleted") before the
@@ -2711,6 +2726,23 @@ mod tests {
             .expect("dads group present");
         assert_eq!(dads.0, 3, "primary should be newest (idx 3)");
         assert_eq!(dads.1.len(), 2, "two alternates for the dads story");
+    }
+
+    #[test]
+    fn count_all_articles_returns_total() {
+        let conn = mem_conn();
+        assert_eq!(count_all_articles(&conn).unwrap(), 0);
+        for i in 0..5 {
+            let a = NewsArticle {
+                symbol: "AAPL".into(),
+                url: format!("https://example.com/{i}"),
+                published_at: 1_700_000_000 + i,
+                ..Default::default()
+            }
+            .with_hash();
+            upsert_news(&conn, &a).unwrap();
+        }
+        assert_eq!(count_all_articles(&conn).unwrap(), 5);
     }
 
     #[test]
