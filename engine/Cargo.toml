@@ -43,7 +43,7 @@ calamine = "0.35"
 scraper = { version = "0.27", default-features = false }
 zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 flate2 = "1"  # Gzip decompression for DARWIN FTP quote files
-thirtyfour = { workspace = true, default-features = false, features = ["reqwest", "rustls-tls"] }    # Async WebDriver client (Selenium) for Darwinex Zero scraping
+thirtyfour = { workspace = true, default-features = false, features = ["reqwest", "rustls"] }    # Async WebDriver client (Selenium) for Darwinex Zero scraping
 mql5-compiler = { workspace = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]

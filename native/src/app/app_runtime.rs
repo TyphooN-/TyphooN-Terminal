@@ -292,13 +292,12 @@ impl eframe::App for TyphooNApp {
             let _ = self.schedule_kraken_equities_universe();
         }
 
-        // WS OHLC spawn is focus-driven: at first KrakenPairs landing the
-        // user's focus set (open charts + positions + watchlist + held
-        // balances) may be empty, in which case maybe_start_kraken_ws_ohlc
-        // defers without flipping `started=true`. Retry every 15s so opening
-        // a chart, taking a position, or adding to the watchlist eventually
-        // brings the streamers up without forcing the user to toggle the
-        // setting. Cheap idempotent no-op once `started=true`.
+        // WS OHLC spawn is pair-discovery/settings driven. At startup the
+        // settings loop can run before Kraken AssetPairs have landed, in
+        // which case maybe_start_kraken_ws_ohlc defers without flipping
+        // `started=true`. Retry every 15s so the full-universe streamers come
+        // up once pair discovery completes, without forcing the user to toggle
+        // the setting. Cheap idempotent no-op once `started=true`.
         if !self.kraken_ws_ohlc_started
             && self.kraken_ws_ohlc_enabled
             && self.kraken_enabled

@@ -12698,86 +12698,41 @@ pub fn compute_svm_snapshot(
 
 // ── ADR-115 Round 8 — OMON fetch (Yahoo options chain) ───────────────────
 
-/// Fetch a Yahoo options chain for a symbol. Returns all expirations Yahoo
-/// is willing to give us in a single call (typically 1–12 weeklies + LEAPS).
-pub async fn fetch_yahoo_options_chain(
-    client: &reqwest::Client,
-    symbol: &str,
-) -> Result<OptionsChainSnapshot, String> {
-    let url = format!(
-        "https://query2.finance.yahoo.com/v7/finance/options/{}",
-        symbol.to_uppercase()
-    );
-    let resp = client
-        .get(&url)
-        .header(
-            "User-Agent",
-            "Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1",
-        )
-        .send()
-        .await
-        .map_err(|e| format!("Yahoo options request: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("Yahoo options: HTTP {}", resp.status()));
+fn parse_yahoo_option_contract(
+    c: &serde_json::Value,
+    opt_type: &str,
+    underlying: f64,
+) -> OptionContract {
+    let strike = c.get("strike").and_then(|x| x.as_f64()).unwrap_or(0.0);
+    let itm = match opt_type {
+        "CALL" => underlying > strike,
+        _ => underlying < strike,
+    };
+    OptionContract {
+        contract_symbol: c
+            .get("contractSymbol")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        option_type: opt_type.to_string(),
+        strike,
+        last_price: c.get("lastPrice").and_then(|x| x.as_f64()).unwrap_or(0.0),
+        bid: c.get("bid").and_then(|x| x.as_f64()).unwrap_or(0.0),
+        ask: c.get("ask").and_then(|x| x.as_f64()).unwrap_or(0.0),
+        volume: c.get("volume").and_then(|x| x.as_f64()).unwrap_or(0.0),
+        open_interest: c
+            .get("openInterest")
+            .and_then(|x| x.as_f64())
+            .unwrap_or(0.0),
+        implied_volatility: c
+            .get("impliedVolatility")
+            .and_then(|x| x.as_f64())
+            .unwrap_or(0.0),
+        in_the_money: itm,
     }
-    let v: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("Yahoo options parse: {e}"))?;
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let result = v
-        .pointer("/optionChain/result/0")
-        .ok_or_else(|| "Yahoo options: empty result".to_string())?;
-    let underlying_price = result
-        .pointer("/quote/regularMarketPrice")
-        .and_then(|x| x.as_f64())
-        .unwrap_or(0.0);
+}
 
-    let expiration_dates: Vec<i64> = result
-        .get("expirationDates")
-        .and_then(|x| x.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
-        .unwrap_or_default();
-
-    // Yahoo only returns one expiration's chain per call when we don't pass
-    // &date=… — we take whatever came back in options[0].
-    let options = result
-        .get("options")
-        .and_then(|x| x.as_array())
-        .and_then(|arr| arr.first())
-        .ok_or_else(|| "Yahoo options: options[0] missing".to_string())?;
-
-    let parse_contract =
-        |c: &serde_json::Value, opt_type: &str, underlying: f64| -> OptionContract {
-            let strike = c.get("strike").and_then(|x| x.as_f64()).unwrap_or(0.0);
-            let itm = match opt_type {
-                "CALL" => underlying > strike,
-                _ => underlying < strike,
-            };
-            OptionContract {
-                contract_symbol: c
-                    .get("contractSymbol")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                option_type: opt_type.to_string(),
-                strike,
-                last_price: c.get("lastPrice").and_then(|x| x.as_f64()).unwrap_or(0.0),
-                bid: c.get("bid").and_then(|x| x.as_f64()).unwrap_or(0.0),
-                ask: c.get("ask").and_then(|x| x.as_f64()).unwrap_or(0.0),
-                volume: c.get("volume").and_then(|x| x.as_f64()).unwrap_or(0.0),
-                open_interest: c
-                    .get("openInterest")
-                    .and_then(|x| x.as_f64())
-                    .unwrap_or(0.0),
-                implied_volatility: c
-                    .get("impliedVolatility")
-                    .and_then(|x| x.as_f64())
-                    .unwrap_or(0.0),
-                in_the_money: itm,
-            }
-        };
-
+fn parse_yahoo_option_expiry(options: &serde_json::Value, underlying_price: f64) -> OptionExpiry {
     let exp_ts = options
         .get("expirationDate")
         .and_then(|x| x.as_i64())
@@ -12801,7 +12756,7 @@ pub async fn fetch_yahoo_options_chain(
         .and_then(|x| x.as_array())
         .map(|arr| {
             arr.iter()
-                .map(|c| parse_contract(c, "CALL", underlying_price))
+                .map(|c| parse_yahoo_option_contract(c, "CALL", underlying_price))
                 .collect()
         })
         .unwrap_or_default();
@@ -12810,31 +12765,149 @@ pub async fn fetch_yahoo_options_chain(
         .and_then(|x| x.as_array())
         .map(|arr| {
             arr.iter()
-                .map(|c| parse_contract(c, "PUT", underlying_price))
+                .map(|c| parse_yahoo_option_contract(c, "PUT", underlying_price))
                 .collect()
         })
         .unwrap_or_default();
 
-    let note = if expiration_dates.len() > 1 {
-        format!(
-            "Yahoo returned first of {} expirations; additional dates available",
-            expiration_dates.len()
+    OptionExpiry {
+        expiration,
+        days_to_expiry,
+        calls,
+        puts,
+    }
+}
+
+async fn fetch_yahoo_options_payload(
+    client: &reqwest::Client,
+    symbol: &str,
+    expiration_ts: Option<i64>,
+) -> Result<serde_json::Value, String> {
+    let mut url = format!(
+        "https://query2.finance.yahoo.com/v7/finance/options/{}",
+        symbol.to_uppercase()
+    );
+    if let Some(ts) = expiration_ts {
+        url.push_str("?date=");
+        url.push_str(&ts.to_string());
+    }
+    let resp = client
+        .get(&url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (X11; Linux x86_64) TyphooN-Terminal/0.1",
         )
+        .send()
+        .await
+        .map_err(|e| format!("Yahoo options request: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Yahoo options: HTTP {}", resp.status()));
+    }
+    resp.json()
+        .await
+        .map_err(|e| format!("Yahoo options parse: {e}"))
+}
+
+fn yahoo_options_result(v: &serde_json::Value) -> Result<&serde_json::Value, String> {
+    v.pointer("/optionChain/result/0")
+        .ok_or_else(|| "Yahoo options: empty result".to_string())
+}
+
+/// Fetch a Yahoo options chain for a symbol. The first request discovers the
+/// available expiration timestamps; follow-up `date=` requests then hydrate
+/// every expiration Yahoo exposes, bounded to avoid pathological provider
+/// responses hanging the OMON/EXPCAL refresh path.
+pub async fn fetch_yahoo_options_chain(
+    client: &reqwest::Client,
+    symbol: &str,
+) -> Result<OptionsChainSnapshot, String> {
+    const MAX_YAHOO_EXPIRATIONS: usize = 64;
+
+    let first_payload = fetch_yahoo_options_payload(client, symbol, None).await?;
+    let first_result = yahoo_options_result(&first_payload)?;
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let underlying_price = first_result
+        .pointer("/quote/regularMarketPrice")
+        .and_then(|x| x.as_f64())
+        .unwrap_or(0.0);
+
+    let mut expiration_dates: Vec<i64> = first_result
+        .get("expirationDates")
+        .and_then(|x| x.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+        .unwrap_or_default();
+    expiration_dates.sort_unstable();
+    expiration_dates.dedup();
+
+    let first_options = first_result
+        .get("options")
+        .and_then(|x| x.as_array())
+        .and_then(|arr| arr.first())
+        .ok_or_else(|| "Yahoo options: options[0] missing".to_string())?;
+    let first_expiry = parse_yahoo_option_expiry(first_options, underlying_price);
+    let first_exp_ts = first_options
+        .get("expirationDate")
+        .and_then(|x| x.as_i64())
+        .unwrap_or(0);
+
+    if expiration_dates.is_empty() && first_exp_ts > 0 {
+        expiration_dates.push(first_exp_ts);
+    }
+
+    let mut expirations = Vec::with_capacity(expiration_dates.len().max(1));
+    expirations.push(first_expiry);
+    let mut failures = Vec::new();
+
+    for exp_ts in expiration_dates
+        .iter()
+        .copied()
+        .filter(|ts| *ts > 0 && *ts != first_exp_ts)
+        .take(MAX_YAHOO_EXPIRATIONS.saturating_sub(1))
+    {
+        match fetch_yahoo_options_payload(client, symbol, Some(exp_ts)).await {
+            Ok(payload) => match yahoo_options_result(&payload).and_then(|result| {
+                result
+                    .get("options")
+                    .and_then(|x| x.as_array())
+                    .and_then(|arr| arr.first())
+                    .ok_or_else(|| "Yahoo options: options[0] missing".to_string())
+            }) {
+                Ok(options) => {
+                    expirations.push(parse_yahoo_option_expiry(options, underlying_price))
+                }
+                Err(e) => failures.push(format!("{exp_ts}: {e}")),
+            },
+            Err(e) => failures.push(format!("{exp_ts}: {e}")),
+        }
+    }
+
+    expirations.sort_by_key(|exp| exp.expiration.clone());
+    expirations.dedup_by(|a, b| a.expiration == b.expiration);
+
+    let mut notes = Vec::new();
+    if expiration_dates.len() > MAX_YAHOO_EXPIRATIONS {
+        notes.push(format!(
+            "Yahoo advertised {} expirations; hydrated first {}",
+            expiration_dates.len(),
+            MAX_YAHOO_EXPIRATIONS
+        ));
     } else {
-        String::new()
-    };
+        notes.push(format!("hydrated {} Yahoo expirations", expirations.len()));
+    }
+    if !failures.is_empty() {
+        notes.push(format!(
+            "{} expiration fetches failed: {}",
+            failures.len(),
+            failures.join("; ")
+        ));
+    }
 
     Ok(OptionsChainSnapshot {
         symbol: symbol.to_uppercase(),
         as_of: today,
         underlying_price,
-        expirations: vec![OptionExpiry {
-            expiration,
-            days_to_expiry,
-            calls,
-            puts,
-        }],
-        note,
+        expirations,
+        note: notes.join("; "),
     })
 }
 
@@ -69767,6 +69840,39 @@ mod tests {
     }
 
     #[test]
+    fn yahoo_option_expiry_parser_preserves_calls_and_puts() {
+        let options = serde_json::json!({
+            "expirationDate": 1_893_456_000i64,
+            "calls": [{
+                "contractSymbol": "SPY300101C00520000",
+                "strike": 520.0,
+                "lastPrice": 8.5,
+                "bid": 8.4,
+                "ask": 8.6,
+                "volume": 1200.0,
+                "openInterest": 5000.0,
+                "impliedVolatility": 0.18
+            }],
+            "puts": [{
+                "contractSymbol": "SPY300101P00520000",
+                "strike": 520.0,
+                "lastPrice": 7.5,
+                "bid": 7.4,
+                "ask": 7.6,
+                "volume": 900.0,
+                "openInterest": 4000.0,
+                "impliedVolatility": 0.20
+            }]
+        });
+        let expiry = parse_yahoo_option_expiry(&options, 525.0);
+        assert_eq!(expiry.calls.len(), 1);
+        assert_eq!(expiry.puts.len(), 1);
+        assert!(expiry.calls[0].in_the_money);
+        assert!(!expiry.puts[0].in_the_money);
+        assert_eq!(expiry.calls[0].contract_symbol, "SPY300101C00520000");
+    }
+
+    #[test]
     fn ivol_roundtrip() {
         let c = open_mem_conn_v8();
         let snap = IvolSnapshot {
@@ -74888,7 +74994,10 @@ Trailing text.
         };
         upsert_ingested_articles(&c, "AAPL", &snap).unwrap();
         let got = get_ingested_articles(&c, "AAPL").unwrap().unwrap();
-        assert_eq!(got.articles[0].body, "Full paywalled text the agent fetched and returned.");
+        assert_eq!(
+            got.articles[0].body,
+            "Full paywalled text the agent fetched and returned."
+        );
     }
 
     #[test]

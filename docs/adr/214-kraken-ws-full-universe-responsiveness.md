@@ -84,16 +84,16 @@ serialisation never compete with tokio's async workers or the egui
 thread. ADR-210 established the same pattern for REST cache writes; the
 WS writer reuses it.
 
-### 4. Focus-empty retry for the spawn lifecycle
+### 4. Pair-discovery retry for the spawn lifecycle
 
 `maybe_start_kraken_ws_ohlc` is idempotent on `kraken_ws_ohlc_started`
-but it also defers if the user's focus set (open charts + held positions
-+ watchlist + balance set) is empty when KrakenPairs first lands —
-nothing useful to subscribe to yet. `app_runtime.rs` re-evaluates every
-15s (`kraken_ws_ohlc_last_spawn_retry`) so opening a chart, taking a
-position, or adding to the watchlist eventually brings the streamers up
-without forcing the user to toggle the setting. Once `started == true`
-the retry becomes a no-op.
+but it also defers until Kraken AssetPairs have landed. The WS pipeline is
+intentionally full-universe, not focus-scoped; an empty chart/watchlist/
+position set is not a reason to skip subscriptions. `app_runtime.rs`
+re-evaluates every 15s (`kraken_ws_ohlc_last_spawn_retry`) so settings
+that are enabled before pair discovery still bring the streamers up once
+the catalog is available. Once `started == true` the retry becomes a
+no-op.
 
 ### 5. UI-thread `user_interacting` auto-reset
 

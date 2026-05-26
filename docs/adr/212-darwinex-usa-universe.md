@@ -10,13 +10,13 @@ Darwinex Zero offers ~800 USA Stocks and ETFs. We obtained the complete list via
 
 ## Decision
 - Created `native/src/app/darwin_universe.rs`
-- Hardcoded the **full** list of 793 USA Stocks + ETFs (after filtering EURGBP/EURUSD/GBPUSD)
+- Hardcoded the **full** deduplicated list of 822 USA Stocks + ETFs (after filtering EURGBP/EURUSD/GBPUSD)
 - Source: `Market Watch 20260515 235457.csv` export from https://www.darwinexzero.com/assets
 - Exposed via `DARWINEX_USA_EQUITY_SYMBOLS`, `darwinex_usa_equity_symbols()`, and `darwinex_usa_equity_set()`
 
 ## Consequences
 - Users can now search/chart Darwinex symbols using existing Kraken/Alpaca data
-- List should be refreshed periodically when Darwinex adds/removes symbols
+- List refresh is a manual maintenance task tied to the Market Watch export; the checked-in constant is deduplicated and covered by the `darwinex_usa_equity_set()` lookup path.
 - No MT5 sync dependency
 
 ## References

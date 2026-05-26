@@ -77,9 +77,10 @@ The two-step split was deliberate:
 - **1c667fb0 (2026-04-23 09:03)** — second peel: tool windows and
   strategy windows.
 
-`app.rs` is still the largest file in the crate (~158k lines), but the
-peeled-off submodules now rebuild in isolation when they are the only
-thing changed.
+The original ~158k-line `app.rs` has since been reduced to roughly 33k
+lines. The current largest seam is `native/src/app/floating_windows.rs`
+(~63k lines), followed by `command_palette.rs` (~18k lines). Peeled-off
+submodules rebuild in isolation when they are the only thing changed.
 
 ## Consequences
 
@@ -90,7 +91,7 @@ thing changed.
   near-perfect line moves for the six new files.
 - **Window discovery is easier.** A new contributor looking for the AI
   Sessions browser or the Storage Manager finds it under the obvious
-  submodule path instead of grepping a 158k-line file.
+  submodule path instead of grepping a monolithic parent file.
 - **`app.rs` stays the integration point.** `TyphooNApp` remains in
   the parent file, all `BrokerCmd` / `BrokerMsg` handling lives there,
   the chart pane and command palette live there, and the central state

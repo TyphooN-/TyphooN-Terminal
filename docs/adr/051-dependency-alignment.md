@@ -30,7 +30,7 @@ The dependency audit was repeated with `cargo tree -d` and the workspace manifes
 - Added `[workspace.dependencies]` for shared first-party crates and repeated third-party dependencies (`serde`, `serde_json`, `tokio`, `reqwest`, `chrono`, `tracing`, `tracing-subscriber`, `rusqlite`, `zstd`, credential crypto crates, and WebDriver plumbing). This keeps workspace members from drifting onto different direct versions.
 - Ran `cargo update` to pick up compatible patch-level security/bugfix releases in `Cargo.lock`.
 - Changed `reqwest` direct usage to `default-features = false` plus the explicit feature set actually used by the terminal (`json`, `query`, `cookies` where needed, and `rustls`). This avoids compiling reqwest's default TLS stack for HTTP clients that do not need it.
-- Changed direct `thirtyfour` usage to `default-features = false` plus `reqwest`/`rustls-tls`, omitting its component macro feature because TyphooN only uses the async WebDriver client for Darwinex Zero scraping.
+- Changed direct `thirtyfour` usage to `default-features = false` plus `reqwest`/`rustls`, omitting its component macro feature because TyphooN only uses the async WebDriver client for Darwinex Zero scraping. The old local `[patch.crates-io]` vendor override was removed after upgrading to upstream `thirtyfour` 0.37 because keeping a stale unused patch produces a Cargo warning and defeats the dependency-freshness policy.
 - Changed native `eframe` from default features to explicit Linux native features (`default_fonts`, `wayland`, `x11`, `wgpu_no_default_features`). The direct `wgpu` dependency now enables only `std`, `parking_lot`, `vulkan`, and `wgsl`, avoiding web, DX12, Metal, GLES, and WebGPU backend feature compilation in the Linux native terminal.
 - Revisited the `keyring` 4.x migration. The umbrella `keyring` 4.0.1 crate pulled in the optional SQLite/Turso backend and conflicted with `typhoon-native`'s global allocator, so TyphooN now uses the keyring 4.x split crates directly: `keyring-core` for `Entry`/`Error` and `dbus-secret-service-keyring-store` for Linux/FreeBSD Secret Service. This preserves the existing libsecret credential namespace without compiling the unused `keyring` CLI/sample wrapper, SQLite store, or Turso stack.
 
@@ -39,7 +39,7 @@ The dependency audit was repeated with `cargo tree -d` and the workspace manifes
 Explicit non-upgrades / unresolved upstream constraints after this pass:
 
 - The old `keyring` 3.x crate is removed. Do not re-add the `keyring` 4.x umbrella crate unless the global-allocator conflict with its SQLite/Turso backend is resolved; prefer direct `keyring-core` + platform backend crates.
-- `generic-array` 0.14.7 and `matchit` 0.8.4 are transitive. They are behind patch releases but are owned by upstream dependency constraints, not direct TyphooN manifests.
+- `generic-array` 0.14.7 and `matchit` 0.8.4 are transitive exact-version constraints from upstream (`crypto-common` and `axum` respectively). `cargo update --verbose` plus explicit `cargo update -p … --precise …` attempts are the verification source for these residual non-upgrades; they cannot be forced from TyphooN manifests without patching upstream crates.
 
 ## Remaining Transitive Duplicates
 

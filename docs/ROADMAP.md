@@ -88,14 +88,14 @@
 - [x] Multi-signal Anomaly Scanner (VaR + EV + ATR + SEC with tradability indicators)
 - [x] MTF Grid tab visibility checkboxes
 - [x] Storage Manager pagination
-- [x] Data hierarchy: MT5 > Alpaca > tastytrade > CryptoCompare > Kraken > Kraken Futures
+- [x] Data hierarchy: MT5 > Kraken Spot/xStocks > Kraken Futures > CryptoCompare > tastytrade > Alpaca
 
 ### Phase 9: tastytrade Integration
 - [x] tastytrade REST API client (session-based login, balances, positions, orders)
 - [x] Market data via DXLink WebSocket (historical bars: SETUP→AUTH→FEED protocol)
 - [x] Option chains + Greeks (nested expiration/strike, IV rank/percentile via market metrics)
 - [x] Quote snapshots + market metrics (bid/ask, IV rank, IV percentile, beta)
-- [x] 6-source bar priority: MT5 → Alpaca → tastytrade → CryptoCompare → Kraken → Kraken Futures
+- [x] 6-source bar priority: MT5 → Kraken Spot/xStocks → Kraken Futures → CryptoCompare → tastytrade → Alpaca
 
 ### Phase 10: Advanced Features
 - [x] More drawing tools (pitchfork, Elliott, Gann — all implemented, 89 total)

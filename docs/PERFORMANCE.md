@@ -38,7 +38,7 @@ WebSocket trade streams build 1-minute OHLCV bars in-process. Completed bars use
 ### Why It's Fast
 
 1. **Zero serialization** — data stays as Rust types from SQLite to GPU
-2. **Immediate mode UI** — egui redraws only what changed, no DOM diffing
+2. **Immediate mode UI** — no DOM or retained widget tree; performance comes from bounded per-frame work, caching, and repaint throttling
 3. **Pre-computed indicators** — computed once on load, cached in ChartState
 4. **Vulkan backend** — wgpu selects Vulkan on Linux (NVIDIA), Metal on macOS
 5. **No garbage collection** — Rust ownership model, no GC pauses

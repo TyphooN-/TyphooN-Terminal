@@ -171,14 +171,12 @@ tokens on identical data for every symbol.
   "No data — run OPTIONS first" until a chain has been fetched.
   This is acceptable (the chain fetch is one palette command away)
   but requires documentation.
-- **Yahoo typically returns only the first expiration** in the
-  chain unless a specific `date=` param is used (noted in
-  `OptionsChainSnapshot.note`). Until the chain-fetch path is
-  extended to enumerate all expirations, Tier 2 will often have
-  only one row — which still classifies correctly and still
-  computes volume/OI sums, but loses the "across expirations"
-  comparison advantage. This is a pre-existing limitation of the
-  chain fetcher, not a Tier 2 bug.
+- **Yahoo requires one request per expiration.** The chain fetcher now
+  discovers `expirationDates` on the first request and hydrates each date
+  with a bounded `date=` follow-up request. Partial provider failures are
+  preserved in `OptionsChainSnapshot.note`; Tier 2 can classify across all
+  successfully fetched expirations instead of being limited to the first
+  row.
 - **Quarterly classification rule is slightly redundant** with
   TRIPLE_WITCHING — in the current calendar, every 3rd Friday of
   a quarter-end month within the LEAPS horizon *is* TW, so the
@@ -201,8 +199,9 @@ tokens on identical data for every symbol.
 ### Paid-API gap
 
 None introduced. Yahoo options endpoint remains the free-tier chain
-source. For full multi-expiration chains we'd want OpEra or Polygon
-options endpoints (paid) — deferred to a future ADR.
+source. Paid endpoints such as OpEra or Polygon may still be useful for
+faster refresh, greeks, and more reliable intraday coverage, but they are
+not required for multi-expiration rows.
 
 ## Verification
 

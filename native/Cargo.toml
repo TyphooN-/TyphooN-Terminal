@@ -74,7 +74,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 mimalloc = { version = "0.1", default-features = false }
 
 # Selenium WebDriver for Darwinex Zero scraping (ADR-093)
-thirtyfour = { workspace = true, default-features = false, features = ["reqwest", "rustls-tls"] }
+thirtyfour = { workspace = true, default-features = false, features = ["reqwest", "rustls"] }
 
 # Windows AC-power probe for ADR-205 idle auto-compact gate
 [target.'cfg(windows)'.dependencies]
