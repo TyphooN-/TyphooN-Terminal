@@ -71,10 +71,10 @@ pub struct IapiLimiterConfig {
     /// pre-ban burst rate, deliberately not raw uncapped.
     pub aimd_max_rate: f64,
     /// How often (during clean traffic) to bump the rate by
-    /// `aimd_increment_per_step`. A 30 s interval at +0.1 means we'd
-    /// reach the 5 req/s ceiling in ~22 minutes of unbroken clean
-    /// traffic, which is fast enough to find the limit in one session
-    /// but slow enough that we don't blow past it on the way up.
+    /// `aimd_increment_per_step`. Default 10 s with a 0.01 req/s step is
+    /// intentionally precise: if 1.12 req/s succeeds and 1.13 req/s trips
+    /// Cloudflare, the limiter records 1.12 req/s as the empirical ceiling
+    /// instead of settling for a coarse 5% headroom estimate.
     pub aimd_increase_interval: Duration,
     /// Additive increment applied per `aimd_increase_interval`.
     pub aimd_increment_per_step: f64,
@@ -83,6 +83,11 @@ pub struct IapiLimiterConfig {
     /// when Cloudflare pushes back, gentle enough that occasional false
     /// positives don't cripple throughput.
     pub aimd_decrease_factor: f64,
+    /// Precision used when deriving the ceiling after a rate-limit hit. If the
+    /// current rate just failed and we have not observed a successful call at
+    /// that exact rate, cap future ramps at `failed_rate - aimd_resolution`.
+    /// Default 0.01 req/s gives hundredth-of-a-request-per-second discovery.
+    pub aimd_resolution: f64,
     /// How long the rate must hold steady (no increase, no 429) before
     /// the limiter declares it "converged" and starts persisting the
     /// value. Once converged the rate is mirrored to disk so the next
@@ -111,9 +116,10 @@ impl Default for IapiLimiterConfig {
             aimd_enabled: true,
             aimd_min_rate: 0.5,
             aimd_max_rate: 5.0,
-            aimd_increase_interval: Duration::from_secs(30),
-            aimd_increment_per_step: 0.1,
+            aimd_increase_interval: Duration::from_secs(10),
+            aimd_increment_per_step: 0.01,
             aimd_decrease_factor: 0.5,
+            aimd_resolution: 0.01,
             aimd_tuned_after: Duration::from_secs(30 * 60),
             aimd_ceiling_headroom: 0.95,
         }
@@ -154,6 +160,10 @@ struct TokenBucket {
     /// ramp caps at this value so the limiter converges just below the
     /// real ceiling instead of oscillating around it forever.
     discovered_ceiling: Option<f64>,
+    /// Highest rate that produced a successful iapi response in this session.
+    /// Used to turn a following 429 into a precise empirical ceiling instead
+    /// of blindly applying coarse percentage headroom.
+    last_successful_rate: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -340,6 +350,7 @@ impl IapiLimiter {
                 last_rate_change: Instant::now(),
                 converged: starts_converged,
                 discovered_ceiling: starting_ceiling,
+                last_successful_rate: None,
             }),
             escalation: StdMutex::new(escalation),
             config,
@@ -536,12 +547,19 @@ impl IapiLimiter {
             bucket.last_refill = Instant::now();
             bucket.converged = false;
             // ssthresh update: the rate that JUST 429'd is now known-bad.
-            // Set the ceiling to that rate × headroom (0.95 default), and
-            // if we already had a lower ceiling from a previous 429, keep
-            // the lower one — Cloudflare's worst recent limit is what we
-            // have to respect.
+            // Prefer the highest rate that actually produced a successful
+            // response in this session; otherwise use failed_rate - resolution.
+            // The old percentage-headroom heuristic stays as a conservative
+            // fallback for pathological cases where resolution math is invalid.
             if self.config.aimd_enabled {
-                let new_ceiling = (bucket.current_rate * self.config.aimd_ceiling_headroom)
+                let failed_rate = bucket.current_rate;
+                let precise_candidate = bucket
+                    .last_successful_rate
+                    .filter(|safe| *safe < failed_rate)
+                    .unwrap_or_else(|| failed_rate - self.config.aimd_resolution.max(0.001));
+                let fallback_candidate = failed_rate * self.config.aimd_ceiling_headroom;
+                let new_ceiling = precise_candidate
+                    .max(fallback_candidate)
                     .max(self.config.aimd_min_rate)
                     .min(self.config.aimd_max_rate);
                 let prev = bucket.discovered_ceiling;
@@ -551,9 +569,10 @@ impl IapiLimiter {
                 };
                 if prev != Some(merged) {
                     tracing::info!(
-                        "iapi AIMD: discovered ceiling = {:.2} req/s (rate {:.2} just {}'d)",
+                        "iapi AIMD: discovered ceiling = {:.2} req/s (last safe {:?}, rate {:.2} just {}'d)",
                         merged,
-                        bucket.current_rate,
+                        bucket.last_successful_rate,
+                        failed_rate,
                         if is_cf { "1015" } else { "429" }
                     );
                     bucket.discovered_ceiling = Some(merged);
@@ -593,6 +612,13 @@ impl IapiLimiter {
     /// reset the escalation counter so a future 429 starts at the base
     /// window instead of inheriting the doubled history.
     pub async fn record_success(&self) {
+        {
+            let mut bucket = self.bucket.lock().await;
+            bucket.last_successful_rate = Some(match bucket.last_successful_rate {
+                Some(prev) => prev.max(bucket.current_rate),
+                None => bucket.current_rate,
+            });
+        }
         let now = Instant::now();
         let mut esc = self.escalation.lock().expect("escalation mutex poisoned");
         if let Some(last_arm) = esc.last_arm {
@@ -678,6 +704,7 @@ mod tests {
             aimd_increase_interval: StdDuration::from_secs(1),
             aimd_increment_per_step: 1.0,
             aimd_decrease_factor: 0.5,
+            aimd_resolution: 0.01,
             aimd_tuned_after: StdDuration::from_secs(60),
             aimd_ceiling_headroom: 0.95,
         }
@@ -856,6 +883,7 @@ mod tests {
             aimd_increase_interval: StdDuration::from_millis(10),
             aimd_increment_per_step: 1.0,
             aimd_decrease_factor: 0.5,
+            aimd_resolution: 0.01,
             // Default for AIMD tests: long enough that ramp tests don't
             // accidentally hit convergence; convergence tests override
             // it explicitly via `convergence_config`.
@@ -1073,7 +1101,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ssthresh_sets_ceiling_to_rate_times_headroom_on_first_429() {
+    async fn ssthresh_sets_ceiling_to_rate_minus_resolution_on_first_429() {
         let lim = IapiLimiter::new(aimd_config());
         // Ramp up to 3.0 req/s so the 429 lands on a non-default rate.
         for _ in 0..3 {
@@ -1085,10 +1113,30 @@ mod tests {
         lim.record_rate_limited("error code: 1015").await;
         let bucket = lim.bucket.lock().await;
         let ceiling = bucket.discovered_ceiling.expect("ceiling set after 429");
-        let expected = (pre_rate * 0.95).max(0.5);
+        let expected = (pre_rate - 0.01).max(0.5);
         assert!(
             (ceiling - expected).abs() < 0.01,
             "expected ceiling ≈ {expected}, got {ceiling}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ssthresh_uses_last_successful_rate_for_hundredth_precision() {
+        let lim = IapiLimiter::new(aimd_config());
+        {
+            let mut bucket = lim.bucket.lock().await;
+            bucket.current_rate = 1.12;
+        }
+        lim.record_success().await;
+        {
+            let mut bucket = lim.bucket.lock().await;
+            bucket.current_rate = 1.13;
+        }
+        lim.record_rate_limited("error code: 1015").await;
+        let ceiling = lim.bucket.lock().await.discovered_ceiling.unwrap();
+        assert!(
+            (ceiling - 1.12).abs() < 1e-6,
+            "expected precise 1.12 req/s ceiling, got {ceiling}"
         );
     }
 
@@ -1103,7 +1151,7 @@ mod tests {
         let pre = lim.current_rate_per_sec().await;
         lim.record_rate_limited("error code: 1015").await;
         let ceiling = lim.bucket.lock().await.discovered_ceiling.unwrap();
-        let expected_ceiling = (pre * 0.95).max(0.5);
+        let expected_ceiling = (pre - 0.01).max(0.5);
         assert!((ceiling - expected_ceiling).abs() < 0.01);
         // Clear the 1015 cooldown so the acquire loop can run again —
         // we're testing the ramp cap behavior, not cooldown gating.
