@@ -4597,10 +4597,14 @@ impl TyphooNApp {
                         // areas advertise that larger height so egui preserves the
                         // new resize state instead of snapping back to content size.
                         let pane_h = ui.available_height().max(96.0);
-                        ui.horizontal(|ui| {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), pane_h),
+                            egui::Layout::left_to_right(egui::Align::Min),
+                            |ui| {
                             // ── Left: article list ──
                             ui.vertical(|ui| {
                                 ui.set_width(list_w);
+                                ui.set_min_height(pane_h);
                                 egui::ScrollArea::vertical()
                                     .id_salt("news_list_scroll")
                                     .max_height(pane_h)
@@ -4725,6 +4729,7 @@ impl TyphooNApp {
                             ui.separator();
                             // ── Right: article body ──
                             ui.vertical(|ui| {
+                                ui.set_min_height(pane_h);
                                 if let Some(idx) = self.news_selected {
                                     // Find which group (if any) this selected
                                     // article belongs to so we can show the
