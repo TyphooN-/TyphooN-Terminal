@@ -1,6 +1,6 @@
 # ADR-208: Xynth Feature Parity Target
 
-**Status:** Proposed
+**Status:** Reference audit, not an active implementation plan
 **Date:** 2026-05-02
 
 ## Context
@@ -24,7 +24,7 @@ Public references used:
 
 ## Parity Matrix
 
-| Xynth-documented capability | TyphooN status | Gap / next work |
+| Xynth-documented capability | TyphooN status | Gap / condition to reopen |
 |---|---:|---|
 | Natural-language AI analyst over market data | Partial | TyphooN has AI sessions and research packets. Need planner/executor workflow that turns prompts into repeatable data pulls, calculations, charts, and summary reports. |
 | Stocks, crypto, indices, forex live/historical data | Mostly covered | Stocks/crypto via Alpaca/Kraken/CryptoCompare/tastytrade; forex/indices via MT5/Darwinex where configured. Add direct forex/index fallback such as Polygon, Twelve Data, or Tiingo for users without MT5. |
@@ -70,14 +70,17 @@ Do not clone Xynth as a web chatbot. TyphooN should meet/exceed the documented c
 
 The missing work is mostly data acquisition and orchestration, not charting or core analytics.
 
-## Implementation Backlog
+## Reopen Criteria
 
-1. Add a provider-neutral `MarketIntelligenceSource` layer for options flow, dark-pool/block prints, borrow, and social/search data.
-2. Add normalized SQLite tables for option trades, option quote snapshots, option OI history, GEX/vanna/charm exposures, dark-pool prints, short borrow, Reddit posts, X posts, and source citations.
-3. Add a field registry mapping human names/aliases to SQL expressions and provider fields for natural-language screening.
-4. Add `ResearchPlan` persistence: steps, data dependencies, generated charts, output tables, summary, last-run timestamp, and rerun diff.
-5. Add an AI planner/executor that can choose tools, run safe local analysis code, and produce markdown/PDF reports with citations.
-6. Extend LAN sync whitelist for the new tables.
+This ADR should not be used as a standing task list. Reopen it only when a
+concrete provider or product workflow is selected, then write a scoped ADR for
+that slice. Valid reopen slices are:
+
+1. Provider-neutral market-intelligence ingestion for a chosen paid/free data source.
+2. Normalized SQLite tables for one acquired data family, with LAN-sync coverage.
+3. Natural-language screening field registry tied to existing provider-backed fields.
+4. `ResearchPlan` persistence and rerun reports over existing local data.
+5. AI planner/executor workflow with auditable local tool calls and citations.
 
 ## Consequences
 

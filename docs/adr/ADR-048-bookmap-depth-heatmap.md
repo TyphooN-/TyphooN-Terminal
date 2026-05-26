@@ -1,6 +1,6 @@
 # ADR-048: Bookmap-Style Depth Heatmap
 
-## Status: Partial (updated 2026-05-26) - Snapshot L2/DOM and guarded live-depth rendering implemented, retained streaming heatmap deferred
+## Status: Accepted current scope (updated 2026-05-26) - Snapshot L2/DOM and guarded live-depth rendering implemented
 
 ## Context
 
@@ -25,9 +25,11 @@ checks the loaded Kraken spot universe before enabling live depth, so equity
 symbols and unsupported broker symbols cannot accidentally start Kraken L2
 streams.
 
-Retained streaming L2 history remains deferred because it depends on broker data
-entitlements and a dedicated ring-buffer/texture pipeline that is separate
-from the normal chart renderer.
+Retained streaming L2 history is not part of the current Bookmap window scope.
+It requires broker data entitlements and a dedicated ring-buffer/texture pipeline
+that is separate from the normal chart renderer, so it should be reopened as a
+new implementation ADR only when the feed entitlement and texture budget are
+available.
 
 ## Original Decision
 
@@ -98,10 +100,10 @@ struct OrderBookSnapshot {
 - GPU compute shader for texture generation (not CPU)
 - Ring buffer with zero-copy GPU upload via `wgpu::Buffer::write`
 
-## Deferred Retained-Depth Phase
+## Reopen Criteria For Retained Depth History
 
-The remaining work is retained depth history, not the user-facing window shell
-or latest-snapshot rendering. It requires:
+Retained depth history is not an unfinished implementation item in this ADR. Reopen it as a new
+ADR when all of these prerequisites exist:
 - A broker entitlement that supplies continuous Level 2 snapshots for the
   target symbols.
 - A ring buffer of order book snapshots and trade prints.

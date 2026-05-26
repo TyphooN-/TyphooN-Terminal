@@ -1,10 +1,17 @@
 # ADR-070: LAN-Lite Client Mode (On-Demand Bar Sync)
 
-**Status:** Proposed | **Date:** 2026-04-05
+**Status:** Closed by existing client-demand sync | **Date:** 2026-04-05 | **Updated:** 2026-05-26
 
 ## Context
 
-The current LAN client mode syncs the FULL bar cache from the server (~3.9 GB for 851 symbols × 9 TFs). This requires significant storage on the client machine and takes time on first sync.
+The original concern was that LAN clients could be forced toward full-cache
+sync behavior. The current code path no longer needs a separate LAN-Lite
+protocol mode for the MT5/bar-demand workflow: client mode forwards active chart
+demand through `client:demand`, and the server/standalone side unions that demand
+before writing `demand.txt` for BarCacheWriter.
+
+The old full-cache comparison is kept below as historical context only; it is
+not an active implementation checklist.
 
 MT5 uses a different model: bars are downloaded on-demand when the user opens a chart. The terminal starts fast with an empty cache and populates it as the user explores symbols.
 
@@ -12,11 +19,16 @@ MT5 uses a different model: bars are downloaded on-demand when the user opens a 
 
 ### LAN-Lite Mode
 
-Add an optional "LAN-Lite" client mode alongside the existing "Full Sync" mode.
+Do not add a separate LAN-Lite protocol mode right now. Use the existing
+client-demand path instead.
 
 **Full Sync (current):** Syncs all bar data, KV cache, analytics. Client has a complete local copy.
 
-**LAN-Lite (new):** Only syncs bars for symbols the user actively views. All heavy analytics remain server-side, delivered via KV cache.
+**Client-demand sync (current):** Active viewed/gap-fill symbols are rendered to
+demand text. In LAN client mode that demand is stored as `client:demand`; the
+server reads it, unions it with local demand, and writes the BarCacheWriter
+`demand.txt` targets. Heavy analytics remain server-side and sync through the
+existing KV/cache surfaces.
 
 ### Architecture
 
@@ -37,17 +49,12 @@ Analytics (VaR, correlations,
 positions, account data)          ←─────  Synced via KV cache (same as Full mode)
 ```
 
-### Implementation Plan
+### Resolution
 
-1. **New LAN sync message:** `RequestBars { keys: Vec<String> }` — client requests specific cache keys
-2. **Server handler:** On receiving `RequestBars`, reads requested keys from cache and sends `EntryData` for each
-3. **Client behavior:**
-   - On chart load, if bars are missing from local cache, send `RequestBars` to server
-   - Cache received bars locally for offline access
-   - Don't sync bars for symbols not actively viewed
-4. **Toggle in Settings:** "LAN Sync Mode: Full / Lite" radio buttons
-5. **KV analytics still sync normally** — positions, account, DARWIN analytics, etc. (small data)
-6. **Bar cache grows incrementally** — as user views more symbols, local cache grows. Never exceeds what the user actually uses.
+No new sync message, Settings toggle, or second LAN mode is needed for the
+current architecture. The existing `RequestEntries { keys }` protocol remains
+available for key-level cache requests, while the active MT5/bar workflow is
+handled by `client:demand` forwarding.
 
 ### Storage Comparison
 

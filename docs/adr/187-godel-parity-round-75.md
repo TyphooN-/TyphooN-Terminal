@@ -1,6 +1,6 @@
 # ADR-187: TA-Lib Parity Round 75 — CDLHARAMICROSS / CDLLONGLEGGEDDOJI / CDLMARUBOZU / CDLSPINNINGTOP / CDLTRISTAR (research-layer, chart overlay deferred)
 
-**Status:** Implemented (research layer); chart overlay deferred by ADR-188
+**Status:** Implemented (research layer); chart overlays governed by ADR-188
 **Date:** 2026-04-19
 **Supersedes/extends:** ADR-108 through ADR-186
 **Related:** `engine/src/core/research.rs`, `native/src/app.rs`, `engine/src/core/lan_sync.rs`
@@ -9,11 +9,11 @@
 
 | Feature | Godel documented? | TA-Lib primitive? | Research packet | egui popup | Chart overlay |
 | --- | --- | --- | --- | --- | --- |
-| CDLHARAMICROSS | No | Yes (`CDLHARAMICROSS`) | Yes | Yes | No (deferred — ADR-188) |
-| CDLLONGLEGGEDDOJI | No | Yes (`CDLLONGLEGGEDDOJI`) | Yes | Yes | No (deferred — ADR-188) |
-| CDLMARUBOZU | No | Yes (`CDLMARUBOZU`) | Yes | Yes | No (deferred — ADR-188) |
-| CDLSPINNINGTOP | No | Yes (`CDLSPINNINGTOP`) | Yes | Yes | No (deferred — ADR-188) |
-| CDLTRISTAR | No | Yes (`CDLTRISTAR`) | Yes | Yes | No (deferred — ADR-188) |
+| CDLHARAMICROSS | No | Yes (`CDLHARAMICROSS`) | Yes | Yes | No (ADR-188 scope rule) |
+| CDLLONGLEGGEDDOJI | No | Yes (`CDLLONGLEGGEDDOJI`) | Yes | Yes | No (ADR-188 scope rule) |
+| CDLMARUBOZU | No | Yes (`CDLMARUBOZU`) | Yes | Yes | No (ADR-188 scope rule) |
+| CDLSPINNINGTOP | No | Yes (`CDLSPINNINGTOP`) | Yes | Yes | No (ADR-188 scope rule) |
+| CDLTRISTAR | No | Yes (`CDLTRISTAR`) | Yes | Yes | No (ADR-188 scope rule) |
 
 **Round classification:** pure TA-Lib candlestick-library coverage; not
 derived from Godel Terminal's publicly documented feature set. The

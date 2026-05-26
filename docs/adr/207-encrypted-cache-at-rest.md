@@ -1,6 +1,6 @@
 # ADR-207: Password-Encrypted Cache at Rest
 
-**Status:** Partially Implemented (Phase 1)
+**Status:** Implemented for encrypted backup/export scope
 **Date:** 2026-05-02
 **Updated:** 2026-05-06
 
@@ -12,7 +12,10 @@ The constraint is performance: the cache is hot-path storage for chart bars, lar
 
 ## Decision
 
-Support encrypted cache as an opt-in mode, not the default mode for all users.
+Support password-encrypted backup export/import as the implemented security
+scope. Do not treat live-cache encryption as an unfinished item in this ADR; it
+has different packaging, benchmark, and unlock-flow risk and should be reopened
+as a separate ADR if it becomes a current priority.
 
 Phase 1 is now implemented as password-encrypted backup export/import:
 
@@ -29,15 +32,18 @@ Phase 1 is now implemented as password-encrypted backup export/import:
   imports it. The CLI detects encrypted backup envelopes and refuses encrypted
   import without a passphrase.
 
-Recommended implementation path:
+Implemented path and reopen criteria:
 
-1. **Phase 1: encrypted backup/export.** Add password-protected
+1. **Encrypted backup/export.** Add password-protected
    `.typhoon-backup` exports. Implemented with whole-snapshot authenticated
    encryption, matching the existing backup path's in-memory zstd snapshot
    behavior. Chunked AEAD can be added later if multi-GB encrypted exports need
    lower peak memory.
-2. **Phase 2: encrypted live cache.** Add a dedicated encrypted cache mode behind a storage setting and migration flow.
-3. **Phase 3: server unlock workflow.** Headless LAN server reads the unlock secret from OS keyring when available, or prompts/systemd-credential/Ansible-vault supplied secret at service start. The unlock password is never stored in `kv_cache`.
+2. **Live encrypted cache.** Reopen separately only if SQLCipher or an
+   application-level encrypted-blob design has a stable packaging path and a
+   benchmark plan for multi-GB caches.
+3. **Server unlock workflow.** Reopen with live encryption only. Headless LAN
+   server unlock flows are irrelevant to encrypted backup files.
 
 For live encryption, prefer page-level database encryption if a stable build path is acceptable:
 
