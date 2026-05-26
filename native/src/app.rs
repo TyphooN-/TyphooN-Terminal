@@ -33065,10 +33065,12 @@ mod tests {
         let fonts = egui::FontDefinitions::default();
         ctx.set_fonts(fonts);
 
-        egui::CentralPanel::default().show(&ctx, |ui| {
-            nav_primary(ui, "TEST");
-            nav_secondary(ui, "123.45");
-            nav_muted(ui, "Yahoo");
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                nav_primary(ui, "TEST");
+                nav_secondary(ui, "123.45");
+                nav_muted(ui, "Yahoo");
+            });
         });
     }
 
