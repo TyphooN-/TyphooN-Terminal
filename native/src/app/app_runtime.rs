@@ -9354,7 +9354,7 @@ impl eframe::App for TyphooNApp {
                         ui.close();
                     }
                     if ui.button("Bookmap Heatmap").clicked() {
-                        self.show_bookmap = true;
+                        self.open_bookmap_window(None);
                         ui.close();
                     }
                 });

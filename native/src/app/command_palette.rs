@@ -2,9 +2,13 @@ use super::*;
 
 impl TyphooNApp {
     pub(super) fn handle_command(&mut self, cmd: &str, ctx: &egui::Context) {
-        let cmd_upper = cmd.trim().to_uppercase();
+        let cmd_upper = cmd.trim().trim_start_matches('/').to_uppercase();
         self.log
             .push_back(LogEntry::info(format!("CMD: {}", cmd_upper)));
+        if let Some(symbol) = cmd_upper.strip_prefix("BOOKMAP ") {
+            self.open_bookmap_window(Some(symbol.trim().to_string()));
+            return;
+        }
         match cmd_upper.as_str() {
             "QUIT" => {
                 self.save_session();
@@ -14614,7 +14618,7 @@ impl TyphooNApp {
             "STAT_ARB" => self.show_stat_arb = true,
             "RISK_BUDGET" => self.show_risk_budget = true,
             "ORDER_FLOW" => self.show_order_flow = true,
-            "BOOKMAP" => self.show_bookmap = true,
+            "BOOKMAP" => self.open_bookmap_window(None),
             "JOURNAL" => self.show_journal = true,
             "CACHE_STATS" => self.show_cache_stats = true,
             "SOURCES" => {

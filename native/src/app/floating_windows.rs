@@ -130,6 +130,31 @@ fn sortable_header(
 }
 
 impl TyphooNApp {
+    pub(super) fn open_bookmap_window(&mut self, symbol: Option<String>) {
+        let resolved = symbol
+            .map(|s| normalize_market_data_symbol(&s))
+            .filter(|s| !s.is_empty())
+            .or_else(|| self.active_trade_symbol())
+            .unwrap_or_else(|| "UNKNOWN".to_string());
+
+        if self
+            .bookmap_windows
+            .iter_mut()
+            .any(|w| w.symbol.eq_ignore_ascii_case(&resolved))
+        {
+            self.log
+                .push_back(LogEntry::info(format!("Bookmap already open: {resolved}")));
+            return;
+        }
+
+        self.bookmap_windows.push(BookmapWindowState {
+            symbol: resolved.clone(),
+            open: true,
+        });
+        self.log
+            .push_back(LogEntry::info(format!("Bookmap opened: {resolved}")));
+    }
+
     pub(super) fn draw_floating_windows(&mut self, ctx: &egui::Context) {
         // Shared helper: returns true if we should do heavy rendering
         let should_render_heavy = !self.heavy_sync_in_progress;
@@ -58355,10 +58380,19 @@ impl TyphooNApp {
                 });
         }
 
-        // Bookmap — wired to orderbook API
+        // Bookmap — one floating heatmap per requested symbol.
         if self.show_bookmap {
-            egui::Window::new("Bookmap Heatmap")
-                .open(&mut self.show_bookmap)
+            self.open_bookmap_window(None);
+            self.show_bookmap = false;
+        }
+        let mut open_bookmaps = Vec::with_capacity(self.bookmap_windows.len());
+        for window in std::mem::take(&mut self.bookmap_windows) {
+            let sym = window.symbol;
+            let mut open = window.open;
+            let title = format!("Bookmap Heatmap — {sym}");
+            egui::Window::new(title)
+                .id(egui::Id::new(("bookmap_heatmap", sym.as_str())))
+                .open(&mut open)
                 .resizable(true)
                 .default_size([600.0, 450.0])
                 .show(ctx, |ui| {
@@ -58366,23 +58400,10 @@ impl TyphooNApp {
                     let bm_red = egui::Color32::from_rgb(200, 50, 50);
                     let bm_dim = egui::Color32::from_rgb(80, 80, 100);
 
-                    let sym = self
-                        .charts
-                        .get(self.active_tab)
-                        .map(|c| {
-                            c.symbol
-                                .split(':')
-                                .rev()
-                                .nth(1)
-                                .or_else(|| c.symbol.split(':').last())
-                                .unwrap_or("")
-                                .to_string()
-                        })
-                        .unwrap_or_default();
                     let stream_supported =
                         typhoon_engine::core::kraken::to_kraken_pair_lossy(&sym).is_some();
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(format!("Depth: {}", sym)).strong());
+                        ui.label(egui::RichText::new(format!("Depth: {sym}")).strong());
                         if ui.button("Fetch Depth").clicked() && !sym.is_empty() {
                             let _ = self.broker_tx.send(BrokerCmd::GetOrderbook {
                                 symbol: sym.clone(),
@@ -58405,8 +58426,11 @@ impl TyphooNApp {
                     });
                     ui.separator();
 
-                    // Render depth heatmap from recent bar volume distribution
-                    if let Some(chart) = self.charts.get(self.active_tab) {
+                    // Render depth heatmap from the requested symbol's chart data.
+                    let chart = self.charts.iter().find(|chart| {
+                        normalize_market_data_symbol(&chart.symbol).eq_ignore_ascii_case(&sym)
+                    });
+                    if let Some(chart) = chart {
                         let bars = &chart.bars;
                         let n = bars.len();
                         if n > 20 {
@@ -58505,9 +58529,20 @@ impl TyphooNApp {
                         } else {
                             ui.label(egui::RichText::new("Load chart data first.").color(bm_dim));
                         }
+                    } else {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "No open chart data for {sym}. Open/load the symbol chart first."
+                            ))
+                            .color(bm_dim),
+                        );
                     }
                 });
+            if open {
+                open_bookmaps.push(BookmapWindowState { symbol: sym, open });
+            }
         }
+        self.bookmap_windows = open_bookmaps;
 
         // Orderbook DOM — shows real L2 data from Fetch Depth/Fetch L2
         if self.show_orderbook_window {

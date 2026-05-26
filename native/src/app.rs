@@ -5453,7 +5453,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "BOOKMAP",
-        desc: "Bookmap depth heatmap",
+        desc: "Bookmap depth heatmap; use BOOKMAP SYMBOL to open a specific symbol",
     },
     Command {
         name: "HV_CONE",
@@ -10468,6 +10468,12 @@ impl SortState {
     }
 }
 
+#[derive(Clone, Debug)]
+struct BookmapWindowState {
+    symbol: String,
+    open: bool,
+}
+
 pub struct TyphooNApp {
     /// Shared cache handle — opened once at startup.
     cache: Option<Arc<SqliteCache>>,
@@ -11221,6 +11227,7 @@ pub struct TyphooNApp {
     show_risk_budget: bool,
     show_order_flow: bool,
     show_bookmap: bool,
+    bookmap_windows: Vec<BookmapWindowState>,
     show_darwinex_outliers: bool,
     darwinex_outliers: Vec<typhoon_engine::core::var::OutlierResult>,
     darwinex_sector_stats: Vec<typhoon_engine::core::var::SectorStats>,
@@ -27681,6 +27688,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             show_risk_budget: false,
             show_order_flow: false,
             show_bookmap: false,
+            bookmap_windows: Vec::new(),
             show_darwinex_outliers: false,
             darwinex_multi_outliers: Vec::new(),
             darwinex_outliers: Vec::new(),

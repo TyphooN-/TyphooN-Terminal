@@ -72,6 +72,7 @@ impl TyphooNApp {
         self.show_volume_profile = false;
         self.show_order_flow = false;
         self.show_bookmap = false;
+        self.bookmap_windows.clear();
         self.show_darwinex_outliers = false;
         self.show_option_chain = false;
         self.show_indicator_compiler = false;
