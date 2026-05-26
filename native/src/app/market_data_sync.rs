@@ -843,14 +843,15 @@ impl TyphooNApp {
         if self.kraken_equities_sync_pause_until_ts > chrono::Utc::now().timestamp() {
             return 0;
         }
-        // iapi is 15-min delayed for equities, so M1/M5 fidelity is fake —
-        // strip them at the scheduler so candidate selection doesn't even
-        // shortlist symbols we will drop at queue_kraken_equity_fetch. Saves
-        // the rotation cursor for TFs we actually fetch.
+        // iapi is the slow lane. M1/M5 are fake fidelity on a 15-min delayed
+        // feed, and broad 15Min/30Min/1Hour/4Hour coverage for ~12.6k symbols
+        // would consume the whole limiter for days. Keep the universe lane on
+        // durable high TFs; focused/owned/charted symbols can still fetch
+        // intraday via queue_kraken_equity_fetch.
         let timeframes: Vec<String> = self
             .enabled_standard_sync_timeframes()
             .into_iter()
-            .filter(|tf| !matches!(tf.as_str(), "1Min" | "5Min"))
+            .filter(|tf| kraken_equity_full_universe_timeframe(tf))
             .collect();
         if timeframes.is_empty() {
             return 0;

@@ -406,8 +406,7 @@ impl IapiLimiter {
                     && now.saturating_duration_since(bucket.last_rate_change)
                         >= self.config.aimd_increase_interval
                 {
-                    let new_rate = (bucket.current_rate
-                        + self.config.aimd_increment_per_step)
+                    let new_rate = (bucket.current_rate + self.config.aimd_increment_per_step)
                         .min(effective_max);
                     if (new_rate - bucket.current_rate).abs() >= 0.001 {
                         tracing::info!(
@@ -454,8 +453,10 @@ impl IapiLimiter {
                 let (last_arm_unix, consecutive) = {
                     let escalation = self.escalation.lock().expect("escalation mutex poisoned");
                     let last_arm_unix = match escalation.last_arm {
-                        Some(t) => chrono::Utc::now().timestamp()
-                            - Instant::now().saturating_duration_since(t).as_secs() as i64,
+                        Some(t) => {
+                            chrono::Utc::now().timestamp()
+                                - Instant::now().saturating_duration_since(t).as_secs() as i64
+                        }
                         None => 0,
                     };
                     (last_arm_unix, escalation.consecutive)
@@ -590,7 +591,10 @@ impl IapiLimiter {
                     bucket.last_rate_change = Instant::now();
                 }
             }
-            (bucket.current_rate, bucket.discovered_ceiling.unwrap_or(0.0))
+            (
+                bucket.current_rate,
+                bucket.discovered_ceiling.unwrap_or(0.0),
+            )
         };
         // Persist the post-429 rate AND the freshly-updated ceiling so a
         // restart mid-throttle resumes at the same conservative rate
@@ -667,7 +671,9 @@ impl Default for EscalationState {
 
 impl TokenBucket {
     fn refill(&mut self, rate: f64, capacity: f64, now: Instant) {
-        let elapsed = now.saturating_duration_since(self.last_refill).as_secs_f64();
+        let elapsed = now
+            .saturating_duration_since(self.last_refill)
+            .as_secs_f64();
         if elapsed > 0.0 {
             self.tokens = (self.tokens + elapsed * rate).min(capacity);
             self.last_refill = now;
@@ -752,7 +758,9 @@ mod tests {
     #[tokio::test]
     async fn cloudflare_1015_uses_longer_window() {
         let lim = IapiLimiter::new(fast_config());
-        let secs = lim.record_rate_limited("<html>error code: 1015</html>").await;
+        let secs = lim
+            .record_rate_limited("<html>error code: 1015</html>")
+            .await;
         assert!(secs >= 599 && secs <= 600, "got {secs}");
     }
 
@@ -989,11 +997,17 @@ mod tests {
             lim.acquire(1.0).await.expect("free");
         }
         let rate = lim.current_rate_per_sec().await;
-        assert!((rate - 2.0).abs() < 1e-6, "rate should be pinned at 2.0, got {rate}");
+        assert!(
+            (rate - 2.0).abs() < 1e-6,
+            "rate should be pinned at 2.0, got {rate}"
+        );
         // And 429 should also leave the rate unchanged when disabled.
         lim.record_rate_limited("Too Many Requests").await;
         let rate2 = lim.current_rate_per_sec().await;
-        assert!((rate2 - 2.0).abs() < 1e-6, "rate should stay at 2.0, got {rate2}");
+        assert!(
+            (rate2 - 2.0).abs() < 1e-6,
+            "rate should stay at 2.0, got {rate2}"
+        );
     }
 
     /// Config tuned for convergence tests: short `aimd_tuned_after` so
@@ -1053,7 +1067,10 @@ mod tests {
         };
         let lim = IapiLimiter::new(cfg);
         let rate = lim.current_rate_per_sec().await;
-        assert!((rate - 3.5).abs() < 1e-6, "expected 3.5 restored, got {rate}");
+        assert!(
+            (rate - 3.5).abs() < 1e-6,
+            "expected 3.5 restored, got {rate}"
+        );
     }
 
     #[tokio::test]
@@ -1093,7 +1110,8 @@ mod tests {
     fn legacy_persisted_state_without_tuned_rate_decodes() {
         // Pre-AIMD persistence files don't have tuned_rate or
         // discovered_ceiling — serde defaults keep them decoding cleanly.
-        let legacy = r#"{"cooldown_until_unix":1700000000,"consecutive":1,"last_arm_unix":1699999000}"#;
+        let legacy =
+            r#"{"cooldown_until_unix":1700000000,"consecutive":1,"last_arm_unix":1699999000}"#;
         let s: PersistedState = serde_json::from_str(legacy).expect("legacy decode");
         assert_eq!(s.cooldown_until_unix, 1_700_000_000);
         assert_eq!(s.tuned_rate, 0.0);

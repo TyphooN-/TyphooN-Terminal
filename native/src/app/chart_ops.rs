@@ -361,7 +361,9 @@ impl TyphooNApp {
     pub(super) fn normalize_news_ticker_for_chart(raw: &str) -> Option<String> {
         let symbol = normalize_market_data_symbol(raw)
             .trim()
-            .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '.' && ch != '-' && ch != '/')
+            .trim_matches(|ch: char| {
+                !ch.is_ascii_alphanumeric() && ch != '.' && ch != '-' && ch != '/'
+            })
             .to_ascii_uppercase();
         let valid_chars = symbol
             .chars()
@@ -376,10 +378,7 @@ impl TyphooNApp {
         }
     }
 
-    pub(super) fn news_article_tickers(
-        primary_symbol: &str,
-        tickers: &[String],
-    ) -> Vec<String> {
+    pub(super) fn news_article_tickers(primary_symbol: &str, tickers: &[String]) -> Vec<String> {
         let mut out = Vec::new();
         if let Some(primary) = Self::normalize_news_ticker_for_chart(primary_symbol) {
             out.push(primary);
@@ -453,7 +452,8 @@ impl TyphooNApp {
             *visible = true;
         }
         self.mtf_enabled = true;
-        let queued = self.queue_symbol_fetch_for_source(&symbol, Timeframe::D1.cache_suffix(), None);
+        let queued =
+            self.queue_symbol_fetch_for_source(&symbol, Timeframe::D1.cache_suffix(), None);
         self.compute_mtf_grid_status();
         self.log.push_back(LogEntry::info(if queued {
             format!("News: opened {} D1 chart tab and queued data fetch", symbol)

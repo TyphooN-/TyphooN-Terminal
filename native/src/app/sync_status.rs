@@ -181,15 +181,12 @@ impl TyphooNApp {
                     let Some(tf) = normalize_sync_timeframe_key(tf) else {
                         continue;
                     };
-                    // Equities sync explicitly skips M1/M5 (iapi is 15-min
-                    // delayed, so those bars would be illusory fidelity —
-                    // see queue_kraken_equity_fetch). The cached rows for
-                    // those slots are deleted by the kraken_equity_m1m5
-                    // migration. Don't synthesise "expected" placeholder
-                    // rows for them either, otherwise the sync grid still
-                    // shows ~12.6k entries at 0% and the user assumes the
-                    // purge failed.
-                    if source == "kraken-equities" && matches!(tf, "1Min" | "5Min") {
+                    // Equities/iapi is the rate-limit bottleneck. The broad
+                    // universe lane only targets D1/W1/MN1; intraday history
+                    // remains demand/focus-driven so the sync grid does not
+                    // manufacture tens of thousands of slow, low-value expected
+                    // rows and hold full-tilt open for days.
+                    if source == "kraken-equities" && !kraken_equity_full_universe_timeframe(tf) {
                         continue;
                     }
                     if existing.contains(&format!("{source}:{symbol}:{tf}")) {

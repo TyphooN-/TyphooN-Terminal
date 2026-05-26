@@ -33144,7 +33144,8 @@ mod tests {
         let ctx = egui::Context::default();
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 120.0));
+                let rect =
+                    egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 120.0));
                 let painter = ui.painter();
                 draw_market_depth(painter, &depth, rect);
                 draw_volume_profile(painter, &profile, rect);
@@ -33419,18 +33420,23 @@ pub fn draw_market_depth(painter: &egui::Painter, depth: &MarketDepth, rect: egu
         painter.rect_filled(
             egui::Rect::from_min_max(
                 egui::pos2(mid_x, y0),
-                egui::pos2((mid_x + width).min(rect.right()), (y0 + row_h).min(rect.bottom())),
+                egui::pos2(
+                    (mid_x + width).min(rect.right()),
+                    (y0 + row_h).min(rect.bottom()),
+                ),
             ),
             0.0,
             ask_color,
         );
     }
     painter.line_segment(
-        [egui::pos2(mid_x, rect.top()), egui::pos2(mid_x, rect.bottom())],
+        [
+            egui::pos2(mid_x, rect.top()),
+            egui::pos2(mid_x, rect.bottom()),
+        ],
         egui::Stroke::new(1.0, egui::Color32::from_gray(95)),
     );
 }
-
 
 /// Basic Volume Profile rendering.
 #[derive(Clone, Debug, Default)]
@@ -33483,8 +33489,7 @@ pub fn draw_volume_profile(painter: &egui::Painter, profile: &VolumeProfile, rec
 #[derive(Clone, Debug, Default)]
 #[allow(dead_code)]
 pub struct EarningsSurprise {
-
-/// Simple earnings surprise calculation
+    /// Simple earnings surprise calculation
     pub symbol: String,
     pub actual: f64,
     pub estimate: f64,
@@ -33503,12 +33508,13 @@ pub struct Alert {
 
 #[allow(dead_code)]
 pub fn check_price_alert(current_price: f64, alert_price: f64, direction: &str) -> bool {
-
-/// Basic earnings surprise table row
-pub fn format_earnings_row(surprise: &EarningsSurprise) -> String {
-    format!("{}: Actual {:.2} vs Est {:.2} ({:.1}% surprise)", 
-        surprise.symbol, surprise.actual, surprise.estimate, surprise.surprise_pct)
-}
+    /// Basic earnings surprise table row
+    pub fn format_earnings_row(surprise: &EarningsSurprise) -> String {
+        format!(
+            "{}: Actual {:.2} vs Est {:.2} ({:.1}% surprise)",
+            surprise.symbol, surprise.actual, surprise.estimate, surprise.surprise_pct
+        )
+    }
 
     match direction {
         "above" => current_price > alert_price,
@@ -33521,8 +33527,7 @@ pub fn format_earnings_row(surprise: &EarningsSurprise) -> String {
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct SessionTemplate {
-
-/// Simple session check
+    /// Simple session check
     pub name: String,
     pub start_hour: u8,
     pub end_hour: u8,
@@ -33549,11 +33554,14 @@ pub struct TradeHistoryFilter {
 
 #[allow(dead_code)]
 pub fn trigger_alert(alert: &Alert, current_price: f64) -> bool {
+    /// Simple workspace switch helper
+    pub fn switch_workspace(_current: &Workspace, target: &Workspace) -> Workspace {
+        target.clone()
+    }
 
-/// Simple workspace switch helper
-pub fn switch_workspace(_current: &Workspace, target: &Workspace) -> Workspace {
-    target.clone()
-}
-
-    check_price_alert(current_price, alert.condition.parse().unwrap_or(0.0), "above")
+    check_price_alert(
+        current_price,
+        alert.condition.parse().unwrap_or(0.0),
+        "above",
+    )
 }

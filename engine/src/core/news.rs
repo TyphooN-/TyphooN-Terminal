@@ -363,10 +363,9 @@ pub fn list_articles_missing_body(
                   LIMIT ?3",
             )
             .map_err(|e| format!("prepare missing body: {e}"))?;
-        stmt.query_map(
-            params![sym, like, limit_i, MAX_BODY_FETCH_ATTEMPTS],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-        )
+        stmt.query_map(params![sym, like, limit_i, MAX_BODY_FETCH_ATTEMPTS], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
         .map_err(|e| format!("query missing body: {e}"))?
         .collect()
     };
@@ -399,7 +398,9 @@ pub fn bump_news_body_fetch_attempts(conn: &Connection, url_hash: &str) -> Resul
 /// article). The output is suitable for direct storage via
 /// [`upsert_news_body`] and for indexing in `research_news_fts`.
 pub async fn fetch_article_body(url: &str) -> Option<String> {
-    fetch_article_body_with_image(url).await.map(|(body, _)| body)
+    fetch_article_body_with_image(url)
+        .await
+        .map(|(body, _)| body)
 }
 
 /// Same as `fetch_article_body` but also returns the hero image URL when
@@ -592,11 +593,7 @@ fn parse_drop_selectors() -> Vec<scraper::Selector> {
 /// skipping any subtree rooted at an element matching one of the drop
 /// selectors. A trailing newline is inserted after block-level elements
 /// so paragraphs don't get glued together.
-fn walk_visible_text(
-    node: scraper::ElementRef,
-    drops: &[scraper::Selector],
-    out: &mut String,
-) {
+fn walk_visible_text(node: scraper::ElementRef, drops: &[scraper::Selector], out: &mut String) {
     for d in drops {
         if d.matches(&node) {
             return;
@@ -698,9 +695,7 @@ pub fn normalize_headline_for_dedup(headline: &str) -> String {
 /// are sorted newest → oldest after the primary. Returns
 /// `Vec<(primary_index, alternate_indices)>` so the caller can index
 /// back into the original slice without cloning the articles.
-pub fn group_articles_by_headline(
-    articles: &[NewsArticle],
-) -> Vec<(usize, Vec<usize>)> {
+pub fn group_articles_by_headline(articles: &[NewsArticle]) -> Vec<(usize, Vec<usize>)> {
     use std::collections::HashMap;
     // Map normalized headline → indices in input order.
     let mut buckets: HashMap<String, Vec<usize>> = HashMap::new();
@@ -717,11 +712,7 @@ pub fn group_articles_by_headline(
         let mut indices = buckets.remove(&key).unwrap_or_default();
         // Sort by published_at descending so the freshest source wins
         // the primary slot.
-        indices.sort_by(|&a, &b| {
-            articles[b]
-                .published_at
-                .cmp(&articles[a].published_at)
-        });
+        indices.sort_by(|&a, &b| articles[b].published_at.cmp(&articles[a].published_at));
         let primary = indices.remove(0);
         out.push((primary, indices));
     }
@@ -1103,11 +1094,9 @@ fn search_news_fts(
 /// production cache.
 pub fn count_all_articles(conn: &Connection) -> Result<i64, String> {
     let _ = create_news_tables(conn);
-    conn.query_row(
-        "SELECT COUNT(*) FROM research_news",
-        [],
-        |r| r.get::<_, i64>(0),
-    )
+    conn.query_row("SELECT COUNT(*) FROM research_news", [], |r| {
+        r.get::<_, i64>(0)
+    })
     .map_err(|e| format!("count all articles: {e}"))
 }
 
@@ -2729,19 +2718,21 @@ mod tests {
 
     #[test]
     fn group_articles_collapses_same_story_across_sources() {
-        let mk = |url: &str, headline: &str, ts: i64| NewsArticle {
-            url: url.into(),
-            headline: headline.into(),
-            published_at: ts,
-            ..Default::default()
-        }
-        .with_hash();
+        let mk = |url: &str, headline: &str, ts: i64| {
+            NewsArticle {
+                url: url.into(),
+                headline: headline.into(),
+                published_at: ts,
+                ..Default::default()
+            }
+            .with_hash()
+        };
         let articles = vec![
-            mk("u1", "Dads club Colchester | A Gazette",  100),
-            mk("u2", "Apple beats Q3 estimates",          200),
+            mk("u1", "Dads club Colchester | A Gazette", 100),
+            mk("u2", "Apple beats Q3 estimates", 200),
             mk("u3", "Dads club Colchester | B Standard", 110),
-            mk("u4", "Dads club Colchester - C News",     120),
-            mk("u5", "Tesla rises",                       300),
+            mk("u4", "Dads club Colchester - C News", 120),
+            mk("u5", "Tesla rises", 300),
         ];
         let groups = group_articles_by_headline(&articles);
         // 3 distinct stories: dads (3 sources), apple, tesla
@@ -2794,12 +2785,14 @@ mod tests {
 
     #[test]
     fn group_articles_preserves_singletons() {
-        let mk = |url: &str, headline: &str| NewsArticle {
-            url: url.into(),
-            headline: headline.into(),
-            ..Default::default()
-        }
-        .with_hash();
+        let mk = |url: &str, headline: &str| {
+            NewsArticle {
+                url: url.into(),
+                headline: headline.into(),
+                ..Default::default()
+            }
+            .with_hash()
+        };
         let articles = vec![mk("u1", "Unique A"), mk("u2", "Unique B")];
         let groups = group_articles_by_headline(&articles);
         assert_eq!(groups.len(), 2);

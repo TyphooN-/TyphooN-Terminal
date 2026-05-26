@@ -357,7 +357,8 @@ impl KrakenBroker {
         // 404s with `{"errors":[{"type":"Unknown method"}]}`. Kraken doesn't
         // dispatch on `asset_class` alone — the URL has to be in the equities
         // namespace.
-        let url = format!("{KRAKEN_INTERNAL_API_BASE_URL}/markets/equities/{symbol}/ticker/history");
+        let url =
+            format!("{KRAKEN_INTERNAL_API_BASE_URL}/markets/equities/{symbol}/ticker/history");
         let resp = self
             .client
             .get(&url)

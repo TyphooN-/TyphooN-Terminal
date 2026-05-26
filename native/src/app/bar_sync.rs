@@ -93,6 +93,13 @@ pub(super) fn compute_bar_sync_stats(
         let Some(tf) = normalize_sync_timeframe_key(raw_tf) else {
             continue;
         };
+        // Stale Kraken-equities intraday rows are historical byproducts / demand
+        // fetches, not part of the full-universe contract. Counting them in the
+        // aggregate makes the Sync Status window report an impossible backlog:
+        // iapi safely serves well under 1 req/s and each symbol×TF is a request.
+        if prefix == "kraken-equities" && !super::kraken_equity_full_universe_timeframe(tf) {
+            continue;
+        }
         let entry = groups
             .entry((broker.to_string(), tf.to_string()))
             .or_default();
@@ -310,5 +317,30 @@ mod tests {
             .expect("missing 1Hour row");
         assert_eq!(healthy_row.healthy, 1);
         assert_eq!(healthy_row.stale, 0);
+    }
+
+    #[test]
+    fn compute_bar_sync_stats_ignores_kraken_equity_intraday_universe_rows() {
+        let now_s = chrono::Utc::now().timestamp();
+        let rows = compute_bar_sync_stats(
+            &[
+                ("kraken-equities:AAPL:15Min".into(), 10, now_s),
+                ("kraken-equities:AAPL:1Day".into(), 10, now_s),
+            ],
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
+
+        let fifteen = rows
+            .iter()
+            .find(|row| row.broker == "Kraken" && row.tf == "15Min")
+            .expect("required Kraken 15Min placeholder row should exist");
+        assert_eq!(fifteen.total, 0);
+
+        let day = rows
+            .iter()
+            .find(|row| row.broker == "Kraken" && row.tf == "1Day")
+            .expect("missing Kraken 1Day row");
+        assert_eq!(day.total, 1);
     }
 }

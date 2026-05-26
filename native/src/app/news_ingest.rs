@@ -98,11 +98,7 @@ pub async fn hydrate_missing_bodies(cache: Arc<SqliteCache>, symbol_hint: Option
 /// feedback instead of waiting for the next background tick. Returns true
 /// if a body was actually stored, false if the fetch failed (in which
 /// case the per-URL failure counter is bumped, same as the batch path).
-pub async fn hydrate_one_url(
-    cache: Arc<SqliteCache>,
-    url_hash: String,
-    url: String,
-) -> bool {
+pub async fn hydrate_one_url(cache: Arc<SqliteCache>, url_hash: String, url: String) -> bool {
     if url.is_empty() {
         return false;
     }

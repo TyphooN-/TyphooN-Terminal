@@ -578,16 +578,17 @@ impl TyphooNApp {
                                     // Char-aware truncate so multi-byte UTF-8
                                     // (em-dashes, smart quotes, accented
                                     // letters) doesn't slice a code point.
-                                    let truncated: String = if text.chars().count()
-                                        > NEWS_BODY_CHAR_LIMIT
-                                    {
-                                        let mut buf =
-                                            text.chars().take(NEWS_BODY_CHAR_LIMIT).collect::<String>();
-                                        buf.push('…');
-                                        buf
-                                    } else {
-                                        text.to_string()
-                                    };
+                                    let truncated: String =
+                                        if text.chars().count() > NEWS_BODY_CHAR_LIMIT {
+                                            let mut buf = text
+                                                .chars()
+                                                .take(NEWS_BODY_CHAR_LIMIT)
+                                                .collect::<String>();
+                                            buf.push('…');
+                                            buf
+                                        } else {
+                                            text.to_string()
+                                        };
                                     let _ = writeln!(p, "{}: {}", label, truncated);
                                 }
                                 let _ = writeln!(p);
@@ -12869,7 +12870,8 @@ impl TyphooNApp {
                                     // char-aware truncate so multi-byte UTF-8 sequences
                                     // (em-dashes, smart quotes, accented letters) don't
                                     // get sliced mid-code-point.
-                                    let s = if a.summary.chars().count() > INGEST_SUMMARY_CHAR_LIMIT {
+                                    let s = if a.summary.chars().count() > INGEST_SUMMARY_CHAR_LIMIT
+                                    {
                                         let mut buf = a
                                             .summary
                                             .chars()

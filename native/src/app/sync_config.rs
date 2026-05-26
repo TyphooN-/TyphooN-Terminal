@@ -55,6 +55,17 @@ pub(super) const MT5_PROVIDER_MAX_BARS: u32 = i32::MAX as u32;
 pub(super) const KRAKEN_SPOT_PROVIDER_WINDOW_BARS: u32 = 720;
 pub(super) const KRAKEN_SPOT_MONTH_PROVIDER_WINDOW_BARS: u32 = 24;
 
+/// Kraken Securities/iapi is the bottleneck in full-universe sync: the safe
+/// discovered ceiling is often below 1 req/s, and history is one symbol × one
+/// timeframe per request. Syncing ~12.6k equities across every intraday TF would
+/// take days and starve charts/owned positions. The broad universe lane therefore
+/// keeps only the durable higher-TF bars current; focused/owned/chart-triggered
+/// fetches can still request 15Min/30Min/1Hour/4Hour through
+/// `queue_kraken_equity_fetch`.
+pub(super) fn kraken_equity_full_universe_timeframe(tf: &str) -> bool {
+    matches!(tf, "1Day" | "1Week" | "1Month")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,5 +85,14 @@ mod tests {
     fn kraken_rest_provider_window_stays_within_public_ohlc_ceiling() {
         assert_eq!(KRAKEN_SPOT_PROVIDER_WINDOW_BARS, 720);
         assert!(KRAKEN_SPOT_MONTH_PROVIDER_WINDOW_BARS < KRAKEN_SPOT_PROVIDER_WINDOW_BARS);
+    }
+
+    #[test]
+    fn kraken_equity_full_universe_sync_is_high_timeframe_only() {
+        assert!(!kraken_equity_full_universe_timeframe("15Min"));
+        assert!(!kraken_equity_full_universe_timeframe("4Hour"));
+        assert!(kraken_equity_full_universe_timeframe("1Day"));
+        assert!(kraken_equity_full_universe_timeframe("1Week"));
+        assert!(kraken_equity_full_universe_timeframe("1Month"));
     }
 }

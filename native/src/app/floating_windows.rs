@@ -60,10 +60,7 @@ impl SearchFilterMode {
                         .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '/')
             })
         {
-            let syms: Vec<String> = candidates
-                .iter()
-                .map(|s| s.to_ascii_uppercase())
-                .collect();
+            let syms: Vec<String> = candidates.iter().map(|s| s.to_ascii_uppercase()).collect();
             return Self::Symbols(syms);
         }
         // Bare keyword that isn't a symbol-CSV or regex: show all and
@@ -141,7 +138,9 @@ fn orderbook_json_matches_symbol(orderbook_json: &str, symbol: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(orderbook_json)
         .ok()
         .and_then(|v| v.get("symbol").and_then(|s| s.as_str()).map(str::to_string))
-        .map(|book_symbol| bookmap_symbol_key(&book_symbol).eq_ignore_ascii_case(&bookmap_symbol_key(symbol)))
+        .map(|book_symbol| {
+            bookmap_symbol_key(&book_symbol).eq_ignore_ascii_case(&bookmap_symbol_key(symbol))
+        })
         .unwrap_or(false)
 }
 
@@ -196,7 +195,10 @@ fn render_live_orderbook_heatmap(
 
     let mid_y = rect.center().y;
     painter.line_segment(
-        [egui::pos2(rect.left(), mid_y), egui::pos2(rect.right(), mid_y)],
+        [
+            egui::pos2(rect.left(), mid_y),
+            egui::pos2(rect.right(), mid_y),
+        ],
         egui::Stroke::new(1.0, dim_color),
     );
 
@@ -211,7 +213,11 @@ fn render_live_orderbook_heatmap(
             egui::pos2(rect.right() - width * frac, y),
             egui::vec2(width * frac, row_h - 1.0),
         );
-        painter.rect_filled(bar, 0.0, egui::Color32::from_rgba_premultiplied(200, 40, 40, 125));
+        painter.rect_filled(
+            bar,
+            0.0,
+            egui::Color32::from_rgba_premultiplied(200, 40, 40, 125),
+        );
         if idx < 6 {
             painter.text(
                 egui::pos2(rect.left() + 4.0, y),
@@ -231,7 +237,11 @@ fn render_live_orderbook_heatmap(
             egui::pos2(rect.left(), y),
             egui::vec2(width * frac, row_h - 1.0),
         );
-        painter.rect_filled(bar, 0.0, egui::Color32::from_rgba_premultiplied(0, 180, 60, 125));
+        painter.rect_filled(
+            bar,
+            0.0,
+            egui::Color32::from_rgba_premultiplied(0, 180, 60, 125),
+        );
         if idx < 6 {
             painter.text(
                 egui::pos2(rect.right() - 4.0, y),
@@ -3910,19 +3920,25 @@ impl TyphooNApp {
                                 + self.tastytrade_universe_symbols.len(),
                         );
                     broker_universe_assets.extend(self.all_broker_assets.iter().cloned());
-                    broker_universe_assets.extend(
-                        self.kraken_pairs
-                            .iter()
-                            .map(|(pair, display)| (display.clone(), pair.clone(), "crypto".to_string())),
-                    );
-                    broker_universe_assets.extend(
-                        self.kraken_futures_symbols.iter().map(|sym| {
-                            (sym.clone(), "Kraken Futures instrument".to_string(), "future".to_string())
-                        }),
-                    );
-                    broker_universe_assets.extend(self.tastytrade_universe_symbols.iter().map(|sym| {
-                        (sym.clone(), "tastytrade market-data symbol".to_string(), "tastytrade".to_string())
+                    broker_universe_assets.extend(self.kraken_pairs.iter().map(
+                        |(pair, display)| (display.clone(), pair.clone(), "crypto".to_string()),
+                    ));
+                    broker_universe_assets.extend(self.kraken_futures_symbols.iter().map(|sym| {
+                        (
+                            sym.clone(),
+                            "Kraken Futures instrument".to_string(),
+                            "future".to_string(),
+                        )
                     }));
+                    broker_universe_assets.extend(self.tastytrade_universe_symbols.iter().map(
+                        |sym| {
+                            (
+                                sym.clone(),
+                                "tastytrade market-data symbol".to_string(),
+                                "tastytrade".to_string(),
+                            )
+                        },
+                    ));
 
                     // PERF: return &str slices instead of a heap-allocated Vec<&str>.
                     // Called once per detailed_stats entry (~500/frame when explorer open).
@@ -4518,18 +4534,11 @@ impl TyphooNApp {
             // before Load Cached fires). Throttled to 5 s so a window
             // staying open doesn't hammer the cache lock — the SELECT
             // COUNT is fast but still costs the read lock.
-            if self
-                .news_db_total_last_refresh
-                .elapsed()
-                .as_secs()
-                >= 5
-            {
+            if self.news_db_total_last_refresh.elapsed().as_secs() >= 5 {
                 self.news_db_total_last_refresh = std::time::Instant::now();
                 if let Some(cache) = &self.cache {
                     if let Ok(conn) = cache.connection() {
-                        if let Ok(n) =
-                            typhoon_engine::core::news::count_all_articles(&conn)
-                        {
+                        if let Ok(n) = typhoon_engine::core::news::count_all_articles(&conn) {
                             self.news_db_total = Some(n);
                         }
                     }
@@ -58419,7 +58428,8 @@ impl TyphooNApp {
                                 symbol: sym.clone(),
                             });
                         }
-                        let stream_supported = kraken_bookmap_stream_supported(&sym, &self.kraken_pairs);
+                        let stream_supported =
+                            kraken_bookmap_stream_supported(&sym, &self.kraken_pairs);
                         let stream_button =
                             ui.add_enabled(stream_supported, egui::Button::new("Stream L2"));
                         if stream_button.clicked() && !sym.is_empty() {

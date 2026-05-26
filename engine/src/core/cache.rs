@@ -2269,9 +2269,8 @@ impl SqliteCache {
                     "DELETE FROM bar_cache WHERE key LIKE ?1 ESCAPE '\\'",
                     params![pattern],
                 )
-                .map_err(|e| {
-                    format!("delete kraken-equities bars failed for tf {tf}: {e}")
-                })? as u64;
+                .map_err(|e| format!("delete kraken-equities bars failed for tf {tf}: {e}"))?
+                as u64;
             let _ = conn.execute(
                 "DELETE FROM bar_track WHERE key LIKE ?1 ESCAPE '\\'",
                 params![pattern],
@@ -3578,18 +3577,45 @@ mod tests {
         assert_eq!(deleted, 3, "expected 3 rows deleted, got {deleted}");
 
         // Survivors still queryable:
-        assert!(cache.get_bars("kraken-equities:AAPL:1Hour").unwrap().is_some());
-        assert!(cache.get_bars("kraken-equities:AAPL:1Day").unwrap().is_some());
+        assert!(
+            cache
+                .get_bars("kraken-equities:AAPL:1Hour")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            cache
+                .get_bars("kraken-equities:AAPL:1Day")
+                .unwrap()
+                .is_some()
+        );
         assert!(cache.get_bars("kraken:BTCUSD:1Min").unwrap().is_some());
         assert!(cache.get_bars("alpaca:AAPL:1Min").unwrap().is_some());
-        assert!(cache
-            .get_bars("kraken-equities:NOT1MinFoo:1Hour")
-            .unwrap()
-            .is_some());
+        assert!(
+            cache
+                .get_bars("kraken-equities:NOT1MinFoo:1Hour")
+                .unwrap()
+                .is_some()
+        );
         // Targets gone:
-        assert!(cache.get_bars("kraken-equities:AAPL:1Min").unwrap().is_none());
-        assert!(cache.get_bars("kraken-equities:MSFT:5Min").unwrap().is_none());
-        assert!(cache.get_bars("kraken-equities:TSLA:1Min").unwrap().is_none());
+        assert!(
+            cache
+                .get_bars("kraken-equities:AAPL:1Min")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            cache
+                .get_bars("kraken-equities:MSFT:5Min")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            cache
+                .get_bars("kraken-equities:TSLA:1Min")
+                .unwrap()
+                .is_none()
+        );
 
         let _ = std::fs::remove_file(db_path);
     }
@@ -3603,7 +3629,12 @@ mod tests {
         let (deleted, bytes) = cache.delete_kraken_equity_bars_by_tf(&[]).unwrap();
         assert_eq!(deleted, 0);
         assert_eq!(bytes, 0);
-        assert!(cache.get_bars("kraken-equities:AAPL:1Min").unwrap().is_some());
+        assert!(
+            cache
+                .get_bars("kraken-equities:AAPL:1Min")
+                .unwrap()
+                .is_some()
+        );
         let _ = std::fs::remove_file(db_path);
     }
 }
