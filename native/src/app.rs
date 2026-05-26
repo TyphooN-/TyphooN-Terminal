@@ -25358,6 +25358,12 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     }
                     BrokerCmd::KrakenStartOrderbookWs { symbol, depth } => {
                         let msg_tx = broker_msg_tx_clone.clone();
+                        if typhoon_engine::core::kraken::to_kraken_pair_lossy(&symbol).is_none() {
+                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                "Kraken orderbook WS skipped: {symbol} is not a Kraken spot pair"
+                            )));
+                            continue;
+                        }
                         let stream_result = if let Some(ref kb) = kraken_broker {
                             kb.start_public_orderbook_ws(&symbol, depth).await
                         } else {

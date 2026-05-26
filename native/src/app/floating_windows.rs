@@ -58379,6 +58379,8 @@ impl TyphooNApp {
                                 .to_string()
                         })
                         .unwrap_or_default();
+                    let stream_supported =
+                        typhoon_engine::core::kraken::to_kraken_pair_lossy(&sym).is_some();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("Depth: {}", sym)).strong());
                         if ui.button("Fetch Depth").clicked() && !sym.is_empty() {
@@ -58386,11 +58388,18 @@ impl TyphooNApp {
                                 symbol: sym.clone(),
                             });
                         }
-                        if ui.button("Stream Depth").clicked() && !sym.is_empty() {
+                        let stream_button = ui.add_enabled(
+                            stream_supported,
+                            egui::Button::new("Stream Depth"),
+                        );
+                        if stream_button.clicked() && !sym.is_empty() {
                             let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
                                 symbol: sym.clone(),
                                 depth: 100,
                             });
+                        }
+                        if !stream_supported && !sym.is_empty() {
+                            stream_button.on_hover_text("Live Kraken depth is only available for Kraken spot pairs, not equity symbols.");
                         }
                         ui.label(egui::RichText::new("L2 depth").color(bm_dim).small());
                     });

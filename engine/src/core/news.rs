@@ -1031,6 +1031,33 @@ pub fn search_news(
     if query.trim().is_empty() {
         return Ok(vec![]);
     }
+    let safe_query = fts5_safe_query(query);
+    let primary = search_news_fts(conn, query, limit);
+    if primary.is_ok() || safe_query == query.trim() {
+        return primary;
+    }
+    search_news_fts(conn, &safe_query, limit)
+}
+
+fn fts5_safe_query(query: &str) -> String {
+    let terms: Vec<String> = query
+        .split(|ch: char| ch == ',' || ch.is_ascii_whitespace())
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect();
+    if terms.is_empty() {
+        query.trim().to_string()
+    } else {
+        terms.join(" OR ")
+    }
+}
+
+fn search_news_fts(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<NewsArticle>, String> {
     let mut stmt = conn.prepare(
         "SELECT n.url_hash, n.symbol, n.source, n.provider, n.headline, n.summary, n.url, n.published_at,
                 n.image_url, n.sentiment, n.sentiment_score, n.tickers_json, n.categories_json, n.body,
@@ -2743,6 +2770,26 @@ mod tests {
             upsert_news(&conn, &a).unwrap();
         }
         assert_eq!(count_all_articles(&conn).unwrap(), 5);
+    }
+
+    #[test]
+    fn search_news_falls_back_for_comma_separated_terms() {
+        let conn = mem_conn();
+        let a = NewsArticle {
+            symbol: "TNDM".into(),
+            headline: "TNDM Tandem Diabetes reports results".into(),
+            summary: "Insulin pump maker update".into(),
+            url: "https://example.com/tndm".into(),
+            published_at: 1_700_000_000,
+            tickers: vec!["TNDM".into()],
+            ..Default::default()
+        }
+        .with_hash();
+        upsert_news(&conn, &a).unwrap();
+
+        let rows = search_news(&conn, "TNDM, GDC", 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].symbol, "TNDM");
     }
 
     #[test]
