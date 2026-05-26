@@ -816,13 +816,20 @@ impl TyphooNApp {
             return 0;
         }
         let sectors = self.kraken_sync_symbol_sectors();
-        let budgets = [12usize, 16, 12, 12];
+        let full_tilt = self.full_tilt_sync_enabled();
+        let budgets = if full_tilt {
+            [96usize, 128, 96, 96]
+        } else {
+            [12usize, 16, 12, 12]
+        };
+        let foreground_slots = if full_tilt { 16 } else { 4 };
         let mut dispatched = 0usize;
         for (idx, (sector, budget)) in sectors.iter().zip(budgets).enumerate() {
             if !self.kraken_spot_sector_scrape_enabled(idx) {
                 continue;
             }
-            dispatched += self.schedule_kraken_pairs_with_budget(idx, sector, budget, 4);
+            dispatched +=
+                self.schedule_kraken_pairs_with_budget(idx, sector, budget, foreground_slots);
         }
         dispatched
     }
@@ -937,10 +944,21 @@ impl TyphooNApp {
             return 0;
         }
         let sectors = self.kraken_futures_sync_symbol_sectors();
-        let budgets = [10usize, 8, 8, 4];
+        let full_tilt = self.full_tilt_sync_enabled();
+        let budgets = if full_tilt {
+            [96usize, 64, 64, 32]
+        } else {
+            [10usize, 8, 8, 4]
+        };
+        let foreground_slots = if full_tilt { 12 } else { 3 };
         let mut dispatched = 0usize;
         for (idx, (sector, budget)) in sectors.iter().zip(budgets).enumerate() {
-            dispatched += self.schedule_kraken_futures_pairs_with_budget(idx, sector, budget, 3);
+            dispatched += self.schedule_kraken_futures_pairs_with_budget(
+                idx,
+                sector,
+                budget,
+                foreground_slots,
+            );
         }
         dispatched
     }
@@ -1517,14 +1535,14 @@ impl TyphooNApp {
         let batch_limit = if self.user_interacting && !full_tilt {
             batch_limit.min(2)
         } else if full_tilt {
-            batch_limit.max(32)
+            batch_limit.max(128)
         } else {
             batch_limit
         };
         let foreground_slots = if self.user_interacting && !full_tilt {
             foreground_slots.min(1)
         } else if full_tilt {
-            foreground_slots.max(8)
+            foreground_slots.max(16)
         } else {
             foreground_slots
         };
@@ -1611,14 +1629,14 @@ impl TyphooNApp {
         let batch_limit = if self.user_interacting && !full_tilt {
             batch_limit.min(1)
         } else if full_tilt {
-            batch_limit.max(24)
+            batch_limit.max(96)
         } else {
             batch_limit
         };
         let foreground_slots = if self.user_interacting && !full_tilt {
             foreground_slots.min(1)
         } else if full_tilt {
-            foreground_slots.max(6)
+            foreground_slots.max(12)
         } else {
             foreground_slots
         };

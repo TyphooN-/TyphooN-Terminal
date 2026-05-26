@@ -33,6 +33,11 @@ const KRAKEN_WS_RECONNECT_MAX: Duration = Duration::from_secs(60);
 /// idle connections after ~60s of silence on some pops, so 30s gives plenty
 /// of headroom while still being cheap.
 const KRAKEN_WS_PING_INTERVAL: Duration = Duration::from_secs(30);
+/// Per-frame pause during the initial subscribe burst. Keep a small gap so a
+/// single connection doesn't send all batches in one scheduler tick, but do
+/// not drip-feed the full universe: low timeframe catch-up depends on the WS
+/// snapshots landing immediately after AssetPairs discovery.
+const KRAKEN_WS_SUBSCRIBE_FRAME_DELAY: Duration = Duration::from_millis(20);
 /// How long the subscribe-burst can take before we time it out and treat
 /// the connection as broken. Sized so even the 13k/250 = 52 batches at
 /// 1 frame/sec stay well under it.
@@ -402,9 +407,10 @@ async fn run_ohlc_streamer_once(
                 .await
                 .map_err(|e| format!("ws subscribe send failed: {e}"))?;
             // Brief pace so we don't trip Kraken's per-connection burst limit
-            // on the subscribe storm. 50ms × 52 batches ≈ 2.6s for a 13k
-            // universe, which is acceptable startup time.
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            // on the subscribe storm. 20ms × 52 batches ≈ 1.0s for a 13k
+            // universe per interval, while still allowing all interval
+            // streamers to get their initial snapshots online quickly.
+            tokio::time::sleep(KRAKEN_WS_SUBSCRIBE_FRAME_DELAY).await;
         }
         Ok::<(), String>(())
     };
@@ -509,6 +515,17 @@ mod tests {
         let third: serde_json::Value = serde_json::from_str(&frames[2]).unwrap();
         let arr = third["params"]["symbol"].as_array().unwrap();
         assert_eq!(arr.len(), 100);
+    }
+
+    #[test]
+    fn subscribe_burst_delay_keeps_full_universe_startup_fast() {
+        let symbols: Vec<String> = (0..13_000).map(|i| format!("PAIR{i}/USD")).collect();
+        let batches = build_subscribe_frames(1, &symbols).len() as u32;
+        let expected_elapsed = KRAKEN_WS_SUBSCRIBE_FRAME_DELAY * batches;
+        assert!(
+            expected_elapsed <= Duration::from_secs(2),
+            "full-universe subscribe snapshot should be online in <=2s per interval, got {expected_elapsed:?}"
+        );
     }
 
     #[test]

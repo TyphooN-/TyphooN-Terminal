@@ -285,10 +285,10 @@ mod tests {
     }
 }
 
-/// Coalesce-and-flush cadence for the WS bar writer. Picked so an active
-/// pair's 1Min bar is flushed at least once per bar (~5 flushes/min), but
-/// idle pairs don't pay the cost of a same-bar rewrite every tick.
-const WS_BAR_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
+/// Coalesce-and-flush cadence for the WS bar writer. Keep this tight so the
+/// initial full-universe snapshots mark REST slots WS-fresh almost immediately;
+/// closed-bar gating still prevents per-tick rewrites of open buckets.
+const WS_BAR_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Maximum bars per `merge_bars` call. The cache's merge_bars rewrites the
 /// entire compressed blob for the key, so we batch but don't try to flush
