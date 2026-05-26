@@ -4659,7 +4659,7 @@ impl TyphooNApp {
                         // the window back open; when the user expands, the scroll
                         // areas advertise that larger height so egui preserves the
                         // new resize state instead of snapping back to content size.
-                        let pane_h = ui.available_height().max(96.0);
+                        let pane_h = (ui.max_rect().bottom() - ui.cursor().top()).max(96.0);
                         ui.allocate_ui_with_layout(
                             egui::vec2(ui.available_width(), pane_h),
                             egui::Layout::left_to_right(egui::Align::Min),
