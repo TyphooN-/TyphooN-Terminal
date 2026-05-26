@@ -1,5 +1,15 @@
 use super::*;
 
+const MTF_GRID_TIMEFRAMES: [(&str, Timeframe); 7] = [
+    ("M15", Timeframe::M15),
+    ("M30", Timeframe::M30),
+    ("H1", Timeframe::H1),
+    ("H4", Timeframe::H4),
+    ("D1", Timeframe::D1),
+    ("W1", Timeframe::W1),
+    ("MN1", Timeframe::MN1),
+];
+
 /// True iff `raw` becomes `target_upper` after stripping `'/'` and uppercasing
 /// (ASCII). Avoids the per-call `raw.replace('/', "").to_uppercase()` allocation
 /// that build_trade_overlay used to do once per scanned position.
@@ -391,16 +401,7 @@ impl TyphooNApp {
             .get(self.active_tab)
             .and_then(|chart| chart.source_override.clone());
 
-        let all_tfs: &[(&'static str, Timeframe)] = &[
-            ("M1", Timeframe::M1),
-            ("M5", Timeframe::M5),
-            ("M15", Timeframe::M15),
-            ("M30", Timeframe::M30),
-            ("H1", Timeframe::H1),
-            ("H4", Timeframe::H4),
-            ("D1", Timeframe::D1),
-            ("W1", Timeframe::W1),
-        ];
+        let all_tfs: &[(&'static str, Timeframe)] = &MTF_GRID_TIMEFRAMES;
 
         // Collect results from already-loaded charts (no thread needed)
         let mut preloaded: Vec<(
@@ -528,19 +529,9 @@ impl TyphooNApp {
     }
 
     /// Set up MTF grid with N columns and target chart count.
-    /// Creates charts for all 9 timeframes, filling up to `target` charts.
+    /// Creates charts for M15+ timeframes, filling up to `target` charts.
     pub(super) fn setup_mtf_grid(&mut self, cols: usize, target: usize) {
-        let all_tfs = [
-            Timeframe::M1,
-            Timeframe::M5,
-            Timeframe::M15,
-            Timeframe::M30,
-            Timeframe::H1,
-            Timeframe::H4,
-            Timeframe::D1,
-            Timeframe::W1,
-            Timeframe::MN1,
-        ];
+        let all_tfs = MTF_GRID_TIMEFRAMES.map(|(_, tf)| tf);
         let sym = self.symbol_input.trim().to_string();
         let source_override = self
             .charts

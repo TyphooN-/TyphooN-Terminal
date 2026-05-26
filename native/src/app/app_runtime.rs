@@ -1365,7 +1365,9 @@ impl eframe::App for TyphooNApp {
                         self.auto_compact_started_ms = 0;
                         self.auto_compact_last_skip = Some(format!("last attempt failed: {}", e));
                     }
-                    if e.starts_with("Kraken pairs:") {
+                    if e.starts_with("Asset fetch failed:") {
+                        self.all_broker_assets_fetched = false;
+                    } else if e.starts_with("Kraken pairs:") {
                         self.kraken_pairs_requested = false;
                     } else if e.starts_with("Kraken futures instruments:") {
                         self.kraken_futures_requested = false;

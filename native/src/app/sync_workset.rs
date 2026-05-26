@@ -131,6 +131,13 @@ fn ordered_sync_timeframes_high_first(timeframes: &[String]) -> Vec<String> {
     unique
 }
 
+fn foreground_sync_timeframes(timeframes: &[String]) -> Vec<String> {
+    ordered_sync_timeframes_high_first(timeframes)
+        .into_iter()
+        .filter(|tf| !matches!(tf.as_str(), "1Min" | "5Min"))
+        .collect()
+}
+
 pub(super) fn alpaca_fetch_key(symbol: &str, timeframe: &str) -> String {
     let sym = normalize_market_data_symbol(symbol).replace('/', "");
     let tf = normalize_sync_timeframe_key(timeframe).unwrap_or(timeframe);
@@ -567,12 +574,13 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     // keeps every MTF_Grid cell current before backfilling/scanning lower-value
     // symbols.
     let foreground_budget = batch_size;
-    if foreground_budget > 0 && !focus_symbols.is_empty() {
+    let foreground_timeframes = foreground_sync_timeframes(timeframes);
+    if foreground_budget > 0 && !focus_symbols.is_empty() && !foreground_timeframes.is_empty() {
         let mut foreground_symbols: Vec<String> = focus_symbols.iter().cloned().collect();
         foreground_symbols.sort();
         let foreground = select_alpaca_sync_candidates(
             &foreground_symbols,
-            timeframes,
+            &foreground_timeframes,
             state_map,
             focus_symbols,
             no_data_keys,
@@ -1209,7 +1217,7 @@ mod tests {
     fn select_alpaca_sync_workset_rotating_gives_focus_the_full_batch() {
         let now_s = 1_700_000_000i64;
         let symbols = vec!["AAPL".to_string(), "MSFT".to_string(), "QQQ".to_string()];
-        let timeframes = vec!["1Min".to_string()];
+        let timeframes = vec!["15Min".to_string()];
         let focus = HashSet::from(["MSFT".to_string(), "QQQ".to_string()]);
         let mut cursor = 0usize;
 
@@ -1234,6 +1242,36 @@ mod tests {
         assert_eq!(selected[1].symbol, "QQQ");
         assert!(selected[0].focus);
         assert!(selected[1].focus);
+    }
+
+    #[test]
+    fn select_alpaca_sync_workset_rotating_does_not_foreground_m1_m5() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec!["AAPL".to_string(), "MSFT".to_string(), "QQQ".to_string()];
+        let timeframes = vec!["1Min".to_string(), "5Min".to_string()];
+        let focus = HashSet::from(["QQQ".to_string()]);
+        let mut cursor = 0usize;
+
+        let selected = select_alpaca_sync_workset_rotating(
+            &symbols,
+            &timeframes,
+            &HashMap::new(),
+            &focus,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            1,
+            1,
+            1,
+            &mut cursor,
+            now_s,
+            alpaca_sync_target_bars,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].symbol, "AAPL");
+        assert!(!selected[0].focus);
+        assert_eq!(cursor, 1);
     }
 
     #[test]

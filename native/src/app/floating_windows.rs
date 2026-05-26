@@ -3680,10 +3680,32 @@ impl TyphooNApp {
         // Symbols Explorer — all-encompassing symbol browser with broker hierarchy
         if self.show_symbols {
             let mut show_symbols = self.show_symbols;
-            // Fetch broker assets on first open
-            if !self.all_broker_assets_fetched && self.broker_connected {
+            // Fetch broker symbol universes on first open. Alpaca exposes full
+            // asset metadata; Kraken/tastytrade expose tradable symbol catalogs.
+            if !self.all_broker_assets_fetched && self.broker_connected && self.alpaca_enabled {
                 let _ = self.broker_tx.send(BrokerCmd::GetAllAssets);
                 self.all_broker_assets_fetched = true;
+            }
+            if self.kraken_enabled && self.kraken_pairs.is_empty() && !self.kraken_pairs_requested {
+                let _ = self.broker_tx.send(BrokerCmd::KrakenGetPairs);
+                self.kraken_pairs_requested = true;
+            }
+            if self.kraken_enabled
+                && self.kraken_scrape_futures
+                && self.kraken_futures_symbols.is_empty()
+                && !self.kraken_futures_requested
+            {
+                let _ = self.broker_tx.send(BrokerCmd::KrakenFuturesGetInstruments);
+                self.kraken_futures_requested = true;
+            }
+            if self.tastytrade_enabled
+                && self.tt_connected
+                && self.tastytrade_universe_symbols.is_empty()
+                && !self.tastytrade_universe_requested
+                && chrono::Utc::now().timestamp() >= self.tastytrade_universe_retry_after_ts
+            {
+                let _ = self.broker_tx.send(BrokerCmd::TastytradeGetUniverse);
+                self.tastytrade_universe_requested = true;
             }
             egui::Window::new("Symbol Explorer")
                 .open(&mut show_symbols)
@@ -3715,6 +3737,27 @@ impl TyphooNApp {
                     // Build set of cached symbols (normalized, no slash, uppercase)
                     let details = &self.bg.detailed_stats;
                     let filter_upper = self.symbols_filter.to_uppercase();
+                    let mut broker_universe_assets: Vec<(String, String, String)> =
+                        Vec::with_capacity(
+                            self.all_broker_assets.len()
+                                + self.kraken_pairs.len()
+                                + self.kraken_futures_symbols.len()
+                                + self.tastytrade_universe_symbols.len(),
+                        );
+                    broker_universe_assets.extend(self.all_broker_assets.iter().cloned());
+                    broker_universe_assets.extend(
+                        self.kraken_pairs
+                            .iter()
+                            .map(|(pair, display)| (display.clone(), pair.clone(), "crypto".to_string())),
+                    );
+                    broker_universe_assets.extend(
+                        self.kraken_futures_symbols.iter().map(|sym| {
+                            (sym.clone(), "Kraken Futures instrument".to_string(), "future".to_string())
+                        }),
+                    );
+                    broker_universe_assets.extend(self.tastytrade_universe_symbols.iter().map(|sym| {
+                        (sym.clone(), "tastytrade market-data symbol".to_string(), "tastytrade".to_string())
+                    }));
 
                     // PERF: return &str slices instead of a heap-allocated Vec<&str>.
                     // Called once per detailed_stats entry (~500/frame when explorer open).
@@ -3855,9 +3898,8 @@ impl TyphooNApp {
 
                     // Count cached + broker universe
                     let cached_count: usize = cached.values().map(|s| s.len()).sum();
-                    let broker_count = self.all_broker_assets.len();
-                    let uncached_count = self
-                        .all_broker_assets
+                    let broker_count = broker_universe_assets.len();
+                    let uncached_count = broker_universe_assets
                         .iter()
                         .filter(|(s, _, _)| {
                             !cached_syms_set.contains(&s.replace('/', "").to_uppercase())
@@ -4071,13 +4113,13 @@ impl TyphooNApp {
                             }
 
                             // ── Section 2: Broker Universe (uncached symbols) ──
-                            if !self.all_broker_assets.is_empty() {
+                            if !broker_universe_assets.is_empty() {
                                 // Group by category using fundamentals
                                 let mut universe: std::collections::BTreeMap<
                                     &str,
                                     Vec<&(String, String, String)>,
                                 > = std::collections::BTreeMap::new();
-                                for asset in &self.all_broker_assets {
+                                for asset in &broker_universe_assets {
                                     let sym_norm = asset.0.replace('/', "").to_uppercase();
                                     if !filter_upper.is_empty()
                                         && !sym_norm.contains(&filter_upper)
@@ -4099,7 +4141,7 @@ impl TyphooNApp {
                                     .add(
                                         egui::Label::new(
                                             egui::RichText::new(format!(
-                                                "{} Alpaca Universe ({})",
+                                                "{} Broker Universe ({})",
                                                 arrow, universe_total
                                             ))
                                             .color(sym_green)
