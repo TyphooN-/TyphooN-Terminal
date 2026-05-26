@@ -4343,12 +4343,6 @@ impl TyphooNApp {
 
             let content_h = ctx.content_rect().height();
             let news_default_h = (content_h * 0.58).clamp(420.0, 560.0);
-            // Resize cap = full viewport height minus a small margin so the
-            // window can fill the screen on tall monitors. The previous
-            // `.clamp(480.0, 760.0)` pinned the upper bound at 760 px
-            // regardless of `content_h`, which silently blocked vertical
-            // resize past that on any monitor taller than ~930 px.
-            let news_max_h = (content_h - 16.0).max(480.0);
             let mut open = self.show_news;
             let mut open_url: Option<String> = None;
             egui::Window::new("News & Research")
@@ -4356,7 +4350,10 @@ impl TyphooNApp {
                 .resizable(true)
                 .default_size([920.0, news_default_h])
                 .min_size([680.0, 260.0])
-                .max_size([1280.0, news_max_h])
+                // Do not cap height here. The user may intentionally expand the
+                // floating reader taller than the current content rect; only the
+                // inner scroll areas need bounds to avoid shrink snap-back.
+                .max_width(1280.0)
                 .show(ctx, |ui| {
                     // ── Top bar: Search-driven filter + fetch controls ────────────
                     // The Search field is now the single point of control for
@@ -4560,13 +4557,11 @@ impl TyphooNApp {
                             })
                             .collect();
                         let avail = ui.available_size();
-                        // Keep the story panes bounded by the current window, not by the
-                        // viewport maximum. The previous 220 px pane floor made the
-                        // window content too tall after a user drag-shrunk the window;
-                        // egui's Resize then auto-expanded the window back to the last
-                        // content height on mouse-up. A small scrollable floor preserves
-                        // usability while letting the user's vertical size stick.
-                        let pane_h = avail.y.clamp(96.0, news_max_h - 150.0);
+                        // Keep the story panes bounded by the current window. The
+                        // shrink floor is intentionally tiny so the window can stay
+                        // compact, but there is no artificial upper cap: if the user
+                        // drags the floating reader taller, the panes should grow with it.
+                        let pane_h = avail.y.max(96.0);
                         let list_w = (avail.x * 0.38).clamp(240.0, 420.0);
                         // Filter status line above the panes so the user sees
                         // "12 stories from 47 articles · TNDM, GDC" etc.
