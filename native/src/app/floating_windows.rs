@@ -4350,14 +4350,10 @@ impl TyphooNApp {
                 .resizable(true)
                 .default_size([920.0, news_default_h])
                 .min_size([680.0, 260.0])
-                // Do not cap height here. The user may intentionally expand the
-                // floating reader taller than the current content rect; only the
-                // inner scroll areas need bounds to avoid shrink snap-back.
-                .max_width(1280.0)
-                // egui windows are constrained to the viewport by default, which
-                // silently clamps `Resize::max_size.y` to the current content rect.
-                // That made the reader hit an invisible vertical ceiling. Let the
-                // resize state own the size; child scroll areas below still bound
+                // Do not cap width or height here. The reader is often used as a
+                // wide article/workbench pane, and any `max_width` silently turns
+                // into an invisible horizontal resize ceiling. Let the window's
+                // resize state own both axes; child scroll areas below still bound
                 // their content so shrinking remains stable.
                 .constrain(false)
                 .show(ctx, |ui| {
