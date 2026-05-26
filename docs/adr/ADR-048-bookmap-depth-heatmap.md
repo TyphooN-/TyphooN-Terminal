@@ -13,10 +13,13 @@
 
 ## Current Implementation
 
-The terminal has a Bookmap window, an orderbook DOM, and an Alpaca crypto
-orderbook snapshot path (`AlpacaBroker::get_orderbook`). The current Bookmap
-view can fetch depth on demand and render a heatmap-like view from available
-bar/orderbook context.
+The terminal has per-symbol Bookmap windows, `/bookmap SYMBOL` command routing,
+an orderbook DOM, and an Alpaca crypto orderbook snapshot path
+(`AlpacaBroker::get_orderbook`). The current Bookmap view can fetch depth on
+demand and render a heatmap-like view from available bar/orderbook context.
+Kraken depth streaming is guarded to Kraken spot-pair symbols only, so equity
+symbols and unsupported broker symbols cannot accidentally start Kraken L2
+streams.
 
 True streaming L2 history remains deferred because it depends on broker data
 entitlements and a dedicated ring-buffer/texture pipeline that is separate

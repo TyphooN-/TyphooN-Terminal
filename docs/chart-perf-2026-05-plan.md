@@ -1,68 +1,43 @@
-# Chart Rendering Performance & UX Improvements Plan (2026-05-24)
+# Chart Rendering Performance & UX Status
+
+Last reviewed: 2026-05-26
 
 ## Goal
-Eliminate the severe UI/charting jank introduced by Kraken WS OHLC live updates while delivering the requested TradingView/MT5-style price axis interaction.
 
-## Root Cause Summary
-- Kraken WS forming-bar updates trigger full `ChartState` reload + full indicator recompute in `draw_chart` on every frame.
-- Unconditional `ctx.request_repaint()` in the broker drain path (app_runtime.rs:7677).
-- No separation between "historical data stable" and "only last bar forming".
-- Custom `draw_chart` (technical_analysis.rs:3089) has 20+ indicator paths with no early-out or mesh caching.
-- Price-scale dragging not isolated to the right axis (memory note).
+Keep live Kraken/streaming chart updates smooth while preserving TradingView/MT5-style chart interaction.
 
-## The 4 Improvements
+## Current implementation
 
-### 1. Repaint Throttling + Forming-Bar Fast Path (High Impact)
-- Add `ChartState::forming_bar_dirty: bool` + `last_visible_bar_ts: i64`.
-- In the Kraken WS drain / broker message handler: when a live bar updates for a visible chart, only touch the last bar + set dirty flag. Do **not** request immediate repaint.
-- Change the repaint logic for live charts to `ctx.request_repaint_after(80..120ms)` when only forming bar is dirty. Closed bars use the existing idle timer (~250ms).
-- Result: live 1m bars update at ~8-12 fps instead of 60+ fps full redraws.
+Implemented in the native app:
 
-### 2. Generation Counter + Early-Out in draw_chart (High Impact)
-- Add `ChartState::visible_bars_gen: u64` (increment on any structural change to visible range or closed bars).
-- In `draw_chart` and the indicator computation entry points: compute a cheap hash of (visible range start/end, last bar close, gen). If unchanged since last frame, early-return before any painter calls or indicator math.
-- Keep the expensive paths only when `forming_bar_dirty` or `gen` changed.
-- This makes the common "no new data" case free.
+- `ChartState` tracks `visible_bars_gen`, `forming_bar_dirty`, `last_visible_bar_ts`, `last_rendered_gen`, and `last_rendered_bar_ts`.
+- Forming-bar updates can mutate the last bar without incrementing the closed-bar generation counter.
+- Closed-bar or structural changes call `mark_structural_change()` and increment `visible_bars_gen`.
+- Indicator computation has a forming-bar fast path that consumes `forming_bar_dirty` without forcing a full recompute.
+- Empty charts skip indicator computation immediately.
+- Heavy sync suppresses expensive chart indicator computation.
+- Broker-drain repaint pressure is throttled with `request_repaint_after(...)` instead of forcing immediate repaint spam.
+- Price-axis dragging is isolated to the right price scale and behaves like TradingView/MT5.
 
-### 3. TradingView/MT5-Style Price Axis Dragging (UX Requirement)
-**Already completed** (user confirmed via prior Claude session). No work needed.
+## Current status
 
-### 4. Wire More Work to gpu_compute.rs (Medium/Longer Term)
-- The existing `GpuCompute` already has `upload_bars_full` + buffer reuse for forming bars.
-- Identify 2-3 hot indicator paths (e.g. ATR, Bollinger, MACD histogram) that can be moved to the GPU compute shader path for the visible range.
-- Keep CPU fallback for now; gate behind a feature flag or setting.
-- This reduces CPU work on the UI thread for dense charts.
+The high-impact responsiveness work is complete for the current scope.
 
-## Implementation Order
-1. Add fields to `ChartState` (app.rs) + fast-path logic in chart_ops.rs.
-2. Modify broker/Kraken message handling + repaint sites in app_runtime.rs.
-3. Add early-out + generation logic inside `draw_chart` (technical_analysis.rs).
-4. Implement axis drag ownership (export_nav.rs + chart input code).
-5. Extend gpu_compute for at least one indicator as proof-of-concept.
-6. Build + smoke test (no warnings).
-7. Commit (no push — policy).
+The remaining work is performance-hardening, not a correctness blocker:
 
-## Risks & Mitigations
-- Large monolithic files → use precise patch + search/replace only; verify with cargo check after each logical chunk.
-- Regression on closed-bar updates → always increment gen on structural changes.
-- Drag UX feels off → make the axis hit rect slightly wider (8-12px) for easy grab.
+- Replace the current forming-bar GPU hook with true partial GPU buffer writes.
+- Route more indicator families through GPU compute where profiling proves the CPU path is hot.
+- Add deeper render-cache/content-hash checks only if profiling shows remaining idle-frame chart work is material.
 
-## Verification
-- `cargo check --package typhoon-native` clean.
-- Live Kraken chart feels smooth at 10 fps updates.
-- Price axis drag works exactly like MT5/TradingView (right axis = vertical scale only).
-- No extra allocations or full Vec clones on forming bar ticks.
-## Implemented (2026-05-24)
+## Verification references
 
-### Changes landed
-- Added `visible_bars_gen`, `forming_bar_dirty`, `last_visible_bar_ts` to `ChartState` (app.rs).
-- Initialized in `ChartState::new`.
-- Early-out skeleton at top of `draw_chart` (technical_analysis.rs:3128).
-- Changed broker-drain repaint from immediate `request_repaint()` to `request_repaint_after(90ms)` when drain cap hit (app_runtime.rs). This directly addresses the Kraken WS live-bar spam.
+Recent relevant checks:
 
-### Remaining for full effect
-- Caller sites that update charts from Kraken WS must set `forming_bar_dirty = true` and only mutate the last bar (instead of full reload).
-- Bump `visible_bars_gen` on any closed-bar structural change.
-- The early-out is currently a no-op placeholder; a real content-hash or frame comparison can be added later with zero risk.
+- `cargo check -p typhoon-native --quiet`
+- `cargo check -p typhoon-native --tests --quiet`
+- chart forming-bar/unit coverage in `typhoon-native`
+- `git diff --check`
 
-These two changes alone should give the majority of the perceived smoothness win on live Kraken charts.
+## Maintenance rule
+
+Do not treat this file as an execution checklist. Keep it as an architecture/status record. New chart-performance work should land as code plus focused tests, then update this file only when the architecture or remaining risk changes.

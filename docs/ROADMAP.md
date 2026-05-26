@@ -190,7 +190,7 @@
 ## Deferred / Data-Gated
 
 ### Bookmap / L2
-- Current status: Bookmap window, orderbook DOM, and Alpaca crypto orderbook snapshot fetch are wired.
+- Current status: Bookmap supports multiple per-symbol windows, `/bookmap SYMBOL` routing, orderbook DOM, Alpaca crypto orderbook snapshots, and Kraken spot depth streaming only for symbols that map to Kraken spot pairs.
 - Deferred: true streaming L2 heatmap with a dedicated wgpu compute texture remains data-entitlement and scope gated (ADR-048).
 
 ### Pattern Recognition

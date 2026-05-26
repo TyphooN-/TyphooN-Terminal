@@ -24,7 +24,7 @@ Implemented and verified in code:
 
 ## Corrected notes from the old scratchpad
 
-The old file contained obsolete work items such as "commit and push", "final verification pass", and repeated "continuing" progress notes. Those are not durable project tasks and have been removed.
+The old file contained obsolete transient chores, verification-pass reminders, and repeated progress-log notes. Those are not durable project tasks and have been removed.
 
 The old M1/M5 note is also outdated. Current policy is:
 
@@ -34,7 +34,7 @@ The old M1/M5 note is also outdated. Current policy is:
 
 ## Remaining real work
 
-These are not unfinished leftovers from the floating-window performance pass. They are separate roadmap-scale epics and should be tracked in ADRs or feature plans, not as stale checkboxes in this scratchpad.
+These are not leftovers from the floating-window performance pass. They are separate roadmap-scale epics and should be tracked in ADRs or feature plans, not as stale checkboxes in this scratchpad.
 
 ### Performance / rendering
 
