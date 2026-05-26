@@ -6426,6 +6426,13 @@ fn empty_watchlist_row(symbol: &str) -> WatchlistRow {
     }
 }
 
+fn yahoo_market_state_allows_extended_quote(market_state: &str) -> bool {
+    matches!(
+        market_state.trim().to_ascii_uppercase().as_str(),
+        "PRE" | "PREPRE" | "POST" | "POSTPOST"
+    )
+}
+
 /// Upcoming event source filter for the Event Calendar window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum EventSource {
@@ -14278,6 +14285,16 @@ impl TyphooNApp {
                             .map(|sym| empty_watchlist_row(sym))
                             .collect();
 
+                        let regular_session_open = if let Some(ref b) = broker {
+                            b.get_market_clock()
+                                .await
+                                .ok()
+                                .and_then(|v| v["is_open"].as_bool())
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        };
+
                         if let Some(ref b) = broker {
                             for row in &mut rows {
                                 let api_sym = {
@@ -14299,9 +14316,14 @@ impl TyphooNApp {
                                     let change = snap.last - snap.prev_close;
                                     let change_pct = if snap.prev_close > 0.0 { (snap.last / snap.prev_close - 1.0) * 100.0 } else { 0.0 };
                                     // Extended hours change: last trade vs regular session close
-                                    let ext_change_pct = if snap.regular_close > 0.0 && (snap.last - snap.regular_close).abs() > 1e-10 {
+                                    let ext_change_pct = if !regular_session_open
+                                        && snap.regular_close > 0.0
+                                        && (snap.last - snap.regular_close).abs() > 1e-10
+                                    {
                                         (snap.last / snap.regular_close - 1.0) * 100.0
-                                    } else { 0.0 };
+                                    } else {
+                                        0.0
+                                    };
                                     *row = WatchlistRow {
                                         symbol: row.symbol.clone(),
                                         cache_key: row.symbol.clone(),
@@ -14335,7 +14357,7 @@ impl TyphooNApp {
                                     let sym_list = equity_syms.join(",");
                                     let crumb_param = if session.crumb().is_empty() { String::new() } else { format!("&crumb={}", session.crumb()) };
                                     let url = format!(
-                                        "https://query2.finance.yahoo.com/v7/finance/quote?symbols={}&fields=regularMarketPrice,regularMarketPreviousClose,regularMarketVolume,preMarketPrice,preMarketChangePercent,postMarketPrice,postMarketChangePercent{}",
+                                        "https://query2.finance.yahoo.com/v7/finance/quote?symbols={}&fields=regularMarketPrice,regularMarketPreviousClose,regularMarketVolume,marketState,preMarketPrice,preMarketChangePercent,postMarketPrice,postMarketChangePercent{}",
                                         sym_list, crumb_param
                                     );
                                     if let Ok(Ok(resp)) = tokio::time::timeout(
@@ -14362,11 +14384,24 @@ impl TyphooNApp {
                                                             row.volume = yah_vol;
                                                         }
 
-                                                        // Pre-market price (only valid before market open)
-                                                        let pre_price = q["preMarketPrice"].as_f64().unwrap_or(0.0);
-                                                        let post_price = q["postMarketPrice"].as_f64().unwrap_or(0.0);
+                                                        // Yahoo keeps stale pre/post prices on the quote payload during
+                                                        // regular trading. Only trust them when Yahoo explicitly says
+                                                        // the symbol is in PRE/POST state; otherwise the UI keeps showing
+                                                        // bogus EXT while the market is open.
+                                                        let market_state = q["marketState"].as_str().unwrap_or("");
+                                                        let allow_ext_quote = yahoo_market_state_allows_extended_quote(market_state);
+                                                        let pre_price = if allow_ext_quote {
+                                                            q["preMarketPrice"].as_f64().unwrap_or(0.0)
+                                                        } else {
+                                                            0.0
+                                                        };
+                                                        let post_price = if allow_ext_quote {
+                                                            q["postMarketPrice"].as_f64().unwrap_or(0.0)
+                                                        } else {
+                                                            0.0
+                                                        };
 
-                                                        // Use whichever extended price is available
+                                                        // Use whichever extended price is available during active extended sessions.
                                                         let ext_price = if pre_price > 0.0 { pre_price } else if post_price > 0.0 { post_price } else { 0.0 };
 
                                                         if ext_price > 0.0 && row.prev_close > 0.0 {
@@ -31120,6 +31155,15 @@ pub fn cache_db_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn yahoo_extended_quote_state_filter_blocks_regular_session() {
+        assert!(yahoo_market_state_allows_extended_quote("PRE"));
+        assert!(yahoo_market_state_allows_extended_quote("post"));
+        assert!(!yahoo_market_state_allows_extended_quote("REGULAR"));
+        assert!(!yahoo_market_state_allows_extended_quote("CLOSED"));
+        assert!(!yahoo_market_state_allows_extended_quote(""));
+    }
 
     #[test]
     fn kraken_pair_asset_class_identifies_spot_fx() {
