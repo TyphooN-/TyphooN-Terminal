@@ -1,6 +1,6 @@
 # ADR-048: Bookmap-Style Depth Heatmap
 
-## Status: Partial (updated 2026-05-03) - Snapshot L2/DOM implemented, streaming heatmap deferred
+## Status: Partial (updated 2026-05-26) - Snapshot L2/DOM and guarded live-depth rendering implemented, retained streaming heatmap deferred
 
 ## Context
 
@@ -16,12 +16,16 @@
 The terminal has per-symbol Bookmap windows, `/bookmap SYMBOL` command routing,
 an orderbook DOM, and an Alpaca crypto orderbook snapshot path
 (`AlpacaBroker::get_orderbook`). The current Bookmap view can fetch depth on
-demand and render a heatmap-like view from available bar/orderbook context.
-Kraken depth streaming is guarded to Kraken spot-pair symbols only, so equity
+demand, render a heatmap-like view from available bar/orderbook context, and
+render the latest live orderbook snapshot only when the snapshot symbol matches
+the target Bookmap window.
+
+Kraken depth streaming is guarded to Kraken spot-pair symbols only. The UI
+checks the loaded Kraken spot universe before enabling live depth, so equity
 symbols and unsupported broker symbols cannot accidentally start Kraken L2
 streams.
 
-True streaming L2 history remains deferred because it depends on broker data
+Retained streaming L2 history remains deferred because it depends on broker data
 entitlements and a dedicated ring-buffer/texture pipeline that is separate
 from the normal chart renderer.
 
@@ -94,10 +98,10 @@ struct OrderBookSnapshot {
 - GPU compute shader for texture generation (not CPU)
 - Ring buffer with zero-copy GPU upload via `wgpu::Buffer::write`
 
-## Deferred Streaming Phase
+## Deferred Retained-Depth Phase
 
-The remaining work is the real-time streaming heatmap, not the user-facing
-window shell. It requires:
+The remaining work is retained depth history, not the user-facing window shell
+or latest-snapshot rendering. It requires:
 - A broker entitlement that supplies continuous Level 2 snapshots for the
   target symbols.
 - A ring buffer of order book snapshots and trade prints.

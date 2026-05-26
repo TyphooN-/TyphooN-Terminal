@@ -20,7 +20,7 @@ Implemented and verified in code:
 - Kraken trade/order-related windows and several other heavy floating windows have sync-aware guards or bounded scroll rendering.
 - Yahoo fallback price plumbing exists for watchlist fallback display with source and age metadata.
 - GPU SMA routing exists and forming-bar updates now use partial last-bar GPU buffer writes when buffers are resident.
-- Bookmap has a per-symbol window model and current snapshot/depth paths; true streaming L2 heatmap remains data/API/renderer scoped.
+- Bookmap has a per-symbol window model, current snapshot/depth paths, symbol-filtered live L2 rendering, and Kraken spot-pair guards; retained streaming L2 history remains data/API/renderer scoped.
 
 ## Corrected notes from the old scratchpad
 
@@ -43,8 +43,8 @@ These are not leftovers from the floating-window performance pass. They are sepa
 
 ### Market depth / Bookmap
 
-- Streaming L2 heatmap with dedicated retained depth history and GPU-backed rendering.
-- Broker-specific entitlement handling for real-time L2 feeds.
+- Dedicated retained depth history with a ring buffer and GPU-backed rendering.
+- Broker-specific entitlement handling beyond currently guarded Kraken spot depth streams.
 
 ### News / research
 
