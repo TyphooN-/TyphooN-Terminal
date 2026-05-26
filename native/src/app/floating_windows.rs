@@ -4577,6 +4577,7 @@ impl TyphooNApp {
             let news_default_h = (content_h * 0.58).clamp(420.0, 560.0);
             let mut open = self.show_news;
             let mut open_url: Option<String> = None;
+            let mut open_chart_symbol: Option<String> = None;
             egui::Window::new("News & Research")
                 .open(&mut open)
                 .resizable(true)
@@ -4855,21 +4856,10 @@ impl TyphooNApp {
                                                 "bearish" => DOWN,
                                                 _ => egui::Color32::from_rgb(160, 160, 160),
                                             };
-                                            let mut associated_tickers = Vec::new();
-                                            let primary = a.symbol.trim().to_uppercase();
-                                            if !primary.is_empty() {
-                                                associated_tickers.push(primary);
-                                            }
-                                            for ticker in &a.tickers {
-                                                let ticker = ticker.trim().to_uppercase();
-                                                if !ticker.is_empty()
-                                                    && !associated_tickers
-                                                        .iter()
-                                                        .any(|t| t == &ticker)
-                                                {
-                                                    associated_tickers.push(ticker);
-                                                }
-                                            }
+                                            let associated_tickers = Self::news_article_tickers(
+                                                &a.symbol,
+                                                &a.tickers,
+                                            );
                                             let row = ui.group(|ui| {
                                                 ui.set_width(list_w - 20.0);
                                                 ui.vertical(|ui| {
@@ -4911,13 +4901,24 @@ impl TyphooNApp {
                                                     if !associated_tickers.is_empty() {
                                                         ui.horizontal_wrapped(|ui| {
                                                             for ticker in &associated_tickers {
-                                                                ui.label(
+                                                                let button = egui::Button::new(
                                                                     egui::RichText::new(ticker)
                                                                         .color(egui::Color32::from_rgb(
-                                                                            180, 200, 140,
+                                                                            180, 220, 160,
                                                                         ))
                                                                         .small(),
-                                                                );
+                                                                )
+                                                                .small();
+                                                                if ui
+                                                                    .add(button)
+                                                                    .on_hover_text(format!(
+                                                                        "Open {} D1 chart in MTF_Grid",
+                                                                        ticker
+                                                                    ))
+                                                                    .clicked()
+                                                                {
+                                                                    open_chart_symbol = Some(ticker.clone());
+                                                                }
                                                             }
                                                         });
                                                     }
@@ -5010,19 +5011,10 @@ impl TyphooNApp {
                                         }
                                     }
                                     if let Some(a) = self.news_full_articles.get(idx) {
-                                        let mut associated_tickers = Vec::new();
-                                        let primary = a.symbol.trim().to_uppercase();
-                                        if !primary.is_empty() {
-                                            associated_tickers.push(primary);
-                                        }
-                                        for ticker in &a.tickers {
-                                            let ticker = ticker.trim().to_uppercase();
-                                            if !ticker.is_empty()
-                                                && !associated_tickers.iter().any(|t| t == &ticker)
-                                            {
-                                                associated_tickers.push(ticker);
-                                            }
-                                        }
+                                        let associated_tickers = Self::news_article_tickers(
+                                            &a.symbol,
+                                            &a.tickers,
+                                        );
                                         ui.label(egui::RichText::new(&a.headline).strong().size(16.0));
                                         ui.horizontal(|ui| {
                                             ui.label(egui::RichText::new(&a.source).color(egui::Color32::from_rgb(130, 170, 220)));
@@ -5053,7 +5045,24 @@ impl TyphooNApp {
                                             ui.horizontal_wrapped(|ui| {
                                                 ui.label(egui::RichText::new("Tickers:").color(AXIS_TEXT).small());
                                                 for t in &associated_tickers {
-                                                    ui.label(egui::RichText::new(t).color(egui::Color32::from_rgb(180, 200, 140)).small());
+                                                    let button = egui::Button::new(
+                                                        egui::RichText::new(t)
+                                                            .color(egui::Color32::from_rgb(
+                                                                180, 220, 160,
+                                                            ))
+                                                            .small(),
+                                                    )
+                                                    .small();
+                                                    if ui
+                                                        .add(button)
+                                                        .on_hover_text(format!(
+                                                            "Open {} D1 chart in MTF_Grid",
+                                                            t
+                                                        ))
+                                                        .clicked()
+                                                    {
+                                                        open_chart_symbol = Some(t.clone());
+                                                    }
                                                 }
                                             });
                                         }
@@ -5142,6 +5151,9 @@ impl TyphooNApp {
                     }
                 });
             self.show_news = open;
+            if let Some(symbol) = open_chart_symbol {
+                self.open_news_ticker_chart(&symbol);
+            }
             if let Some(url) = open_url {
                 ctx.open_url(egui::OpenUrl::new_tab(url));
             }

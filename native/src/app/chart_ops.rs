@@ -358,6 +358,111 @@ impl TyphooNApp {
         }
     }
 
+    pub(super) fn normalize_news_ticker_for_chart(raw: &str) -> Option<String> {
+        let symbol = normalize_market_data_symbol(raw)
+            .trim()
+            .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '.' && ch != '-' && ch != '/')
+            .to_ascii_uppercase();
+        let valid_chars = symbol
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '/');
+        let well_formed_parts = symbol
+            .split(['.', '-', '/'])
+            .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_alphanumeric()));
+        if symbol.is_empty() || symbol.len() > 16 || !valid_chars || !well_formed_parts {
+            None
+        } else {
+            Some(symbol)
+        }
+    }
+
+    pub(super) fn news_article_tickers(
+        primary_symbol: &str,
+        tickers: &[String],
+    ) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(primary) = Self::normalize_news_ticker_for_chart(primary_symbol) {
+            out.push(primary);
+        }
+        for ticker in tickers {
+            let Some(ticker) = Self::normalize_news_ticker_for_chart(ticker) else {
+                continue;
+            };
+            if !out.iter().any(|existing| existing == &ticker) {
+                out.push(ticker);
+            }
+        }
+        out
+    }
+
+    pub(super) fn open_news_ticker_chart(&mut self, raw_ticker: &str) -> bool {
+        let Some(symbol) = Self::normalize_news_ticker_for_chart(raw_ticker) else {
+            return false;
+        };
+
+        if let Some(existing_idx) = self.charts.iter().position(|chart| {
+            chart.timeframe == Timeframe::D1
+                && normalize_market_data_symbol(&chart.symbol)
+                    .replace('/', "")
+                    .trim_end_matches(".EQ")
+                    .eq_ignore_ascii_case(
+                        &symbol
+                            .replace('/', "")
+                            .trim_end_matches(".EQ")
+                            .to_ascii_uppercase(),
+                    )
+        }) {
+            self.active_tab = existing_idx;
+            while self.mtf_visible.len() < self.charts.len() {
+                self.mtf_visible.push(true);
+            }
+            if let Some(visible) = self.mtf_visible.get_mut(existing_idx) {
+                *visible = true;
+            }
+            self.symbol_input = symbol.clone();
+            self.mtf_enabled = true;
+            self.compute_mtf_grid_status();
+            self.log.push_back(LogEntry::info(format!(
+                "News: focused existing {} D1 chart tab",
+                symbol
+            )));
+            return true;
+        }
+
+        let mut chart = ChartState::new(&symbol, Timeframe::D1);
+        if let Some(ref cache) = self.cache.clone() {
+            let mut gpu = self.gpu_indicators.take();
+            if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) {
+                self.gpu_indicators = gpu;
+                self.charts.push(chart);
+                let idx = self.charts.len().saturating_sub(1);
+                self.queue_chart_reload(idx);
+            } else {
+                self.gpu_indicators = gpu;
+                self.charts.push(chart);
+            }
+        } else {
+            self.charts.push(chart);
+        }
+        self.active_tab = self.charts.len().saturating_sub(1);
+        self.symbol_input = symbol.clone();
+        while self.mtf_visible.len() < self.charts.len() {
+            self.mtf_visible.push(true);
+        }
+        if let Some(visible) = self.mtf_visible.get_mut(self.active_tab) {
+            *visible = true;
+        }
+        self.mtf_enabled = true;
+        let queued = self.queue_symbol_fetch_for_source(&symbol, Timeframe::D1.cache_suffix(), None);
+        self.compute_mtf_grid_status();
+        self.log.push_back(LogEntry::info(if queued {
+            format!("News: opened {} D1 chart tab and queued data fetch", symbol)
+        } else {
+            format!("News: opened {} D1 chart tab", symbol)
+        }));
+        true
+    }
+
     pub(super) fn chart_source_options(
         &self,
         symbol: &str,
@@ -1038,5 +1143,43 @@ impl TyphooNApp {
             fvg: self.show_fvg,
             order_blocks: self.show_order_blocks,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn news_article_tickers_normalizes_and_deduplicates_symbols() {
+        let tickers = vec![
+            " aapl ".to_string(),
+            "MSFT".to_string(),
+            "msft".to_string(),
+            "../bad".to_string(),
+            "THIS-SYMBOL-IS-TOO-LONG".to_string(),
+        ];
+
+        assert_eq!(
+            TyphooNApp::news_article_tickers("AAPL", &tickers),
+            vec!["AAPL".to_string(), "MSFT".to_string()]
+        );
+    }
+
+    #[test]
+    fn news_ticker_normalization_accepts_common_market_symbols() {
+        assert_eq!(
+            TyphooNApp::normalize_news_ticker_for_chart(" brk.b "),
+            Some("BRK.B".to_string())
+        );
+        assert_eq!(
+            TyphooNApp::normalize_news_ticker_for_chart("BTC/USD"),
+            Some("BTC/USD".to_string())
+        );
+        assert_eq!(TyphooNApp::normalize_news_ticker_for_chart(""), None);
+        assert_eq!(
+            TyphooNApp::normalize_news_ticker_for_chart("THIS-SYMBOL-IS-TOO-LONG"),
+            None
+        );
     }
 }
