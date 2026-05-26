@@ -1926,6 +1926,27 @@ impl eframe::App for TyphooNApp {
                             timeframe,
                             pause
                         );
+                    } else if error.contains("HTTP 500")
+                        && error.contains("Internal error")
+                    {
+                        // Kraken's internal equities history endpoint sometimes returns a
+                        // transient JSON 500 (`type: Internal error`) for valid xStock
+                        // symbols/timeframes. Treat it like temporary endpoint instability,
+                        // not a user-visible per-fetch failure: pause new equity-history
+                        // dispatches briefly and let queued requests drain quietly.
+                        let now = chrono::Utc::now().timestamp();
+                        let pause = 300;
+                        if now + pause > self.kraken_equities_sync_pause_until_ts {
+                            self.kraken_equities_sync_pause_until_ts = now + pause;
+                            self.kraken_equities_sync_pause_reason =
+                                "Kraken equities history temporarily unavailable (HTTP 500)".to_string();
+                        }
+                        tracing::debug!(
+                            "Kraken equities: {} {} skipped — iapi HTTP 500/Internal error; paused {}s",
+                            symbol,
+                            timeframe,
+                            pause
+                        );
                     } else {
                         self.log.push_back(LogEntry::err(error));
                     }

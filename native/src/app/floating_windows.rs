@@ -4355,7 +4355,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([920.0, news_default_h])
-                .min_size([680.0, 320.0])
+                .min_size([680.0, 260.0])
                 .max_size([1280.0, news_max_h])
                 .show(ctx, |ui| {
                     // ── Top bar: Search-driven filter + fetch controls ────────────
@@ -4560,7 +4560,13 @@ impl TyphooNApp {
                             })
                             .collect();
                         let avail = ui.available_size();
-                        let pane_h = avail.y.clamp(220.0, news_max_h - 150.0);
+                        // Keep the story panes bounded by the current window, not by the
+                        // viewport maximum. The previous 220 px pane floor made the
+                        // window content too tall after a user drag-shrunk the window;
+                        // egui's Resize then auto-expanded the window back to the last
+                        // content height on mouse-up. A small scrollable floor preserves
+                        // usability while letting the user's vertical size stick.
+                        let pane_h = avail.y.clamp(96.0, news_max_h - 150.0);
                         let list_w = (avail.x * 0.38).clamp(240.0, 420.0);
                         // Filter status line above the panes so the user sees
                         // "12 stories from 47 articles · TNDM, GDC" etc.
@@ -4590,10 +4596,13 @@ impl TyphooNApp {
                         ui.label(egui::RichText::new(status).color(AXIS_TEXT).small());
                         ui.horizontal(|ui| {
                             // ── Left: article list ──
-                            ui.allocate_ui_with_layout(egui::vec2(list_w, pane_h), egui::Layout::top_down(egui::Align::Min), |ui| {
+                            ui.vertical(|ui| {
+                                ui.set_width(list_w);
                                 egui::ScrollArea::vertical()
                                     .id_salt("news_list_scroll")
-                                    .auto_shrink([false, false])
+                                    .max_height(pane_h)
+                                    .min_scrolled_height(96.0)
+                                    .auto_shrink([false, true])
                                     .show(ui, |ui| {
                                         for (i, alternates) in &groups {
                                             let i = *i;
@@ -4823,8 +4832,9 @@ impl TyphooNApp {
                                         ui.separator();
                                         egui::ScrollArea::vertical()
                                             .id_salt("news_body_scroll")
-                                            .auto_shrink([false, false])
-                                            .max_height((pane_h - 110.0).max(120.0))
+                                            .auto_shrink([false, true])
+                                            .min_scrolled_height(96.0)
+                                            .max_height((pane_h - 96.0).max(96.0))
                                             .show(ui, |ui| {
                                                 // Hero image (og:image / provider banner).
                                                 // Constrained to pane width to keep the
