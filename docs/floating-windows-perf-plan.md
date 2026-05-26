@@ -19,7 +19,7 @@ Implemented and verified in code:
 - The right-panel news slice is bounded and filtered against the active focus set.
 - Kraken trade/order-related windows and several other heavy floating windows have sync-aware guards or bounded scroll rendering.
 - Yahoo fallback price plumbing exists for watchlist fallback display with source and age metadata.
-- GPU SMA200 routing and forming-bar upload hooks exist; full incremental GPU upload remains a separate performance epic.
+- GPU SMA routing exists and forming-bar updates now use partial last-bar GPU buffer writes when buffers are resident.
 - Bookmap has a per-symbol window model and current snapshot/depth paths; true streaming L2 heatmap remains data/API/renderer scoped.
 
 ## Corrected notes from the old scratchpad
@@ -38,7 +38,6 @@ These are not leftovers from the floating-window performance pass. They are sepa
 
 ### Performance / rendering
 
-- True incremental GPU buffer updates for forming bars instead of the current forming-bar hook.
 - More indicator families routed through GPU compute where profiling proves value.
 - Optional table-row caching for extremely large trade/order/history grids if profiling shows formatting dominates frame time.
 

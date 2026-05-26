@@ -147,22 +147,82 @@ fn anchored_vwap_read_window(
     ))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FormingBarGpuWrite {
+    scalar_offset: u64,
+    ohlc_offset: u64,
+    ohlc: [f32; 3],
+    mid: f32,
+}
+
+fn forming_bar_gpu_write(
+    bar_count: u32,
+    high: f32,
+    low: f32,
+    close: f32,
+) -> Option<FormingBarGpuWrite> {
+    if bar_count == 0 {
+        return None;
+    }
+    let last_idx = bar_count - 1;
+    Some(FormingBarGpuWrite {
+        scalar_offset: (last_idx as u64) * 4,
+        ohlc_offset: (last_idx as u64) * 12,
+        ohlc: [high, low, close],
+        mid: (high + low) * 0.5,
+    })
+}
+
 impl GpuCompute {
     /// Upload only the last (forming) bar incrementally.
     /// Much cheaper than full re-upload during live Kraken WS ticks.
-    pub fn upload_forming_bar(&mut self, bar: &crate::app::Bar) -> bool {
-        // For now we just return true to indicate the path is taken.
-        // Real implementation will do partial buffer update.
-        let _ = bar;
+    pub fn upload_forming_bar(
+        &mut self,
+        open: f32,
+        high: f32,
+        low: f32,
+        close: f32,
+        volume: f32,
+    ) -> bool {
+        let Some(write) = forming_bar_gpu_write(self.bar_count, high, low, close) else {
+            return false;
+        };
+        let Some(ref close_buf) = self.bar_buffer else {
+            return false;
+        };
+
+        let close = [close];
+        self.queue
+            .write_buffer(close_buf, write.scalar_offset, bytemuck_cast_slice(&close));
+
+        if let Some(ref open_buf) = self.open_buffer {
+            let open = [open];
+            self.queue
+                .write_buffer(open_buf, write.scalar_offset, bytemuck_cast_slice(&open));
+        }
+        if let Some(ref ohlc_buf) = self.ohlc_buffer {
+            self.queue.write_buffer(
+                ohlc_buf,
+                write.ohlc_offset,
+                bytemuck_cast_slice(&write.ohlc),
+            );
+        }
+        if let Some(ref mid_buf) = self.mid_buffer {
+            let mid = [write.mid];
+            self.queue
+                .write_buffer(mid_buf, write.scalar_offset, bytemuck_cast_slice(&mid));
+        }
+        if let Some(ref vol_buf) = self.vol_buffer {
+            let volume = [volume];
+            self.queue
+                .write_buffer(vol_buf, write.scalar_offset, bytemuck_cast_slice(&volume));
+        }
         true
     }
 
     /// Compute SMA on GPU for a bar range (reuses uploaded OHLC buffer).
     /// Delegates to the existing dispatch_indicator_pub path so it actually
     /// produces results instead of always falling back to CPU.
-    ///
-    /// Future optimization: support incremental forming-bar uploads
-    /// instead of full re-upload on every tick.
     pub fn compute_sma_gpu(
         &self,
         period: u32,
@@ -6719,7 +6779,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 #[cfg(test)]
 mod tests {
-    use super::anchored_vwap_read_window;
+    use super::{FormingBarGpuWrite, anchored_vwap_read_window, forming_bar_gpu_write};
 
     #[test]
     fn anchored_vwap_read_window_computes_expected_offset_and_size() {
@@ -6732,5 +6792,19 @@ mod tests {
         assert_eq!(anchored_vwap_read_window(10, 4, 4), None);
         assert_eq!(anchored_vwap_read_window(10, 8, 7), None);
         assert_eq!(anchored_vwap_read_window(10, 8, 11), None);
+    }
+
+    #[test]
+    fn forming_bar_gpu_write_targets_last_bar_offsets() {
+        assert_eq!(
+            forming_bar_gpu_write(5, 111.0, 99.0, 108.5),
+            Some(FormingBarGpuWrite {
+                scalar_offset: 16,
+                ohlc_offset: 48,
+                ohlc: [111.0, 99.0, 108.5],
+                mid: 105.0,
+            })
+        );
+        assert_eq!(forming_bar_gpu_write(0, 111.0, 99.0, 108.5), None);
     }
 }

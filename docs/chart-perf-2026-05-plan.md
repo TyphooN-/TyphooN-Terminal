@@ -12,6 +12,7 @@ Implemented in the native app:
 
 - `ChartState` tracks `visible_bars_gen`, `forming_bar_dirty`, `last_visible_bar_ts`, `last_rendered_gen`, and `last_rendered_bar_ts`.
 - Forming-bar updates can mutate the last bar without incrementing the closed-bar generation counter.
+- The forming-bar GPU path writes only the last bar into existing close/open/OHLC/mid/volume buffers when those buffers are resident, avoiding a full OHLCV upload on live ticks.
 - Closed-bar or structural changes call `mark_structural_change()` and increment `visible_bars_gen`.
 - Indicator computation has a forming-bar fast path that consumes `forming_bar_dirty` without forcing a full recompute.
 - Empty charts skip indicator computation immediately.
@@ -25,7 +26,6 @@ The high-impact responsiveness work is complete for the current scope.
 
 The remaining work is performance-hardening, not a correctness blocker:
 
-- Replace the current forming-bar GPU hook with true partial GPU buffer writes.
 - Route more indicator families through GPU compute where profiling proves the CPU path is hot.
 - Add deeper render-cache/content-hash checks only if profiling shows remaining idle-frame chart work is material.
 

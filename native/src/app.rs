@@ -3446,7 +3446,15 @@ impl ChartState {
         // point between our WS fast-path and the GPU compute path.
         if self.forming_bar_dirty && n > 1 {
             if let Some(last) = self.bars.last() {
-                let _last_close = last.close as f32;
+                if let Some(gpu) = gpu {
+                    gpu.upload_forming_bar(
+                        last.open as f32,
+                        last.high as f32,
+                        last.low as f32,
+                        last.close as f32,
+                        last.volume as f32,
+                    );
+                }
                 // For SMA200 / SMA100 we can do a cheap rolling update
                 let prev200 = self.sma200.get(n - 2).copied().flatten();
                 if let (Some(last_sma200), Some(prev)) = (self.sma200.last_mut(), prev200) {
