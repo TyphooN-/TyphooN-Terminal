@@ -4354,6 +4354,12 @@ impl TyphooNApp {
                 // floating reader taller than the current content rect; only the
                 // inner scroll areas need bounds to avoid shrink snap-back.
                 .max_width(1280.0)
+                // egui windows are constrained to the viewport by default, which
+                // silently clamps `Resize::max_size.y` to the current content rect.
+                // That made the reader hit an invisible vertical ceiling. Let the
+                // resize state own the size; child scroll areas below still bound
+                // their content so shrinking remains stable.
+                .constrain(false)
                 .show(ctx, |ui| {
                     // ── Top bar: Search-driven filter + fetch controls ────────────
                     // The Search field is now the single point of control for
@@ -4556,13 +4562,8 @@ impl TyphooNApp {
                                 (p, alts)
                             })
                             .collect();
-                        let avail = ui.available_size();
-                        // Keep the story panes bounded by the current window. The
-                        // shrink floor is intentionally tiny so the window can stay
-                        // compact, but there is no artificial upper cap: if the user
-                        // drags the floating reader taller, the panes should grow with it.
-                        let pane_h = avail.y.max(96.0);
-                        let list_w = (avail.x * 0.38).clamp(240.0, 420.0);
+                        let avail_w = ui.available_width();
+                        let list_w = (avail_w * 0.38).clamp(240.0, 420.0);
                         // Filter status line above the panes so the user sees
                         // "12 stories from 47 articles · TNDM, GDC" etc.
                         let status = match &filter_mode {
@@ -4589,6 +4590,13 @@ impl TyphooNApp {
                             ),
                         };
                         ui.label(egui::RichText::new(status).color(AXIS_TEXT).small());
+                        // Bind pane height to the *post-header* remaining area. This
+                        // matters for both directions: when the user shrinks, the
+                        // scroll areas get a small bounded height instead of forcing
+                        // the window back open; when the user expands, the scroll
+                        // areas advertise that larger height so egui preserves the
+                        // new resize state instead of snapping back to content size.
+                        let pane_h = ui.available_height().max(96.0);
                         ui.horizontal(|ui| {
                             // ── Left: article list ──
                             ui.vertical(|ui| {
@@ -4596,8 +4604,8 @@ impl TyphooNApp {
                                 egui::ScrollArea::vertical()
                                     .id_salt("news_list_scroll")
                                     .max_height(pane_h)
-                                    .min_scrolled_height(96.0)
-                                    .auto_shrink([false, true])
+                                    .min_scrolled_height(pane_h)
+                                    .auto_shrink([false, false])
                                     .show(ui, |ui| {
                                         for (i, alternates) in &groups {
                                             let i = *i;
@@ -4825,11 +4833,12 @@ impl TyphooNApp {
                                             });
                                         }
                                         ui.separator();
+                                        let body_scroll_h = (ui.available_height() - 24.0).max(96.0);
                                         egui::ScrollArea::vertical()
                                             .id_salt("news_body_scroll")
-                                            .auto_shrink([false, true])
-                                            .min_scrolled_height(96.0)
-                                            .max_height((pane_h - 96.0).max(96.0))
+                                            .auto_shrink([false, false])
+                                            .min_scrolled_height(body_scroll_h)
+                                            .max_height(body_scroll_h)
                                             .show(ui, |ui| {
                                                 // Hero image (og:image / provider banner).
                                                 // Constrained to pane width to keep the
