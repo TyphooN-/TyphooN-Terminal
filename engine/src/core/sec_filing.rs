@@ -185,6 +185,21 @@ pub fn create_sec_tables(conn: &Connection) -> Result<(), String> {
         "ALTER TABLE sec_filings ADD COLUMN content_fetched BOOLEAN DEFAULT FALSE",
         [],
     );
+    // Retry bookkeeping for SEC content hydration. Without this, permanently
+    // unfetchable/blocked documents stay at the front of the queue and the
+    // background worker can refetch the same failing batch forever.
+    let _ = conn.execute(
+        "ALTER TABLE sec_filings ADD COLUMN content_fetch_attempts INTEGER DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE sec_filings ADD COLUMN content_last_attempt_at INTEGER DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE sec_filings ADD COLUMN content_last_error TEXT DEFAULT ''",
+        [],
+    );
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS sec_filing_content (
@@ -1372,10 +1387,15 @@ pub fn store_filing_content(
         params![accession, compressed, content.len() as i64, now],
     ).map_err(|e| format!("Store content failed: {e}"))?;
 
-    // Update content_fetched flag
+    // Update content_fetched flag and clear any previous retry state.
     let _ = conn.execute(
-        "UPDATE sec_filings SET content_fetched = TRUE WHERE accession_number = ?1",
-        params![accession],
+        "UPDATE sec_filings
+         SET content_fetched = TRUE,
+             content_fetch_attempts = 0,
+             content_last_attempt_at = ?2,
+             content_last_error = ''
+         WHERE accession_number = ?1",
+        params![accession, now],
     );
 
     // Populate FTS5 index (uncompressed for tokenization, also truncated)
@@ -1480,37 +1500,78 @@ pub fn get_filing_content(conn: &Connection, accession: &str) -> Result<Option<S
 
 /// Get filings that haven't had their content fetched yet.
 pub fn get_unfetched_filings(conn: &Connection, limit: usize) -> Result<Vec<SecFiling>, String> {
-    // prepare_cached: called repeatedly by the content backfill worker.
+    const MAX_CONTENT_FETCH_ATTEMPTS: i64 = 3;
+    const CONTENT_FETCH_RETRY_COOLDOWN_SECS: i64 = 6 * 60 * 60;
+
+    // prepare_cached: called repeatedly by the content backfill worker. Skip
+    // recently failed fetches and stop after a few hard failures so one SEC
+    // 403/404 batch cannot monopolize every background cycle.
+    let retry_before = chrono::Utc::now().timestamp() - CONTENT_FETCH_RETRY_COOLDOWN_SECS;
     let mut stmt = conn.prepare_cached(
         "SELECT f.id, f.ticker, f.form_type, f.accession_number, f.filing_date, f.url,
                 f.company_name, f.importance_score, f.category, f.summary, f.insider_flag, f.created_at
          FROM sec_filings f
          LEFT JOIN sec_filing_content c ON c.accession_number = f.accession_number
          WHERE c.accession_number IS NULL
-         ORDER BY f.filing_date DESC LIMIT ?1"
+           AND COALESCE(f.content_fetched, FALSE) = FALSE
+           AND COALESCE(f.content_fetch_attempts, 0) < ?2
+           AND COALESCE(f.content_last_attempt_at, 0) <= ?3
+         ORDER BY f.importance_score DESC, f.filing_date DESC
+         LIMIT ?1"
     ).map_err(|e| format!("Prepare unfetched failed: {e}"))?;
 
     let rows = stmt
-        .query_map(params![limit as i64], |row| {
-            Ok(SecFiling {
-                id: row.get(0)?,
-                ticker: row.get(1)?,
-                form_type: row.get(2)?,
-                accession_number: row.get(3)?,
-                filing_date: row.get(4)?,
-                url: row.get(5)?,
-                company_name: row.get(6)?,
-                importance_score: row.get(7)?,
-                category: row.get(8)?,
-                summary: row.get(9)?,
-                insider_flag: row.get(10)?,
-                created_at: row.get(11)?,
-            })
-        })
+        .query_map(
+            params![limit as i64, MAX_CONTENT_FETCH_ATTEMPTS, retry_before],
+            |row| {
+                Ok(SecFiling {
+                    id: row.get(0)?,
+                    ticker: row.get(1)?,
+                    form_type: row.get(2)?,
+                    accession_number: row.get(3)?,
+                    filing_date: row.get(4)?,
+                    url: row.get(5)?,
+                    company_name: row.get(6)?,
+                    importance_score: row.get(7)?,
+                    category: row.get(8)?,
+                    summary: row.get(9)?,
+                    insider_flag: row.get(10)?,
+                    created_at: row.get(11)?,
+                })
+            },
+        )
         .map_err(|e| format!("Query unfetched failed: {e}"))?;
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Collect unfetched failed: {e}"))
+}
+
+/// Record a failed content hydration attempt so unfetchable SEC documents do
+/// not stay at the front of the background queue forever.
+pub fn mark_filing_content_fetch_failed(
+    conn: &Connection,
+    accession: &str,
+    error: &str,
+) -> Result<(), String> {
+    let truncated_error: std::borrow::Cow<str> = if error.len() > 240 {
+        std::borrow::Cow::Owned(format!("{}…", &error[..240]))
+    } else {
+        std::borrow::Cow::Borrowed(error)
+    };
+    conn.execute(
+        "UPDATE sec_filings
+         SET content_fetch_attempts = COALESCE(content_fetch_attempts, 0) + 1,
+             content_last_attempt_at = ?2,
+             content_last_error = ?3
+         WHERE accession_number = ?1",
+        params![
+            accession,
+            chrono::Utc::now().timestamp(),
+            truncated_error.as_ref()
+        ],
+    )
+    .map_err(|e| format!("Mark content fetch failed: {e}"))?;
+    Ok(())
 }
 
 // ── Keyword Watchlist ───────────────────────────────────────────────────────
@@ -2328,6 +2389,41 @@ mod tests {
         let conn = setup_test_db();
         let filings = get_recent_filings(&conn, None, 100).unwrap();
         assert!(filings.is_empty());
+    }
+
+    #[test]
+    fn get_unfetched_filings_skips_recent_failures() {
+        let conn = setup_test_db();
+        insert_filing(&conn, "AAPL", "10-Q", "acc-ok", "2024-06-01");
+        insert_filing(&conn, "MSFT", "10-Q", "acc-failed", "2024-06-02");
+
+        mark_filing_content_fetch_failed(&conn, "acc-failed", "HTTP 403").unwrap();
+
+        let filings = get_unfetched_filings(&conn, 10).unwrap();
+        assert_eq!(filings.len(), 1);
+        assert_eq!(filings[0].accession_number, "acc-ok");
+    }
+
+    #[test]
+    fn store_filing_content_clears_retry_state() {
+        let conn = setup_test_db();
+        insert_filing(&conn, "AAPL", "10-Q", "acc-001", "2024-06-01");
+        mark_filing_content_fetch_failed(&conn, "acc-001", "HTTP 403").unwrap();
+
+        store_filing_content(&conn, "acc-001", "AAPL", "10-Q", "Apple", "risk factors").unwrap();
+
+        let (fetched, attempts, err): (bool, i64, String) = conn
+            .query_row(
+                "SELECT content_fetched, content_fetch_attempts, content_last_error \
+                 FROM sec_filings WHERE accession_number='acc-001'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert!(fetched);
+        assert_eq!(attempts, 0);
+        assert!(err.is_empty());
+        assert!(get_unfetched_filings(&conn, 10).unwrap().is_empty());
     }
 
     // ── get_insider_trades ─────────────────────────────────────────

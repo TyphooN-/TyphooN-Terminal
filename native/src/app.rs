@@ -30445,34 +30445,98 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                 .name("typhoon-sec-filing-backfill".into())
                                                 .spawn(move || {
                                                     let rt =
-                                                        tokio::runtime::Builder::new_current_thread()
+                                                        match tokio::runtime::Builder::new_current_thread()
                                                             .enable_all()
                                                             .build()
-                                                            .unwrap_or_else(|e| {
-                                                                eprintln!("BG backfill rt: {e}");
-                                                                std::process::exit(1);
-                                                            });
+                                                        {
+                                                            Ok(rt) => rt,
+                                                            Err(e) => {
+                                                                tracing::warn!("SEC content backfill skipped: runtime build failed: {e}");
+                                                                return;
+                                                            }
+                                                        };
                                                     rt.block_on(async {
-                                                    let client = reqwest::Client::builder()
-                                                        .user_agent("TyphooN-Terminal/0.1 (contact: TyphooN)")
-                                                        .timeout(std::time::Duration::from_secs(10))
-                                                        .build().unwrap_or_default();
-                                                    let mut fetched = 0usize;
-                                                    for filing in &unfetched {
-                                                        if filing.url.is_empty() { continue; }
-                                                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                                                        if let Ok(resp) = client.get(&filing.url).send().await {
-                                                            if let Ok(html) = resp.text().await {
-                                                                let content = sec_filing::strip_html_to_text(&html);
-                                                                if let Ok(wr_conn) = wr_cache.connection() {
-                                                                    let _ = sec_filing::store_filing_content(
-                                                                        &wr_conn, &filing.accession_number, &filing.ticker,
-                                                                        &filing.form_type, &filing.company_name, &content,
+                                                        let client = reqwest::Client::builder()
+                                                            .user_agent("TyphooN-Terminal/0.1 (contact: TyphooN)")
+                                                            .timeout(std::time::Duration::from_secs(10))
+                                                            .build()
+                                                            .unwrap_or_default();
+                                                        let mut fetched = 0usize;
+                                                        let mut failed = 0usize;
+
+                                                        let wr_conn = match wr_cache.connection() {
+                                                            Ok(conn) => conn,
+                                                            Err(e) => {
+                                                                tracing::warn!("SEC content backfill skipped: DB connection failed: {e}");
+                                                                return;
+                                                            }
+                                                        };
+                                                        let keywords = sec_filing::get_keywords(&wr_conn)
+                                                            .unwrap_or_default();
+
+                                                        for filing in &unfetched {
+                                                            if filing.url.is_empty() {
+                                                                let _ = sec_filing::mark_filing_content_fetch_failed(
+                                                                    &wr_conn,
+                                                                    &filing.accession_number,
+                                                                    "empty filing URL",
+                                                                );
+                                                                failed += 1;
+                                                                continue;
+                                                            }
+                                                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                                                            let resp = match client.get(&filing.url).send().await {
+                                                                Ok(resp) => resp,
+                                                                Err(e) => {
+                                                                    let _ = sec_filing::mark_filing_content_fetch_failed(
+                                                                        &wr_conn,
+                                                                        &filing.accession_number,
+                                                                        &format!("request failed: {e}"),
                                                                     );
-                                                                    // Check keyword watchlist for alerts
-                                                                    let matched_kw = sec_filing::check_keywords(&wr_conn, &content);
+                                                                    failed += 1;
+                                                                    continue;
+                                                                }
+                                                            };
+                                                            let status = resp.status();
+                                                            if !status.is_success() {
+                                                                let _ = sec_filing::mark_filing_content_fetch_failed(
+                                                                    &wr_conn,
+                                                                    &filing.accession_number,
+                                                                    &format!("HTTP {status}"),
+                                                                );
+                                                                failed += 1;
+                                                                continue;
+                                                            }
+                                                            let html = match resp.text().await {
+                                                                Ok(html) => html,
+                                                                Err(e) => {
+                                                                    let _ = sec_filing::mark_filing_content_fetch_failed(
+                                                                        &wr_conn,
+                                                                        &filing.accession_number,
+                                                                        &format!("read failed: {e}"),
+                                                                    );
+                                                                    failed += 1;
+                                                                    continue;
+                                                                }
+                                                            };
+                                                            let content = sec_filing::strip_html_to_text(&html);
+                                                            match sec_filing::store_filing_content(
+                                                                &wr_conn,
+                                                                &filing.accession_number,
+                                                                &filing.ticker,
+                                                                &filing.form_type,
+                                                                &filing.company_name,
+                                                                &content,
+                                                            ) {
+                                                                Ok(()) => {
+                                                                    fetched += 1;
+                                                                    // Check keyword watchlist for alerts without re-querying the DB per filing.
+                                                                    let matched_kw = sec_filing::check_keywords_in(&keywords, &content);
                                                                     for kw in &matched_kw {
-                                                                        let msg = format!("Keyword '{}' found in {} {} ({})", kw, filing.ticker, filing.form_type, filing.filing_date);
+                                                                        let msg = format!(
+                                                                            "Keyword '{}' found in {} {} ({})",
+                                                                            kw, filing.ticker, filing.form_type, filing.filing_date
+                                                                        );
                                                                         let _ = wr_conn.execute(
                                                                             "INSERT INTO sec_filing_alerts (ticker, alert_type, message, filing_accession, importance, created_at, dismissed)
                                                                              SELECT ?1, 'KEYWORD_MATCH', ?2, ?3, 70, ?4, FALSE
@@ -30481,14 +30545,24 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                                         );
                                                                     }
                                                                 }
-                                                                fetched += 1;
+                                                                Err(e) => {
+                                                                    let _ = sec_filing::mark_filing_content_fetch_failed(
+                                                                        &wr_conn,
+                                                                        &filing.accession_number,
+                                                                        &e,
+                                                                    );
+                                                                    failed += 1;
+                                                                }
                                                             }
                                                         }
-                                                    }
-                                                    if fetched > 0 {
-                                                        tracing::info!("BG: backfilled {} SEC filing(s) content", fetched);
-                                                    }
-                                                });
+                                                        if fetched > 0 || failed > 0 {
+                                                            tracing::info!(
+                                                                "BG: SEC content backfill: {} stored, {} failed",
+                                                                fetched,
+                                                                failed
+                                                            );
+                                                        }
+                                                    });
                                             });
                                         }
                                     }
