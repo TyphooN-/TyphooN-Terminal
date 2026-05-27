@@ -25417,10 +25417,22 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 });
                             }
                             Err(error) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                    "Yahoo Chart fallback failed for {} {}: {}",
-                                    symbol, timeframe, error
-                                )));
+                                let provider_no_data = error.contains("HTTP 404")
+                                    || error.contains("empty result")
+                                    || error.contains("missing quote arrays");
+                                if provider_no_data {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Unresolvable {
+                                        broker: source.clone(),
+                                        symbol: symbol.clone(),
+                                        timeframe: timeframe.clone(),
+                                        reason: error.clone(),
+                                    });
+                                } else {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
+                                        "Yahoo Chart fallback failed for {} {}: {}",
+                                        symbol, timeframe, error
+                                    )));
+                                }
                                 let _ = broker_msg_tx_clone.send(BrokerMsg::BarsFetched {
                                     source,
                                     symbol,

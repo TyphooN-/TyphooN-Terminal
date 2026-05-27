@@ -59,7 +59,10 @@ universe toggles:
   selected equity workset and must not trigger broad Alpaca-universe rotation.
 - `Yahoo Chart fallback` — unkeyed equity/ETF fallback stored under
   `yahoo-chart:SYMBOL:TF`. Supports `1Min`, `5Min`, `15Min`, `30Min`, `1Hour`,
-  `1Day`, `1Week`, and `1Month`, subject to Yahoo's range limits.
+  `1Day`, `1Week`, and `1Month`, subject to Yahoo's range limits and symbol
+  coverage. Dotted class-share symbols are requested using Yahoo's hyphen form
+  (`BH.A` -> `BH-A`), but provider 404s for unresolved/SPAC/unit symbols are
+  expected coverage gaps and are tombstoned rather than retried as app errors.
 - `Stooq daily fallback` — unkeyed daily equity fallback stored under
   `stooq:SYMBOL:1Day`. It is daily-only by design; it must not fabricate
   intraday coverage.
@@ -99,7 +102,10 @@ Fallback providers are source-specific:
   bar path, subject to Alpaca feed/rate-limit/depth constraints.
 - Yahoo Chart may fetch all standard enabled timeframes, but Yahoo applies hard
   history windows: `1Min` is freshness-only, lower intraday is limited, and
-  higher timeframes are the useful deep-history lane.
+  higher timeframes are the useful deep-history lane. Yahoo coverage is not the
+  Kraken equities catalog: many Kraken Securities symbols, especially SPAC/unit
+  style tickers such as `.U`, may return HTTP 404 from Yahoo and must be treated
+  as provider no-data.
 - Stooq is `1Day` only. Do not use it for `1Week`/`1Month` unless a separate
   aggregation/provenance step is added, and never use it for intraday.
 - Kraken equities still never fetch `M1`/`M5` from iapi because the feed is
@@ -300,7 +306,9 @@ Resolved policy:
   assist toggles off; enabling `Alpaca for all Kraken equities` applies to the
   Kraken equities scheduler workset without starting broad Alpaca universe sync.
 - Yahoo Chart is the first non-Alpaca unkeyed fallback for equities/ETFs where
-  Yahoo can resolve the symbol and timeframe.
+  Yahoo can resolve the symbol and timeframe. Dotted class shares use Yahoo's
+  hyphenated request symbol; unresolved Yahoo 404/empty-result responses are
+  durable provider no-data tombstones, not user-visible sync failures.
 - Stooq is the second fallback for daily equity history only. It must not be
   counted as weekly/monthly coverage until a separate aggregation/provenance pass
   exists.

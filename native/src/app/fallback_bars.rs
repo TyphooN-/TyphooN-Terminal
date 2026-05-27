@@ -60,6 +60,23 @@ pub(super) fn stooq_supports_timeframe(timeframe: &str) -> bool {
     matches!(normalize_sync_timeframe_key(timeframe), Some("1Day"))
 }
 
+fn yahoo_chart_request_symbol(symbol: &str) -> String {
+    let symbol = normalize_market_data_symbol(symbol)
+        .replace('/', "")
+        .trim_end_matches(".EQ")
+        .to_ascii_uppercase();
+    // Yahoo uses hyphenated class-share symbols (`BRK-B`, `BH-A`) while Kraken
+    // Securities catalogs and several other feeds commonly use dotted class
+    // notation (`BRK.B`, `BH.A`). Do not blindly rewrite single-letter non-class
+    // suffixes such as SPAC units (`DGAC.U`) into invented Yahoo symbols.
+    if let Some((base, suffix)) = symbol.split_once('.') {
+        if matches!(suffix, "A" | "B" | "C") && base.chars().all(|c| c.is_ascii_alphabetic()) {
+            return format!("{base}-{suffix}");
+        }
+    }
+    symbol
+}
+
 fn yahoo_interval_and_range(timeframe: &str) -> Option<(&'static str, &'static str)> {
     match normalize_sync_timeframe_key(timeframe)? {
         // Yahoo hard-limits 1m history. Keep this as freshness assist only.
@@ -82,10 +99,7 @@ pub(super) async fn fetch_yahoo_chart_bars(
 ) -> Result<Vec<FallbackBar>, String> {
     let (interval, range) = yahoo_interval_and_range(timeframe)
         .ok_or_else(|| format!("Yahoo Chart unsupported timeframe {timeframe}"))?;
-    let symbol = normalize_market_data_symbol(symbol)
-        .replace('/', "")
-        .trim_end_matches(".EQ")
-        .to_ascii_uppercase();
+    let symbol = yahoo_chart_request_symbol(symbol);
     if symbol.is_empty() {
         return Err("Yahoo Chart empty symbol".to_string());
     }
@@ -262,4 +276,22 @@ pub(super) fn store_fallback_bars(
         .put_bars(&cache_key, &json)
         .map_err(|e| format!("{source} cache write failed for {symbol} {tf}: {e}"))?;
     Ok(valid_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn yahoo_chart_request_symbol_uses_hyphen_for_class_shares() {
+        assert_eq!(yahoo_chart_request_symbol("BH.A"), "BH-A");
+        assert_eq!(yahoo_chart_request_symbol("brk.b"), "BRK-B");
+        assert_eq!(yahoo_chart_request_symbol("BH.A.EQ"), "BH-A");
+    }
+
+    #[test]
+    fn yahoo_chart_request_symbol_keeps_non_class_dot_symbols() {
+        assert_eq!(yahoo_chart_request_symbol("DGAC.U"), "DGAC.U");
+        assert_eq!(yahoo_chart_request_symbol("BIII.U"), "BIII.U");
+    }
 }
