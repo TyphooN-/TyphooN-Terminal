@@ -461,6 +461,20 @@ impl TyphooNApp {
                     if backfill_changed {
                         settings_save_after = true;
                         self.pending_kraken_fetches.clear();
+                        self.stooq_sync_pause_until_ts = 0;
+                        self.stooq_sync_pause_reason.clear();
+                    }
+                    if self.backfill_stooq_daily_enabled
+                        && self.stooq_sync_pause_until_ts > chrono::Utc::now().timestamp()
+                    {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Stooq paused: {}",
+                                self.stooq_sync_pause_reason
+                            ))
+                            .color(egui::Color32::YELLOW)
+                            .small(),
+                        );
                     }
                     ui.label(
                         egui::RichText::new(

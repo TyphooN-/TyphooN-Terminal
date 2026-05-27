@@ -11418,6 +11418,11 @@ pub struct TyphooNApp {
     pending_tastytrade_fetches: std::collections::HashSet<String>,
     pending_yahoo_chart_fetches: std::collections::HashSet<String>,
     pending_stooq_fetches: std::collections::HashSet<String>,
+    /// Runtime Stooq assist pause. Stooq can be reachable globally while blocked
+    /// from the user's network/IP; pause the whole optional provider after
+    /// transport/rate-limit failures instead of spraying per-symbol errors.
+    stooq_sync_pause_until_ts: i64,
+    stooq_sync_pause_reason: String,
     /// Per-key cooldown for broker bar re-queues. The in-flight HashSet only
     /// dedups while a fetch is pending; once it completes we'd previously
     /// re-queue immediately on the next sync tick, which (during a closed
@@ -28040,6 +28045,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
             pending_tastytrade_fetches: std::collections::HashSet::new(),
             pending_yahoo_chart_fetches: std::collections::HashSet::new(),
             pending_stooq_fetches: std::collections::HashSet::new(),
+            stooq_sync_pause_until_ts: 0,
+            stooq_sync_pause_reason: String::new(),
             fetch_last_queued_ts: std::collections::HashMap::new(),
             alpaca_sync_cursor: 0,
             kraken_spot_sync_cursors: [0; 4],

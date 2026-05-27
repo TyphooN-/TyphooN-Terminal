@@ -65,7 +65,10 @@ universe toggles:
   expected coverage gaps and are tombstoned rather than retried as app errors.
 - `Stooq daily fallback` — unkeyed daily equity fallback stored under
   `stooq:SYMBOL:1Day`. It is daily-only by design; it must not fabricate
-  intraday coverage.
+  intraday coverage. Stooq availability is local-network/IP dependent: a third-
+  party status page may show Stooq up while this machine cannot browse or fetch
+  `stooq.com`. On transport/provider failure, the app pauses the optional Stooq
+  assist lane instead of logging one failure per Kraken equity symbol.
 
 Alpaca fallback must also have an explicit **assist-only mode**. Connecting Alpaca
 for Kraken gap fill must not automatically enable the normal broad Alpaca
@@ -107,7 +110,9 @@ Fallback providers are source-specific:
   style tickers such as `.U`, may return HTTP 404 from Yahoo and must be treated
   as provider no-data.
 - Stooq is `1Day` only. Do not use it for `1Week`/`1Month` unless a separate
-  aggregation/provenance step is added, and never use it for intraday.
+  aggregation/provenance step is added, and never use it for intraday. Treat
+  connection failures as provider unavailable from this machine; pause the Stooq
+  lane and show degraded assist state instead of continuing a broad retry storm.
 - Kraken equities still never fetch `M1`/`M5` from iapi because the feed is
   delayed and those bars imply false precision.
 

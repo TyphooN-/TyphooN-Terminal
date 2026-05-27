@@ -997,7 +997,10 @@ impl TyphooNApp {
                 }
             }
         }
-        if self.backfill_stooq_daily_enabled && self.sync_timeframe_enabled("1Day") {
+        if self.backfill_stooq_daily_enabled
+            && self.sync_timeframe_enabled("1Day")
+            && self.stooq_sync_pause_until_ts <= chrono::Utc::now().timestamp()
+        {
             let state = self.build_source_cache_state_map("stooq:");
             let no_data = self
                 .unresolvable_fetch_keys_by_broker
@@ -1381,6 +1384,9 @@ impl TyphooNApp {
             return false;
         };
         if !self.backfill_stooq_daily_enabled || !self.sync_timeframe_enabled(tf) {
+            return false;
+        }
+        if self.stooq_sync_pause_until_ts > chrono::Utc::now().timestamp() {
             return false;
         }
         if !stooq_supports_timeframe(tf) {
