@@ -1,7 +1,6 @@
 # ADR-102: Kraken Equities Gap Fill via Alpaca and Provider Fallback
 
-**Status:** Proposed
-**Date:** 2026-05-27
+**Status:** Accepted / partially implemented | **Date:** 2026-05-27
 
 ## Context
 
@@ -293,13 +292,22 @@ Historical implementation items that remain relevant as regression checks:
 5. Tests should cover mapping, merge precedence, provider tombstones, and the
    high-TF catalog vs intraday demand denominator rule.
 
-## Open questions
+## Current policy / remaining reopen questions
 
-- Should fallback be enabled by default for all Kraken equities, or only for
-  watchlist/position/visible symbols until provider load is understood?
+Resolved policy:
+
+- Broad Kraken-equities assist is opt-in. New sessions default Alpaca/Yahoo/Stooq
+  assist toggles off; enabling `Alpaca for all Kraken equities` applies to the
+  Kraken equities scheduler workset without starting broad Alpaca universe sync.
+- Yahoo Chart is the first non-Alpaca unkeyed fallback for equities/ETFs where
+  Yahoo can resolve the symbol and timeframe.
+- Stooq is the second fallback for daily equity history only. It must not be
+  counted as weekly/monthly coverage until a separate aggregation/provenance pass
+  exists.
+
+Remaining reopen questions:
+
 - Should `4Hour` be materialized from `1Hour` bars or from `15Min` bars for
   better session-boundary control?
-- Which non-Alpaca provider should be the second fallback for symbols Alpaca
-  cannot serve or accounts without sufficient data tier?
 - How visually loud should fallback spans be on charts? Too subtle hides risk;
   too loud makes charts unreadable.

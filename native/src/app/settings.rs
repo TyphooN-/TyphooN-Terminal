@@ -454,7 +454,7 @@ impl TyphooNApp {
                                 "Stooq daily fallback",
                             )
                             .on_hover_text(
-                                "Optional daily equity/ETF fallback for long-range D1/W1/MN1 gaps where symbols resolve cleanly.",
+                                "Optional daily-only equity/ETF fallback for long-range 1Day gaps where symbols resolve cleanly. Weekly/monthly require an explicit aggregation/provenance pass before Stooq can assist them.",
                             )
                             .changed();
                     });
